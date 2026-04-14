@@ -108,6 +108,49 @@ class TestNeo4jStoreIntegration:
         assert "Public" in names_with
         assert "Secret" in names_with
 
+    def test_batched_insert_triplets(self, graph_store: Neo4jGraphStore) -> None:
+        """The UNWIND-based insert_triplets covers what ingest actually calls."""
+        tenant = f"t-{uuid.uuid4().hex[:8]}"
+        graph_store.initialize_tenant(tenant)
+
+        triplets = [
+            ("Alice", "knows", "Bob"),
+            ("Bob", "works_at", "Acme"),
+            ("Acme", "based_in", "Springfield"),
+            # Malformed rows are silently filtered by the implementation.
+            ("", "knows", "Bob"),
+            ("Alice", "", "Bob"),
+        ]
+
+        graph_store.insert_triplets(
+            tenant,
+            triplets,
+            document_key="doc-batched",
+            tags=["people", "work"],
+            access_keys=[42],
+        )
+
+        # Every entity mentioned in a valid triplet should be present.
+        for name in ("Alice", "Bob", "Acme", "Springfield"):
+            hits = graph_store.fuzzy_entity_search(tenant, name, user_access=[42])
+            assert any(h["name"] == name for h in hits), f"missing entity {name}"
+
+        relationships = graph_store.fuzzy_relationship_search(tenant, "knows")
+        assert any(
+            h.get("subj") == "Alice" and h.get("obj") == "Bob"
+            for h in relationships
+        )
+
+    def test_insert_triplets_empty_list_is_noop(
+        self, graph_store: Neo4jGraphStore
+    ) -> None:
+        tenant = f"t-{uuid.uuid4().hex[:8]}"
+        graph_store.initialize_tenant(tenant)
+        # Should not raise, should not create any rows.
+        graph_store.insert_triplets(tenant, [], document_key="x")
+        hits = graph_store.fuzzy_entity_search(tenant, "")
+        assert hits == []
+
     def test_update_metadata(self, graph_store: Neo4jGraphStore) -> None:
         tenant = f"t-{uuid.uuid4().hex[:8]}"
         graph_store.initialize_tenant(tenant)

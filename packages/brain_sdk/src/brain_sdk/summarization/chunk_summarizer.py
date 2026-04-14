@@ -118,10 +118,24 @@ class ChunkSummarizer:
         return level[0] if level else ""
 
     def _summarize_group(self, summaries: list[str]) -> str:
-        """Summarise one group of summaries into a single summary."""
+        """Summarise one group of summaries into a single summary.
+
+        Handles three edge cases:
+          - single item → return as-is (skip LLM round-trip)
+          - all items empty → return empty (don't send LLM a blank prompt)
+          - only one non-empty item → return it (same saving as single-item)
+        """
         if len(summaries) == 1:
             return summaries[0]
-        combined = "\n\n".join(f"- {s}" for s in summaries if s)
+
+        non_empty = [s for s in summaries if s and s.strip()]
+        if not non_empty:
+            logger.warning("_summarize_group: all %d items empty", len(summaries))
+            return ""
+        if len(non_empty) == 1:
+            return non_empty[0]
+
+        combined = "\n\n".join(f"- {s}" for s in non_empty)
         try:
             response = self._client.chat.completions.create(
                 model=self._model,
@@ -135,9 +149,9 @@ class ChunkSummarizer:
             return response.choices[0].message.content or ""
         except Exception as e:
             logger.error("Group summary failed (%d items): %s", len(summaries), e)
-            # Degrade gracefully — pick the longest summary in the group as a
-            # proxy for "most informative" so downstream processing continues.
-            return max(summaries, key=_tokens_estimate, default="")
+            # Degrade gracefully — pick the longest summary as a proxy for
+            # "most informative" so downstream processing continues.
+            return max(non_empty, key=_tokens_estimate, default="")
 
     # Backwards-compat alias for older callers.
     def create_document_summary(self, chunk_summaries: list[str]) -> str:

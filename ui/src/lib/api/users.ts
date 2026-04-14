@@ -12,3 +12,20 @@ export async function fetchMe(): Promise<CurrentUser> {
   const response = await apiClient.get<CurrentUser>("/users/me");
   return response.data;
 }
+
+export interface ProfileUpdateInput {
+  description?: string | null;
+}
+
+export interface UserProfile {
+  id: string;
+  username: string;
+  email: string;
+  description: string | null;
+  is_site_admin: boolean;
+}
+
+export async function updateMe(input: ProfileUpdateInput): Promise<UserProfile> {
+  const response = await apiClient.patch<UserProfile>("/users/me", input);
+  return response.data;
+}

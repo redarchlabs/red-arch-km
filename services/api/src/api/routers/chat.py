@@ -12,18 +12,26 @@ from api.auth.dependencies import OrgContext, require_org_access
 from api.dependencies import get_tenant_db
 from api.repositories.chat import ChatRepository
 from api.schemas.chat import ChatSessionCreate, ChatSessionRead, ChatSessionUpdate
+from api.schemas.common import PaginatedResponse, PaginationParams, make_page
 
 router = APIRouter()
 
 
-@router.get("/sessions", response_model=list[ChatSessionRead])
+@router.get("/sessions", response_model=PaginatedResponse[ChatSessionRead])
 async def list_sessions(
     ctx: Annotated[OrgContext, Depends(require_org_access)],
     session: Annotated[AsyncSession, Depends(get_tenant_db)],
-) -> list[ChatSessionRead]:
+    pagination: Annotated[PaginationParams, Depends()],
+) -> PaginatedResponse[ChatSessionRead]:
     repo = ChatRepository(session)
-    sessions = await repo.list_for_user(ctx.user.profile_id)
-    return [ChatSessionRead.model_validate(s) for s in sessions]
+    sessions, total = await repo.list_for_user(
+        ctx.user.profile_id,
+        offset=pagination.offset,
+        limit=pagination.page_size,
+    )
+    return make_page(
+        [ChatSessionRead.model_validate(s) for s in sessions], total, pagination
+    )
 
 
 @router.post("/sessions", response_model=ChatSessionRead, status_code=status.HTTP_201_CREATED)

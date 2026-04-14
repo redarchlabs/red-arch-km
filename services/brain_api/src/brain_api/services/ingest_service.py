@@ -42,10 +42,21 @@ _TRIPLET_WORKERS = 8
 
 
 def _centroid(vectors: list[list[float]]) -> list[float]:
-    """Arithmetic mean across a list of equal-length vectors."""
+    """Arithmetic mean across a list of equal-length vectors.
+
+    Raises ValueError if vectors have inconsistent dimensions — silently
+    averaging mismatched vectors would produce a wrong centroid and a
+    broken document-level search signal.
+    """
     if not vectors:
         return []
     dim = len(vectors[0])
+    if dim == 0:
+        return []
+    for idx, v in enumerate(vectors):
+        if len(v) != dim:
+            msg = f"centroid input dim mismatch: vectors[0]={dim} vs vectors[{idx}]={len(v)}"
+            raise ValueError(msg)
     n = len(vectors)
     return [sum(v[i] for v in vectors) / n for i in range(dim)]
 

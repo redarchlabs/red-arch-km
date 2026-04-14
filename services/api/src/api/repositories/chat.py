@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.models.chat import ChatSession
@@ -18,14 +18,27 @@ class ChatRepository:
         return await self._session.get(ChatSession, session_id)
 
     async def list_for_user(
-        self, user_id: uuid.UUID, *, include_deleted: bool = False
-    ) -> list[ChatSession]:
-        query = select(ChatSession).where(ChatSession.user_id == user_id)
+        self,
+        user_id: uuid.UUID,
+        *,
+        include_deleted: bool = False,
+        offset: int = 0,
+        limit: int = 200,
+    ) -> tuple[list[ChatSession], int]:
+        """Return a page of chat sessions + total count."""
+        base = select(ChatSession).where(ChatSession.user_id == user_id)
         if not include_deleted:
-            query = query.where(ChatSession.deleted.is_(False))
-        query = query.order_by(ChatSession.updated_at.desc())
-        result = await self._session.execute(query)
-        return list(result.scalars().all())
+            base = base.where(ChatSession.deleted.is_(False))
+
+        total = (
+            await self._session.execute(
+                select(func.count()).select_from(base.subquery())
+            )
+        ).scalar_one()
+        result = await self._session.execute(
+            base.order_by(ChatSession.updated_at.desc()).offset(offset).limit(limit)
+        )
+        return list(result.scalars().all()), total
 
     async def create(
         self,

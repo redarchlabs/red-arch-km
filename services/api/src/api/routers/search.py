@@ -6,6 +6,7 @@ import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth.dependencies import OrgContext, require_org_access
@@ -96,4 +97,48 @@ async def chat(
         answer=result.get("answer", ""),
         sources=result.get("sources", []),
         graph_context=result.get("graph_context", []),
+    )
+
+
+@router.post("/chat/stream")
+async def chat_stream(
+    body: ChatRequest,
+    ctx: Annotated[OrgContext, Depends(require_org_access)],
+    session: Annotated[AsyncSession, Depends(get_tenant_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> StreamingResponse:
+    """Streaming RAG chat — proxies brain-api's SSE stream to the UI.
+
+    The UI uses fetch (not EventSource) so auth headers can flow through;
+    we in turn stream bytes from brain-api straight to the client without
+    reparsing, preserving SSE framing + timing.
+    """
+    access_keys = await _get_user_access_keys(session, ctx)
+    client = BrainAPIClient(settings)
+
+    async def iterator():  # type: ignore[no-untyped-def]
+        try:
+            async for chunk in client.vector_chat_stream(
+                tenant_id=str(ctx.org_id),
+                query=body.query,
+                chat_history=body.chat_history,
+                access_keys=access_keys,
+                tags=body.tags,
+                use_knowledge_graph=body.use_knowledge_graph,
+            ):
+                yield chunk
+        except Exception:
+            logger.exception("Chat stream failed")
+            # Emit a synthetic SSE error so the client terminates gracefully
+            # instead of hanging on a silently-closed connection.
+            yield b'data: {"type": "error", "message": "Stream failed"}\n\n'
+
+    return StreamingResponse(
+        iterator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
     )

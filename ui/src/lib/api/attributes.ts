@@ -30,8 +30,10 @@ export interface AttributeUpdateInput {
 }
 
 export async function listAttributes(): Promise<AttributeDefinition[]> {
-  const response = await apiClient.get<AttributeDefinition[]>("/attributes/");
-  return response.data;
+  const response = await apiClient.get<{ items: AttributeDefinition[] }>("/attributes/", {
+    params: { page_size: 200 },
+  });
+  return response.data.items;
 }
 
 export async function createAttribute(

@@ -16,18 +16,24 @@ from api.schemas.attribute import (
     AttributeDefinitionRead,
     AttributeDefinitionUpdate,
 )
+from api.schemas.common import PaginatedResponse, PaginationParams, make_page
 
 router = APIRouter()
 
 
-@router.get("/", response_model=list[AttributeDefinitionRead])
+@router.get("/", response_model=PaginatedResponse[AttributeDefinitionRead])
 async def list_attributes(
     ctx: Annotated[OrgContext, Depends(require_org_admin)],
     session: Annotated[AsyncSession, Depends(get_tenant_db)],
-) -> list[AttributeDefinitionRead]:
+    pagination: Annotated[PaginationParams, Depends()],
+) -> PaginatedResponse[AttributeDefinitionRead]:
     repo = AttributeDefinitionRepository(session)
-    items = await repo.list_all()
-    return [AttributeDefinitionRead.model_validate(i) for i in items]
+    items, total = await repo.list_all(
+        offset=pagination.offset, limit=pagination.page_size
+    )
+    return make_page(
+        [AttributeDefinitionRead.model_validate(i) for i in items], total, pagination
+    )
 
 
 @router.get("/{attribute_id}", response_model=AttributeDefinitionRead)

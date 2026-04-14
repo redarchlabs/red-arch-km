@@ -3,8 +3,10 @@ import type { ChatSession } from "@/types";
 import apiClient from "./client";
 
 export async function listSessions(): Promise<ChatSession[]> {
-  const response = await apiClient.get<ChatSession[]>("/chat/sessions");
-  return response.data;
+  const response = await apiClient.get<{ items: ChatSession[] }>("/chat/sessions", {
+    params: { page_size: 200 },
+  });
+  return response.data.items;
 }
 
 export async function createSession(

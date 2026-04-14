@@ -56,8 +56,20 @@ export function OrgProvider({ children }: { children: ReactNode }) {
     // Without this gate we would fire the API call before Keycloak has a
     // token, then immediately get a 401 and bounce to /login.
     if (isInitializing) return;
+
+    // When the user logs out mid-session we must clear the org list so the
+    // next (possibly different) user doesn't see the previous user's orgs
+    // flash before refresh() completes.
+    if (!isAuthenticated) {
+      setOrgs([]);
+      setCurrentOrgIdState(null);
+      setIsSiteAdmin(false);
+      setIsLoading(false);
+      return;
+    }
+
     void refresh();
-  }, [refresh, isInitializing]);
+  }, [refresh, isInitializing, isAuthenticated]);
 
   const setCurrentOrgId = useCallback((id: string) => {
     setCurrentOrgIdState(id);
