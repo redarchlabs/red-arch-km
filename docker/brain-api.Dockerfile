@@ -8,13 +8,16 @@ RUN pip install --no-cache-dir uv
 
 WORKDIR /app
 
-COPY pyproject.toml ./
+COPY pyproject.toml uv.lock* ./
 COPY packages/ packages/
 COPY services/brain_api/ services/brain_api/
 
-RUN cd services/brain_api && uv sync --frozen --no-dev 2>/dev/null || uv pip install --system -e ".[all]" 2>/dev/null || pip install -e .
+RUN uv pip install --system --no-cache \
+        -e ./packages/shared_config \
+        -e ./packages/brain_sdk \
+        -e ./services/brain_api
 
-RUN useradd --create-home appuser
+RUN useradd --create-home appuser && chown -R appuser:appuser /app
 USER appuser
 
 EXPOSE 8020

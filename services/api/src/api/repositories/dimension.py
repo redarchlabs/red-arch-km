@@ -37,12 +37,15 @@ class DimensionRepository:
     async def create(
         self, *, name: str, org_id: uuid.UUID, description: str | None = None
     ) -> DimensionModel:
-        # Assign next permission_number per-org
+        # Assign next permission_number per-org. Row-level lock prevents the
+        # select-max/insert race that would otherwise let two concurrent
+        # creates pick the same value.
         last_num_result = await self._session.execute(
             select(self._model.permission_number)
             .where(self._model.org_id == org_id)
             .order_by(self._model.permission_number.desc())
             .limit(1)
+            .with_for_update()
         )
         last_num = last_num_result.scalar_one_or_none() or 0
 

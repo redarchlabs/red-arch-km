@@ -26,7 +26,7 @@ const OrgContext = createContext<OrgState | null>(null);
 const STORAGE_KEY = "redarch:currentOrgId";
 
 export function OrgProvider({ children }: { children: ReactNode }) {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, isInitializing } = useAuth();
   const [orgs, setOrgs] = useState<OrgSummary[]>([]);
   const [currentOrgId, setCurrentOrgIdState] = useState<string | null>(null);
   const [isSiteAdmin, setIsSiteAdmin] = useState(false);
@@ -52,8 +52,12 @@ export function OrgProvider({ children }: { children: ReactNode }) {
   }, [isAuthenticated]);
 
   useEffect(() => {
+    // Wait for AuthContext to finish initialising before hitting /users/me.
+    // Without this gate we would fire the API call before Keycloak has a
+    // token, then immediately get a 401 and bounce to /login.
+    if (isInitializing) return;
     void refresh();
-  }, [refresh]);
+  }, [refresh, isInitializing]);
 
   const setCurrentOrgId = useCallback((id: string) => {
     setCurrentOrgIdState(id);

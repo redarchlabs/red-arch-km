@@ -37,6 +37,35 @@ async def create_tag(
     return TagRead.model_validate(tag)
 
 
+@router.get("/{tag_id}", response_model=TagRead)
+async def get_tag(
+    tag_id: uuid.UUID,
+    ctx: Annotated[OrgContext, Depends(require_org_access)],
+    session: Annotated[AsyncSession, Depends(get_tenant_db)],
+) -> TagRead:
+    repo = TagRepository(session)
+    tag = await repo.get(tag_id)
+    if tag is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tag not found")
+    return TagRead.model_validate(tag)
+
+
+@router.patch("/{tag_id}", response_model=TagRead)
+async def update_tag(
+    tag_id: uuid.UUID,
+    body: TagCreate,
+    ctx: Annotated[OrgContext, Depends(require_org_access)],
+    session: Annotated[AsyncSession, Depends(get_tenant_db)],
+) -> TagRead:
+    repo = TagRepository(session)
+    tag = await repo.get(tag_id)
+    if tag is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tag not found")
+    tag.name = body.name
+    await session.flush()
+    return TagRead.model_validate(tag)
+
+
 @router.delete("/{tag_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_tag(
     tag_id: uuid.UUID,

@@ -40,8 +40,10 @@ services:
     env_file:
       - ../.env
     environment:
-      BRAIN_QDRANT_URL: http://qdrant:6333
-      BRAIN_NEO4J_URI: bolt://neo4j:7687
+      # Override .env URLs for in-cluster service resolution.
+      # Unprefixed keys match the BrainAPISettings `validation_alias` values.
+      QDRANT_URL: http://qdrant:6333
+      NEO4J_URI: bolt://neo4j:7687
     depends_on:
       qdrant:
         condition: service_healthy

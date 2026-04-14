@@ -1,11 +1,14 @@
 "use client";
 
+import DOMPurify from "dompurify";
 import { FileText } from "lucide-react";
 
 import type { ChatSource } from "@/lib/api/search";
 import { cn } from "@/lib/utils";
 
 export interface Message {
+  /** Stable ID assigned when the message is appended; used as React key. */
+  id: string;
   role: "user" | "assistant";
   content: string;
   sources?: ChatSource[];
@@ -14,6 +17,15 @@ export interface Message {
 
 interface ChatMessageProps {
   message: Message;
+}
+
+/**
+ * React escapes text by default, but we additionally strip HTML via DOMPurify
+ * so accidental markup in LLM output or pasted user prompts never escapes
+ * the plain-text rendering — belt-and-suspenders.
+ */
+function sanitize(text: string): string {
+  return DOMPurify.sanitize(text, { ALLOWED_TAGS: [], ALLOWED_ATTR: [] });
 }
 
 export function ChatMessage({ message }: ChatMessageProps) {
@@ -27,7 +39,7 @@ export function ChatMessage({ message }: ChatMessageProps) {
           isUser ? "bg-primary text-primary-foreground" : "bg-muted",
         )}
       >
-        <div className="whitespace-pre-wrap">{message.content}</div>
+        <div className="whitespace-pre-wrap">{sanitize(message.content)}</div>
         {message.streaming ? (
           <span
             aria-label="streaming"

@@ -7,16 +7,18 @@ import uuid
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth.dependencies import OrgContext, require_org_access
 from api.config import Settings, get_settings
 from api.dependencies import get_tenant_db
+from api.models.document import Tag
 from api.models.org import Org
 from api.repositories.document import DocumentRepository
 from api.repositories.folder import FolderRepository
 from api.schemas.common import PaginatedResponse, PaginationParams
-from api.schemas.document import DocumentCreate, DocumentRead
+from api.schemas.document import DocumentCreate, DocumentRead, DocumentUpdate
 from api.services.brain_client import BrainAPIClient
 from api.services.permission_config import calculate_user_masks_from_membership
 from api.tasks.ingest import dispatch_ingest
@@ -124,6 +126,48 @@ async def get_document(
     doc = await repo.get(document_id)
     if doc is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
+    return DocumentRead.model_validate(doc)
+
+
+@router.patch("/{document_id}", response_model=DocumentRead)
+async def update_document(
+    document_id: uuid.UUID,
+    body: DocumentUpdate,
+    ctx: Annotated[OrgContext, Depends(require_org_access)],
+    session: Annotated[AsyncSession, Depends(get_tenant_db)],
+) -> DocumentRead:
+    """Update metadata on a document. Does not re-trigger ingestion.
+
+    Callers that change tags or folder_id should be aware: the vector-store
+    access_keys are inherited from the folder at ingest time and are NOT
+    automatically re-propagated here. A dedicated metadata update task
+    should be dispatched separately (see worker.tasks.metadata).
+    """
+    repo = DocumentRepository(session)
+    doc = await repo.get(document_id)
+    if doc is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
+
+    fields_set = body.model_fields_set
+
+    if body.title is not None:
+        doc.title = body.title
+    if "description" in fields_set:
+        doc.description = body.description
+    if "folder_id" in fields_set:
+        doc.folder_id = body.folder_id
+    if "metadata" in fields_set:
+        doc.metadata_ = body.metadata or {}
+
+    if body.tag_ids is not None:
+        if body.tag_ids:
+            tag_result = await session.execute(select(Tag).where(Tag.id.in_(body.tag_ids)))
+            doc.tags = list(tag_result.scalars().all())
+        else:
+            doc.tags = []
+
+    await session.flush()
+    logger.info("Updated document %s in org %s", document_id, ctx.org_id)
     return DocumentRead.model_validate(doc)
 
 

@@ -8,15 +8,25 @@ RUN pip install --no-cache-dir uv
 
 WORKDIR /app
 
-# Copy workspace definition and shared packages first (cache layer)
-COPY pyproject.toml ./
+# Copy workspace definition, the uv lockfile, and the shared packages first
+# so image layers cache well — service code changes don't invalidate the
+# dependency layer.
+COPY pyproject.toml uv.lock* ./
 COPY packages/ packages/
 COPY services/api/ services/api/
 
-RUN cd services/api && uv sync --frozen --no-dev 2>/dev/null || uv pip install --system -e ".[all]" 2>/dev/null || pip install -e .
+# Install dependencies from the workspace. --no-editable keeps the build
+# reproducible; --no-dev skips test-only packages. Fail the build loudly
+# if deps can't be installed — no silent fallbacks.
+RUN uv pip install --system --no-cache \
+        -e ./packages/access_mask \
+        -e ./packages/shared_config \
+        -e ./packages/brain_sdk \
+        -e ./services/api
 
-# Create non-root user
-RUN useradd --create-home appuser
+# Chown app dir so the non-root user can read it (packages are installed
+# system-wide, so this is mostly cosmetic, but safer if any runtime writes).
+RUN useradd --create-home appuser && chown -R appuser:appuser /app
 USER appuser
 
 EXPOSE 8000

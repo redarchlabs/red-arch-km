@@ -129,3 +129,33 @@ async def update_folder(
 
     logger.info("Updated folder %s in org %s", folder_id, ctx.org_id)
     return FolderRead.model_validate(folder)
+
+
+@router.delete("/{folder_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_folder(
+    folder_id: uuid.UUID,
+    ctx: Annotated[OrgContext, Depends(require_org_admin)],
+    session: Annotated[AsyncSession, Depends(get_tenant_db)],
+) -> None:
+    """Delete a folder. Refuses to delete folders that still have children.
+
+    Documents under the folder have their `folder_id` set to NULL by the
+    FK's ON DELETE SET NULL rule; callers should re-bucket them explicitly
+    if that's not desired.
+    """
+    repo = FolderRepository(session)
+    folder = await repo.get(folder_id)
+    if folder is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Folder not found")
+
+    # descendants() returns the folder itself + descendants, so >1 means children exist
+    descendants = await repo.descendants(folder)
+    if len(descendants) > 1:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Cannot delete folder with children — move or delete them first",
+        )
+
+    await session.delete(folder)
+    await session.flush()
+    logger.info("Deleted folder %s in org %s", folder_id, ctx.org_id)

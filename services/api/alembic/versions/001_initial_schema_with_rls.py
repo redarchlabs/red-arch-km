@@ -88,12 +88,20 @@ def upgrade() -> None:
     )
 
     # Membership M2M junction tables
+    # Composite PK on (membership_id, dim_id) prevents duplicate assignments
+    # and gives us the best index for reverse lookups ("which members have this role?").
     for dim in ["regions", "departments", "roles", "groups"]:
         singular = dim.rstrip("s") if dim != "groups" else "group"
         op.create_table(
             f"membership_{dim}",
-            sa.Column("membership_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("user_org_memberships.id", ondelete="CASCADE")),
-            sa.Column(f"{singular}_id", postgresql.UUID(as_uuid=True), sa.ForeignKey(f"{dim}.id", ondelete="CASCADE")),
+            sa.Column("membership_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("user_org_memberships.id", ondelete="CASCADE"), nullable=False),
+            sa.Column(f"{singular}_id", postgresql.UUID(as_uuid=True), sa.ForeignKey(f"{dim}.id", ondelete="CASCADE"), nullable=False),
+            sa.PrimaryKeyConstraint("membership_id", f"{singular}_id", name=f"pk_membership_{dim}"),
+        )
+        op.create_index(
+            f"ix_membership_{dim}_{singular}",
+            f"membership_{dim}",
+            [f"{singular}_id"],
         )
 
     # --- Folders ---
@@ -147,12 +155,18 @@ def upgrade() -> None:
         sa.UniqueConstraint("org_id", "document_key", name="uq_doc_key_per_org"),
     )
 
-    # Document-Tag M2M
+    # Document-Tag M2M with composite PK to prevent duplicate tag assignments
     op.create_table(
         "document_tags",
-        sa.Column("document_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("documents.id", ondelete="CASCADE")),
-        sa.Column("tag_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("tags.id", ondelete="CASCADE")),
+        sa.Column("document_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("documents.id", ondelete="CASCADE"), nullable=False),
+        sa.Column("tag_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("tags.id", ondelete="CASCADE"), nullable=False),
+        sa.PrimaryKeyConstraint("document_id", "tag_id", name="pk_document_tags"),
     )
+    op.create_index("ix_document_tags_tag_id", "document_tags", ["tag_id"])
+
+    # Secondary indexes on FKs that are queried independently
+    op.create_index("ix_documents_folder_id", "documents", ["folder_id"])
+    op.create_index("ix_documents_uploaded_by_id", "documents", ["uploaded_by_id"])
 
     # --- Document Access ---
     op.create_table(
@@ -163,7 +177,9 @@ def upgrade() -> None:
         sa.Column("org_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("orgs.id", ondelete="CASCADE"), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
+        sa.UniqueConstraint("user_id", "folder_id", name="uq_document_access_user_folder"),
     )
+    op.create_index("ix_document_access_folder_id", "document_access", ["folder_id"])
 
     # --- Document Attribute Definitions ---
     op.create_table(

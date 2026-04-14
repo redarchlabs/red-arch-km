@@ -25,6 +25,21 @@ class DocumentCreate(BaseModel):
     use_knowledge_graph: bool | None = None
 
 
+class DocumentUpdate(BaseModel):
+    """Partial update for a document. Only the provided fields are modified.
+
+    `folder_id`, `tag_ids`, and `description` are tri-state (omitted / None /
+    value); tests distinguish "omitted" from "explicit null" via
+    `model_fields_set` to support clearing values.
+    """
+
+    title: str | None = Field(default=None, min_length=1, max_length=255)
+    description: str | None = None
+    folder_id: uuid.UUID | None = None
+    tag_ids: list[uuid.UUID] | None = None
+    metadata: dict[str, Any] | None = None
+
+
 class DocumentRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

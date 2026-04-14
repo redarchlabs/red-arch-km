@@ -1,5 +1,6 @@
 "use client";
 
+import DOMPurify from "dompurify";
 import { ArrowLeft, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
@@ -17,6 +18,11 @@ import {
 } from "@/lib/api/documents";
 import { formatDate } from "@/lib/format";
 import type { Document } from "@/types";
+
+/** Strip any HTML from chunk text — source docs could contain accidental markup. */
+function sanitizeChunk(text: string): string {
+  return DOMPurify.sanitize(text, { ALLOWED_TAGS: [], ALLOWED_ATTR: [] });
+}
 
 export default function DocumentDetailPage() {
   const params = useParams<{ id: string }>();
@@ -134,7 +140,9 @@ export default function DocumentDetailPage() {
                   <div className="mb-1 text-xs font-medium text-muted-foreground">
                     Chunk #{chunk.chunk_order}
                   </div>
-                  <div className="whitespace-pre-wrap text-sm">{chunk.text}</div>
+                  <div className="whitespace-pre-wrap text-sm">
+                    {sanitizeChunk(chunk.text)}
+                  </div>
                 </li>
               ))}
             </ol>

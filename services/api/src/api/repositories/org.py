@@ -42,9 +42,13 @@ class OrgRepository:
         description: str | None = None,
         use_knowledge_graph: bool = True,
     ) -> Org:
-        # Assign next permission_number (org_mask bit index)
+        # Assign next permission_number (org_mask bit index). Row-level lock
+        # prevents two concurrent org creations from picking the same number.
         count_result = await self._session.execute(
-            select(Org.permission_number).order_by(Org.permission_number.desc()).limit(1)
+            select(Org.permission_number)
+            .order_by(Org.permission_number.desc())
+            .limit(1)
+            .with_for_update()
         )
         last = count_result.scalar_one_or_none()
         permission_number = (last or 0) + 1

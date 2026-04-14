@@ -39,10 +39,20 @@ apiClient.interceptors.request.use(async (config) => {
   return config;
 });
 
+// Single-flight flag: prevents a storm of concurrent 401s from triggering
+// multiple redirects. Only the first 401 wins; subsequent ones just reject.
+let isRedirectingToLogin = false;
+
 apiClient.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401 && typeof window !== "undefined") {
+    if (
+      error.response?.status === 401 &&
+      typeof window !== "undefined" &&
+      !isRedirectingToLogin &&
+      !window.location.pathname.startsWith("/login")
+    ) {
+      isRedirectingToLogin = true;
       window.location.href = "/login";
     }
     return Promise.reject(error);

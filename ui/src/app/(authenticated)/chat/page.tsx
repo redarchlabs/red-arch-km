@@ -47,8 +47,15 @@ export default function ChatPage() {
     if (id === null) return;
     try {
       const session = await getSession(id);
-      const data = session.chat_data as { messages?: Message[] } | null;
-      setMessages(data?.messages ?? []);
+      const data = session.chat_data as { messages?: Partial<Message>[] } | null;
+      // Backfill stable IDs on persisted messages that predate the id field.
+      const hydrated: Message[] = (data?.messages ?? []).map((m, idx) => ({
+        id: m.id ?? `${id}-${idx}`,
+        role: (m.role as Message["role"]) ?? "assistant",
+        content: m.content ?? "",
+        sources: m.sources,
+      }));
+      setMessages(hydrated);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to load session");
     }
@@ -86,8 +93,17 @@ export default function ChatPage() {
       }
     }
 
-    const userMsg: Message = { role: "user", content: query };
-    const assistantMsg: Message = { role: "assistant", content: "", streaming: true };
+    const userMsg: Message = {
+      id: crypto.randomUUID(),
+      role: "user",
+      content: query,
+    };
+    const assistantMsg: Message = {
+      id: crypto.randomUUID(),
+      role: "assistant",
+      content: "",
+      streaming: true,
+    };
     const history = messages.map((m) => ({ role: m.role, content: m.content }));
 
     setMessages((prev) => [...prev, userMsg, assistantMsg]);
@@ -190,7 +206,7 @@ export default function ChatPage() {
               <p>Start a conversation by asking a question below.</p>
             </div>
           ) : (
-            messages.map((m, i) => <ChatMessage key={i} message={m} />)
+            messages.map((m) => <ChatMessage key={m.id} message={m} />)
           )}
         </div>
 
