@@ -42,6 +42,10 @@ class Settings(BaseSettings):
     brain_api_url: str = Field(default="http://localhost:8020")
     brain_api_key: str = Field(default="", validation_alias="BRAIN_API_KEY")
 
+    # Internal API key for service-to-service callbacks (worker → api).
+    # Separate from brain_api_key so compromise of one doesn't grant the other.
+    internal_api_key: str = Field(default="", validation_alias="INTERNAL_API_KEY")
+
     # Keycloak (shared identity provider config)
     keycloak_url: str = Field(default="", validation_alias="KEYCLOAK_URL")
     keycloak_realm: str = Field(default="redarch", validation_alias="KEYCLOAK_REALM")

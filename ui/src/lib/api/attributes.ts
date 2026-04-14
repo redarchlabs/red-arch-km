@@ -29,11 +29,19 @@ export interface AttributeUpdateInput {
   order?: number;
 }
 
-export async function listAttributes(): Promise<AttributeDefinition[]> {
-  const response = await apiClient.get<{ items: AttributeDefinition[] }>("/attributes/", {
-    params: { page_size: 200 },
-  });
-  return response.data.items;
+export const ADMIN_LIST_PAGE_SIZE = 200;
+
+export interface AttributeListPage {
+  items: AttributeDefinition[];
+  total: number;
+}
+
+export async function listAttributes(): Promise<AttributeListPage> {
+  const response = await apiClient.get<{ items: AttributeDefinition[]; total: number }>(
+    "/attributes/",
+    { params: { page_size: ADMIN_LIST_PAGE_SIZE } },
+  );
+  return { items: response.data.items, total: response.data.total };
 }
 
 export async function createAttribute(

@@ -64,19 +64,54 @@ class MembershipRepository:
         role_ids: list[uuid.UUID] | None = None,
         group_ids: list[uuid.UUID] | None = None,
     ) -> UserOrgMembership:
+        """Replace the membership's dimension assignments.
+
+        Every ID must resolve to a row visible under the current RLS tenant
+        scope. If an ID is missing (typo, stale client cache, cross-org
+        attempt), raises UnknownDimensionError listing the offenders so the
+        router can translate to a 400. Silently dropping them would let the
+        client think the save succeeded when it partially didn't.
+        """
         if region_ids is not None:
             result = await self._session.execute(select(Region).where(Region.id.in_(region_ids)))
-            membership.regions = list(result.scalars().all())
+            regions = list(result.scalars().all())
+            _assert_all_found("region", region_ids, {r.id for r in regions})
+            membership.regions = regions
         if department_ids is not None:
             result = await self._session.execute(
                 select(Department).where(Department.id.in_(department_ids))
             )
-            membership.departments = list(result.scalars().all())
+            departments = list(result.scalars().all())
+            _assert_all_found("department", department_ids, {d.id for d in departments})
+            membership.departments = departments
         if role_ids is not None:
             result = await self._session.execute(select(Role).where(Role.id.in_(role_ids)))
-            membership.roles = list(result.scalars().all())
+            roles = list(result.scalars().all())
+            _assert_all_found("role", role_ids, {r.id for r in roles})
+            membership.roles = roles
         if group_ids is not None:
             result = await self._session.execute(select(Group).where(Group.id.in_(group_ids)))
-            membership.groups = list(result.scalars().all())
+            groups = list(result.scalars().all())
+            _assert_all_found("group", group_ids, {g.id for g in groups})
+            membership.groups = groups
         await self._session.flush()
         return membership
+
+
+class UnknownDimensionError(ValueError):
+    """Raised when an assigned dimension ID doesn't exist in the current tenant."""
+
+    def __init__(self, kind: str, missing: list[uuid.UUID]) -> None:
+        self.kind = kind
+        self.missing = missing
+        super().__init__(
+            f"Unknown {kind} id(s): {', '.join(str(m) for m in missing)}"
+        )
+
+
+def _assert_all_found(
+    kind: str, requested: list[uuid.UUID], found: set[uuid.UUID]
+) -> None:
+    missing = [rid for rid in requested if rid not in found]
+    if missing:
+        raise UnknownDimensionError(kind, missing)

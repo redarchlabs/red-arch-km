@@ -14,11 +14,19 @@ export interface DimensionCreateInput {
   description?: string | null;
 }
 
-export async function listDimensions(kind: DimensionKind): Promise<Dimension[]> {
-  const response = await apiClient.get<{ items: Dimension[] }>(`/dimensions/${kind}`, {
-    params: { page_size: 200 },
-  });
-  return response.data.items;
+export const ADMIN_LIST_PAGE_SIZE = 200;
+
+export interface DimensionListPage {
+  items: Dimension[];
+  total: number;
+}
+
+export async function listDimensions(kind: DimensionKind): Promise<DimensionListPage> {
+  const response = await apiClient.get<{ items: Dimension[]; total: number }>(
+    `/dimensions/${kind}`,
+    { params: { page_size: ADMIN_LIST_PAGE_SIZE } },
+  );
+  return { items: response.data.items, total: response.data.total };
 }
 
 export async function createDimension(

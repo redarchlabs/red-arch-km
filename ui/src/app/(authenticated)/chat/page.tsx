@@ -26,6 +26,7 @@ export default function ChatPage() {
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
   const loadSessions = useCallback(async () => {
     if (!currentOrgId) return;
@@ -109,10 +110,20 @@ export default function ChatPage() {
     setMessages((prev) => [...prev, userMsg, assistantMsg]);
     setStreaming(true);
 
+    // Cancel any previous in-flight stream before starting a new one. The
+    // ref also lets handleNew / unmount abort the underlying fetch so
+    // brain-api doesn't keep generating tokens the user can't see.
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     let finalMessages: Message[] = [...messages, userMsg, assistantMsg];
 
     try {
-      for await (const event of streamChat(query, { chat_history: history })) {
+      for await (const event of streamChat(query, {
+        chat_history: history,
+        signal: controller.signal,
+      })) {
         if (event.type === "sources" && event.sources) {
           setMessages((prev) => {
             const next = [...prev];
@@ -139,8 +150,17 @@ export default function ChatPage() {
         }
       }
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Chat request failed");
+      // AbortError is an expected control-flow signal (user clicked New,
+      // navigated away, or sent a new message mid-stream) — not a failure.
+      if (e instanceof DOMException && e.name === "AbortError") {
+        // no-op
+      } else {
+        setError(e instanceof Error ? e.message : "Chat request failed");
+      }
     } finally {
+      if (abortRef.current === controller) {
+        abortRef.current = null;
+      }
       setStreaming(false);
       setMessages((prev) => {
         const next = [...prev];
@@ -171,10 +191,19 @@ export default function ChatPage() {
   };
 
   const handleNew = () => {
+    abortRef.current?.abort();
     setActiveId(null);
     setMessages([]);
     setError(null);
   };
+
+  // Cancel any in-flight stream when the user navigates away from /chat
+  // so brain-api stops generating immediately.
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort();
+    };
+  }, []);
 
   if (!currentOrgId) {
     return <p className="text-muted-foreground">Select an organization to chat.</p>;

@@ -72,7 +72,12 @@ export function MembershipManager() {
         listDimensions("groups"),
       ]);
       setUsers(userRows);
-      setOptions({ regions, departments, roles, groups });
+      setOptions({
+        regions: regions.items,
+        departments: departments.items,
+        roles: roles.items,
+        groups: groups.items,
+      });
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to load data");
     } finally {

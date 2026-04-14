@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth.dependencies import OrgContext, require_org_admin
 from api.dependencies import get_tenant_db
-from api.repositories.membership import MembershipRepository
+from api.repositories.membership import MembershipRepository, UnknownDimensionError
 from api.schemas.membership import MembershipCreate, MembershipRead, MembershipUpdate
 
 router = APIRouter()
@@ -45,13 +45,16 @@ async def create_membership(
     membership = await repo.upsert(
         profile_id=body.profile_id, org_id=ctx.org_id, is_org_admin=body.is_org_admin
     )
-    membership = await repo.assign_dimensions(
-        membership,
-        region_ids=body.region_ids,
-        department_ids=body.department_ids,
-        role_ids=body.role_ids,
-        group_ids=body.group_ids,
-    )
+    try:
+        membership = await repo.assign_dimensions(
+            membership,
+            region_ids=body.region_ids,
+            department_ids=body.department_ids,
+            role_ids=body.role_ids,
+            group_ids=body.group_ids,
+        )
+    except UnknownDimensionError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     # Reload with relationships
     reloaded = await repo.get(membership.id)
     if reloaded is None:
@@ -73,13 +76,16 @@ async def update_membership(
 
     if body.is_org_admin is not None:
         membership.is_org_admin = body.is_org_admin
-    await repo.assign_dimensions(
-        membership,
-        region_ids=body.region_ids,
-        department_ids=body.department_ids,
-        role_ids=body.role_ids,
-        group_ids=body.group_ids,
-    )
+    try:
+        await repo.assign_dimensions(
+            membership,
+            region_ids=body.region_ids,
+            department_ids=body.department_ids,
+            role_ids=body.role_ids,
+            group_ids=body.group_ids,
+        )
+    except UnknownDimensionError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
 
     reloaded = await repo.get(membership_id)
     if reloaded is None:

@@ -10,6 +10,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
+  ADMIN_LIST_PAGE_SIZE,
   type AttributeDefinition,
   type AttributeType,
   createAttribute,
@@ -38,6 +39,7 @@ interface EditDraft {
 
 export function AttributeManager() {
   const [items, setItems] = useState<AttributeDefinition[]>([]);
+  const [total, setTotal] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -55,7 +57,9 @@ export function AttributeManager() {
     setIsLoading(true);
     setError(null);
     try {
-      setItems(await listAttributes());
+      const page = await listAttributes();
+      setItems(page.items);
+      setTotal(page.total);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to load attributes");
     } finally {
@@ -185,6 +189,13 @@ export function AttributeManager() {
           <p className="text-sm text-muted-foreground">
             Define metadata fields that can be attached to documents.
           </p>
+          {total > items.length ? (
+            <p className="text-xs text-amber-600 dark:text-amber-500">
+              Showing first {items.length} of {total}. The admin UI paginates at{" "}
+              {ADMIN_LIST_PAGE_SIZE} — delete unused attributes or contact an
+              engineer to add pagination here.
+            </p>
+          ) : null}
         </div>
 
         <form onSubmit={handleCreate} className="space-y-3 rounded-md border p-3">

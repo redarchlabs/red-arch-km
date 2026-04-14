@@ -73,6 +73,22 @@ async def create_document(
     doc_repo = DocumentRepository(session)
     folder_repo = FolderRepository(session)
 
+    # Validate folder BEFORE persisting the document, so we reject bad
+    # folder_ids (typo / stale client cache / cross-tenant via RLS) with a
+    # clean 400 instead of saving a doc that references nothing resolvable.
+    access_keys: list[int] = []
+    tag_names: list[str] = []
+    if body.folder_id is not None:
+        folder = await folder_repo.get(body.folder_id)
+        if folder is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="folder_id does not exist in this organization",
+            )
+        access_keys = list(folder.view_permission_masks or [])
+        # Encode folder membership as a tag for graph-level filtering
+        tag_names.append(f"folder:{folder.id}")
+
     doc = await doc_repo.create(
         title=body.title,
         org_id=ctx.org_id,
@@ -88,18 +104,9 @@ async def create_document(
     # Commit before dispatching so the worker can read the row via the API
     await session.commit()
 
-    # Inherit access masks from the folder (if any)
-    access_keys: list[int] = []
-    tag_names: list[str] = []
-    if body.folder_id is not None:
-        folder = await folder_repo.get(body.folder_id)
-        if folder is not None:
-            access_keys = list(folder.view_permission_masks or [])
-            # Encode folder membership as a tag for graph-level filtering
-            tag_names.append(f"folder:{folder.id}")
-
     if doc.text:
         task_id = dispatch_ingest({
+            "document_id": str(doc.id),
             "tenant_id": str(ctx.org_id),
             "document_key": doc.document_key,
             "title": doc.title,
@@ -176,11 +183,36 @@ async def delete_document(
     document_id: uuid.UUID,
     ctx: Annotated[OrgContext, Depends(require_org_access)],
     session: Annotated[AsyncSession, Depends(get_tenant_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
 ) -> None:
+    """Delete a document. Cascades across PostgreSQL, Qdrant, and Neo4j.
+
+    Cascade to brain-api is best-effort, mirroring delete_org: a transient
+    brain-api outage logs an error but does not block the PostgreSQL delete.
+    Operators can rerun cleanup from the logs if needed.
+    """
     repo = DocumentRepository(session)
+    doc = await repo.get(document_id)
+    if doc is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
+
+    document_key = doc.document_key
     deleted = await repo.delete(document_id)
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
+
+    # Best-effort cascade to brain-api. The PostgreSQL delete commits in
+    # get_tenant_db on successful return regardless of brain-api outcome.
+    try:
+        client = BrainAPIClient(settings)
+        await client.remove_document(str(ctx.org_id), document_key)
+    except Exception as e:
+        logger.error(
+            "brain-api cleanup failed for deleted document %s (key %s) in org %s: %s — "
+            "manual cleanup may be required",
+            document_id, document_key, ctx.org_id, e,
+        )
+
     logger.info("Deleted document %s in org %s", document_id, ctx.org_id)
 
 

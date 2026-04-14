@@ -213,3 +213,27 @@ async def require_site_admin(
             detail="Site admin access required",
         )
     return user
+
+
+async def require_internal_api_key(
+    settings: Annotated[Settings, Depends(get_settings)],
+    x_internal_api_key: Annotated[str | None, Header(alias="X-Internal-API-Key")] = None,
+) -> None:
+    """Authenticate internal service-to-service calls (e.g. worker callbacks).
+
+    Uses a shared secret distinct from brain_api_key so compromise of one
+    service credential does not grant access to both surfaces. Configured
+    secrets must be non-empty — an empty configured key disables the
+    endpoint rather than allowing anonymous access.
+    """
+    expected = settings.internal_api_key
+    if not expected:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Internal API disabled (no key configured)",
+        )
+    if not x_internal_api_key or x_internal_api_key != expected:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid internal API credentials",
+        )

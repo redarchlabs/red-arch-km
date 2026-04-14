@@ -41,6 +41,9 @@ apiClient.interceptors.request.use(async (config) => {
 
 // Single-flight flag: prevents a storm of concurrent 401s from triggering
 // multiple redirects. Only the first 401 wins; subsequent ones just reject.
+// The flag is reset after a short window so that if the navigation is
+// cancelled (e.g. a beforeunload confirm) subsequent 401s can still redirect
+// instead of silently rejecting forever.
 let isRedirectingToLogin = false;
 
 apiClient.interceptors.response.use(
@@ -54,6 +57,12 @@ apiClient.interceptors.response.use(
     ) {
       isRedirectingToLogin = true;
       window.location.href = "/login";
+      // If the navigation was cancelled, reset the flag so future 401s can
+      // retry the redirect. In the normal path the page unloads before the
+      // timer fires and this is a no-op.
+      setTimeout(() => {
+        isRedirectingToLogin = false;
+      }, 5000);
     }
     return Promise.reject(error);
   },

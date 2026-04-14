@@ -7,11 +7,18 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
-import { createTag, deleteTag, listTags, updateTag } from "@/lib/api/tags";
+import {
+  ADMIN_LIST_PAGE_SIZE,
+  createTag,
+  deleteTag,
+  listTags,
+  updateTag,
+} from "@/lib/api/tags";
 import type { Tag } from "@/types";
 
 export function TagManager() {
   const [tags, setTags] = useState<Tag[]>([]);
+  const [total, setTotal] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [newName, setNewName] = useState("");
@@ -24,7 +31,9 @@ export function TagManager() {
     setIsLoading(true);
     setError(null);
     try {
-      setTags(await listTags());
+      const page = await listTags();
+      setTags(page.items);
+      setTotal(page.total);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to load tags");
     } finally {
@@ -93,8 +102,15 @@ export function TagManager() {
         <div>
           <h2 className="text-lg font-semibold">Tags</h2>
           <p className="text-sm text-muted-foreground">
-            {tags.length} tag{tags.length === 1 ? "" : "s"}
+            {total} tag{total === 1 ? "" : "s"}
           </p>
+          {total > tags.length ? (
+            <p className="text-xs text-amber-600 dark:text-amber-500">
+              Showing first {tags.length} of {total}. The admin UI paginates at{" "}
+              {ADMIN_LIST_PAGE_SIZE} — delete unused tags or contact an engineer
+              to add pagination here.
+            </p>
+          ) : null}
         </div>
 
         <form onSubmit={handleCreate} className="flex gap-2">

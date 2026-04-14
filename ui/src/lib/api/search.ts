@@ -46,6 +46,10 @@ export async function searchDocuments(
  *
  * We use fetch (not EventSource) because EventSource cannot set custom
  * headers for auth or org scoping.
+ *
+ * Pass `signal` so callers can cancel on unmount / navigation — otherwise
+ * the underlying fetch and reader stay open even after the consumer stops
+ * iterating, which means brain-api keeps running the LLM call (real cost).
  */
 export async function* streamChat(
   query: string,
@@ -53,6 +57,7 @@ export async function* streamChat(
     chat_history?: Array<{ role: string; content: string }>;
     tags?: string[];
     use_knowledge_graph?: boolean;
+    signal?: AbortSignal;
   } = {},
 ): AsyncGenerator<StreamEvent> {
   const baseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
@@ -75,6 +80,7 @@ export async function* streamChat(
       tags: options.tags ?? [],
       use_knowledge_graph: options.use_knowledge_graph ?? true,
     }),
+    signal: options.signal,
   });
 
   if (!response.ok) {
@@ -88,24 +94,34 @@ export async function* streamChat(
   const decoder = new TextDecoder();
   let buffer = "";
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
 
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n\n");
-    buffer = lines.pop() ?? "";
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n\n");
+      buffer = lines.pop() ?? "";
 
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed.startsWith("data:")) continue;
-      const payload = trimmed.slice(5).trim();
-      if (!payload) continue;
-      try {
-        yield JSON.parse(payload) as StreamEvent;
-      } catch {
-        // Ignore malformed events rather than tearing down the stream
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith("data:")) continue;
+        const payload = trimmed.slice(5).trim();
+        if (!payload) continue;
+        try {
+          yield JSON.parse(payload) as StreamEvent;
+        } catch {
+          // Ignore malformed events rather than tearing down the stream
+        }
       }
+    }
+  } finally {
+    // Release the underlying network stream even if the consumer throws
+    // or aborts. reader.cancel() is idempotent and safe post-done.
+    try {
+      await reader.cancel();
+    } catch {
+      // Reader may already be released; ignore.
     }
   }
 }

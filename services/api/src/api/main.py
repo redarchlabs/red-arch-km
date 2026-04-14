@@ -21,6 +21,7 @@ from api.routers import (
     documents,
     folders,
     health,
+    internal,
     memberships,
     orgs,
     search,
@@ -83,6 +84,7 @@ def create_app() -> FastAPI:
     app.include_router(dimensions.router, prefix="/api/dimensions", tags=["dimensions"])
     app.include_router(memberships.router, prefix="/api/memberships", tags=["memberships"])
     app.include_router(attributes.router, prefix="/api/attributes", tags=["attributes"])
+    app.include_router(internal.router, prefix="/api/internal", tags=["internal"])
 
     return app
 

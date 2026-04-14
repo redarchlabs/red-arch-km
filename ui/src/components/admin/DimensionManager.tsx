@@ -9,6 +9,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
+  ADMIN_LIST_PAGE_SIZE,
   createDimension,
   deleteDimension,
   listDimensions,
@@ -24,6 +25,7 @@ interface DimensionManagerProps {
 
 export function DimensionManager({ kind, label }: DimensionManagerProps) {
   const [items, setItems] = useState<Dimension[]>([]);
+  const [total, setTotal] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [newName, setNewName] = useState("");
@@ -36,7 +38,9 @@ export function DimensionManager({ kind, label }: DimensionManagerProps) {
     setIsLoading(true);
     setError(null);
     try {
-      setItems(await listDimensions(kind));
+      const page = await listDimensions(kind);
+      setItems(page.items);
+      setTotal(page.total);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to load");
     } finally {
@@ -105,8 +109,15 @@ export function DimensionManager({ kind, label }: DimensionManagerProps) {
         <div>
           <h2 className="text-lg font-semibold">{label}</h2>
           <p className="text-sm text-muted-foreground">
-            {items.length} {label.toLowerCase()}
+            {total} {label.toLowerCase()}
           </p>
+          {total > items.length ? (
+            <p className="text-xs text-amber-600 dark:text-amber-500">
+              Showing first {items.length} of {total}. The admin UI paginates at{" "}
+              {ADMIN_LIST_PAGE_SIZE} — delete unused entries or contact an
+              engineer to add pagination here.
+            </p>
+          ) : null}
         </div>
 
         <form onSubmit={handleCreate} className="flex gap-2">

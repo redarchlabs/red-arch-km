@@ -11,6 +11,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.models.document import Folder
 
 
+# PostgreSQL LIKE interprets % and _ as wildcards. dot_path is built from
+# user-supplied folder names (see folder_service.build_dot_path), so a
+# user who names a folder "foo_bar" or "a%" would otherwise match
+# unrelated siblings during descendants() or rename subtree rewrites.
+# Paired with the ESCAPE '\' clause on the LIKE pattern, this renders
+# wildcards literal.
+_LIKE_ESCAPE = str.maketrans({"\\": "\\\\", "%": "\\%", "_": "\\_"})
+
+
+def _escape_like(value: str) -> str:
+    return value.translate(_LIKE_ESCAPE)
+
+
 class FolderRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
@@ -97,9 +110,11 @@ class FolderRepository:
     async def descendants(self, folder: Folder) -> list[Folder]:
         """Return this folder and all descendants via dot_path prefix match."""
         prefix = folder.dot_path
+        escaped = _escape_like(prefix)
         result = await self._session.execute(
             select(Folder).where(
-                (Folder.dot_path == prefix) | Folder.dot_path.like(f"{prefix}.%")
+                (Folder.dot_path == prefix)
+                | Folder.dot_path.like(f"{escaped}.%", escape="\\")
             )
         )
         return list(result.scalars().all())
@@ -149,12 +164,12 @@ class FolderRepository:
             sql_text(
                 "UPDATE folders "
                 "SET dot_path = :new_prefix || substr(dot_path, :old_len + 1) "
-                "WHERE dot_path LIKE :old_like"
+                "WHERE dot_path LIKE :old_like ESCAPE '\\'"
             ),
             {
                 "new_prefix": new_prefix,
                 "old_len": len(old_prefix),
-                "old_like": f"{old_prefix}.%",
+                "old_like": f"{_escape_like(old_prefix)}.%",
             },
         )
         await self._session.flush()

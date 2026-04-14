@@ -139,3 +139,14 @@ class BrainAPIClient:
             )
             response.raise_for_status()
             return response.json()
+
+    async def remove_document(self, tenant_id: str, document_key: str) -> dict[str, Any]:
+        """Purge a single document's vectors + graph nodes from brain-api."""
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.post(
+                f"{self._base_url}/api/remove-document",
+                json={"tenant_id": tenant_id, "document_key": document_key},
+                headers=self._headers(),
+            )
+            response.raise_for_status()
+            return response.json()

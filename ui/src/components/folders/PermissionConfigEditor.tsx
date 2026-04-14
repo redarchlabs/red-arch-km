@@ -42,7 +42,12 @@ export function PermissionConfigEditor({ value, onChange, label }: PermissionCon
   useEffect(() => {
     Promise.all(DIMENSIONS.map((d) => listDimensions(d.kind)))
       .then(([regions, departments, roles, groups]) => {
-        setOptions({ regions, departments, roles, groups });
+        setOptions({
+          regions: regions.items,
+          departments: departments.items,
+          roles: roles.items,
+          groups: groups.items,
+        });
       })
       .catch(() => {
         // Non-fatal: editor still renders, just with empty dropdowns.

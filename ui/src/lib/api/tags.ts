@@ -2,11 +2,18 @@ import type { Tag } from "@/types";
 
 import apiClient from "./client";
 
-export async function listTags(): Promise<Tag[]> {
-  const response = await apiClient.get<{ items: Tag[] }>("/tags/", {
-    params: { page_size: 200 },
+export const ADMIN_LIST_PAGE_SIZE = 200;
+
+export interface TagListPage {
+  items: Tag[];
+  total: number;
+}
+
+export async function listTags(): Promise<TagListPage> {
+  const response = await apiClient.get<{ items: Tag[]; total: number }>("/tags/", {
+    params: { page_size: ADMIN_LIST_PAGE_SIZE },
   });
-  return response.data.items;
+  return { items: response.data.items, total: response.data.total };
 }
 
 export async function createTag(name: string): Promise<Tag> {
