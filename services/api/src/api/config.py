@@ -34,6 +34,19 @@ class Settings(BaseSettings):
     # Observability
     log_level: str = Field(default="INFO", json_schema_extra={"env": "LOG_LEVEL"})
 
+    # E2E test mode (dev-only)
+    e2e_test_mode: bool = Field(
+        default=False,
+        description=(
+            "When true, API accepts an X-Test-User header in place of Keycloak JWTs. "
+            "NEVER enable in production."
+        ),
+    )
+    e2e_test_secret: SecretStr = Field(
+        default=SecretStr(""),
+        description="Shared secret required alongside X-Test-User; prevents abuse.",
+    )
+
 
 def get_settings() -> Settings:
     return Settings()  # type: ignore[call-arg]

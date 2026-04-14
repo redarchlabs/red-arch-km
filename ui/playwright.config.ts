@@ -15,6 +15,9 @@ export default defineConfig({
   retries: process.env.CI ? 2 : 0,
   workers: process.env.CI ? 2 : undefined,
   reporter: process.env.CI ? "github" : "list",
+  // Only run the full-journey setup when a seeded backend is available.
+  // Without it, the basic smoke tests still run.
+  globalSetup: process.env.E2E_WITH_BACKEND ? "./tests/e2e/global-setup.ts" : undefined,
 
   use: {
     baseURL: process.env.BASE_URL ?? "http://localhost:3000",

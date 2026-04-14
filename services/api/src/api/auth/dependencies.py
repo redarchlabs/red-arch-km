@@ -7,7 +7,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Annotated
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, Header, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,7 +20,10 @@ from api.models.user import UserOrgMembership, UserProfile
 from api.services.user_provisioning import provision_user_from_claims
 
 logger = logging.getLogger(__name__)
-_bearer_scheme = HTTPBearer()
+
+# `auto_error=False` makes the scheme optional so the e2e test path can
+# skip the Authorization header entirely.
+_bearer_scheme = HTTPBearer(auto_error=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,12 +47,67 @@ class OrgContext:
     is_org_admin: bool
 
 
+async def _resolve_e2e_user(
+    test_user: str,
+    test_secret: str,
+    settings: Settings,
+    session: AsyncSession,
+) -> CurrentUser:
+    """Resolve a user via the E2E test bypass.
+
+    Accepts any sub/username in X-Test-User as long as the shared secret matches.
+    The UserProfile is auto-provisioned on first use.
+    """
+    expected = settings.e2e_test_secret.get_secret_value()
+    if not expected or test_secret != expected:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid E2E test credentials",
+        )
+
+    # Parse X-Test-User as "username:email" for convenience; default to
+    # synthetic email when only the username is provided.
+    username, _, email = test_user.partition(":")
+    if not username:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="X-Test-User must be provided",
+        )
+    email = email or f"{username}@e2e.local"
+
+    profile = await provision_user_from_claims(
+        session, sub=f"e2e-{username}", username=username, email=email
+    )
+    return CurrentUser(
+        sub=profile.keycloak_sub,
+        username=profile.username,
+        email=profile.email,
+        profile_id=profile.id,
+        is_site_admin=profile.is_site_admin,
+    )
+
+
 async def get_current_user(
-    credentials: Annotated[HTTPAuthorizationCredentials, Depends(_bearer_scheme)],
     settings: Annotated[Settings, Depends(get_settings)],
     session: Annotated[AsyncSession, Depends(get_db)],
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer_scheme)] = None,
+    x_test_user: Annotated[str | None, Header(alias="X-Test-User")] = None,
+    x_test_secret: Annotated[str | None, Header(alias="X-Test-Secret")] = None,
 ) -> CurrentUser:
-    """Validate the bearer token, provision the user if needed, and return them."""
+    """Validate the bearer token (or E2E bypass) and return the current user."""
+    # E2E test mode takes precedence, but is locked behind the config flag
+    # AND a matching shared secret. Never active in production.
+    if settings.e2e_test_mode and x_test_user:
+        return await _resolve_e2e_user(
+            x_test_user, x_test_secret or "", settings, session
+        )
+
+    if credentials is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authorization required",
+        )
+
     try:
         claims = await validate_keycloak_token(
             credentials.credentials,
