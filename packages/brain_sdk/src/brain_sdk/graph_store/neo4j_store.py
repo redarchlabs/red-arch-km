@@ -300,5 +300,23 @@ FOREACH (_ IN CASE WHEN $dk IS NOT NULL THEN [1] ELSE [] END |
         count = result[0]["updated"] if result else 0
         logger.info("Updated %d Neo4j nodes for document %s", count, document_key)
 
+    def delete_tenant(self, tenant_id: str) -> None:
+        """Detach-delete every node carrying this tenant's label.
+
+        Uses DETACH DELETE so relationships to/from any matched node are
+        removed in the same statement. The tenant label is enough on its
+        own to scope — no WHERE clause needed.
+        """
+        lbls = self._tenant_labels(tenant_id)
+        # Count first (COUNT after DETACH DELETE is unreliable across driver
+        # versions), then delete.
+        count_result = self._cypher(
+            f"MATCH (n{lbls}) RETURN count(n) AS c"
+        )
+        count = count_result[0]["c"] if count_result else 0
+        if count:
+            self._cypher(f"MATCH (n{lbls}) DETACH DELETE n")
+        logger.info("Deleted %d Neo4j nodes for tenant %s", count, tenant_id)
+
     def close(self) -> None:
         self._driver.close()

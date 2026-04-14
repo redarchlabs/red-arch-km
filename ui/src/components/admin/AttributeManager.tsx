@@ -1,6 +1,6 @@
 "use client";
 
-import { Plus, Trash2 } from "lucide-react";
+import { Check, Pencil, Plus, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { z } from "zod";
 
@@ -15,6 +15,7 @@ import {
   createAttribute,
   deleteAttribute,
   listAttributes,
+  updateAttribute,
 } from "@/lib/api/attributes";
 
 const createSchema = z.object({
@@ -29,6 +30,12 @@ const createSchema = z.object({
   required: z.boolean(),
 });
 
+interface EditDraft {
+  name: string;
+  required: boolean;
+  picklistRaw: string;
+}
+
 export function AttributeManager() {
   const [items, setItems] = useState<AttributeDefinition[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -40,6 +47,9 @@ export function AttributeManager() {
   const [picklistRaw, setPicklistRaw] = useState("");
   const [required, setRequired] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState<EditDraft | null>(null);
 
   const load = useCallback(async () => {
     setIsLoading(true);
@@ -107,6 +117,54 @@ export function AttributeManager() {
       setError(e instanceof Error ? e.message : "Create failed");
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const startEdit = (attr: AttributeDefinition) => {
+    setEditingId(attr.id);
+    setEditDraft({
+      name: attr.name,
+      required: attr.required,
+      picklistRaw: attr.picklist_options.join(", "),
+    });
+    setError(null);
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+    setEditDraft(null);
+  };
+
+  const saveEdit = async (attr: AttributeDefinition) => {
+    if (!editDraft) return;
+    const trimmedName = editDraft.name.trim();
+    if (!trimmedName) {
+      setError("Name cannot be empty");
+      return;
+    }
+
+    let nextOptions: string[] | undefined;
+    if (attr.attribute_type === "picklist") {
+      nextOptions = editDraft.picklistRaw
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (nextOptions.length === 0) {
+        setError("Picklist attributes need at least one option");
+        return;
+      }
+    }
+
+    try {
+      await updateAttribute(attr.id, {
+        name: trimmedName,
+        required: editDraft.required,
+        ...(nextOptions !== undefined ? { picklist_options: nextOptions } : {}),
+      });
+      cancelEdit();
+      await load();
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Update failed");
     }
   };
 
@@ -195,31 +253,101 @@ export function AttributeManager() {
           <Skeleton className="h-20 w-full" />
         ) : items.length > 0 ? (
           <ul className="divide-y rounded-md border">
-            {items.map((attr) => (
-              <li key={attr.id} className="flex items-start justify-between gap-3 px-3 py-2">
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="font-medium">{attr.name}</span>
-                    <Badge variant="outline">{attr.attribute_type}</Badge>
-                    {attr.required ? <Badge variant="secondary">required</Badge> : null}
+            {items.map((attr) => {
+              const isEditing = attr.id === editingId;
+              if (isEditing && editDraft) {
+                return (
+                  <li key={attr.id} className="space-y-2 px-3 py-3">
+                    <div className="flex items-center gap-2">
+                      <Input
+                        value={editDraft.name}
+                        onChange={(e) =>
+                          setEditDraft({ ...editDraft, name: e.target.value })
+                        }
+                        className="h-8 flex-1"
+                        autoFocus
+                      />
+                      <Badge variant="outline">{attr.attribute_type}</Badge>
+                    </div>
+                    <p className="font-mono text-xs text-muted-foreground">{attr.slug}</p>
+                    <label className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={editDraft.required}
+                        onChange={(e) =>
+                          setEditDraft({ ...editDraft, required: e.target.checked })
+                        }
+                      />
+                      Required
+                    </label>
+                    {attr.attribute_type === "picklist" ? (
+                      <Input
+                        value={editDraft.picklistRaw}
+                        onChange={(e) =>
+                          setEditDraft({ ...editDraft, picklistRaw: e.target.value })
+                        }
+                        placeholder="Option A, Option B, Option C"
+                        className="h-8"
+                      />
+                    ) : null}
+                    <div className="flex gap-2">
+                      <Button
+                        size="sm"
+                        onClick={() => void saveEdit(attr)}
+                        aria-label="Save"
+                      >
+                        <Check className="h-4 w-4" />
+                        Save
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={cancelEdit}
+                        aria-label="Cancel edit"
+                      >
+                        <X className="h-4 w-4" />
+                        Cancel
+                      </Button>
+                    </div>
+                  </li>
+                );
+              }
+              return (
+                <li key={attr.id} className="flex items-start justify-between gap-3 px-3 py-2">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium">{attr.name}</span>
+                      <Badge variant="outline">{attr.attribute_type}</Badge>
+                      {attr.required ? <Badge variant="secondary">required</Badge> : null}
+                    </div>
+                    <p className="font-mono text-xs text-muted-foreground">{attr.slug}</p>
+                    {attr.attribute_type === "picklist" && attr.picklist_options.length > 0 ? (
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Options: {attr.picklist_options.join(", ")}
+                      </p>
+                    ) : null}
                   </div>
-                  <p className="font-mono text-xs text-muted-foreground">{attr.slug}</p>
-                  {attr.attribute_type === "picklist" && attr.picklist_options.length > 0 ? (
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      Options: {attr.picklist_options.join(", ")}
-                    </p>
-                  ) : null}
-                </div>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => void handleDelete(attr.id)}
-                  aria-label={`Delete ${attr.name}`}
-                >
-                  <Trash2 className="h-4 w-4" />
-                </Button>
-              </li>
-            ))}
+                  <div className="flex gap-1">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => startEdit(attr)}
+                      aria-label={`Edit ${attr.name}`}
+                    >
+                      <Pencil className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => void handleDelete(attr.id)}
+                      aria-label={`Delete ${attr.name}`}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </li>
+              );
+            })}
           </ul>
         ) : (
           <p className="text-sm text-muted-foreground">No attributes yet.</p>

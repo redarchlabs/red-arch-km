@@ -118,6 +118,34 @@ class TestQdrantStoreIntegration:
         assert all(c.payload["tenant_id"] == tenant_a for c in chunks_a)
         assert all(c.payload["tenant_id"] == tenant_b for c in chunks_b)
 
+    def test_delete_tenant_removes_both_collections(
+        self, vector_store: QdrantVectorStore
+    ) -> None:
+        tenant = f"t-{uuid.uuid4().hex[:8]}"
+        doc_key = f"doc-{uuid.uuid4().hex[:8]}"
+
+        vector_store.ensure_collections(tenant)
+        vector_store.upsert_vectors(tenant, _make_records(tenant, doc_key, 2))
+        doc_record = VectorRecord(
+            id=str(uuid.uuid4()),
+            vector=[0.1, 0.2, 0.3, 0.4],
+            payload={"document_key": doc_key, "tenant_id": tenant, "type": "document"},
+        )
+        vector_store.upsert_vectors(tenant, [doc_record], collection_type="documents")
+        assert vector_store.document_exists(tenant, doc_key) is True
+
+        vector_store.delete_tenant(tenant)
+        # Subsequent existence check on the missing collection returns False
+        # rather than raising.
+        assert vector_store.document_exists(tenant, doc_key) is False
+
+    def test_delete_tenant_idempotent(self, vector_store: QdrantVectorStore) -> None:
+        """Deleting a tenant that doesn't exist must not raise, and a second
+        delete on an already-deleted tenant must also be a no-op."""
+        tenant = f"ghost-{uuid.uuid4().hex[:8]}"
+        vector_store.delete_tenant(tenant)
+        vector_store.delete_tenant(tenant)
+
     def test_update_metadata(self, vector_store: QdrantVectorStore) -> None:
         tenant = f"t-{uuid.uuid4().hex[:8]}"
         doc_key = f"doc-{uuid.uuid4().hex[:8]}"

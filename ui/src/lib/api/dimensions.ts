@@ -29,6 +29,15 @@ export async function createDimension(
   return response.data;
 }
 
+export async function updateDimension(
+  kind: DimensionKind,
+  id: string,
+  input: DimensionCreateInput,
+): Promise<Dimension> {
+  const response = await apiClient.patch<Dimension>(`/dimensions/${kind}/${id}`, input);
+  return response.data;
+}
+
 export async function deleteDimension(kind: DimensionKind, id: string): Promise<void> {
   await apiClient.delete(`/dimensions/${kind}/${id}`);
 }

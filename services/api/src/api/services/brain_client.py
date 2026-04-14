@@ -128,3 +128,14 @@ class BrainAPIClient:
             )
             response.raise_for_status()
             return response.json()
+
+    async def remove_tenant(self, tenant_id: str) -> dict[str, Any]:
+        """Ask brain-api to purge a tenant's Qdrant + Neo4j data."""
+        async with httpx.AsyncClient(timeout=60) as client:
+            response = await client.post(
+                f"{self._base_url}/api/remove-tenant",
+                json={"tenant_id": tenant_id},
+                headers=self._headers(),
+            )
+            response.raise_for_status()
+            return response.json()

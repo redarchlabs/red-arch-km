@@ -126,6 +126,24 @@ async def init_tenant(
     return {"status": "initialized", "tenant_id": body.tenant_id}
 
 
+@router.post("/remove-tenant")
+async def remove_tenant(
+    body: InitTenantRequest,
+    service: Annotated[IngestService, Depends(_get_service)],
+    _api_key: Annotated[str, Depends(require_api_key)],
+) -> dict[str, str]:
+    """Delete all Qdrant collections + Neo4j nodes for a tenant.
+
+    Called by the API when an org is deleted. The service layer already
+    logs per-store failures and proceeds, so the caller gets 200 even on
+    partial failure — operators should monitor brain-api logs to spot
+    cleanup gaps. (Failing loudly here would block PostgreSQL deletion
+    upstream, which is usually worse than leaving orphan vectors.)
+    """
+    await asyncio.to_thread(service.remove_tenant, body.tenant_id)
+    return {"status": "removed", "tenant_id": body.tenant_id}
+
+
 @router.get("/documents/{tenant_id}/{document_key}/chunks")
 async def get_document_chunks(
     tenant_id: str,

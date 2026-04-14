@@ -181,6 +181,21 @@ class QdrantVectorStore:
             self._client.delete(collection_name=collection, points_selector=q_filter)
         logger.info("Deleted document %s from tenant %s", document_key, tenant_id)
 
+    def delete_tenant(self, tenant_id: str) -> None:
+        """Drop both collections for a tenant. Idempotent on missing collections."""
+        for collection in (
+            self._chunk_collection(tenant_id),
+            self._doc_collection(tenant_id),
+        ):
+            try:
+                self._client.delete_collection(collection_name=collection)
+            except Exception as e:  # noqa: BLE001 — Qdrant raises generic on 404
+                msg = str(e).lower()
+                if "not found" in msg or "doesn't exist" in msg or "404" in msg:
+                    continue
+                raise
+        logger.info("Deleted Qdrant collections for tenant %s", tenant_id)
+
     def document_exists(self, tenant_id: str, document_key: str) -> bool:
         conditions = [
             rest.FieldCondition(key="document_key", match=rest.MatchValue(value=document_key)),

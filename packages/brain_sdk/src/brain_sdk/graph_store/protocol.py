@@ -66,6 +66,13 @@ class GraphStore(Protocol):
         """Delete all nodes and relationships for a document."""
         ...
 
+    def delete_tenant(self, tenant_id: str) -> None:
+        """Delete every node and relationship labelled with this tenant.
+
+        Idempotent — a tenant with no nodes is a no-op.
+        """
+        ...
+
     def update_metadata(
         self,
         tenant_id: str,

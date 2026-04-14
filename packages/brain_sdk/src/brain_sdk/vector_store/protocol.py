@@ -83,3 +83,11 @@ class VectorStore(Protocol):
     ) -> list[SearchResult]:
         """Return all chunks for a document ordered by chunk_order."""
         ...
+
+    def delete_tenant(self, tenant_id: str) -> None:
+        """Delete both chunk and document collections for a tenant.
+
+        Idempotent — missing collections are silently ignored so callers
+        can cascade org-deletion without checking state first.
+        """
+        ...

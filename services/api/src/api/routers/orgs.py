@@ -114,16 +114,36 @@ async def delete_org(
     org_id: uuid.UUID,
     _admin: Annotated[CurrentUser, Depends(require_site_admin)],
     session: Annotated[AsyncSession, Depends(get_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
 ) -> None:
-    """Delete an org. Cascades to folders/documents/etc. via FK ON DELETE CASCADE.
+    """Delete an org. Cascades across PostgreSQL, Qdrant, and Neo4j.
 
-    Site admin only. This is a destructive operation — it removes all data
-    belonging to the org from PostgreSQL. Vector/graph cleanup in the brain-api
-    is a separate concern (call /api/remove-document per doc before deleting
-    the org if needed).
+    Site admin only. Destructive: wipes all data belonging to the org from:
+      - PostgreSQL (via FK CASCADE on org_id)
+      - Qdrant (both per-tenant collections)
+      - Neo4j (all nodes with the tenant label)
+
+    Cascade to brain-api is best-effort: if Qdrant/Neo4j cleanup fails,
+    the PostgreSQL delete still completes and operators are expected to
+    follow up via the logs. Blocking the DB delete on a transient infra
+    outage would be worse than leaving orphan vectors behind.
     """
     repo = OrgRepository(session)
     deleted = await repo.delete(org_id)
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Org not found")
+
+    # Best-effort cascade to brain-api. Any failure here is logged but
+    # does not abort the HTTP response — the session.commit() in get_db
+    # will still persist the PostgreSQL delete.
+    try:
+        client = BrainAPIClient(settings)
+        await client.remove_tenant(str(org_id))
+    except Exception as e:
+        logger.error(
+            "brain-api tenant cleanup failed for deleted org %s: %s — "
+            "manual cleanup may be required",
+            org_id, e,
+        )
+
     logger.warning("Site-admin deleted org %s", org_id)

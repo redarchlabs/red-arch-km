@@ -108,6 +108,33 @@ class TestNeo4jStoreIntegration:
         assert "Public" in names_with
         assert "Secret" in names_with
 
+    def test_delete_tenant_removes_all_nodes(
+        self, graph_store: Neo4jGraphStore
+    ) -> None:
+        tenant_a = f"a-{uuid.uuid4().hex[:8]}"
+        tenant_b = f"b-{uuid.uuid4().hex[:8]}"
+
+        graph_store.initialize_tenant(tenant_a)
+        graph_store.initialize_tenant(tenant_b)
+
+        graph_store.insert_triplet(tenant_a, "NodeA", "r", "NodeA2", document_key="a1")
+        graph_store.insert_triplet(tenant_b, "NodeB", "r", "NodeB2", document_key="b1")
+
+        assert graph_store.fuzzy_entity_search(tenant_a, "NodeA")
+        assert graph_store.fuzzy_entity_search(tenant_b, "NodeB")
+
+        graph_store.delete_tenant(tenant_a)
+
+        # Tenant A is gone, tenant B is untouched.
+        assert graph_store.fuzzy_entity_search(tenant_a, "NodeA") == []
+        assert graph_store.fuzzy_entity_search(tenant_b, "NodeB")
+
+    def test_delete_tenant_idempotent(self, graph_store: Neo4jGraphStore) -> None:
+        """Tenant that doesn't exist: delete is a no-op, doesn't raise."""
+        tenant = f"ghost-{uuid.uuid4().hex[:8]}"
+        graph_store.delete_tenant(tenant)
+        graph_store.delete_tenant(tenant)
+
     def test_batched_insert_triplets(self, graph_store: Neo4jGraphStore) -> None:
         """The UNWIND-based insert_triplets covers what ingest actually calls."""
         tenant = f"t-{uuid.uuid4().hex[:8]}"

@@ -14,6 +14,11 @@ export async function createTag(name: string): Promise<Tag> {
   return response.data;
 }
 
+export async function updateTag(id: string, name: string): Promise<Tag> {
+  const response = await apiClient.patch<Tag>(`/tags/${id}`, { name });
+  return response.data;
+}
+
 export async function deleteTag(id: string): Promise<void> {
   await apiClient.delete(`/tags/${id}`);
 }

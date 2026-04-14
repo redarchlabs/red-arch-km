@@ -319,3 +319,20 @@ class IngestService:
         """Initialize vector collections and graph schema for a new tenant."""
         self._stores.vector.ensure_collections(tenant_id)
         self._stores.graph.initialize_tenant(tenant_id)
+
+    def remove_tenant(self, tenant_id: str) -> None:
+        """Delete every vector collection + graph node for a tenant.
+
+        Called when an org is deleted upstream. Both stores handle missing
+        state idempotently, and a failure on one store doesn't block the
+        other — cascading deletes should be best-effort so the upstream
+        org deletion doesn't get blocked by a transient infra outage.
+        """
+        try:
+            self._stores.vector.delete_tenant(tenant_id)
+        except Exception as e:
+            logger.error("Vector tenant delete failed for %s: %s", tenant_id, e)
+        try:
+            self._stores.graph.delete_tenant(tenant_id)
+        except Exception as e:
+            logger.error("Graph tenant delete failed for %s: %s", tenant_id, e)

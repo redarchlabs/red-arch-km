@@ -1,6 +1,6 @@
 "use client";
 
-import { Plus, Trash2 } from "lucide-react";
+import { Check, Pencil, Plus, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
@@ -12,6 +12,7 @@ import {
   createDimension,
   deleteDimension,
   listDimensions,
+  updateDimension,
   type Dimension,
   type DimensionKind,
 } from "@/lib/api/dimensions";
@@ -27,6 +28,9 @@ export function DimensionManager({ kind, label }: DimensionManagerProps) {
   const [error, setError] = useState<string | null>(null);
   const [newName, setNewName] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editName, setEditName] = useState("");
 
   const load = useCallback(async () => {
     setIsLoading(true);
@@ -46,16 +50,43 @@ export function DimensionManager({ kind, label }: DimensionManagerProps) {
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newName.trim() || isSubmitting) return;
+    const name = newName.trim();
+    if (!name || isSubmitting) return;
     setIsSubmitting(true);
     try {
-      await createDimension(kind, { name: newName.trim() });
+      await createDimension(kind, { name });
       setNewName("");
       await load();
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Create failed");
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const startEdit = (item: Dimension) => {
+    setEditingId(item.id);
+    setEditName(item.name);
+    setError(null);
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+    setEditName("");
+  };
+
+  const saveEdit = async (item: Dimension) => {
+    const trimmed = editName.trim();
+    if (!trimmed || trimmed === item.name) {
+      cancelEdit();
+      return;
+    }
+    try {
+      await updateDimension(kind, item.id, { name: trimmed });
+      cancelEdit();
+      await load();
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Update failed");
     }
   };
 
@@ -97,22 +128,66 @@ export function DimensionManager({ kind, label }: DimensionManagerProps) {
           <Skeleton className="h-10 w-full" />
         ) : items.length > 0 ? (
           <ul className="divide-y rounded-md border">
-            {items.map((item) => (
-              <li key={item.id} className="flex items-center justify-between px-3 py-2">
-                <div className="flex items-center gap-2">
-                  <span className="text-sm">{item.name}</span>
-                  <Badge variant="outline">#{item.permission_number}</Badge>
-                </div>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => void handleDelete(item.id)}
-                  aria-label={`Delete ${item.name}`}
-                >
-                  <Trash2 className="h-4 w-4" />
-                </Button>
-              </li>
-            ))}
+            {items.map((item) => {
+              const isEditing = item.id === editingId;
+              return (
+                <li key={item.id} className="flex items-center gap-2 px-3 py-2">
+                  {isEditing ? (
+                    <>
+                      <Input
+                        value={editName}
+                        onChange={(e) => setEditName(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") void saveEdit(item);
+                          if (e.key === "Escape") cancelEdit();
+                        }}
+                        autoFocus
+                        className="h-8"
+                      />
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => void saveEdit(item)}
+                        aria-label="Save"
+                      >
+                        <Check className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={cancelEdit}
+                        aria-label="Cancel edit"
+                      >
+                        <X className="h-4 w-4" />
+                      </Button>
+                    </>
+                  ) : (
+                    <>
+                      <div className="flex flex-1 items-center gap-2">
+                        <span className="text-sm">{item.name}</span>
+                        <Badge variant="outline">#{item.permission_number}</Badge>
+                      </div>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => startEdit(item)}
+                        aria-label={`Edit ${item.name}`}
+                      >
+                        <Pencil className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => void handleDelete(item.id)}
+                        aria-label={`Delete ${item.name}`}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </>
+                  )}
+                </li>
+              );
+            })}
           </ul>
         ) : (
           <p className="text-sm text-muted-foreground">No {label.toLowerCase()} yet.</p>
