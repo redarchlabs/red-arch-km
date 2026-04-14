@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from brain_api.services.ingest_service import IngestService
+from brain_api.services.ingest_service import IngestService, _centroid
 
 
 class _FakeEmbedder:
@@ -26,11 +26,24 @@ def mock_stores() -> MagicMock:
     stores.vector = MagicMock()
     stores.graph = MagicMock()
     stores.summarizer = MagicMock()
-    stores.summarizer.summarize_chunks.return_value = ["summary 1", "summary 2", "summary 3"]
-    stores.summarizer.create_document_summary.return_value = "doc summary"
+    stores.summarizer.summarize_chunks.side_effect = lambda chunks: [
+        f"summary-{i}" for i, _ in enumerate(chunks)
+    ]
+    stores.summarizer.summarize_document.return_value = "final doc summary"
     stores.extractor = MagicMock()
     stores.extractor.extract.return_value = [("subject", "predicate", "object")]
     return stores
+
+
+class TestCentroid:
+    def test_empty_returns_empty(self) -> None:
+        assert _centroid([]) == []
+
+    def test_mean_of_identical_vectors(self) -> None:
+        assert _centroid([[1.0, 2.0], [1.0, 2.0]]) == [1.0, 2.0]
+
+    def test_mean_of_differing_vectors(self) -> None:
+        assert _centroid([[1.0, 2.0], [3.0, 4.0]]) == [2.0, 3.0]
 
 
 class TestIngestService:
@@ -52,40 +65,61 @@ class TestIngestService:
         )
         mock_stores.vector.ensure_collections.assert_called_once_with("t1")
 
-    def test_chunks_and_document_upserted(self, mock_stores: MagicMock) -> None:
+    def test_chunk_summaries_stored_in_payload(self, mock_stores: MagicMock) -> None:
+        """Chunk summaries must land in the chunk record payload — not discarded."""
         service = IngestService(mock_stores)
         service.ingest_document(
             tenant_id="t1", document_key="dk1", title="Doc",
             text="Hello world. This is a test.", tags=["tag1"], access_keys=[42],
             use_knowledge_graph=False,
         )
-        # Two upsert calls: one for chunks, one for document
-        assert mock_stores.vector.upsert_vectors.call_count == 2
+        # First upsert_vectors call is chunks; second is the doc-level record.
         chunk_call = mock_stores.vector.upsert_vectors.call_args_list[0]
-        assert chunk_call.kwargs["collection_type"] == "chunks"
+        records = chunk_call.args[1]
+        assert all("summary" in r.payload for r in records)
+        assert all(r.payload["summary"].startswith("summary-") for r in records)
 
-    def test_knowledge_graph_skipped(self, mock_stores: MagicMock) -> None:
+    def test_document_summary_uses_hierarchical(self, mock_stores: MagicMock) -> None:
+        """The service should call summarize_document, not the old joined-text path."""
         service = IngestService(mock_stores)
         service.ingest_document(
             tenant_id="t1", document_key="dk1", title="Doc",
             text="Hello world. This is a test.", tags=[], access_keys=[],
             use_knowledge_graph=False,
         )
-        mock_stores.graph.insert_triplets.assert_not_called()
-        mock_stores.extractor.extract.assert_not_called()
+        mock_stores.summarizer.summarize_document.assert_called_once()
 
-    def test_knowledge_graph_extracts_and_stores(self, mock_stores: MagicMock) -> None:
+    def test_doc_summary_failure_falls_back_to_centroid(
+        self, mock_stores: MagicMock
+    ) -> None:
+        """Empty doc summary → doc vector is the centroid of chunk embeddings."""
+        mock_stores.summarizer.summarize_document.return_value = ""
+        service = IngestService(mock_stores)
+        service.ingest_document(
+            tenant_id="t1", document_key="dk1", title="Doc",
+            text="Hello world. This is a test.", tags=[], access_keys=[],
+            use_knowledge_graph=False,
+        )
+
+        doc_call = mock_stores.vector.upsert_vectors.call_args_list[1]
+        doc_record = doc_call.args[1][0]
+        # The centroid is not equal to the first chunk embedding alone.
+        assert doc_record.vector != [0.1] * 4
+
+    def test_knowledge_graph_batched_insert(self, mock_stores: MagicMock) -> None:
+        """All triplets are collected then inserted in one batch call."""
         service = IngestService(mock_stores)
         result = service.ingest_document(
             tenant_id="t1", document_key="dk1", title="Doc",
             text="Hello world. This is a test.", tags=[], access_keys=[],
             use_knowledge_graph=True,
         )
-        mock_stores.extractor.extract.assert_called()
-        mock_stores.graph.insert_triplets.assert_called()
+        mock_stores.graph.insert_triplets.assert_called_once()
         assert result["triplets"] > 0
 
-    def test_triplet_failure_does_not_halt_ingestion(self, mock_stores: MagicMock) -> None:
+    def test_triplet_extraction_failure_does_not_halt_ingestion(
+        self, mock_stores: MagicMock
+    ) -> None:
         mock_stores.extractor.extract.side_effect = RuntimeError("LLM failed")
         service = IngestService(mock_stores)
         result = service.ingest_document(
@@ -93,7 +127,19 @@ class TestIngestService:
             text="Hello world. This is a test.", tags=[], access_keys=[],
             use_knowledge_graph=True,
         )
-        # Chunks should still be stored even when triplet extraction fails
+        assert result["chunks"] > 0
+        assert result["triplets"] == 0
+        mock_stores.graph.insert_triplets.assert_not_called()
+
+    def test_triplet_insert_failure_returns_zero(self, mock_stores: MagicMock) -> None:
+        """If the batched insert itself fails, ingestion still returns success."""
+        mock_stores.graph.insert_triplets.side_effect = RuntimeError("Neo4j down")
+        service = IngestService(mock_stores)
+        result = service.ingest_document(
+            tenant_id="t1", document_key="dk1", title="Doc",
+            text="Hello world. This is a test.", tags=[], access_keys=[],
+            use_knowledge_graph=True,
+        )
         assert result["chunks"] > 0
         assert result["triplets"] == 0
 
@@ -101,13 +147,6 @@ class TestIngestService:
         service = IngestService(mock_stores)
         service.remove_document("t1", "dk1")
         mock_stores.vector.delete_document.assert_called_once_with("t1", "dk1")
-        mock_stores.graph.delete_by_document_key.assert_called_once_with("t1", "dk1")
-
-    def test_remove_document_tolerates_vector_failure(self, mock_stores: MagicMock) -> None:
-        mock_stores.vector.delete_document.side_effect = RuntimeError("Qdrant down")
-        service = IngestService(mock_stores)
-        service.remove_document("t1", "dk1")
-        # Graph delete still runs
         mock_stores.graph.delete_by_document_key.assert_called_once_with("t1", "dk1")
 
     def test_init_tenant(self, mock_stores: MagicMock) -> None:

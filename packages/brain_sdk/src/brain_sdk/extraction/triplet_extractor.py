@@ -29,7 +29,7 @@ def _clean_json_response(text: str) -> str:
 class TripletExtractor:
     """Extract knowledge graph triplets from text via LLM."""
 
-    def __init__(self, api_key: str, model: str = "gpt-4.1-mini") -> None:
+    def __init__(self, api_key: str, model: str = "gpt-5-mini") -> None:
         self._client = OpenAI(api_key=api_key)
         self._model = model
 

@@ -124,14 +124,52 @@ class Neo4jGraphStore:
         tags: list[str] | None = None,
         access_keys: list[int] | None = None,
     ) -> None:
-        for s, p, o in triplets:
-            if s and p and o:
-                self.insert_triplet(
-                    tenant_id, s, p, o,
-                    document_key=document_key,
-                    subj_tags=tags, obj_tags=tags,
-                    subj_access=access_keys, obj_access=access_keys,
-                )
+        """Batch-insert all triplets in one Cypher round-trip via UNWIND.
+
+        Previously this iterated `insert_triplet` once per tuple, each of
+        which ran three Cypher queries — 50 triplets cost ~150 round-trips.
+        The UNWIND variant does it in one statement; per-chunk ingest
+        latency for a document with ~10 triplets/chunk drops roughly an
+        order of magnitude.
+        """
+        clean = [
+            {"subj": s, "pred": p, "obj": o}
+            for s, p, o in triplets
+            if s and p and o
+        ]
+        if not clean:
+            return
+
+        lbls = self._tenant_labels(tenant_id)
+        cypher = f"""
+UNWIND $triplets AS t
+MERGE (s{lbls} {{{_PROP_NAME}: t.subj}})
+  ON CREATE SET s.{_PROP_TAGS} = $tags,
+                s.{_PROP_ACCESS_KEYS} = $access_keys
+  ON MATCH  SET s.{_PROP_TAGS} = apoc.coll.toSet(coalesce(s.{_PROP_TAGS}, []) + $tags),
+                s.{_PROP_ACCESS_KEYS} = apoc.coll.toSet(coalesce(s.{_PROP_ACCESS_KEYS}, []) + $access_keys)
+MERGE (o{lbls} {{{_PROP_NAME}: t.obj}})
+  ON CREATE SET o.{_PROP_TAGS} = $tags,
+                o.{_PROP_ACCESS_KEYS} = $access_keys
+  ON MATCH  SET o.{_PROP_TAGS} = apoc.coll.toSet(coalesce(o.{_PROP_TAGS}, []) + $tags),
+                o.{_PROP_ACCESS_KEYS} = apoc.coll.toSet(coalesce(o.{_PROP_ACCESS_KEYS}, []) + $access_keys)
+FOREACH (_ IN CASE WHEN $dk IS NOT NULL THEN [1] ELSE [] END |
+    SET s.{_PROP_DOCUMENT_KEY} = $dk, o.{_PROP_DOCUMENT_KEY} = $dk
+)
+MERGE (s)-[r:{_REL_TYPE} {{{_PROP_TYPE}: t.pred}}]->(o)
+SET r.tenant_id = $tid
+FOREACH (_ IN CASE WHEN $dk IS NOT NULL THEN [1] ELSE [] END |
+    SET r.{_PROP_DOCUMENT_KEY} = $dk
+)
+"""
+        self._cypher(
+            cypher,
+            triplets=clean,
+            tags=tags or [],
+            access_keys=access_keys or [],
+            dk=document_key,
+            tid=tenant_id,
+        )
 
     def _get_all_triplets(
         self,

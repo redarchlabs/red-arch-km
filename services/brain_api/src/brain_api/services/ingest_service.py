@@ -1,7 +1,26 @@
-"""Document ingestion orchestration: chunk → embed → summarize → store (+ triplets)."""
+"""Document ingestion orchestration.
+
+Pipeline (all LLM/I-O calls parallelised where safe):
+
+    chunk text ─┬─▶ parallel embed batch ─┬─▶ chunk records (text + summary)
+                └─▶ parallel chunk summaries ─▶ hierarchical doc summary
+                                                      │
+                                                      └─▶ doc-level vector
+
+    parallel triplet extraction per chunk ─▶ single UNWIND insert into Neo4j
+
+Key guarantees:
+- Chunk-level summaries are stored alongside raw chunk text so retrieval
+  can surface them without recomputing.
+- Document summary is hierarchical (groups of chunk summaries → group
+  summaries → … → single summary) — never over-stuffs one LLM prompt.
+- If document summarisation returns empty, the doc-level vector falls
+  back to the centroid of chunk embeddings rather than the first chunk.
+"""
 
 from __future__ import annotations
 
+import concurrent.futures
 import logging
 import time
 import uuid
@@ -19,6 +38,16 @@ _tracer = get_tracer("brain_api.ingest")
 
 _CHUNK_SIZE_TOKENS = 500
 _CHUNK_OVERLAP_TOKENS = 20
+_TRIPLET_WORKERS = 8
+
+
+def _centroid(vectors: list[list[float]]) -> list[float]:
+    """Arithmetic mean across a list of equal-length vectors."""
+    if not vectors:
+        return []
+    dim = len(vectors[0])
+    n = len(vectors)
+    return [sum(v[i] for v in vectors) / n for i in range(dim)]
 
 
 class IngestService:
@@ -39,10 +68,7 @@ class IngestService:
         use_knowledge_graph: bool = True,
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Run the full ingestion pipeline for a document.
-
-        Returns a summary of what was ingested (chunk count, triplet count, etc.).
-        """
+        """Run the full ingestion pipeline for a document."""
         metrics = get_metrics()
         start = time.perf_counter()
 
@@ -78,8 +104,18 @@ class IngestService:
                 logger.warning("No chunks produced from document %s", document_key)
                 return {"document_key": document_key, "chunks": 0, "triplets": 0}
 
-            with _tracer.start_as_current_span("embed_chunks") as span:
-                chunk_embeddings = self._stores.embedder.embed_batch(chunks)
+            # Embedding and summarisation are independent and network-bound,
+            # so we run them concurrently.
+            with (
+                _tracer.start_as_current_span("embed_and_summarize") as span,
+                concurrent.futures.ThreadPoolExecutor(max_workers=2) as exe,
+            ):
+                embed_future = exe.submit(self._stores.embedder.embed_batch, chunks)
+                summaries_future = exe.submit(
+                    self._stores.summarizer.summarize_chunks, chunks
+                )
+                chunk_embeddings = embed_future.result()
+                chunk_summaries = summaries_future.result()
                 span.set_attribute("batch_size", len(chunks))
 
             doc_id = str(uuid.uuid4())
@@ -89,6 +125,7 @@ class IngestService:
                     vector=embedding,
                     payload={
                         "text": chunk,
+                        "summary": summary,
                         "chunk_order": idx,
                         "document_id": doc_id,
                         "document_key": document_key,
@@ -100,7 +137,9 @@ class IngestService:
                         **(metadata or {}),
                     },
                 )
-                for idx, (chunk, embedding) in enumerate(zip(chunks, chunk_embeddings, strict=True))
+                for idx, (chunk, embedding, summary) in enumerate(
+                    zip(chunks, chunk_embeddings, chunk_summaries, strict=True)
+                )
             ]
 
             with _tracer.start_as_current_span("upsert_chunks"):
@@ -109,10 +148,8 @@ class IngestService:
                 )
 
             with _tracer.start_as_current_span("document_summary"):
-                summary = self._build_document_summary(chunks)
-                doc_vector = (
-                    self._stores.embedder.embed(summary) if summary else chunk_embeddings[0]
-                )
+                doc_summary = self._safe_document_summary(chunk_summaries)
+                doc_vector = self._choose_document_vector(doc_summary, chunk_embeddings)
 
             doc_record = VectorRecord(
                 id=doc_id,
@@ -121,7 +158,7 @@ class IngestService:
                     "document_id": doc_id,
                     "document_key": document_key,
                     "document_title": title,
-                    "summary": summary,
+                    "summary": doc_summary,
                     "tenant_id": tenant_id,
                     "tags": tags,
                     "access_keys": access_keys or [0],
@@ -135,7 +172,7 @@ class IngestService:
 
             triplet_count = 0
             if use_knowledge_graph:
-                with _tracer.start_as_current_span("extract_triplets") as span:
+                with _tracer.start_as_current_span("extract_and_store_triplets") as span:
                     triplet_count = self._extract_and_store_triplets(
                         tenant_id=tenant_id,
                         document_key=document_key,
@@ -166,21 +203,32 @@ class IngestService:
                 "triplets": triplet_count,
             }
 
-    def _build_document_summary(self, chunks: list[str]) -> str:
-        """Create a document-level summary.
-
-        For short documents (<3 chunks) we skip LLM summarization to save cost
-        and just concatenate the chunks.
-        """
-        if len(chunks) < 3:
-            return " ".join(chunks)[:2000]
-
+    def _safe_document_summary(self, chunk_summaries: list[str]) -> str:
+        """Hierarchical summary with a safe fallback if the LLM pipeline fails."""
         try:
-            chunk_summaries = self._stores.summarizer.summarize_chunks(chunks)
-            return self._stores.summarizer.create_document_summary(chunk_summaries)
+            return self._stores.summarizer.summarize_document(chunk_summaries)
         except Exception as e:
-            logger.error("Summarization failed; falling back to truncation: %s", e)
-            return " ".join(chunks)[:2000]
+            logger.error("Document summarisation failed: %s", e)
+            # Cheap fallback so the doc-level record still has text to display.
+            return " ".join(s for s in chunk_summaries if s)[:2000]
+
+    def _choose_document_vector(
+        self, summary: str, chunk_embeddings: list[list[float]]
+    ) -> list[float]:
+        """Embed the doc summary, or fall back to centroid of chunk embeddings.
+
+        Previously this defaulted to `chunk_embeddings[0]`, biasing
+        document-level retrieval toward whatever happened to appear first
+        in the source. The centroid is a much better neutral baseline.
+        """
+        if summary:
+            try:
+                return self._stores.embedder.embed(summary)
+            except Exception as e:
+                logger.error("Doc summary embedding failed; using centroid: %s", e)
+        else:
+            logger.warning("Doc summary empty; using centroid of chunk embeddings")
+        return _centroid(chunk_embeddings)
 
     def _extract_and_store_triplets(
         self,
@@ -191,30 +239,34 @@ class IngestService:
         tags: list[str],
         access_keys: list[int],
     ) -> int:
-        """Extract triplets from each chunk and insert into the graph store."""
-        total = 0
-        for chunk in chunks:
-            try:
-                triplets = self._stores.extractor.extract(chunk)
-            except Exception as e:
-                logger.error("Triplet extraction failed: %s", e)
-                continue
+        """Extract triplets from all chunks in parallel, then batch-insert."""
 
-            if not triplets:
-                continue
-
+        def extract_safe(chunk: str) -> list[tuple[str, str, str]]:
             try:
-                self._stores.graph.insert_triplets(
-                    tenant_id=tenant_id,
-                    triplets=triplets,
-                    document_key=document_key,
-                    tags=tags,
-                    access_keys=access_keys,
-                )
-                total += len(triplets)
+                return self._stores.extractor.extract(chunk)
             except Exception as e:
-                logger.error("Triplet insert failed: %s", e)
-        return total
+                logger.warning("Triplet extraction failed for one chunk: %s", e)
+                return []
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=_TRIPLET_WORKERS) as exe:
+            per_chunk = list(exe.map(extract_safe, chunks))
+
+        all_triplets: list[tuple[str, str, str]] = [t for sub in per_chunk for t in sub]
+        if not all_triplets:
+            return 0
+
+        try:
+            self._stores.graph.insert_triplets(
+                tenant_id=tenant_id,
+                triplets=all_triplets,
+                document_key=document_key,
+                tags=tags,
+                access_keys=access_keys,
+            )
+        except Exception as e:
+            logger.error("Batch triplet insert failed: %s", e)
+            return 0
+        return len(all_triplets)
 
     def remove_document(self, tenant_id: str, document_key: str) -> None:
         """Remove a document from both vector and graph stores."""

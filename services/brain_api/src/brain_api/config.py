@@ -37,7 +37,7 @@ class BrainAPISettings(BaseSettings):
 
     openai_api_key: str = Field(default="", validation_alias="OPENAI_API_KEY")
     openai_chat_model: str = Field(
-        default="gpt-4.1-mini", validation_alias="OPENAI_CHAT_MODEL"
+        default="gpt-5-mini", validation_alias="OPENAI_CHAT_MODEL"
     )
     openai_embedding_model: str = Field(
         default="text-embedding-3-small",

@@ -14,7 +14,7 @@ from brain_sdk.vector_store.protocol import SearchResult
 def fake_settings() -> MagicMock:
     settings = MagicMock()
     settings.openai_api_key = "sk-test"
-    settings.openai_chat_model = "gpt-4.1-mini"
+    settings.openai_chat_model = "gpt-5-mini"
     return settings
 
 
