@@ -10,8 +10,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.config import get_settings
-from api.db import dispose_engine
+from api.db import dispose_engine, get_engine
 from api.middleware.request_logging import RequestLoggingMiddleware
+from api.observability import setup_observability
 from api.routers import (
     auth,
     chat,
@@ -32,10 +33,15 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     settings = get_settings()
-    logging.basicConfig(
-        level=getattr(logging, settings.log_level.upper()),
-        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+    engine = get_engine(settings)
+
+    setup_observability(
+        app,
+        engine,
+        service_name="red-arch-km-api",
+        log_level=settings.log_level,
     )
+
     logger.info("Starting Red Arch KM API")
 
     yield

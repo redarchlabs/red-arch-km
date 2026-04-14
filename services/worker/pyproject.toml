@@ -13,6 +13,8 @@ dependencies = [
     "pdf2image>=1.16",
     "brain-sdk",
     "shared-config",
+    "opentelemetry-instrumentation-celery>=0.48",
+    "opentelemetry-instrumentation-httpx>=0.48",
 ]
 
 [build-system]

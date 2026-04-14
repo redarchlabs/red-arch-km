@@ -1,4 +1,10 @@
-"""Request logging middleware with request ID propagation."""
+"""Structured request logging middleware.
+
+Emits one JSON log line per request with method, path, status, duration,
+and the request ID. Trace and span IDs are injected automatically by the
+`JSONFormatter` from `shared_config.logging` when OTel has instrumented
+the request.
+"""
 
 from __future__ import annotations
 
@@ -23,12 +29,15 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         duration_ms = (time.perf_counter() - start) * 1000
 
         logger.info(
-            "%s %s %d %.1fms [%s]",
-            request.method,
-            request.url.path,
-            response.status_code,
-            duration_ms,
-            request_id,
+            "request completed",
+            extra={
+                "request_id": request_id,
+                "method": request.method,
+                "path": request.url.path,
+                "status": response.status_code,
+                "duration_ms": round(duration_ms, 2),
+                "client_ip": request.client.host if request.client else None,
+            },
         )
 
         response.headers["X-Request-ID"] = request_id

@@ -3,15 +3,19 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Iterator
 from typing import Any
 
 from openai import OpenAI
+from shared_config import get_tracer
 
 from brain_api.config import BrainAPISettings
+from brain_api.observability import get_metrics
 from brain_api.stores import Stores
 
 logger = logging.getLogger(__name__)
+_tracer = get_tracer("brain_api.search")
 
 _RAG_SYSTEM_PROMPT = """\
 You are a knowledgeable assistant answering questions using the provided context.
@@ -38,13 +42,24 @@ class SearchService:
         tags: list[str] | None = None,
     ) -> dict[str, Any]:
         """Semantic search over chunk vectors."""
-        query_vector = self._stores.embedder.embed(query)
-        results = self._stores.vector.search(
-            tenant_id=tenant_id,
-            query_vector=query_vector,
-            limit=limit,
-            access_keys=access_keys,
-            required_tags=tags,
+        metrics = get_metrics()
+        start = time.perf_counter()
+
+        with _tracer.start_as_current_span(
+            "vector_search",
+            attributes={"tenant_id": tenant_id, "limit": limit},
+        ):
+            query_vector = self._stores.embedder.embed(query)
+            results = self._stores.vector.search(
+                tenant_id=tenant_id,
+                query_vector=query_vector,
+                limit=limit,
+                access_keys=access_keys,
+                required_tags=tags,
+            )
+
+        metrics.search_duration_ms.record(
+            (time.perf_counter() - start) * 1000, {"tenant_id": tenant_id}
         )
         return {
             "hits": [

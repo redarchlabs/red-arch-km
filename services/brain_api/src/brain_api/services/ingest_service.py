@@ -3,15 +3,19 @@
 from __future__ import annotations
 
 import logging
+import time
 import uuid
 from typing import Any
 
 from brain_sdk.chunking.chunker import chunk_text
 from brain_sdk.vector_store.protocol import VectorRecord
+from shared_config import get_tracer
 
+from brain_api.observability import get_metrics
 from brain_api.stores import Stores
 
 logger = logging.getLogger(__name__)
+_tracer = get_tracer("brain_api.ingest")
 
 _CHUNK_SIZE_TOKENS = 500
 _CHUNK_OVERLAP_TOKENS = 20
@@ -39,86 +43,128 @@ class IngestService:
 
         Returns a summary of what was ingested (chunk count, triplet count, etc.).
         """
-        logger.info("Ingesting %s for tenant %s (%d chars)", document_key, tenant_id, len(text))
+        metrics = get_metrics()
+        start = time.perf_counter()
 
-        # 1. Ensure per-tenant collections exist
-        self._stores.vector.ensure_collections(tenant_id)
+        with _tracer.start_as_current_span(
+            "ingest_document",
+            attributes={
+                "tenant_id": tenant_id,
+                "document_key": document_key,
+                "text_length": len(text),
+            },
+        ):
+            logger.info(
+                "Ingesting document",
+                extra={
+                    "document_key": document_key,
+                    "tenant_id": tenant_id,
+                    "text_length": len(text),
+                },
+            )
 
-        # 2. Chunk the text
-        chunks = chunk_text(text, desired_chunk_size=_CHUNK_SIZE_TOKENS, desired_overlap=_CHUNK_OVERLAP_TOKENS)
-        if not chunks:
-            logger.warning("No chunks produced from document %s", document_key)
-            return {"document_key": document_key, "chunks": 0, "triplets": 0}
+            with _tracer.start_as_current_span("ensure_collections"):
+                self._stores.vector.ensure_collections(tenant_id)
 
-        # 3. Embed chunks in a batch
-        chunk_embeddings = self._stores.embedder.embed_batch(chunks)
+            with _tracer.start_as_current_span("chunk_text") as span:
+                chunks = chunk_text(
+                    text,
+                    desired_chunk_size=_CHUNK_SIZE_TOKENS,
+                    desired_overlap=_CHUNK_OVERLAP_TOKENS,
+                )
+                span.set_attribute("chunk_count", len(chunks))
 
-        # 4. Build chunk vector records
-        doc_id = str(uuid.uuid4())
-        chunk_records = [
-            VectorRecord(
-                id=str(uuid.uuid4()),
-                vector=embedding,
+            if not chunks:
+                logger.warning("No chunks produced from document %s", document_key)
+                return {"document_key": document_key, "chunks": 0, "triplets": 0}
+
+            with _tracer.start_as_current_span("embed_chunks") as span:
+                chunk_embeddings = self._stores.embedder.embed_batch(chunks)
+                span.set_attribute("batch_size", len(chunks))
+
+            doc_id = str(uuid.uuid4())
+            chunk_records = [
+                VectorRecord(
+                    id=str(uuid.uuid4()),
+                    vector=embedding,
+                    payload={
+                        "text": chunk,
+                        "chunk_order": idx,
+                        "document_id": doc_id,
+                        "document_key": document_key,
+                        "document_title": title,
+                        "tenant_id": tenant_id,
+                        "tags": tags,
+                        "access_keys": access_keys or [0],
+                        "type": "chunk",
+                        **(metadata or {}),
+                    },
+                )
+                for idx, (chunk, embedding) in enumerate(zip(chunks, chunk_embeddings, strict=True))
+            ]
+
+            with _tracer.start_as_current_span("upsert_chunks"):
+                self._stores.vector.upsert_vectors(
+                    tenant_id, chunk_records, collection_type="chunks"
+                )
+
+            with _tracer.start_as_current_span("document_summary"):
+                summary = self._build_document_summary(chunks)
+                doc_vector = (
+                    self._stores.embedder.embed(summary) if summary else chunk_embeddings[0]
+                )
+
+            doc_record = VectorRecord(
+                id=doc_id,
+                vector=doc_vector,
                 payload={
-                    "text": chunk,
-                    "chunk_order": idx,
                     "document_id": doc_id,
                     "document_key": document_key,
                     "document_title": title,
+                    "summary": summary,
                     "tenant_id": tenant_id,
                     "tags": tags,
                     "access_keys": access_keys or [0],
-                    "type": "chunk",
+                    "type": "document",
                     **(metadata or {}),
                 },
             )
-            for idx, (chunk, embedding) in enumerate(zip(chunks, chunk_embeddings, strict=True))
-        ]
-
-        self._stores.vector.upsert_vectors(tenant_id, chunk_records, collection_type="chunks")
-        logger.info("Stored %d chunk vectors for %s", len(chunk_records), document_key)
-
-        # 5. Build and store document-level record (summary + embedding)
-        summary = self._build_document_summary(chunks)
-        doc_vector = self._stores.embedder.embed(summary) if summary else chunk_embeddings[0]
-        doc_record = VectorRecord(
-            id=doc_id,
-            vector=doc_vector,
-            payload={
-                "document_id": doc_id,
-                "document_key": document_key,
-                "document_title": title,
-                "summary": summary,
-                "tenant_id": tenant_id,
-                "tags": tags,
-                "access_keys": access_keys or [0],
-                "type": "document",
-                **(metadata or {}),
-            },
-        )
-        self._stores.vector.upsert_vectors(tenant_id, [doc_record], collection_type="documents")
-
-        # 6. Extract and store triplets (optional)
-        triplet_count = 0
-        if use_knowledge_graph:
-            triplet_count = self._extract_and_store_triplets(
-                tenant_id=tenant_id,
-                document_key=document_key,
-                chunks=chunks,
-                tags=tags,
-                access_keys=access_keys,
+            self._stores.vector.upsert_vectors(
+                tenant_id, [doc_record], collection_type="documents"
             )
 
-        logger.info(
-            "Ingest complete for %s: %d chunks, %d triplets",
-            document_key, len(chunk_records), triplet_count,
-        )
-        return {
-            "document_key": document_key,
-            "document_id": doc_id,
-            "chunks": len(chunk_records),
-            "triplets": triplet_count,
-        }
+            triplet_count = 0
+            if use_knowledge_graph:
+                with _tracer.start_as_current_span("extract_triplets") as span:
+                    triplet_count = self._extract_and_store_triplets(
+                        tenant_id=tenant_id,
+                        document_key=document_key,
+                        chunks=chunks,
+                        tags=tags,
+                        access_keys=access_keys,
+                    )
+                    span.set_attribute("triplet_count", triplet_count)
+
+            duration_ms = (time.perf_counter() - start) * 1000
+            metrics.chunks_ingested.add(len(chunk_records), {"tenant_id": tenant_id})
+            metrics.triplets_ingested.add(triplet_count, {"tenant_id": tenant_id})
+            metrics.ingest_duration_ms.record(duration_ms, {"tenant_id": tenant_id})
+
+            logger.info(
+                "Ingest complete",
+                extra={
+                    "document_key": document_key,
+                    "chunks": len(chunk_records),
+                    "triplets": triplet_count,
+                    "duration_ms": round(duration_ms, 2),
+                },
+            )
+            return {
+                "document_key": document_key,
+                "document_id": doc_id,
+                "chunks": len(chunk_records),
+                "triplets": triplet_count,
+            }
 
     def _build_document_summary(self, chunks: list[str]) -> str:
         """Create a document-level summary.

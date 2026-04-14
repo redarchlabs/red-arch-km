@@ -12,6 +12,9 @@ dependencies = [
     "httpx>=0.27",
     "brain-sdk",
     "shared-config",
+    "opentelemetry-instrumentation-fastapi>=0.48",
+    "opentelemetry-instrumentation-httpx>=0.48",
+    "prometheus-fastapi-instrumentator>=7.0",
 ]
 
 [build-system]

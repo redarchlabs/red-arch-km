@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from brain_api.config import BrainAPISettings
+from brain_api.observability import setup_observability
 from brain_api.routers import health, ingest, rag, search
 from brain_api.stores import close_stores, get_stores
 
@@ -18,10 +19,8 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     settings = BrainAPISettings()  # type: ignore[call-arg]
-    logging.basicConfig(
-        level=getattr(logging, settings.log_level.upper()),
-        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
-    )
+    setup_observability(app, service_name="red-arch-km-brain-api", log_level=settings.log_level)
+
     logger.info("Starting Brain API")
 
     # Eagerly initialize stores so startup failures surface immediately
