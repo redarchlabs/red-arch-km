@@ -1,12 +1,16 @@
 /**
  * Keycloak authentication integration.
  *
- * Initializes Keycloak, handles login/logout, and provides token access.
+ * Initialises Keycloak, handles login/logout, and provides token access.
+ * React 19 StrictMode mounts effects twice in development, which would
+ * otherwise invoke `keycloak.init()` a second time and throw — so we
+ * memoise the init promise and return the same resolved value.
  */
 
 import Keycloak from "keycloak-js";
 
 let keycloakInstance: Keycloak | null = null;
+let initPromise: Promise<boolean> | null = null;
 
 export function getKeycloak(): Keycloak {
   if (!keycloakInstance) {
@@ -19,14 +23,17 @@ export function getKeycloak(): Keycloak {
   return keycloakInstance;
 }
 
-export async function initKeycloak(): Promise<boolean> {
+export function initKeycloak(): Promise<boolean> {
+  if (initPromise !== null) {
+    return initPromise;
+  }
   const kc = getKeycloak();
-  const authenticated = await kc.init({
+  initPromise = kc.init({
     onLoad: "login-required",
     checkLoginIframe: false,
     pkceMethod: "S256",
   });
-  return authenticated;
+  return initPromise;
 }
 
 export function getToken(): string | undefined {
@@ -38,5 +45,10 @@ export async function refreshToken(minValidity: number = 30): Promise<boolean> {
 }
 
 export function logout(): void {
+  // Clear persisted per-user state before redirecting through Keycloak
+  // so the next login doesn't inherit a stale org selection.
+  if (typeof window !== "undefined") {
+    localStorage.removeItem("redarch:currentOrgId");
+  }
   getKeycloak().logout();
 }

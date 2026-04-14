@@ -30,7 +30,8 @@ _RLS_TABLES = [
 
 @pytest.fixture(scope="session")
 def postgres_container() -> Generator[PostgresContainer]:
-    with PostgresContainer("postgres:16.4", driver="asyncpg") as pg:
+    # Matches docker-compose.infra.yml and the CI service container.
+    with PostgresContainer("postgres:18", driver="asyncpg") as pg:
         yield pg
 
 

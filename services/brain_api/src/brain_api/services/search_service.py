@@ -44,23 +44,31 @@ class SearchService:
         """Semantic search over chunk vectors."""
         metrics = get_metrics()
         start = time.perf_counter()
+        status = "success"
 
-        with _tracer.start_as_current_span(
-            "vector_search",
-            attributes={"tenant_id": tenant_id, "limit": limit},
-        ):
-            query_vector = self._stores.embedder.embed(query)
-            results = self._stores.vector.search(
-                tenant_id=tenant_id,
-                query_vector=query_vector,
-                limit=limit,
-                access_keys=access_keys,
-                required_tags=tags,
+        try:
+            with _tracer.start_as_current_span(
+                "vector_search",
+                attributes={"tenant_id": tenant_id, "limit": limit},
+            ):
+                query_vector = self._stores.embedder.embed(query)
+                results = self._stores.vector.search(
+                    tenant_id=tenant_id,
+                    query_vector=query_vector,
+                    limit=limit,
+                    access_keys=access_keys,
+                    required_tags=tags,
+                )
+        except Exception:
+            status = "error"
+            raise
+        finally:
+            # Record duration regardless of outcome so dashboards show both
+            # p50/p95 on success and failure timings.
+            metrics.search_duration_ms.record(
+                (time.perf_counter() - start) * 1000,
+                {"tenant_id": tenant_id, "status": status},
             )
-
-        metrics.search_duration_ms.record(
-            (time.perf_counter() - start) * 1000, {"tenant_id": tenant_id}
-        )
         return {
             "hits": [
                 {"id": r.id, "score": r.score, "payload": r.payload}

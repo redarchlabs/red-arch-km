@@ -51,6 +51,23 @@ export function FolderTree({ folders, onMove }: FolderTreeProps) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [dragOverId, setDragOverId] = useState<string | "__root__" | null>(null);
 
+  /**
+   * Fast descendant check using the server-maintained dot_path prefix.
+   * Moving folder A under any node whose dot_path is "A" or starts with
+   * "A." would create a cycle; the server rejects this, but we also
+   * short-circuit here so the user gets immediate feedback instead of
+   * a round-trip failure.
+   */
+  const isDescendantOf = (candidateId: string, ancestorId: string): boolean => {
+    const ancestor = folders.find((f) => f.id === ancestorId);
+    const candidate = folders.find((f) => f.id === candidateId);
+    if (!ancestor || !candidate) return false;
+    const prefix = ancestor.dot_path;
+    return (
+      candidate.dot_path === prefix || candidate.dot_path.startsWith(`${prefix}.`)
+    );
+  };
+
   const toggle = (id: string) =>
     setExpanded((prev) => {
       const next = new Set(prev);
@@ -77,6 +94,8 @@ export function FolderTree({ folders, onMove }: FolderTreeProps) {
     setDragOverId(null);
     const draggedId = e.dataTransfer.getData("application/x-folder-id");
     if (!draggedId || draggedId === targetId) return;
+    // Short-circuit cycle attempts client-side. The server also rejects.
+    if (targetId !== null && isDescendantOf(targetId, draggedId)) return;
     await onMove(draggedId, targetId);
   };
 

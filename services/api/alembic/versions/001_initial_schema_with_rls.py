@@ -256,12 +256,27 @@ def downgrade() -> None:
             op.execute(f"DROP POLICY IF EXISTS tenant_isolation_{action} ON {table}")
         op.execute(f"ALTER TABLE {table} DISABLE ROW LEVEL SECURITY")
 
-    # Drop tables in reverse dependency order
-    for table in reversed([
-        "document_tags", "document_access", "document_attribute_definitions",
-        "chat_sessions", "documents", "tags", "folders",
-        "membership_regions", "membership_departments", "membership_roles", "membership_groups",
-        "user_org_memberships", "user_profiles",
-        "regions", "departments", "roles", "groups", "orgs",
-    ]):
+    # Drop tables in dependency-safe order (dependents first, referenced last).
+    # Without this order, dropping `orgs` before `regions`/`departments`/etc.
+    # raises FK-dependent-objects errors.
+    for table in [
+        "document_tags",
+        "document_access",
+        "document_attribute_definitions",
+        "chat_sessions",
+        "documents",
+        "tags",
+        "folders",
+        "membership_regions",
+        "membership_departments",
+        "membership_roles",
+        "membership_groups",
+        "user_org_memberships",
+        "user_profiles",
+        "regions",
+        "departments",
+        "roles",
+        "groups",
+        "orgs",
+    ]:
         op.drop_table(table)
