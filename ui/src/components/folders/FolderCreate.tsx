@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { z } from "zod";
 
+import { ParentFolderSelect } from "@/components/folders/ParentFolderSelect";
 import {
   PermissionConfigEditor,
   type PermissionEntry,
@@ -18,9 +19,14 @@ import {
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { createFolder } from "@/lib/api/folders";
+import type { Folder } from "@/types";
 
 const schema = z.object({
-  name: z.string().min(1, "Name is required").max(255),
+  name: z
+    .string()
+    .min(1, "Name is required")
+    .max(255)
+    .refine((v) => !v.includes("."), "Folder names cannot contain '.'"),
   description: z.string().max(2000).optional(),
 });
 
@@ -28,11 +34,13 @@ interface FolderCreateProps {
   open: boolean;
   onClose: () => void;
   onCreated: () => void;
+  folders: Folder[];
 }
 
-export function FolderCreate({ open, onClose, onCreated }: FolderCreateProps) {
+export function FolderCreate({ open, onClose, onCreated, folders }: FolderCreateProps) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [parentId, setParentId] = useState<string | null>(null);
   const [viewers, setViewers] = useState<PermissionEntry[]>([]);
   const [contributors, setContributors] = useState<PermissionEntry[]>([]);
   const [submitting, setSubmitting] = useState(false);
@@ -41,6 +49,7 @@ export function FolderCreate({ open, onClose, onCreated }: FolderCreateProps) {
   const reset = () => {
     setName("");
     setDescription("");
+    setParentId(null);
     setViewers([]);
     setContributors([]);
     setError(null);
@@ -66,6 +75,7 @@ export function FolderCreate({ open, onClose, onCreated }: FolderCreateProps) {
       await createFolder({
         name: parsed.data.name,
         description: parsed.data.description || null,
+        parent_id: parentId,
         viewer_permissions_config: viewers.length > 0 ? viewers : null,
         contributor_permissions_config: contributors.length > 0 ? contributors : null,
       });
@@ -99,6 +109,19 @@ export function FolderCreate({ open, onClose, onCreated }: FolderCreateProps) {
             onChange={(e) => setName(e.target.value)}
             placeholder="Engineering Docs"
             required
+            disabled={submitting}
+          />
+        </div>
+
+        <div>
+          <label htmlFor="folder-parent" className="mb-1.5 block text-sm font-medium">
+            Parent folder
+          </label>
+          <ParentFolderSelect
+            id="folder-parent"
+            value={parentId}
+            onChange={setParentId}
+            folders={folders}
             disabled={submitting}
           />
         </div>

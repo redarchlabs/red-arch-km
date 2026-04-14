@@ -5,7 +5,14 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+
+def _no_dots(name: str) -> str:
+    if "." in name:
+        msg = "Folder names cannot contain '.' (reserved for path separator)"
+        raise ValueError(msg)
+    return name
 
 
 class DocumentCreate(BaseModel):
@@ -37,6 +44,29 @@ class FolderCreate(BaseModel):
     parent_id: uuid.UUID | None = None
     viewer_permissions_config: list[dict[str, Any]] | None = None
     contributor_permissions_config: list[dict[str, Any]] | None = None
+
+    @field_validator("name")
+    @classmethod
+    def _validate_name(cls, v: str) -> str:
+        return _no_dots(v)
+
+
+class FolderUpdate(BaseModel):
+    """Partial update — any field may be omitted, including parent_id.
+
+    Note: parent_id is a `str | None` tagged union here; a literal ``None``
+    reparents to root, while omitting the field leaves the parent unchanged.
+    We distinguish "unset" from "set to null" via the `model_fields_set` API.
+    """
+
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    description: str | None = None
+    parent_id: uuid.UUID | None = None
+
+    @field_validator("name")
+    @classmethod
+    def _validate_name(cls, v: str | None) -> str | None:
+        return _no_dots(v) if v is not None else None
 
 
 class FolderRead(BaseModel):

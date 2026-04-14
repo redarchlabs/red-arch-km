@@ -13,8 +13,13 @@ from api.auth.dependencies import OrgContext, require_org_access, require_org_ad
 from api.dependencies import get_tenant_db
 from api.models.org import Org
 from api.repositories.folder import FolderRepository
-from api.schemas.document import FolderCreate, FolderRead
-from api.services.folder_service import build_dot_path, compute_folder_masks
+from api.schemas.document import FolderCreate, FolderRead, FolderUpdate
+from api.services.folder_service import (
+    FolderCycleError,
+    build_dot_path,
+    compute_folder_masks,
+    move_folder,
+)
 from api.services.permission_config import calculate_user_masks_from_membership
 
 logger = logging.getLogger(__name__)
@@ -83,4 +88,44 @@ async def get_folder(
     folder = await repo.get(folder_id)
     if folder is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Folder not found")
+    return FolderRead.model_validate(folder)
+
+
+@router.patch("/{folder_id}", response_model=FolderRead)
+async def update_folder(
+    folder_id: uuid.UUID,
+    body: FolderUpdate,
+    ctx: Annotated[OrgContext, Depends(require_org_admin)],
+    session: Annotated[AsyncSession, Depends(get_tenant_db)],
+) -> FolderRead:
+    """Rename and/or reparent a folder.
+
+    Distinguishes between "parent_id omitted" (leave unchanged) and
+    "parent_id: null" (move to root) via `model_fields_set`.
+    """
+    repo = FolderRepository(session)
+    folder = await repo.get(folder_id)
+    if folder is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Folder not found")
+
+    if body.name is not None and body.name != folder.name:
+        folder = await repo.rename(folder, body.name)
+
+    if body.description is not None:
+        folder.description = body.description
+        await session.flush()
+
+    if "parent_id" in body.model_fields_set:
+        try:
+            folder = await move_folder(session, folder, body.parent_id)
+        except FolderCycleError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)
+            ) from e
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail=str(e)
+            ) from e
+
+    logger.info("Updated folder %s in org %s", folder_id, ctx.org_id)
     return FolderRead.model_validate(folder)

@@ -1,14 +1,15 @@
 "use client";
 
-import { FolderIcon, Plus } from "lucide-react";
+import { Plus } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
 import { FolderCreate } from "@/components/folders/FolderCreate";
+import { FolderTree } from "@/components/folders/FolderTree";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useOrg } from "@/context/OrgContext";
-import { listFolders } from "@/lib/api/folders";
+import { listFolders, updateFolder } from "@/lib/api/folders";
 import type { Folder } from "@/types";
 
 export default function FoldersPage() {
@@ -35,6 +36,18 @@ export default function FoldersPage() {
     void load();
   }, [load]);
 
+  const handleMove = useCallback(
+    async (folderId: string, newParentId: string | null) => {
+      try {
+        await updateFolder(folderId, { parent_id: newParentId });
+        await load();
+      } catch (e: unknown) {
+        setError(e instanceof Error ? e.message : "Failed to move folder");
+      }
+    },
+    [load],
+  );
+
   if (orgLoading) return <Skeleton className="h-32 w-full" />;
   if (!currentOrgId) {
     return <p className="text-muted-foreground">Select an organization to view folders.</p>;
@@ -46,7 +59,7 @@ export default function FoldersPage() {
         <div>
           <h1 className="text-2xl font-semibold">Folders</h1>
           <p className="text-sm text-muted-foreground">
-            {folders.length} folder{folders.length === 1 ? "" : "s"} visible
+            {folders.length} folder{folders.length === 1 ? "" : "s"} visible · drag to reparent
           </p>
         </div>
         <Button onClick={() => setCreateOpen(true)}>
@@ -62,20 +75,10 @@ export default function FoldersPage() {
       ) : null}
 
       {isLoading ? (
-        <Skeleton className="h-20 w-full" />
+        <Skeleton className="h-40 w-full" />
       ) : folders.length > 0 ? (
         <Card>
-          <ul className="divide-y">
-            {folders.map((folder) => (
-              <li key={folder.id} className="flex items-center gap-3 px-6 py-3">
-                <FolderIcon className="h-4 w-4 text-muted-foreground" />
-                <div>
-                  <p className="font-medium">{folder.name}</p>
-                  <p className="font-mono text-xs text-muted-foreground">{folder.dot_path}</p>
-                </div>
-              </li>
-            ))}
-          </ul>
+          <FolderTree folders={folders} onMove={handleMove} />
         </Card>
       ) : (
         <Card>
@@ -85,7 +88,12 @@ export default function FoldersPage() {
         </Card>
       )}
 
-      <FolderCreate open={createOpen} onClose={() => setCreateOpen(false)} onCreated={load} />
+      <FolderCreate
+        open={createOpen}
+        onClose={() => setCreateOpen(false)}
+        onCreated={load}
+        folders={folders}
+      />
     </div>
   );
 }

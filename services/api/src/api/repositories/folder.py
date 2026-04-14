@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import bindparam, func, or_, select
+from sqlalchemy import bindparam, func, or_, select, text as sql_text
 from sqlalchemy.dialects.postgresql import ARRAY, BIGINT
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -85,3 +85,58 @@ class FolderRepository:
             )
         )
         return list(result.scalars().all())
+
+    async def rename(self, folder: Folder, new_name: str) -> Folder:
+        """Rename a folder and rebuild dot_paths for the subtree."""
+        old_prefix = folder.dot_path
+        parent = await self.get(folder.parent_id) if folder.parent_id else None
+        new_prefix = f"{parent.dot_path}.{new_name}" if parent else new_name
+
+        folder.name = new_name
+        await self._rewrite_subtree_paths(old_prefix, new_prefix, folder.id)
+        await self._session.refresh(folder)
+        return folder
+
+    async def move(self, folder: Folder, new_parent: Folder | None) -> Folder:
+        """Reparent a folder and rebuild dot_paths for its subtree.
+
+        Caller is responsible for validating that `new_parent` is not a
+        descendant of `folder` (cycle prevention lives in the service layer).
+        """
+        old_prefix = folder.dot_path
+        new_prefix = (
+            f"{new_parent.dot_path}.{folder.name}" if new_parent else folder.name
+        )
+
+        folder.parent_id = new_parent.id if new_parent else None
+        await self._rewrite_subtree_paths(old_prefix, new_prefix, folder.id)
+        await self._session.refresh(folder)
+        return folder
+
+    async def _rewrite_subtree_paths(
+        self, old_prefix: str, new_prefix: str, folder_id: uuid.UUID
+    ) -> None:
+        """Rewrite dot_path for the given folder and all descendants atomically.
+
+        RLS still enforces tenant scope on these UPDATE statements; we rely
+        on the `app.current_tenant_id` session setting being in effect.
+        """
+        await self._session.execute(
+            sql_text(
+                "UPDATE folders SET dot_path = :new_prefix WHERE id = :folder_id"
+            ),
+            {"new_prefix": new_prefix, "folder_id": folder_id},
+        )
+        await self._session.execute(
+            sql_text(
+                "UPDATE folders "
+                "SET dot_path = :new_prefix || substr(dot_path, :old_len + 1) "
+                "WHERE dot_path LIKE :old_like"
+            ),
+            {
+                "new_prefix": new_prefix,
+                "old_len": len(old_prefix),
+                "old_like": f"{old_prefix}.%",
+            },
+        )
+        await self._session.flush()
