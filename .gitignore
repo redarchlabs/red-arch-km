@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Environment and secrets
+.env
+.env.local
+.env.production
+secrets/
+*.pem
+*.key
+
+# Testing
+.coverage
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+
+# Docker
+docker/secrets/
+
+# Node / UI
+ui/node_modules/
+ui/.next/
+ui/out/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+var/
+
+# Models (large ML model files)
+models/

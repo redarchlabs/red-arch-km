@@ -1,0 +1,157 @@
+"""FastAPI auth dependencies: get_current_user, require_org_access, require_site_admin."""
+
+from __future__ import annotations
+
+import logging
+import uuid
+from dataclasses import dataclass
+from typing import Annotated
+
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+
+from api.auth.keycloak import validate_keycloak_token
+from api.config import Settings, get_settings
+from api.dependencies import get_db, get_org_id
+from api.models.user import UserOrgMembership, UserProfile
+from api.services.user_provisioning import provision_user_from_claims
+
+logger = logging.getLogger(__name__)
+_bearer_scheme = HTTPBearer()
+
+
+@dataclass(frozen=True, slots=True)
+class CurrentUser:
+    """The authenticated user extracted from the JWT and database."""
+
+    sub: str
+    username: str
+    email: str
+    profile_id: uuid.UUID
+    is_site_admin: bool
+
+
+@dataclass(frozen=True, slots=True)
+class OrgContext:
+    """The user's membership context within a specific org."""
+
+    user: CurrentUser
+    org_id: uuid.UUID
+    membership: UserOrgMembership
+    is_org_admin: bool
+
+
+async def get_current_user(
+    credentials: Annotated[HTTPAuthorizationCredentials, Depends(_bearer_scheme)],
+    settings: Annotated[Settings, Depends(get_settings)],
+    session: Annotated[AsyncSession, Depends(get_db)],
+) -> CurrentUser:
+    """Validate the bearer token, provision the user if needed, and return them."""
+    try:
+        claims = await validate_keycloak_token(
+            credentials.credentials,
+            keycloak_url=settings.keycloak_url,
+            realm=settings.keycloak_realm,
+            client_id=settings.keycloak_client_id,
+        )
+    except Exception as e:
+        logger.warning("Token validation failed: %s", e)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired token",
+        ) from e
+
+    sub = claims.get("sub", "")
+    username = claims.get("preferred_username", "")
+    email = claims.get("email", "")
+
+    if not sub:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token missing subject claim",
+        )
+
+    profile = await provision_user_from_claims(
+        session, sub=sub, username=username, email=email
+    )
+
+    return CurrentUser(
+        sub=sub,
+        username=profile.username,
+        email=profile.email,
+        profile_id=profile.id,
+        is_site_admin=profile.is_site_admin,
+    )
+
+
+async def require_org_access(
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+    org_id: Annotated[uuid.UUID, Depends(get_org_id)],
+    session: Annotated[AsyncSession, Depends(get_db)],
+) -> OrgContext:
+    """Require the current user to have a membership in the requested org.
+
+    Site admins get full access (synthetic membership).
+    """
+    result = await session.execute(
+        select(UserOrgMembership)
+        .where(
+            UserOrgMembership.profile_id == user.profile_id,
+            UserOrgMembership.org_id == org_id,
+        )
+        .options(
+            selectinload(UserOrgMembership.regions),
+            selectinload(UserOrgMembership.departments),
+            selectinload(UserOrgMembership.roles),
+            selectinload(UserOrgMembership.groups),
+        )
+    )
+    membership = result.scalar_one_or_none()
+
+    if membership is None and not user.is_site_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="No membership in the requested organization",
+        )
+
+    # Site admins without explicit membership get elevated access
+    if membership is None:
+        membership = UserOrgMembership(
+            profile_id=user.profile_id,
+            org_id=org_id,
+            is_org_admin=True,
+        )
+
+    return OrgContext(
+        user=user,
+        org_id=org_id,
+        membership=membership,
+        is_org_admin=membership.is_org_admin or user.is_site_admin,
+    )
+
+
+async def require_org_admin(
+    ctx: Annotated[OrgContext, Depends(require_org_access)],
+) -> OrgContext:
+    """Require org-admin privileges within the current org."""
+    if not ctx.is_org_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Organization admin access required",
+        )
+    return ctx
+
+
+async def require_site_admin(
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+) -> CurrentUser:
+    """Require the current user to be a site admin."""
+    if not user.is_site_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Site admin access required",
+        )
+    return user
