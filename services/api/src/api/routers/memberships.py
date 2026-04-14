@@ -16,6 +16,25 @@ from api.schemas.membership import MembershipCreate, MembershipRead, MembershipU
 router = APIRouter()
 
 
+@router.get("/by-user/{user_id}", response_model=MembershipRead | None)
+async def get_user_membership(
+    user_id: uuid.UUID,
+    ctx: Annotated[OrgContext, Depends(require_org_admin)],
+    session: Annotated[AsyncSession, Depends(get_tenant_db)],
+) -> MembershipRead | None:
+    """Return a user's membership in the current org (or null if none exists).
+
+    Used by the admin UI when opening the member-edit panel.
+    """
+    from api.repositories.user import UserRepository
+
+    user_repo = UserRepository(session)
+    membership = await user_repo.get_membership(user_id, ctx.org_id)
+    if membership is None:
+        return None
+    return MembershipRead.model_validate(membership)
+
+
 @router.post("/", response_model=MembershipRead, status_code=status.HTTP_201_CREATED)
 async def create_membership(
     body: MembershipCreate,

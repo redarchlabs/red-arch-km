@@ -14,6 +14,7 @@ from api.db import dispose_engine, get_engine
 from api.middleware.request_logging import RequestLoggingMiddleware
 from api.observability import setup_observability
 from api.routers import (
+    attributes,
     auth,
     chat,
     dimensions,
@@ -81,6 +82,7 @@ def create_app() -> FastAPI:
     app.include_router(search.router, prefix="/api/search", tags=["search"])
     app.include_router(dimensions.router, prefix="/api/dimensions", tags=["dimensions"])
     app.include_router(memberships.router, prefix="/api/memberships", tags=["memberships"])
+    app.include_router(attributes.router, prefix="/api/attributes", tags=["attributes"])
 
     return app
 
