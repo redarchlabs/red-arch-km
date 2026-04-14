@@ -18,9 +18,6 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
-    settings = BrainAPISettings()  # type: ignore[call-arg]
-    setup_observability(app, service_name="red-arch-km-brain-api", log_level=settings.log_level)
-
     logger.info("Starting Brain API")
 
     # Eagerly initialize stores so startup failures surface immediately
@@ -50,6 +47,13 @@ def create_app() -> FastAPI:
         version="2.0.0",
         docs_url="/docs" if settings.debug else None,
         lifespan=lifespan,
+    )
+
+    # Observability must be wired before startup — the Prometheus
+    # instrumentator adds middleware, which Starlette forbids once the
+    # app has entered the lifespan context.
+    setup_observability(
+        app, service_name="red-arch-km-brain-api", log_level=settings.log_level
     )
 
     app.include_router(health.router)

@@ -34,16 +34,6 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
-    settings = get_settings()
-    engine = get_engine(settings)
-
-    setup_observability(
-        app,
-        engine,
-        service_name="red-arch-km-api",
-        log_level=settings.log_level,
-    )
-
     logger.info("Starting Red Arch KM API")
 
     yield
@@ -54,6 +44,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 
 def create_app() -> FastAPI:
     settings = get_settings()
+    engine = get_engine(settings)
 
     app = FastAPI(
         title="Red Arch Knowledge Management API",
@@ -71,6 +62,16 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     app.add_middleware(RequestLoggingMiddleware)
+
+    # Observability must be wired here (before startup). Starlette forbids
+    # adding middleware once the app enters the lifespan context, and the
+    # Prometheus instrumentator installs middleware under the hood.
+    setup_observability(
+        app,
+        engine,
+        service_name="red-arch-km-api",
+        log_level=settings.log_level,
+    )
 
     app.include_router(health.router)
     app.include_router(auth.router, prefix="/api/auth", tags=["auth"])

@@ -45,8 +45,10 @@ services:
       QDRANT_URL: http://qdrant:6333
       NEO4J_URI: bolt://neo4j:7687
     depends_on:
+      # Qdrant's image ships no HTTP client for a healthcheck — rely on
+      # the service being started and brain-api's own retries instead.
       qdrant:
-        condition: service_healthy
+        condition: service_started
       neo4j:
         condition: service_healthy
     healthcheck:
@@ -121,8 +123,11 @@ services:
     depends_on:
       api:
         condition: service_healthy
+    # node:22-alpine doesn't ship curl; use node's own http module instead.
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:3000 || exit 1"]
+      test:
+        - "CMD-SHELL"
+        - "node -e \"require('http').get('http://localhost:3000', r => process.exit(r.statusCode < 500 ? 0 : 1)).on('error', () => process.exit(1))\""
       interval: 10s
       timeout: 5s
       retries: 5

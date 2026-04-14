@@ -2,8 +2,12 @@ services:
   postgres:
     image: postgres:18
     container_name: km2_postgres
+    # In-cluster services reach postgres at postgres:5432 via the docker
+    # network; the host port is only for external tools (psql, pgAdmin
+    # outside Docker). 5433 avoids conflicts with other postgres stacks
+    # bound to the default 5432.
     ports:
-      - "5432:5432"
+      - "5433:5432"
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-redarch}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
@@ -45,12 +49,9 @@ services:
     volumes:
       - qdrant-data:/qdrant/storage
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:6333/healthz || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
+    # Qdrant's image ships neither curl nor wget, so an HTTP healthcheck
+    # can't run inside the container. Dependants (brain-api) use
+    # `service_started` and rely on their own retry/backoff instead.
     ulimits:
       nofile:
         soft: 65535
