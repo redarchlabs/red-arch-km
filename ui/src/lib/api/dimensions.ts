@@ -15,8 +15,10 @@ export interface DimensionCreateInput {
 }
 
 export async function listDimensions(kind: DimensionKind): Promise<Dimension[]> {
-  const response = await apiClient.get<Dimension[]>(`/dimensions/${kind}`);
-  return response.data;
+  const response = await apiClient.get<{ items: Dimension[] }>(`/dimensions/${kind}`, {
+    params: { page_size: 200 },
+  });
+  return response.data.items;
 }
 
 export async function createDimension(

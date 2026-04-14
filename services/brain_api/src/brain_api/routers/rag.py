@@ -1,7 +1,14 @@
-"""RAG pipeline endpoints with streaming support."""
+"""RAG pipeline endpoints with streaming support.
+
+The non-streaming `/ask` endpoint wraps its blocking call in
+`asyncio.to_thread` to keep the event loop responsive. The streaming
+`/ask/stream` endpoint uses FastAPI's StreamingResponse, which consumes
+a sync generator in a thread pool by default.
+"""
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Annotated, Any
@@ -40,7 +47,8 @@ async def ask(
 ) -> dict[str, Any]:
     """Non-streaming RAG query."""
     try:
-        return service.vector_chat(
+        return await asyncio.to_thread(
+            service.vector_chat,
             tenant_id=body.tenant_id,
             query=body.query,
             chat_history=body.chat_history,

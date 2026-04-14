@@ -1,7 +1,12 @@
-"""Vector search and hybrid query endpoints."""
+"""Vector search and hybrid query endpoints.
+
+Blocking service calls are dispatched via `asyncio.to_thread` so the
+event loop stays free for other requests.
+"""
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Annotated, Any
 
@@ -46,7 +51,8 @@ async def vector_search(
     _api_key: Annotated[str, Depends(require_api_key)],
 ) -> dict[str, Any]:
     try:
-        return service.vector_search(
+        return await asyncio.to_thread(
+            service.vector_search,
             tenant_id=body.tenant_id,
             query=body.query,
             limit=body.limit,
@@ -68,7 +74,8 @@ async def vector_chat(
     _api_key: Annotated[str, Depends(require_api_key)],
 ) -> dict[str, Any]:
     try:
-        return service.vector_chat(
+        return await asyncio.to_thread(
+            service.vector_chat,
             tenant_id=body.tenant_id,
             query=body.query,
             chat_history=body.chat_history,

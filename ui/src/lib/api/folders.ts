@@ -17,8 +17,11 @@ export interface FolderCreateInput {
 }
 
 export async function listFolders(): Promise<Folder[]> {
-  const response = await apiClient.get<Folder[]>("/folders/");
-  return response.data;
+  // Backend paginates; request the max page size to keep the UI flat.
+  const response = await apiClient.get<{ items: Folder[] }>("/folders/", {
+    params: { page_size: 200 },
+  });
+  return response.data.items;
 }
 
 export async function createFolder(input: FolderCreateInput): Promise<Folder> {
@@ -40,4 +43,8 @@ export interface FolderUpdateInput {
 export async function updateFolder(id: string, input: FolderUpdateInput): Promise<Folder> {
   const response = await apiClient.patch<Folder>(`/folders/${id}`, input);
   return response.data;
+}
+
+export async function deleteFolder(id: string): Promise<void> {
+  await apiClient.delete(`/folders/${id}`);
 }

@@ -30,6 +30,19 @@ async def list_attributes(
     return [AttributeDefinitionRead.model_validate(i) for i in items]
 
 
+@router.get("/{attribute_id}", response_model=AttributeDefinitionRead)
+async def get_attribute(
+    attribute_id: uuid.UUID,
+    ctx: Annotated[OrgContext, Depends(require_org_admin)],
+    session: Annotated[AsyncSession, Depends(get_tenant_db)],
+) -> AttributeDefinitionRead:
+    repo = AttributeDefinitionRepository(session)
+    instance = await repo.get(attribute_id)
+    if instance is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    return AttributeDefinitionRead.model_validate(instance)
+
+
 @router.post(
     "/", response_model=AttributeDefinitionRead, status_code=status.HTTP_201_CREATED
 )

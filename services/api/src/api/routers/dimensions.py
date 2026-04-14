@@ -16,6 +16,7 @@ from api.auth.dependencies import OrgContext, require_org_admin
 from api.dependencies import get_tenant_db
 from api.models.org import Department, Group, Region, Role
 from api.repositories.dimension import DimensionRepository
+from api.schemas.common import PaginatedResponse, PaginationParams, make_page
 from api.schemas.org import DimensionCreate, DimensionRead
 
 router = APIRouter()
@@ -38,16 +39,36 @@ def _resolve_model(dimension: str) -> type[Region | Department | Role | Group]:
     return model
 
 
-@router.get("/{dimension}", response_model=list[DimensionRead])
+@router.get("/{dimension}", response_model=PaginatedResponse[DimensionRead])
 async def list_dimensions(
     dimension: str,
     ctx: Annotated[OrgContext, Depends(require_org_admin)],
     session: Annotated[AsyncSession, Depends(get_tenant_db)],
-) -> list[DimensionRead]:
+    pagination: Annotated[PaginationParams, Depends()],
+) -> PaginatedResponse[DimensionRead]:
     model = _resolve_model(dimension)
     repo = DimensionRepository(session, model)
-    items = await repo.list_all()
-    return [DimensionRead.model_validate(item) for item in items]
+    items, total = await repo.list_all(
+        offset=pagination.offset, limit=pagination.page_size
+    )
+    return make_page(
+        [DimensionRead.model_validate(item) for item in items], total, pagination
+    )
+
+
+@router.get("/{dimension}/{dimension_id}", response_model=DimensionRead)
+async def get_dimension(
+    dimension: str,
+    dimension_id: uuid.UUID,
+    ctx: Annotated[OrgContext, Depends(require_org_admin)],
+    session: Annotated[AsyncSession, Depends(get_tenant_db)],
+) -> DimensionRead:
+    model = _resolve_model(dimension)
+    repo = DimensionRepository(session, model)
+    instance = await repo.get(dimension_id)
+    if instance is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    return DimensionRead.model_validate(instance)
 
 
 @router.post("/{dimension}", response_model=DimensionRead, status_code=status.HTTP_201_CREATED)

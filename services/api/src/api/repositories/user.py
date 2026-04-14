@@ -24,15 +24,26 @@ class UserRepository:
         )
         return result.scalar_one_or_none()
 
-    async def list_in_org(self, org_id: uuid.UUID) -> list[UserProfile]:
-        """Return users with a membership in the given org."""
-        result = await self._session.execute(
+    async def list_in_org(
+        self, org_id: uuid.UUID, *, offset: int = 0, limit: int = 200
+    ) -> tuple[list[UserProfile], int]:
+        """Return a page of users with membership in the given org, plus total."""
+        from sqlalchemy import func
+
+        base = (
             select(UserProfile)
             .join(UserOrgMembership, UserOrgMembership.profile_id == UserProfile.id)
             .where(UserOrgMembership.org_id == org_id)
-            .order_by(UserProfile.username)
         )
-        return list(result.scalars().all())
+        total = (
+            await self._session.execute(
+                select(func.count()).select_from(base.subquery())
+            )
+        ).scalar_one()
+        result = await self._session.execute(
+            base.order_by(UserProfile.username).offset(offset).limit(limit)
+        )
+        return list(result.scalars().all()), total
 
     async def get_membership(
         self, profile_id: uuid.UUID, org_id: uuid.UUID

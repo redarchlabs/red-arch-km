@@ -52,8 +52,8 @@ export async function updateMembership(
 export async function listUsersInOrg(): Promise<
   Array<{ id: string; username: string; email: string }>
 > {
-  const response = await apiClient.get<
-    Array<{ id: string; username: string; email: string }>
-  >("/users/");
-  return response.data;
+  const response = await apiClient.get<{
+    items: Array<{ id: string; username: string; email: string }>;
+  }>("/users/", { params: { page_size: 200 } });
+  return response.data.items;
 }

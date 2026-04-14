@@ -19,29 +19,47 @@ class FolderRepository:
         return await self._session.get(Folder, folder_id)
 
     async def list_visible_to_masks(
-        self, user_masks: list[int] | None = None
-    ) -> list[Folder]:
-        """List folders visible to the given user masks.
+        self,
+        user_masks: list[int] | None = None,
+        *,
+        offset: int | None = None,
+        limit: int | None = None,
+    ) -> tuple[list[Folder], int]:
+        """List folders visible to the given user masks, plus total count.
 
         If user_masks is None, returns all folders (admin view).
         Otherwise returns folders that either:
           - have no view restrictions (public within the org), OR
           - have at least one mask overlapping the user's masks (PostgreSQL `&&`)
+
+        Pagination is optional — when offset/limit are omitted, all matching
+        rows are returned (used internally by document permission filtering).
         """
-        query = select(Folder)
+        base = select(Folder)
 
         if user_masks is not None:
             masks_param = bindparam("user_masks", value=user_masks, type_=ARRAY(BIGINT))
-            query = query.where(
+            base = base.where(
                 or_(
                     func.coalesce(func.array_length(Folder.view_permission_masks, 1), 0) == 0,
                     Folder.view_permission_masks.op("&&")(masks_param),
                 )
             )
 
-        query = query.order_by(Folder.dot_path)
+        total = (
+            await self._session.execute(
+                select(func.count()).select_from(base.subquery())
+            )
+        ).scalar_one()
+
+        query = base.order_by(Folder.dot_path)
+        if offset is not None:
+            query = query.offset(offset)
+        if limit is not None:
+            query = query.limit(limit)
+
         result = await self._session.execute(query)
-        return list(result.scalars().all())
+        return list(result.scalars().all()), total
 
     async def list_children(self, parent_id: uuid.UUID | None) -> list[Folder]:
         query = select(Folder).where(Folder.parent_id == parent_id).order_by(Folder.order, Folder.name)

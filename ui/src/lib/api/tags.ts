@@ -3,8 +3,10 @@ import type { Tag } from "@/types";
 import apiClient from "./client";
 
 export async function listTags(): Promise<Tag[]> {
-  const response = await apiClient.get<Tag[]>("/tags/");
-  return response.data;
+  const response = await apiClient.get<{ items: Tag[] }>("/tags/", {
+    params: { page_size: 200 },
+  });
+  return response.data.items;
 }
 
 export async function createTag(name: string): Promise<Tag> {

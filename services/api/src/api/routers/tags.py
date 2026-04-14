@@ -11,19 +11,23 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.auth.dependencies import OrgContext, require_org_access
 from api.dependencies import get_tenant_db
 from api.repositories.tag import TagRepository
+from api.schemas.common import PaginatedResponse, PaginationParams, make_page
 from api.schemas.document import TagCreate, TagRead
 
 router = APIRouter()
 
 
-@router.get("/", response_model=list[TagRead])
+@router.get("/", response_model=PaginatedResponse[TagRead])
 async def list_tags(
     ctx: Annotated[OrgContext, Depends(require_org_access)],
     session: Annotated[AsyncSession, Depends(get_tenant_db)],
-) -> list[TagRead]:
+    pagination: Annotated[PaginationParams, Depends()],
+) -> PaginatedResponse[TagRead]:
     repo = TagRepository(session)
-    tags = await repo.list_all()
-    return [TagRead.model_validate(t) for t in tags]
+    tags, total = await repo.list_all(offset=pagination.offset, limit=pagination.page_size)
+    return make_page(
+        [TagRead.model_validate(t) for t in tags], total, pagination
+    )
 
 
 @router.post("/", response_model=TagRead, status_code=status.HTTP_201_CREATED)

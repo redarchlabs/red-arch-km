@@ -38,13 +38,13 @@ async def list_documents(
     doc_repo = DocumentRepository(session)
 
     if ctx.is_org_admin:
-        visible_folders = await folder_repo.list_visible_to_masks(user_masks=None)
+        visible_folders, _ = await folder_repo.list_visible_to_masks(user_masks=None)
     else:
         org = await session.get(Org, ctx.org_id)
         if org is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Org not found")
         user_masks = calculate_user_masks_from_membership(ctx.membership, org.permission_number)
-        visible_folders = await folder_repo.list_visible_to_masks(user_masks=user_masks)
+        visible_folders, _ = await folder_repo.list_visible_to_masks(user_masks=user_masks)
 
     folder_ids = [f.id for f in visible_folders]
     documents, total = await doc_repo.list_for_folders(

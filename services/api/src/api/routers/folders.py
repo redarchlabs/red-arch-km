@@ -13,6 +13,7 @@ from api.auth.dependencies import OrgContext, require_org_access, require_org_ad
 from api.dependencies import get_tenant_db
 from api.models.org import Org
 from api.repositories.folder import FolderRepository
+from api.schemas.common import PaginatedResponse, PaginationParams, make_page
 from api.schemas.document import FolderCreate, FolderRead, FolderUpdate
 from api.services.folder_service import (
     FolderCycleError,
@@ -26,24 +27,35 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-@router.get("/", response_model=list[FolderRead])
+@router.get("/", response_model=PaginatedResponse[FolderRead])
 async def list_folders(
     ctx: Annotated[OrgContext, Depends(require_org_access)],
     session: Annotated[AsyncSession, Depends(get_tenant_db)],
-) -> list[FolderRead]:
+    pagination: Annotated[PaginationParams, Depends()],
+) -> PaginatedResponse[FolderRead]:
     """List folders visible to the current user via permission masks."""
     repo = FolderRepository(session)
 
     if ctx.is_org_admin:
-        folders = await repo.list_visible_to_masks(user_masks=None)
+        folders, total = await repo.list_visible_to_masks(
+            user_masks=None,
+            offset=pagination.offset,
+            limit=pagination.page_size,
+        )
     else:
         org = await session.get(Org, ctx.org_id)
         if org is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Org not found")
         user_masks = calculate_user_masks_from_membership(ctx.membership, org.permission_number)
-        folders = await repo.list_visible_to_masks(user_masks=user_masks)
+        folders, total = await repo.list_visible_to_masks(
+            user_masks=user_masks,
+            offset=pagination.offset,
+            limit=pagination.page_size,
+        )
 
-    return [FolderRead.model_validate(f) for f in folders]
+    return make_page(
+        [FolderRead.model_validate(f) for f in folders], total, pagination
+    )
 
 
 @router.post("/", response_model=FolderRead, status_code=status.HTTP_201_CREATED)

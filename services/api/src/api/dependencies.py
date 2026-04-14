@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from collections.abc import AsyncGenerator
 from typing import Annotated
@@ -12,6 +13,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.config import Settings, get_settings
 from api.db import get_session_factory
+
+logger = logging.getLogger(__name__)
 
 
 async def get_db(
@@ -27,8 +30,18 @@ async def get_db(
         try:
             yield session
             await session.commit()
-        except Exception:
+        except HTTPException:
+            # Expected control-flow exception — roll back and let FastAPI
+            # translate it into the correct HTTP response. Not logged as
+            # an error because it isn't one.
             await session.rollback()
+            raise
+        except Exception:
+            # Unexpected DB/SQLAlchemy/programming error: log before re-raising
+            # so the traceback is captured alongside request metadata rather
+            # than lost.
+            await session.rollback()
+            logger.exception("Unhandled exception in DB session")
             raise
 
 
@@ -71,6 +84,10 @@ async def get_tenant_db(
             )
             yield session
             await session.commit()
+        except HTTPException:
+            await session.rollback()
+            raise
         except Exception:
             await session.rollback()
+            logger.exception("Unhandled exception in tenant DB session (org=%s)", org_id)
             raise

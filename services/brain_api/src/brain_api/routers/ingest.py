@@ -1,7 +1,14 @@
-"""Document ingestion and metadata management endpoints."""
+"""Document ingestion and metadata management endpoints.
+
+Service calls delegate to Qdrant/Neo4j/OpenAI clients which are all blocking
+by design (the Python clients for these aren't natively async). We wrap each
+call in `asyncio.to_thread` so long blocking I/O runs in the thread pool
+instead of stalling the FastAPI event loop.
+"""
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Annotated, Any
 
@@ -56,7 +63,8 @@ async def ingest_document(
 ) -> dict[str, Any]:
     """Ingest a document: chunk, embed, summarize, store in vector + graph."""
     try:
-        return service.ingest_document(
+        return await asyncio.to_thread(
+            service.ingest_document,
             tenant_id=body.tenant_id,
             document_key=body.document_key,
             title=body.title,
@@ -80,7 +88,7 @@ async def remove_document(
     service: Annotated[IngestService, Depends(_get_service)],
     _api_key: Annotated[str, Depends(require_api_key)],
 ) -> dict[str, str]:
-    service.remove_document(body.tenant_id, body.document_key)
+    await asyncio.to_thread(service.remove_document, body.tenant_id, body.document_key)
     return {"status": "deleted", "document_key": body.document_key}
 
 
@@ -90,7 +98,8 @@ async def update_metadata(
     service: Annotated[IngestService, Depends(_get_service)],
     _api_key: Annotated[str, Depends(require_api_key)],
 ) -> dict[str, str]:
-    service.update_metadata(
+    await asyncio.to_thread(
+        service.update_metadata,
         tenant_id=body.tenant_id,
         document_key=body.document_key,
         tags=body.new_tags,
@@ -107,7 +116,7 @@ async def init_tenant(
     _api_key: Annotated[str, Depends(require_api_key)],
 ) -> dict[str, str]:
     try:
-        service.init_tenant(body.tenant_id)
+        await asyncio.to_thread(service.init_tenant, body.tenant_id)
     except Exception as e:
         logger.exception("Tenant init failed for %s", body.tenant_id)
         raise HTTPException(
@@ -127,7 +136,9 @@ async def get_document_chunks(
 ) -> dict[str, Any]:
     """Return all chunks for a document, ordered by chunk_order."""
     try:
-        chunks = stores.vector.get_document_chunks(tenant_id, document_key, limit=limit)
+        chunks = await asyncio.to_thread(
+            stores.vector.get_document_chunks, tenant_id, document_key, limit=limit
+        )
     except Exception:
         logger.exception("Failed to fetch chunks for %s", document_key)
         raise HTTPException(

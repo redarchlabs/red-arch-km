@@ -27,12 +27,19 @@ class DimensionRepository:
     async def get(self, dimension_id: uuid.UUID) -> DimensionModel | None:
         return await self._session.get(self._model, dimension_id)
 
-    async def list_all(self) -> list[DimensionModel]:
-        """List dimensions in the current tenant (RLS-scoped)."""
+    async def list_all(
+        self, *, offset: int = 0, limit: int = 200
+    ) -> tuple[list[DimensionModel], int]:
+        """Return a page of dimensions plus total count (RLS-scoped)."""
+        from sqlalchemy import func
+
+        total = (
+            await self._session.execute(select(func.count()).select_from(self._model))
+        ).scalar_one()
         result = await self._session.execute(
-            select(self._model).order_by(self._model.name)
+            select(self._model).order_by(self._model.name).offset(offset).limit(limit)
         )
-        return list(result.scalars().all())
+        return list(result.scalars().all()), total
 
     async def create(
         self, *, name: str, org_id: uuid.UUID, description: str | None = None
