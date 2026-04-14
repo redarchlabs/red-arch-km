@@ -72,6 +72,22 @@ class MembershipRepository:
         router can translate to a 400. Silently dropping them would let the
         client think the save succeeded when it partially didn't.
         """
+        # Assigning to a relationship collection requires SQLAlchemy to diff
+        # against its current value. On an async session that means the
+        # collection must already be loaded — lazy-loading here would throw
+        # MissingGreenlet. Eagerly refresh only the collections we're about
+        # to touch so we don't pay for ones we'll skip.
+        to_refresh = [
+            name for name, ids in (
+                ("regions", region_ids),
+                ("departments", department_ids),
+                ("roles", role_ids),
+                ("groups", group_ids),
+            ) if ids is not None
+        ]
+        if to_refresh:
+            await self._session.refresh(membership, to_refresh)
+
         if region_ids is not None:
             result = await self._session.execute(select(Region).where(Region.id.in_(region_ids)))
             regions = list(result.scalars().all())
