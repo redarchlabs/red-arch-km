@@ -11,10 +11,12 @@ import (
 )
 
 type Querier interface {
+	AddDocumentTag(ctx context.Context, arg AddDocumentTagParams) error
 	AddMembershipDepartment(ctx context.Context, arg AddMembershipDepartmentParams) error
 	AddMembershipGroup(ctx context.Context, arg AddMembershipGroupParams) error
 	AddMembershipRegion(ctx context.Context, arg AddMembershipRegionParams) error
 	AddMembershipRole(ctx context.Context, arg AddMembershipRoleParams) error
+	ClearDocumentTags(ctx context.Context, documentID pgtype.UUID) error
 	// Membership departments junction
 	ClearMembershipDepartments(ctx context.Context, membershipID pgtype.UUID) error
 	// Membership groups junction
@@ -25,32 +27,57 @@ type Querier interface {
 	ClearMembershipRoles(ctx context.Context, membershipID pgtype.UUID) error
 	CountAllOrgs(ctx context.Context) (int64, error)
 	CountDepartments(ctx context.Context) (int64, error)
+	CountDocuments(ctx context.Context) (int64, error)
+	CountDocumentsByFolder(ctx context.Context, folderID pgtype.UUID) (int64, error)
+	CountDocumentsForFolders(ctx context.Context, arg CountDocumentsForFoldersParams) (int64, error)
+	CountDocumentsForOrg(ctx context.Context, orgID pgtype.UUID) (int64, error)
+	CountDocumentsWithNullFolder(ctx context.Context, orgID pgtype.UUID) (int64, error)
+	CountFolderDescendants(ctx context.Context, id pgtype.UUID) (int64, error)
+	CountFolders(ctx context.Context) (int64, error)
+	CountFoldersForOrg(ctx context.Context, orgID pgtype.UUID) (int64, error)
 	CountGroups(ctx context.Context) (int64, error)
 	CountMembershipsInOrg(ctx context.Context, orgID pgtype.UUID) (int64, error)
 	CountOrgsForUser(ctx context.Context, profileID pgtype.UUID) (int64, error)
 	CountRegions(ctx context.Context) (int64, error)
 	CountRoles(ctx context.Context) (int64, error)
+	CountTags(ctx context.Context) (int64, error)
+	CountTagsForOrg(ctx context.Context, orgID pgtype.UUID) (int64, error)
 	CountUsersInOrg(ctx context.Context, orgID pgtype.UUID) (int64, error)
 	CreateDepartment(ctx context.Context, arg CreateDepartmentParams) (Department, error)
+	CreateDocument(ctx context.Context, arg CreateDocumentParams) (Document, error)
+	CreateFolder(ctx context.Context, arg CreateFolderParams) (Folder, error)
 	CreateGroup(ctx context.Context, arg CreateGroupParams) (Group, error)
 	CreateMembership(ctx context.Context, arg CreateMembershipParams) (UserOrgMembership, error)
 	CreateOrg(ctx context.Context, arg CreateOrgParams) (Org, error)
 	CreateRegion(ctx context.Context, arg CreateRegionParams) (Region, error)
 	CreateRole(ctx context.Context, arg CreateRoleParams) (Role, error)
+	CreateTag(ctx context.Context, arg CreateTagParams) (Tag, error)
 	CreateUserProfile(ctx context.Context, arg CreateUserProfileParams) (UserProfile, error)
 	DeleteDepartment(ctx context.Context, id pgtype.UUID) error
+	DeleteDocument(ctx context.Context, id pgtype.UUID) error
+	DeleteFolder(ctx context.Context, id pgtype.UUID) error
 	DeleteGroup(ctx context.Context, id pgtype.UUID) error
 	DeleteMembership(ctx context.Context, id pgtype.UUID) error
 	DeleteOrg(ctx context.Context, id pgtype.UUID) error
 	DeleteRegion(ctx context.Context, id pgtype.UUID) error
 	DeleteRole(ctx context.Context, id pgtype.UUID) error
+	DeleteTag(ctx context.Context, id pgtype.UUID) error
 	// Departments
 	GetDepartment(ctx context.Context, id pgtype.UUID) (Department, error)
+	GetDepartmentByName(ctx context.Context, arg GetDepartmentByNameParams) (Department, error)
+	GetDocument(ctx context.Context, id pgtype.UUID) (Document, error)
+	GetDocumentByKey(ctx context.Context, arg GetDocumentByKeyParams) (Document, error)
+	GetFolder(ctx context.Context, id pgtype.UUID) (Folder, error)
+	GetFolderByName(ctx context.Context, arg GetFolderByNameParams) (Folder, error)
+	// Returns the folder and all its descendants (via dot_path prefix match)
+	GetFolderDescendants(ctx context.Context, id pgtype.UUID) ([]Folder, error)
 	// Groups
 	GetGroup(ctx context.Context, id pgtype.UUID) (Group, error)
+	GetGroupByName(ctx context.Context, arg GetGroupByNameParams) (Group, error)
 	GetMembership(ctx context.Context, id pgtype.UUID) (UserOrgMembership, error)
 	GetMembershipByUserAndOrg(ctx context.Context, arg GetMembershipByUserAndOrgParams) (UserOrgMembership, error)
 	GetNextDepartmentPermissionNumber(ctx context.Context) (int32, error)
+	GetNextFolderOrder(ctx context.Context, arg GetNextFolderOrderParams) (int32, error)
 	GetNextGroupPermissionNumber(ctx context.Context) (int32, error)
 	GetNextOrgPermissionNumber(ctx context.Context) (int32, error)
 	GetNextRegionPermissionNumber(ctx context.Context) (int32, error)
@@ -58,14 +85,30 @@ type Querier interface {
 	GetOrg(ctx context.Context, id pgtype.UUID) (Org, error)
 	// Regions
 	GetRegion(ctx context.Context, id pgtype.UUID) (Region, error)
+	GetRegionByName(ctx context.Context, arg GetRegionByNameParams) (Region, error)
 	// Roles
 	GetRole(ctx context.Context, id pgtype.UUID) (Role, error)
+	GetRoleByName(ctx context.Context, arg GetRoleByNameParams) (Role, error)
+	GetTag(ctx context.Context, id pgtype.UUID) (Tag, error)
+	GetTagByName(ctx context.Context, arg GetTagByNameParams) (Tag, error)
+	GetTagsByIDs(ctx context.Context, dollar_1 []pgtype.UUID) ([]Tag, error)
 	GetUserProfile(ctx context.Context, id pgtype.UUID) (UserProfile, error)
 	GetUserProfileByEmail(ctx context.Context, email string) (UserProfile, error)
 	GetUserProfileByKeycloakSub(ctx context.Context, keycloakSub string) (UserProfile, error)
 	IsUserMemberOfOrg(ctx context.Context, arg IsUserMemberOfOrgParams) (bool, error)
 	ListAllOrgs(ctx context.Context, arg ListAllOrgsParams) ([]Org, error)
+	ListChildFolders(ctx context.Context, parentID pgtype.UUID) ([]Folder, error)
 	ListDepartments(ctx context.Context, arg ListDepartmentsParams) ([]Department, error)
+	// Document Tags
+	ListDocumentTags(ctx context.Context, documentID pgtype.UUID) ([]Tag, error)
+	ListDocuments(ctx context.Context, arg ListDocumentsParams) ([]Document, error)
+	ListDocumentsByFolder(ctx context.Context, arg ListDocumentsByFolderParams) ([]Document, error)
+	// List documents that belong to any of the given folder IDs (or have NULL folder_id)
+	ListDocumentsForFolders(ctx context.Context, arg ListDocumentsForFoldersParams) ([]Document, error)
+	ListDocumentsForOrg(ctx context.Context, arg ListDocumentsForOrgParams) ([]Document, error)
+	ListDocumentsWithNullFolder(ctx context.Context, arg ListDocumentsWithNullFolderParams) ([]Document, error)
+	ListFolders(ctx context.Context, arg ListFoldersParams) ([]Folder, error)
+	ListFoldersForOrg(ctx context.Context, arg ListFoldersForOrgParams) ([]Folder, error)
 	ListGroups(ctx context.Context, arg ListGroupsParams) ([]Group, error)
 	ListMembershipDepartments(ctx context.Context, membershipID pgtype.UUID) ([]Department, error)
 	ListMembershipGroups(ctx context.Context, membershipID pgtype.UUID) ([]Group, error)
@@ -75,13 +118,28 @@ type Querier interface {
 	ListOrgsForUser(ctx context.Context, arg ListOrgsForUserParams) ([]Org, error)
 	ListRegions(ctx context.Context, arg ListRegionsParams) ([]Region, error)
 	ListRoles(ctx context.Context, arg ListRolesParams) ([]Role, error)
+	ListRootFolders(ctx context.Context, arg ListRootFoldersParams) ([]Folder, error)
+	ListTags(ctx context.Context, arg ListTagsParams) ([]Tag, error)
+	ListTagsForDocument(ctx context.Context, documentID pgtype.UUID) ([]Tag, error)
+	ListTagsForOrg(ctx context.Context, arg ListTagsForOrgParams) ([]Tag, error)
 	ListUsersInOrg(ctx context.Context, arg ListUsersInOrgParams) ([]UserProfile, error)
+	RemoveDocumentTag(ctx context.Context, arg RemoveDocumentTagParams) error
+	// Update the order of folders for drag-and-drop reordering
+	ReorderFolders(ctx context.Context, arg ReorderFoldersParams) error
+	// Clear and reset all tags for a document
+	SetDocumentTags(ctx context.Context, documentID pgtype.UUID) error
 	UpdateDepartment(ctx context.Context, arg UpdateDepartmentParams) (Department, error)
+	UpdateDocument(ctx context.Context, arg UpdateDocumentParams) (Document, error)
+	UpdateDocumentStatus(ctx context.Context, arg UpdateDocumentStatusParams) error
+	UpdateFolder(ctx context.Context, arg UpdateFolderParams) (Folder, error)
+	// Update dot_path for a folder and all its descendants when moved
+	UpdateFolderDotPath(ctx context.Context, arg UpdateFolderDotPathParams) error
 	UpdateGroup(ctx context.Context, arg UpdateGroupParams) (Group, error)
 	UpdateMembership(ctx context.Context, arg UpdateMembershipParams) (UserOrgMembership, error)
 	UpdateOrg(ctx context.Context, arg UpdateOrgParams) (Org, error)
 	UpdateRegion(ctx context.Context, arg UpdateRegionParams) (Region, error)
 	UpdateRole(ctx context.Context, arg UpdateRoleParams) (Role, error)
+	UpdateTag(ctx context.Context, arg UpdateTagParams) (Tag, error)
 	UpdateUserProfile(ctx context.Context, arg UpdateUserProfileParams) (UserProfile, error)
 	UpsertMembership(ctx context.Context, arg UpsertMembershipParams) (UserOrgMembership, error)
 	UpsertUserProfile(ctx context.Context, arg UpsertUserProfileParams) (UserProfile, error)
