@@ -73,3 +73,21 @@ class ChatRepository:
         chat.deleted = True
         await self._session.flush()
         return True
+
+    async def append_messages(
+        self, session_id: uuid.UUID, messages: list[dict]
+    ) -> ChatSession | None:
+        """Append messages to the session's chat_data."""
+        chat = await self.get(session_id)
+        if chat is None:
+            return None
+
+        current_data = chat.chat_data or {}
+        current_messages = current_data.get("messages", [])
+        current_messages.extend(messages)
+        current_data["messages"] = current_messages
+
+        # SQLAlchemy won't detect in-place JSONB mutation, so reassign
+        chat.chat_data = current_data
+        await self._session.flush()
+        return chat
