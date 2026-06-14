@@ -91,3 +91,110 @@ func (c *BrainAPIClient) doTenantRequest(ctx context.Context, path, tenantID str
 
 	return nil
 }
+
+// IngestRequest is the request body for document ingestion.
+type IngestRequest struct {
+	DocumentID        string                 `json:"document_id"`
+	TenantID          string                 `json:"tenant_id"`
+	DocumentKey       string                 `json:"document_key"`
+	Title             string                 `json:"title"`
+	Text              string                 `json:"text"`
+	Tags              []string               `json:"tags"`
+	AccessKeys        []int64                `json:"access_keys"`
+	UseKnowledgeGraph bool                   `json:"use_knowledge_graph"`
+	Metadata          map[string]interface{} `json:"metadata"`
+}
+
+// IngestDocument dispatches a document for ingestion to brain-api.
+func (c *BrainAPIClient) IngestDocument(ctx context.Context, req IngestRequest) error {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return fmt.Errorf("marshal request: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/api/ingest", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("create request: %w", err)
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("X-API-Key", c.apiKey)
+	httpReq.Header.Set("X-Tenant-ID", req.TenantID)
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("execute request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("brain-api error (status %d): %s", resp.StatusCode, string(respBody))
+	}
+
+	return nil
+}
+
+// RemoveDocument removes a document from vector and graph stores.
+func (c *BrainAPIClient) RemoveDocument(ctx context.Context, tenantID, documentKey string) error {
+	payload := map[string]string{
+		"tenant_id":    tenantID,
+		"document_key": documentKey,
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/api/remove", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-API-Key", c.apiKey)
+	req.Header.Set("X-Tenant-ID", tenantID)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("execute request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("brain-api error (status %d): %s", resp.StatusCode, string(respBody))
+	}
+
+	return nil
+}
+
+// GetDocumentChunks retrieves the indexed chunks for a document.
+func (c *BrainAPIClient) GetDocumentChunks(ctx context.Context, tenantID, documentKey string) (map[string]interface{}, error) {
+	url := fmt.Sprintf("%s/api/chunks/%s", c.baseURL, documentKey)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+
+	req.Header.Set("X-API-Key", c.apiKey)
+	req.Header.Set("X-Tenant-ID", tenantID)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("execute request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		respBody, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("brain-api error (status %d): %s", resp.StatusCode, string(respBody))
+	}
+
+	var result map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decode response: %w", err)
+	}
+
+	return result, nil
+}

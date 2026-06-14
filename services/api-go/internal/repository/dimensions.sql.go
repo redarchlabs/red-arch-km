@@ -251,6 +251,30 @@ func (q *Queries) GetDepartment(ctx context.Context, id pgtype.UUID) (Department
 	return i, err
 }
 
+const getDepartmentByName = `-- name: GetDepartmentByName :one
+SELECT id, name, description, permission_number, org_id, created_at, updated_at FROM departments WHERE name = $1 AND org_id = $2
+`
+
+type GetDepartmentByNameParams struct {
+	Name  string      `json:"name"`
+	OrgID pgtype.UUID `json:"org_id"`
+}
+
+func (q *Queries) GetDepartmentByName(ctx context.Context, arg GetDepartmentByNameParams) (Department, error) {
+	row := q.db.QueryRow(ctx, getDepartmentByName, arg.Name, arg.OrgID)
+	var i Department
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Description,
+		&i.PermissionNumber,
+		&i.OrgID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getGroup = `-- name: GetGroup :one
 SELECT id, name, description, permission_number, org_id, created_at, updated_at FROM groups WHERE id = $1
 `
@@ -258,6 +282,30 @@ SELECT id, name, description, permission_number, org_id, created_at, updated_at 
 // Groups
 func (q *Queries) GetGroup(ctx context.Context, id pgtype.UUID) (Group, error) {
 	row := q.db.QueryRow(ctx, getGroup, id)
+	var i Group
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Description,
+		&i.PermissionNumber,
+		&i.OrgID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getGroupByName = `-- name: GetGroupByName :one
+SELECT id, name, description, permission_number, org_id, created_at, updated_at FROM groups WHERE name = $1 AND org_id = $2
+`
+
+type GetGroupByNameParams struct {
+	Name  string      `json:"name"`
+	OrgID pgtype.UUID `json:"org_id"`
+}
+
+func (q *Queries) GetGroupByName(ctx context.Context, arg GetGroupByNameParams) (Group, error) {
+	row := q.db.QueryRow(ctx, getGroupByName, arg.Name, arg.OrgID)
 	var i Group
 	err := row.Scan(
 		&i.ID,
@@ -335,6 +383,30 @@ func (q *Queries) GetRegion(ctx context.Context, id pgtype.UUID) (Region, error)
 	return i, err
 }
 
+const getRegionByName = `-- name: GetRegionByName :one
+SELECT id, name, description, permission_number, org_id, created_at, updated_at FROM regions WHERE name = $1 AND org_id = $2
+`
+
+type GetRegionByNameParams struct {
+	Name  string      `json:"name"`
+	OrgID pgtype.UUID `json:"org_id"`
+}
+
+func (q *Queries) GetRegionByName(ctx context.Context, arg GetRegionByNameParams) (Region, error) {
+	row := q.db.QueryRow(ctx, getRegionByName, arg.Name, arg.OrgID)
+	var i Region
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Description,
+		&i.PermissionNumber,
+		&i.OrgID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getRole = `-- name: GetRole :one
 SELECT id, name, description, permission_number, org_id, created_at, updated_at FROM roles WHERE id = $1
 `
@@ -342,6 +414,30 @@ SELECT id, name, description, permission_number, org_id, created_at, updated_at 
 // Roles
 func (q *Queries) GetRole(ctx context.Context, id pgtype.UUID) (Role, error) {
 	row := q.db.QueryRow(ctx, getRole, id)
+	var i Role
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Description,
+		&i.PermissionNumber,
+		&i.OrgID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getRoleByName = `-- name: GetRoleByName :one
+SELECT id, name, description, permission_number, org_id, created_at, updated_at FROM roles WHERE name = $1 AND org_id = $2
+`
+
+type GetRoleByNameParams struct {
+	Name  string      `json:"name"`
+	OrgID pgtype.UUID `json:"org_id"`
+}
+
+func (q *Queries) GetRoleByName(ctx context.Context, arg GetRoleByNameParams) (Role, error) {
+	row := q.db.QueryRow(ctx, getRoleByName, arg.Name, arg.OrgID)
 	var i Role
 	err := row.Scan(
 		&i.ID,

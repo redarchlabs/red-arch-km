@@ -27,6 +27,9 @@ RETURNING *;
 -- name: DeleteRegion :exec
 DELETE FROM regions WHERE id = $1;
 
+-- name: GetRegionByName :one
+SELECT * FROM regions WHERE name = $1 AND org_id = $2;
+
 -- Departments
 -- name: GetDepartment :one
 SELECT * FROM departments WHERE id = $1;
@@ -55,6 +58,9 @@ RETURNING *;
 
 -- name: DeleteDepartment :exec
 DELETE FROM departments WHERE id = $1;
+
+-- name: GetDepartmentByName :one
+SELECT * FROM departments WHERE name = $1 AND org_id = $2;
 
 -- Roles
 -- name: GetRole :one
@@ -85,6 +91,9 @@ RETURNING *;
 -- name: DeleteRole :exec
 DELETE FROM roles WHERE id = $1;
 
+-- name: GetRoleByName :one
+SELECT * FROM roles WHERE name = $1 AND org_id = $2;
+
 -- Groups
 -- name: GetGroup :one
 SELECT * FROM groups WHERE id = $1;
@@ -113,3 +122,6 @@ RETURNING *;
 
 -- name: DeleteGroup :exec
 DELETE FROM groups WHERE id = $1;
+
+-- name: GetGroupByName :one
+SELECT * FROM groups WHERE name = $1 AND org_id = $2;

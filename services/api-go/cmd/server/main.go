@@ -87,6 +87,9 @@ func run() error {
 	userHandler := handlers.NewUserHandler(pool)
 	membershipHandler := handlers.NewMembershipHandler(pool)
 	dimensionHandler := handlers.NewDimensionHandler(pool)
+	folderHandler := handlers.NewFolderHandler(pool)
+	documentHandler := handlers.NewDocumentHandler(pool, brainClient)
+	tagHandler := handlers.NewTagHandler(pool)
 
 	// Setup router
 	r := chi.NewRouter()
@@ -198,6 +201,38 @@ func run() error {
 			r.Get("/{dimensionID}", dimensionHandler.GetGroup)
 			r.Patch("/{dimensionID}", dimensionHandler.UpdateGroup)
 			r.Delete("/{dimensionID}", dimensionHandler.DeleteGroup)
+		})
+
+		// Folders (org-scoped, permission-filtered)
+		r.Route("/folders", func(r chi.Router) {
+			r.Use(middleware.RequireOrg)
+			r.Get("/", folderHandler.ListFolders)
+			r.Post("/", folderHandler.CreateFolder)
+			r.Post("/reorder", folderHandler.ReorderFolders)
+			r.Get("/{folderID}", folderHandler.GetFolder)
+			r.Patch("/{folderID}", folderHandler.UpdateFolder)
+			r.Delete("/{folderID}", folderHandler.DeleteFolder)
+		})
+
+		// Documents (org-scoped, permission-filtered via folder)
+		r.Route("/documents", func(r chi.Router) {
+			r.Use(middleware.RequireOrg)
+			r.Get("/", documentHandler.ListDocuments)
+			r.Post("/", documentHandler.CreateDocument)
+			r.Get("/{documentID}", documentHandler.GetDocument)
+			r.Patch("/{documentID}", documentHandler.UpdateDocument)
+			r.Delete("/{documentID}", documentHandler.DeleteDocument)
+			r.Get("/{documentID}/chunks", documentHandler.GetDocumentChunks)
+		})
+
+		// Tags (org-scoped)
+		r.Route("/tags", func(r chi.Router) {
+			r.Use(middleware.RequireOrg)
+			r.Get("/", tagHandler.ListTags)
+			r.Post("/", tagHandler.CreateTag)
+			r.Get("/{tagID}", tagHandler.GetTag)
+			r.Patch("/{tagID}", tagHandler.UpdateTag)
+			r.Delete("/{tagID}", tagHandler.DeleteTag)
 		})
 	})
 
