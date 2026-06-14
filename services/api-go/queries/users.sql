@@ -30,3 +30,15 @@ ON CONFLICT (keycloak_sub) DO UPDATE SET
     email = EXCLUDED.email,
     updated_at = NOW()
 RETURNING *;
+
+-- name: ListUsersInOrg :many
+SELECT up.* FROM user_profiles up
+JOIN user_org_memberships m ON m.profile_id = up.id
+WHERE m.org_id = $1
+ORDER BY up.username
+LIMIT $2 OFFSET $3;
+
+-- name: CountUsersInOrg :one
+SELECT COUNT(*) FROM user_profiles up
+JOIN user_org_memberships m ON m.profile_id = up.id
+WHERE m.org_id = $1;
