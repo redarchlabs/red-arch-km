@@ -17,6 +17,7 @@ import (
 
 	"github.com/redarchlabs/red-arch-km-2/packages/shared/logging"
 	"github.com/redarchlabs/red-arch-km-2/packages/shared/telemetry"
+	"github.com/redarchlabs/red-arch-km-2/services/api-go/internal/client"
 	"github.com/redarchlabs/red-arch-km-2/services/api-go/internal/config"
 	"github.com/redarchlabs/red-arch-km-2/services/api-go/internal/db"
 	"github.com/redarchlabs/red-arch-km-2/services/api-go/internal/handlers"
@@ -72,6 +73,21 @@ func run() error {
 		slog.Warn("DATABASE_URL not set, database features disabled")
 	}
 
+	// Create Brain API client
+	var brainClient *client.BrainAPIClient
+	if cfg.BrainAPIURL != "" {
+		brainClient = client.NewBrainAPIClient(client.BrainAPIConfig{
+			BaseURL: cfg.BrainAPIURL,
+			APIKey:  cfg.BrainAPIKey,
+		})
+	}
+
+	// Create handlers
+	orgHandler := handlers.NewOrgHandler(pool, brainClient)
+	userHandler := handlers.NewUserHandler(pool)
+	membershipHandler := handlers.NewMembershipHandler(pool)
+	dimensionHandler := handlers.NewDimensionHandler(pool)
+
 	// Setup router
 	r := chi.NewRouter()
 
@@ -99,7 +115,7 @@ func run() error {
 		r.Get("/readyz", handlers.Healthz()) // Fallback without DB
 	}
 
-	// JWT middleware (configured but not applied globally yet)
+	// JWT middleware
 	jwtMiddleware := middleware.NewJWTMiddleware(middleware.JWTConfig{
 		KeycloakURL: cfg.KeycloakURL,
 		Realm:       cfg.KeycloakRealm,
@@ -111,20 +127,77 @@ func run() error {
 		// Apply JWT auth to all /api routes
 		r.Use(jwtMiddleware.Handler)
 
-		// Auth endpoints
-		r.Route("/auth", func(r chi.Router) {
-			r.Get("/me", handleMe)
+		// User routes
+		r.Route("/users", func(r chi.Router) {
+			r.Get("/me", userHandler.GetMe)
+			r.Patch("/me", userHandler.UpdateMe)
+
+			// Org-scoped user routes
+			r.Group(func(r chi.Router) {
+				r.Use(middleware.RequireOrg)
+				r.Get("/", userHandler.ListUsersInOrg)
+				r.Get("/{userID}", userHandler.GetUser)
+			})
 		})
 
-		// Org-scoped routes
+		// Org routes (site-admin scoped for write, member for read)
 		r.Route("/orgs", func(r chi.Router) {
-			r.Get("/", handleListOrgs)
-			// Nested routes requiring org context
-			r.Route("/{orgID}", func(r chi.Router) {
-				r.Use(middleware.RequireOrg)
-				r.Get("/", handleGetOrg)
-				// Add more org-scoped routes here
-			})
+			r.Get("/", orgHandler.ListOrgs)
+			r.Post("/", orgHandler.CreateOrg)
+			r.Get("/{orgID}", orgHandler.GetOrg)
+			r.Patch("/{orgID}", orgHandler.UpdateOrg)
+			r.Delete("/{orgID}", orgHandler.DeleteOrg)
+		})
+
+		// Membership routes (org-scoped, org-admin for write)
+		r.Route("/memberships", func(r chi.Router) {
+			r.Use(middleware.RequireOrg)
+			r.Get("/", membershipHandler.ListMemberships)
+			r.Post("/", membershipHandler.CreateMembership)
+			r.Get("/by-user/{userID}", membershipHandler.GetMembershipByUser)
+			r.Patch("/{membershipID}", membershipHandler.UpdateMembership)
+			r.Delete("/{membershipID}", membershipHandler.DeleteMembership)
+		})
+
+		// Dimension routes (org-scoped)
+		// Regions
+		r.Route("/regions", func(r chi.Router) {
+			r.Use(middleware.RequireOrg)
+			r.Get("/", dimensionHandler.ListRegions)
+			r.Post("/", dimensionHandler.CreateRegion)
+			r.Get("/{dimensionID}", dimensionHandler.GetRegion)
+			r.Patch("/{dimensionID}", dimensionHandler.UpdateRegion)
+			r.Delete("/{dimensionID}", dimensionHandler.DeleteRegion)
+		})
+
+		// Departments
+		r.Route("/departments", func(r chi.Router) {
+			r.Use(middleware.RequireOrg)
+			r.Get("/", dimensionHandler.ListDepartments)
+			r.Post("/", dimensionHandler.CreateDepartment)
+			r.Get("/{dimensionID}", dimensionHandler.GetDepartment)
+			r.Patch("/{dimensionID}", dimensionHandler.UpdateDepartment)
+			r.Delete("/{dimensionID}", dimensionHandler.DeleteDepartment)
+		})
+
+		// Roles
+		r.Route("/roles", func(r chi.Router) {
+			r.Use(middleware.RequireOrg)
+			r.Get("/", dimensionHandler.ListRoles)
+			r.Post("/", dimensionHandler.CreateRole)
+			r.Get("/{dimensionID}", dimensionHandler.GetRole)
+			r.Patch("/{dimensionID}", dimensionHandler.UpdateRole)
+			r.Delete("/{dimensionID}", dimensionHandler.DeleteRole)
+		})
+
+		// Groups
+		r.Route("/groups", func(r chi.Router) {
+			r.Use(middleware.RequireOrg)
+			r.Get("/", dimensionHandler.ListGroups)
+			r.Post("/", dimensionHandler.CreateGroup)
+			r.Get("/{dimensionID}", dimensionHandler.GetGroup)
+			r.Patch("/{dimensionID}", dimensionHandler.UpdateGroup)
+			r.Delete("/{dimensionID}", dimensionHandler.DeleteGroup)
 		})
 	})
 
@@ -159,26 +232,4 @@ func run() error {
 	}
 
 	return <-done
-}
-
-// Placeholder handlers - will be replaced with real implementations
-func handleMe(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.GetUserClaims(r.Context())
-	if !ok {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	fmt.Fprintf(w, `{"sub":"%s","email":"%s","username":"%s"}`, claims.Sub, claims.Email, claims.PreferredUsername)
-}
-
-func handleListOrgs(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte(`{"orgs":[]}`))
-}
-
-func handleGetOrg(w http.ResponseWriter, r *http.Request) {
-	orgID := middleware.MustGetOrgID(r.Context())
-	w.Header().Set("Content-Type", "application/json")
-	fmt.Fprintf(w, `{"id":"%s"}`, orgID)
 }
