@@ -1,0 +1,9 @@
+go 1.22
+
+use (
+	./packages/accessmask
+	./packages/shared
+	./services/api-go
+	./services/brain-api-go
+	./services/worker-go
+)
