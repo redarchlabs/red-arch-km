@@ -1,7 +1,8 @@
 include .env
 export
 
-.PHONY: help dev dev-infra down lint type-check test test-unit test-integration format install-hooks clean
+.PHONY: help dev dev-infra dev-go down lint type-check test test-unit test-integration format install-hooks clean \
+        go-build go-test go-lint go-run-api go-clean go-mod-tidy
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -67,3 +68,69 @@ clean: ## Remove build artifacts
 	find . -type d -name .pytest_cache -exec rm -rf {} + 2>/dev/null || true
 	find . -type d -name .mypy_cache -exec rm -rf {} + 2>/dev/null || true
 	find . -type d -name "*.egg-info" -exec rm -rf {} + 2>/dev/null || true
+
+# =============================================================================
+# Go Services
+# =============================================================================
+
+GO_BIN_DIR := bin
+
+go-build: ## Build all Go services
+	@mkdir -p $(GO_BIN_DIR)
+	go build -o $(GO_BIN_DIR)/api ./services/api-go/cmd/server
+	go build -o $(GO_BIN_DIR)/brain-api ./services/brain-api-go/cmd/server
+	go build -o $(GO_BIN_DIR)/worker ./services/worker-go/cmd/worker
+	@echo "Built: $(GO_BIN_DIR)/api, $(GO_BIN_DIR)/brain-api, $(GO_BIN_DIR)/worker"
+
+go-test: ## Run Go tests with coverage
+	go test -v -race -cover ./packages/accessmask/... ./packages/shared/... ./services/api-go/... ./services/brain-api-go/... ./services/worker-go/...
+
+go-test-cover: ## Run Go tests with detailed coverage report
+	go test -v -race -coverprofile=coverage.out ./packages/accessmask/... ./packages/shared/... ./services/api-go/... ./services/brain-api-go/... ./services/worker-go/...
+	go tool cover -html=coverage.out -o coverage.html
+	@echo "Coverage report: coverage.html"
+
+go-lint: ## Run Go linters (requires golangci-lint)
+	@which golangci-lint > /dev/null || (echo "Install golangci-lint: https://golangci-lint.run/welcome/install/" && exit 1)
+	golangci-lint run ./packages/accessmask/... ./packages/shared/... ./services/api-go/... ./services/brain-api-go/... ./services/worker-go/...
+
+go-run-api: ## Run API server locally (requires DATABASE_URL)
+	go run ./services/api-go/cmd/server
+
+go-run-brain-api: ## Run Brain API server locally
+	go run ./services/brain-api-go/cmd/server
+
+go-run-worker: ## Run Worker locally
+	go run ./services/worker-go/cmd/worker
+
+go-mod-tidy: ## Tidy all Go module dependencies
+	cd packages/accessmask && go mod tidy
+	cd packages/shared && go mod tidy
+	cd services/api-go && go mod tidy
+	cd services/brain-api-go && go mod tidy
+	cd services/worker-go && go mod tidy
+
+go-clean: ## Remove Go build artifacts
+	rm -rf $(GO_BIN_DIR)
+	rm -f coverage.out coverage.html
+
+dev-go: ## Start Go development stack (Go services + infrastructure)
+	docker compose --env-file .env -f docker/docker-compose.go.yml up -d --build
+
+# --- Database (Go) ---
+
+DATABASE_URL_GO = postgres://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@localhost:5432/$(POSTGRES_DB)?sslmode=disable
+
+go-migrate: ## Run Go migrations with golang-migrate
+	@which migrate > /dev/null || (echo "Install golang-migrate: go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest" && exit 1)
+	migrate -path services/api-go/migrations -database "$(DATABASE_URL_GO)" up
+
+go-migrate-down: ## Rollback Go migrations
+	migrate -path services/api-go/migrations -database "$(DATABASE_URL_GO)" down 1
+
+go-migrate-create: ## Create a new Go migration (usage: make go-migrate-create NAME=add_users)
+	migrate create -ext sql -dir services/api-go/migrations -seq $(NAME)
+
+go-sqlc: ## Generate sqlc code
+	@which sqlc > /dev/null || (echo "Install sqlc: go install github.com/sqlc-dev/sqlc/cmd/sqlc@latest" && exit 1)
+	cd services/api-go && sqlc generate

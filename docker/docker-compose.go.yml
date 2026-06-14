@@ -1,0 +1,112 @@
+# Docker Compose configuration for Go services
+# Use: docker compose -f docker-compose.infra.yml -f docker-compose.go.yml up
+
+include:
+  - docker-compose.infra.yml
+
+services:
+  api-go:
+    build:
+      context: ..
+      dockerfile: services/api-go/Dockerfile
+    container_name: km2_api_go
+    ports:
+      - "8000:8000"
+    env_file:
+      - ../.env
+    environment:
+      # Go pgx uses standard postgres:// URLs (not asyncpg)
+      DATABASE_URL: postgres://${POSTGRES_USER:-redarch}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-redarch_km}?sslmode=disable
+      REDIS_URL: redis://redis:6379/0
+      KEYCLOAK_URL: http://keycloak:8080
+      ENV: ${ENV:-development}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8000/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - km2
+
+  brain-api-go:
+    build:
+      context: ..
+      dockerfile: services/brain-api-go/Dockerfile
+    container_name: km2_brain_api_go
+    ports:
+      - "8020:8020"
+    env_file:
+      - ../.env
+    environment:
+      QDRANT_URL: http://qdrant:6333
+      NEO4J_URI: bolt://neo4j:7687
+      ENV: ${ENV:-development}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    depends_on:
+      qdrant:
+        condition: service_started
+      neo4j:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8020/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - km2
+
+  worker-go:
+    build:
+      context: ..
+      dockerfile: services/worker-go/Dockerfile
+    container_name: km2_worker_go
+    env_file:
+      - ../.env
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      API_URL: http://api-go:8000
+      BRAIN_API_URL: http://brain-api-go:8020
+      ENV: ${ENV:-development}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      WORKER_CONCURRENCY: 4
+    depends_on:
+      redis:
+        condition: service_healthy
+      api-go:
+        condition: service_healthy
+      brain-api-go:
+        condition: service_healthy
+    networks:
+      - km2
+
+  ui:
+    build:
+      context: ..
+      dockerfile: docker/ui.Dockerfile
+    container_name: km2_ui
+    ports:
+      - "3000:3000"
+    environment:
+      # Point UI to Go API
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+    depends_on:
+      api-go:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "node -e \"require('http').get('http://localhost:3000', r => process.exit(r.statusCode < 500 ? 0 : 1)).on('error', () => process.exit(1))\""
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks:
+      - km2
