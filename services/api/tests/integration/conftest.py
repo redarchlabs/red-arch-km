@@ -11,19 +11,25 @@ from __future__ import annotations
 import os
 from collections.abc import AsyncGenerator, Generator
 
+import api.models  # noqa: F401 — register all models with Base.metadata
 import pytest
 import pytest_asyncio
+from api.models.base import Base
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from testcontainers.postgres import PostgresContainer
 
-import api.models  # noqa: F401 — register all models with Base.metadata
-from api.models.base import Base
-
 _RLS_TABLES = [
-    "regions", "departments", "roles", "groups",
-    "folders", "tags", "documents", "document_access",
-    "document_attribute_definitions", "chat_sessions",
+    "regions",
+    "departments",
+    "roles",
+    "groups",
+    "folders",
+    "tags",
+    "documents",
+    "document_access",
+    "document_attribute_definitions",
+    "chat_sessions",
     "user_org_memberships",
 ]
 
@@ -67,11 +73,13 @@ async def _enable_rls(engine: AsyncEngine) -> None:
                 ("update", "USING"),
                 ("insert", "WITH CHECK"),
             ):
-                await conn.execute(text(f"""
+                await conn.execute(
+                    text(f"""
                     CREATE POLICY tenant_isolation_{action} ON {tbl}
                     FOR {action.upper()}
                     {clause} (org_id = current_setting('app.current_tenant_id', true)::uuid)
-                """))
+                """)
+                )
 
 
 @pytest_asyncio.fixture(scope="session")

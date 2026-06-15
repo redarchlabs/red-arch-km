@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import pytest
-from pydantic import ValidationError
-
 from api.schemas.document import FolderCreate, FolderUpdate
+from pydantic import ValidationError
 
 
 class TestFolderNameValidation:

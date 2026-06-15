@@ -5,7 +5,6 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 import pytest
-
 from brain_api.services.ingest_service import IngestService, _centroid
 
 
@@ -26,9 +25,7 @@ def mock_stores() -> MagicMock:
     stores.vector = MagicMock()
     stores.graph = MagicMock()
     stores.summarizer = MagicMock()
-    stores.summarizer.summarize_chunks.side_effect = lambda chunks: [
-        f"summary-{i}" for i, _ in enumerate(chunks)
-    ]
+    stores.summarizer.summarize_chunks.side_effect = lambda chunks: [f"summary-{i}" for i, _ in enumerate(chunks)]
     stores.summarizer.summarize_document.return_value = "final doc summary"
     stores.extractor = MagicMock()
     stores.extractor.extract.return_value = [("subject", "predicate", "object")]
@@ -50,8 +47,13 @@ class TestIngestService:
     def test_empty_text_returns_zero_chunks(self, mock_stores: MagicMock) -> None:
         service = IngestService(mock_stores)
         result = service.ingest_document(
-            tenant_id="t1", document_key="dk1", title="Doc",
-            text="", tags=[], access_keys=[], use_knowledge_graph=False,
+            tenant_id="t1",
+            document_key="dk1",
+            title="Doc",
+            text="",
+            tags=[],
+            access_keys=[],
+            use_knowledge_graph=False,
         )
         assert result["chunks"] == 0
         assert result["triplets"] == 0
@@ -59,8 +61,12 @@ class TestIngestService:
     def test_ensure_collections_called(self, mock_stores: MagicMock) -> None:
         service = IngestService(mock_stores)
         service.ingest_document(
-            tenant_id="t1", document_key="dk1", title="Doc",
-            text="Hello world. This is a test.", tags=[], access_keys=[],
+            tenant_id="t1",
+            document_key="dk1",
+            title="Doc",
+            text="Hello world. This is a test.",
+            tags=[],
+            access_keys=[],
             use_knowledge_graph=False,
         )
         mock_stores.vector.ensure_collections.assert_called_once_with("t1")
@@ -69,8 +75,12 @@ class TestIngestService:
         """Chunk summaries must land in the chunk record payload — not discarded."""
         service = IngestService(mock_stores)
         service.ingest_document(
-            tenant_id="t1", document_key="dk1", title="Doc",
-            text="Hello world. This is a test.", tags=["tag1"], access_keys=[42],
+            tenant_id="t1",
+            document_key="dk1",
+            title="Doc",
+            text="Hello world. This is a test.",
+            tags=["tag1"],
+            access_keys=[42],
             use_knowledge_graph=False,
         )
         # First upsert_vectors call is chunks; second is the doc-level record.
@@ -83,21 +93,27 @@ class TestIngestService:
         """The service should call summarize_document, not the old joined-text path."""
         service = IngestService(mock_stores)
         service.ingest_document(
-            tenant_id="t1", document_key="dk1", title="Doc",
-            text="Hello world. This is a test.", tags=[], access_keys=[],
+            tenant_id="t1",
+            document_key="dk1",
+            title="Doc",
+            text="Hello world. This is a test.",
+            tags=[],
+            access_keys=[],
             use_knowledge_graph=False,
         )
         mock_stores.summarizer.summarize_document.assert_called_once()
 
-    def test_doc_summary_failure_falls_back_to_centroid(
-        self, mock_stores: MagicMock
-    ) -> None:
+    def test_doc_summary_failure_falls_back_to_centroid(self, mock_stores: MagicMock) -> None:
         """Empty doc summary → doc vector is the centroid of chunk embeddings."""
         mock_stores.summarizer.summarize_document.return_value = ""
         service = IngestService(mock_stores)
         service.ingest_document(
-            tenant_id="t1", document_key="dk1", title="Doc",
-            text="Hello world. This is a test.", tags=[], access_keys=[],
+            tenant_id="t1",
+            document_key="dk1",
+            title="Doc",
+            text="Hello world. This is a test.",
+            tags=[],
+            access_keys=[],
             use_knowledge_graph=False,
         )
 
@@ -110,21 +126,27 @@ class TestIngestService:
         """All triplets are collected then inserted in one batch call."""
         service = IngestService(mock_stores)
         result = service.ingest_document(
-            tenant_id="t1", document_key="dk1", title="Doc",
-            text="Hello world. This is a test.", tags=[], access_keys=[],
+            tenant_id="t1",
+            document_key="dk1",
+            title="Doc",
+            text="Hello world. This is a test.",
+            tags=[],
+            access_keys=[],
             use_knowledge_graph=True,
         )
         mock_stores.graph.insert_triplets.assert_called_once()
         assert result["triplets"] > 0
 
-    def test_triplet_extraction_failure_does_not_halt_ingestion(
-        self, mock_stores: MagicMock
-    ) -> None:
+    def test_triplet_extraction_failure_does_not_halt_ingestion(self, mock_stores: MagicMock) -> None:
         mock_stores.extractor.extract.side_effect = RuntimeError("LLM failed")
         service = IngestService(mock_stores)
         result = service.ingest_document(
-            tenant_id="t1", document_key="dk1", title="Doc",
-            text="Hello world. This is a test.", tags=[], access_keys=[],
+            tenant_id="t1",
+            document_key="dk1",
+            title="Doc",
+            text="Hello world. This is a test.",
+            tags=[],
+            access_keys=[],
             use_knowledge_graph=True,
         )
         assert result["chunks"] > 0
@@ -136,8 +158,12 @@ class TestIngestService:
         mock_stores.graph.insert_triplets.side_effect = RuntimeError("Neo4j down")
         service = IngestService(mock_stores)
         result = service.ingest_document(
-            tenant_id="t1", document_key="dk1", title="Doc",
-            text="Hello world. This is a test.", tags=[], access_keys=[],
+            tenant_id="t1",
+            document_key="dk1",
+            title="Doc",
+            text="Hello world. This is a test.",
+            tags=[],
+            access_keys=[],
             use_knowledge_graph=True,
         )
         assert result["chunks"] > 0

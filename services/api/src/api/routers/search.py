@@ -27,9 +27,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-async def _get_user_access_keys(
-    session: AsyncSession, ctx: OrgContext
-) -> list[int] | None:
+async def _get_user_access_keys(session: AsyncSession, ctx: OrgContext) -> list[int] | None:
     """Return the user's access masks, or None for admins (unrestricted)."""
     if ctx.is_org_admin:
         return None

@@ -14,9 +14,8 @@ from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
 from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
 from prometheus_fastapi_instrumentator import Instrumentator
-from sqlalchemy.ext.asyncio import AsyncEngine
-
 from shared_config import configure_logging, configure_telemetry
+from sqlalchemy.ext.asyncio import AsyncEngine
 
 logger = logging.getLogger(__name__)
 

@@ -9,14 +9,12 @@ from __future__ import annotations
 import uuid
 
 import pytest
+from api.models.document import Document, Folder
+from api.models.org import Org
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.models.document import Document, Folder
-from api.models.org import Org
-
 from .helpers import set_tenant
-
 
 pytestmark = pytest.mark.integration
 
@@ -56,9 +54,7 @@ class TestRLSIsolation:
         visible = result.scalars().all()
         assert {d.title for d in visible} == {"B-doc"}
 
-    async def test_insert_wrong_tenant_rejected(
-        self, admin_session: AsyncSession, session: AsyncSession
-    ) -> None:
+    async def test_insert_wrong_tenant_rejected(self, admin_session: AsyncSession, session: AsyncSession) -> None:
         """Inserting a document with mismatched org_id must fail the RLS INSERT policy."""
         await set_tenant(admin_session, None)
         org_a = Org(name="OrgInsertA", permission_number=10)
@@ -74,9 +70,7 @@ class TestRLSIsolation:
         with pytest.raises(Exception):  # RLS policy violation raises
             await session.flush()
 
-    async def test_no_tenant_set_returns_empty(
-        self, admin_session: AsyncSession, session: AsyncSession
-    ) -> None:
+    async def test_no_tenant_set_returns_empty(self, admin_session: AsyncSession, session: AsyncSession) -> None:
         """With no tenant context, queries against RLS-enabled tables return nothing."""
         await set_tenant(admin_session, None)
         org = Org(name="OrgNoCtx", permission_number=20)
@@ -91,9 +85,7 @@ class TestRLSIsolation:
         result = await session.execute(select(Document))
         assert result.scalars().all() == []
 
-    async def test_folder_rls_same_behavior(
-        self, admin_session: AsyncSession, session: AsyncSession
-    ) -> None:
+    async def test_folder_rls_same_behavior(self, admin_session: AsyncSession, session: AsyncSession) -> None:
         """Folders table should exhibit the same tenant isolation as documents."""
         await set_tenant(admin_session, None)
         org_a = Org(name="OrgFolderA", permission_number=30)

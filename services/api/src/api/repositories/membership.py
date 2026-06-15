@@ -45,9 +45,7 @@ class MembershipRepository:
         membership = existing.scalar_one_or_none()
 
         if membership is None:
-            membership = UserOrgMembership(
-                profile_id=profile_id, org_id=org_id, is_org_admin=is_org_admin
-            )
+            membership = UserOrgMembership(profile_id=profile_id, org_id=org_id, is_org_admin=is_org_admin)
             self._session.add(membership)
         else:
             membership.is_org_admin = is_org_admin
@@ -78,12 +76,14 @@ class MembershipRepository:
         # MissingGreenlet. Eagerly refresh only the collections we're about
         # to touch so we don't pay for ones we'll skip.
         to_refresh = [
-            name for name, ids in (
+            name
+            for name, ids in (
                 ("regions", region_ids),
                 ("departments", department_ids),
                 ("roles", role_ids),
                 ("groups", group_ids),
-            ) if ids is not None
+            )
+            if ids is not None
         ]
         if to_refresh:
             await self._session.refresh(membership, to_refresh)
@@ -94,9 +94,7 @@ class MembershipRepository:
             _assert_all_found("region", region_ids, {r.id for r in regions})
             membership.regions = regions
         if department_ids is not None:
-            result = await self._session.execute(
-                select(Department).where(Department.id.in_(department_ids))
-            )
+            result = await self._session.execute(select(Department).where(Department.id.in_(department_ids)))
             departments = list(result.scalars().all())
             _assert_all_found("department", department_ids, {d.id for d in departments})
             membership.departments = departments
@@ -120,14 +118,10 @@ class UnknownDimensionError(ValueError):
     def __init__(self, kind: str, missing: list[uuid.UUID]) -> None:
         self.kind = kind
         self.missing = missing
-        super().__init__(
-            f"Unknown {kind} id(s): {', '.join(str(m) for m in missing)}"
-        )
+        super().__init__(f"Unknown {kind} id(s): {', '.join(str(m) for m in missing)}")
 
 
-def _assert_all_found(
-    kind: str, requested: list[uuid.UUID], found: set[uuid.UUID]
-) -> None:
+def _assert_all_found(kind: str, requested: list[uuid.UUID], found: set[uuid.UUID]) -> None:
     missing = [rid for rid in requested if rid not in found]
     if missing:
         raise UnknownDimensionError(kind, missing)
