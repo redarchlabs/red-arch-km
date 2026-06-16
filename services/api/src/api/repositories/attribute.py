@@ -17,15 +17,11 @@ class AttributeDefinitionRepository:
     async def get(self, definition_id: uuid.UUID) -> DocumentAttributeDefinition | None:
         return await self._session.get(DocumentAttributeDefinition, definition_id)
 
-    async def list_all(
-        self, *, offset: int = 0, limit: int = 200
-    ) -> tuple[list[DocumentAttributeDefinition], int]:
+    async def list_all(self, *, offset: int = 0, limit: int = 200) -> tuple[list[DocumentAttributeDefinition], int]:
         from sqlalchemy import func
 
         total = (
-            await self._session.execute(
-                select(func.count()).select_from(DocumentAttributeDefinition)
-            )
+            await self._session.execute(select(func.count()).select_from(DocumentAttributeDefinition))
         ).scalar_one()
         result = await self._session.execute(
             select(DocumentAttributeDefinition)

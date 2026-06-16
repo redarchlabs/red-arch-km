@@ -7,21 +7,16 @@ import uuid
 import pytest
 from brain_sdk.graph_store.neo4j_store import Neo4jGraphStore
 
-
 pytestmark = pytest.mark.integration
 
 
 class TestNeo4jStoreIntegration:
-    def test_initialize_tenant_is_idempotent(
-        self, graph_store: Neo4jGraphStore
-    ) -> None:
+    def test_initialize_tenant_is_idempotent(self, graph_store: Neo4jGraphStore) -> None:
         tenant = f"t-{uuid.uuid4().hex[:8]}"
         graph_store.initialize_tenant(tenant)
         graph_store.initialize_tenant(tenant)  # safe to call twice
 
-    def test_insert_triplet_then_fuzzy_search(
-        self, graph_store: Neo4jGraphStore
-    ) -> None:
+    def test_insert_triplet_then_fuzzy_search(self, graph_store: Neo4jGraphStore) -> None:
         tenant = f"t-{uuid.uuid4().hex[:8]}"
         graph_store.initialize_tenant(tenant)
 
@@ -41,9 +36,7 @@ class TestNeo4jStoreIntegration:
         assert len(hits) > 0
         assert any(h.get("subj") == "Alice" for h in hits)
 
-    def test_tenant_isolation_for_entities(
-        self, graph_store: Neo4jGraphStore
-    ) -> None:
+    def test_tenant_isolation_for_entities(self, graph_store: Neo4jGraphStore) -> None:
         tenant_a = f"ta-{uuid.uuid4().hex[:8]}"
         tenant_b = f"tb-{uuid.uuid4().hex[:8]}"
 
@@ -68,12 +61,8 @@ class TestNeo4jStoreIntegration:
         tenant = f"t-{uuid.uuid4().hex[:8]}"
         graph_store.initialize_tenant(tenant)
 
-        graph_store.insert_triplet(
-            tenant, "DocA-Node1", "relates_to", "DocA-Node2", document_key="doc-a"
-        )
-        graph_store.insert_triplet(
-            tenant, "DocB-Node1", "relates_to", "DocB-Node2", document_key="doc-b"
-        )
+        graph_store.insert_triplet(tenant, "DocA-Node1", "relates_to", "DocA-Node2", document_key="doc-a")
+        graph_store.insert_triplet(tenant, "DocB-Node1", "relates_to", "DocB-Node2", document_key="doc-b")
 
         graph_store.delete_by_document_key(tenant, "doc-a")
 
@@ -88,12 +77,22 @@ class TestNeo4jStoreIntegration:
         graph_store.initialize_tenant(tenant)
 
         graph_store.insert_triplet(
-            tenant, "Public", "has", "Info",
-            document_key="pub", subj_access=[], obj_access=[],
+            tenant,
+            "Public",
+            "has",
+            "Info",
+            document_key="pub",
+            subj_access=[],
+            obj_access=[],
         )
         graph_store.insert_triplet(
-            tenant, "Secret", "hides", "Data",
-            document_key="priv", subj_access=[999], obj_access=[999],
+            tenant,
+            "Secret",
+            "hides",
+            "Data",
+            document_key="priv",
+            subj_access=[999],
+            obj_access=[999],
         )
 
         # User with no access should still see public nodes (empty access_keys)
@@ -108,9 +107,7 @@ class TestNeo4jStoreIntegration:
         assert "Public" in names_with
         assert "Secret" in names_with
 
-    def test_delete_tenant_removes_all_nodes(
-        self, graph_store: Neo4jGraphStore
-    ) -> None:
+    def test_delete_tenant_removes_all_nodes(self, graph_store: Neo4jGraphStore) -> None:
         tenant_a = f"a-{uuid.uuid4().hex[:8]}"
         tenant_b = f"b-{uuid.uuid4().hex[:8]}"
 
@@ -163,14 +160,9 @@ class TestNeo4jStoreIntegration:
             assert any(h["name"] == name for h in hits), f"missing entity {name}"
 
         relationships = graph_store.fuzzy_relationship_search(tenant, "knows")
-        assert any(
-            h.get("subj") == "Alice" and h.get("obj") == "Bob"
-            for h in relationships
-        )
+        assert any(h.get("subj") == "Alice" and h.get("obj") == "Bob" for h in relationships)
 
-    def test_insert_triplets_empty_list_is_noop(
-        self, graph_store: Neo4jGraphStore
-    ) -> None:
+    def test_insert_triplets_empty_list_is_noop(self, graph_store: Neo4jGraphStore) -> None:
         tenant = f"t-{uuid.uuid4().hex[:8]}"
         graph_store.initialize_tenant(tenant)
         # Should not raise, should not create any rows.
@@ -183,13 +175,16 @@ class TestNeo4jStoreIntegration:
         graph_store.initialize_tenant(tenant)
 
         graph_store.insert_triplet(
-            tenant, "X", "rel", "Y",
-            document_key="d1", subj_tags=["old"], subj_access=[1],
+            tenant,
+            "X",
+            "rel",
+            "Y",
+            document_key="d1",
+            subj_tags=["old"],
+            subj_access=[1],
         )
 
-        graph_store.update_metadata(
-            tenant, "d1", tags=["new"], access_keys=[42]
-        )
+        graph_store.update_metadata(tenant, "d1", tags=["new"], access_keys=[42])
 
         # After update, nodes should have the new tags only
         hits = graph_store.fuzzy_entity_search(tenant, "x", tags=["new"])

@@ -48,12 +48,8 @@ async def list_dimensions(
 ) -> PaginatedResponse[DimensionRead]:
     model = _resolve_model(dimension)
     repo = DimensionRepository(session, model)
-    items, total = await repo.list_all(
-        offset=pagination.offset, limit=pagination.page_size
-    )
-    return make_page(
-        [DimensionRead.model_validate(item) for item in items], total, pagination
-    )
+    items, total = await repo.list_all(offset=pagination.offset, limit=pagination.page_size)
+    return make_page([DimensionRead.model_validate(item) for item in items], total, pagination)
 
 
 @router.get("/{dimension}/{dimension_id}", response_model=DimensionRead)
@@ -80,9 +76,7 @@ async def create_dimension(
 ) -> DimensionRead:
     model = _resolve_model(dimension)
     repo = DimensionRepository(session, model)
-    instance = await repo.create(
-        name=body.name, description=body.description, org_id=ctx.org_id
-    )
+    instance = await repo.create(name=body.name, description=body.description, org_id=ctx.org_id)
     return DimensionRead.model_validate(instance)
 
 
@@ -96,9 +90,7 @@ async def update_dimension(
 ) -> DimensionRead:
     model = _resolve_model(dimension)
     repo = DimensionRepository(session, model)
-    instance = await repo.update(
-        dimension_id, name=body.name, description=body.description
-    )
+    instance = await repo.update(dimension_id, name=body.name, description=body.description)
     if instance is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     return DimensionRead.model_validate(instance)

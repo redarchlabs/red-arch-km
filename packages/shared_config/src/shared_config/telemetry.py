@@ -52,9 +52,7 @@ def configure_telemetry(
 
     endpoint = settings.otel_exporter_otlp_endpoint.strip()
     if endpoint:
-        tracer_provider.add_span_processor(
-            BatchSpanProcessor(OTLPSpanExporter(endpoint=endpoint, insecure=True))
-        )
+        tracer_provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint=endpoint, insecure=True)))
         meter_provider_readers.append(
             PeriodicExportingMetricReader(
                 OTLPMetricExporter(endpoint=endpoint, insecure=True),

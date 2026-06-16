@@ -3,16 +3,13 @@
 from __future__ import annotations
 
 import pytest
+from api.models.document import Folder
+from api.models.org import Org
+from api.services.folder_service import FolderCycleError, move_folder
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.models.document import Folder
-from api.models.org import Org
-from api.repositories.folder import FolderRepository
-from api.services.folder_service import FolderCycleError, move_folder
-
 from .helpers import set_tenant
-
 
 pytestmark = pytest.mark.integration
 
@@ -32,9 +29,7 @@ async def _make_folder(
 
 
 class TestFolderMove:
-    async def test_move_rebuilds_dot_paths(
-        self, admin_session: AsyncSession
-    ) -> None:
+    async def test_move_rebuilds_dot_paths(self, admin_session: AsyncSession) -> None:
         """Moving a folder updates its dot_path and all descendants'."""
         await set_tenant(admin_session, None)
         org = Org(name="MoveTest1", permission_number=1)
@@ -49,12 +44,8 @@ class TestFolderMove:
         #   │           └── c (dot_path="a.b.c")
         #   └── x (dot_path="x")
         a = await _make_folder(admin_session, name="a", org_id=org.id, dot_path="a")
-        b = await _make_folder(
-            admin_session, name="b", org_id=org.id, parent_id=a.id, dot_path="a.b"
-        )
-        await _make_folder(
-            admin_session, name="c", org_id=org.id, parent_id=b.id, dot_path="a.b.c"
-        )
+        b = await _make_folder(admin_session, name="b", org_id=org.id, parent_id=a.id, dot_path="a.b")
+        await _make_folder(admin_session, name="c", org_id=org.id, parent_id=b.id, dot_path="a.b.c")
         x = await _make_folder(admin_session, name="x", org_id=org.id, dot_path="x")
         await admin_session.commit()
 
@@ -77,18 +68,14 @@ class TestFolderMove:
 
         await set_tenant(admin_session, str(org.id))
         a = await _make_folder(admin_session, name="a", org_id=org.id, dot_path="a")
-        b = await _make_folder(
-            admin_session, name="b", org_id=org.id, parent_id=a.id, dot_path="a.b"
-        )
+        b = await _make_folder(admin_session, name="b", org_id=org.id, parent_id=a.id, dot_path="a.b")
         await admin_session.commit()
 
         # Move b to root → new dot_path = "b"
         await move_folder(admin_session, b, None)
         await admin_session.commit()
 
-        refreshed = await admin_session.execute(
-            select(Folder).where(Folder.name == "b")
-        )
+        refreshed = await admin_session.execute(select(Folder).where(Folder.name == "b"))
         folder = refreshed.scalar_one()
         assert folder.dot_path == "b"
         assert folder.parent_id is None
@@ -101,18 +88,14 @@ class TestFolderMove:
 
         await set_tenant(admin_session, str(org.id))
         a = await _make_folder(admin_session, name="a", org_id=org.id, dot_path="a")
-        b = await _make_folder(
-            admin_session, name="b", org_id=org.id, parent_id=a.id, dot_path="a.b"
-        )
+        b = await _make_folder(admin_session, name="b", org_id=org.id, parent_id=a.id, dot_path="a.b")
         await admin_session.commit()
 
         # Attempt to move a under b — would create a cycle
         with pytest.raises(FolderCycleError):
             await move_folder(admin_session, a, b.id)
 
-    async def test_prefix_similar_names_not_affected(
-        self, admin_session: AsyncSession
-    ) -> None:
+    async def test_prefix_similar_names_not_affected(self, admin_session: AsyncSession) -> None:
         """Moving 'alpha' should not rewrite 'alpha2' (prefix match bug guard)."""
         await set_tenant(admin_session, None)
         org = Org(name="MoveTest4", permission_number=4)
@@ -120,23 +103,15 @@ class TestFolderMove:
         await admin_session.commit()
 
         await set_tenant(admin_session, str(org.id))
-        alpha = await _make_folder(
-            admin_session, name="alpha", org_id=org.id, dot_path="alpha"
-        )
-        await _make_folder(
-            admin_session, name="alpha2", org_id=org.id, dot_path="alpha2"
-        )
-        target = await _make_folder(
-            admin_session, name="target", org_id=org.id, dot_path="target"
-        )
+        alpha = await _make_folder(admin_session, name="alpha", org_id=org.id, dot_path="alpha")
+        await _make_folder(admin_session, name="alpha2", org_id=org.id, dot_path="alpha2")
+        target = await _make_folder(admin_session, name="target", org_id=org.id, dot_path="target")
         await admin_session.commit()
 
         await move_folder(admin_session, alpha, target.id)
         await admin_session.commit()
 
-        result = await admin_session.execute(
-            select(Folder).order_by(Folder.name)
-        )
+        result = await admin_session.execute(select(Folder).order_by(Folder.name))
         folders = {f.name: f.dot_path for f in result.scalars().all()}
         assert folders["alpha"] == "target.alpha"
         assert folders["alpha2"] == "alpha2"  # untouched

@@ -5,9 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import pytest
-
-from access_mask import MAX_DEPT, MAX_GROUP, MAX_REGION, MAX_ROLE, decode, encode
-
+from access_mask import decode, encode
 from api.services.permission_config import calculate_user_masks_from_membership
 
 
@@ -77,9 +75,7 @@ class TestCalculateUserMasksFromMembership:
             (3, 2, 2, 2, 24),
         ],
     )
-    def test_cartesian_counts(
-        self, n_regions: int, n_depts: int, n_roles: int, n_groups: int, expected: int
-    ) -> None:
+    def test_cartesian_counts(self, n_regions: int, n_depts: int, n_roles: int, n_groups: int, expected: int) -> None:
         membership = _FakeMembership(
             regions=[_FakeDim(i) for i in range(1, n_regions + 1)],
             departments=[_FakeDim(i) for i in range(1, n_depts + 1)],

@@ -84,7 +84,5 @@ async def list_users_in_org(
 ) -> PaginatedResponse[UserRead]:
     """List users with membership in the current org."""
     repo = UserRepository(session)
-    users, total = await repo.list_in_org(
-        ctx.org_id, offset=pagination.offset, limit=pagination.page_size
-    )
+    users, total = await repo.list_in_org(ctx.org_id, offset=pagination.offset, limit=pagination.page_size)
     return make_page([UserRead.model_validate(u) for u in users], total, pagination)

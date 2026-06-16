@@ -122,9 +122,7 @@ class IngestService:
                 concurrent.futures.ThreadPoolExecutor(max_workers=2) as exe,
             ):
                 embed_future = exe.submit(self._stores.embedder.embed_batch, chunks)
-                summaries_future = exe.submit(
-                    self._stores.summarizer.summarize_chunks, chunks
-                )
+                summaries_future = exe.submit(self._stores.summarizer.summarize_chunks, chunks)
                 chunk_embeddings = embed_future.result()
                 chunk_summaries = summaries_future.result()
                 span.set_attribute("batch_size", len(chunks))
@@ -154,9 +152,7 @@ class IngestService:
             ]
 
             with _tracer.start_as_current_span("upsert_chunks"):
-                self._stores.vector.upsert_vectors(
-                    tenant_id, chunk_records, collection_type="chunks"
-                )
+                self._stores.vector.upsert_vectors(tenant_id, chunk_records, collection_type="chunks")
 
             with _tracer.start_as_current_span("document_summary"):
                 doc_summary = self._safe_document_summary(chunk_summaries)
@@ -177,9 +173,7 @@ class IngestService:
                     **(metadata or {}),
                 },
             )
-            self._stores.vector.upsert_vectors(
-                tenant_id, [doc_record], collection_type="documents"
-            )
+            self._stores.vector.upsert_vectors(tenant_id, [doc_record], collection_type="documents")
 
             triplet_count = 0
             if use_knowledge_graph:
@@ -223,9 +217,7 @@ class IngestService:
             # Cheap fallback so the doc-level record still has text to display.
             return " ".join(s for s in chunk_summaries if s)[:2000]
 
-    def _choose_document_vector(
-        self, summary: str, chunk_embeddings: list[list[float]]
-    ) -> list[float]:
+    def _choose_document_vector(self, summary: str, chunk_embeddings: list[list[float]]) -> list[float]:
         """Embed the doc summary, or fall back to centroid of chunk embeddings.
 
         Previously this defaulted to `chunk_embeddings[0]`, biasing

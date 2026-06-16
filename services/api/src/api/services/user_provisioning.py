@@ -23,9 +23,7 @@ async def provision_user_from_claims(
 
     Called on every authenticated request; the first call creates the record.
     """
-    result = await session.execute(
-        select(UserProfile).where(UserProfile.keycloak_sub == sub)
-    )
+    result = await session.execute(select(UserProfile).where(UserProfile.keycloak_sub == sub))
     profile = result.scalar_one_or_none()
 
     if profile is not None:

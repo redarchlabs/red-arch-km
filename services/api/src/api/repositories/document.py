@@ -8,7 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from api.models.document import Document, Folder, Tag
+from api.models.document import Document, Tag
 
 
 class DocumentRepository:

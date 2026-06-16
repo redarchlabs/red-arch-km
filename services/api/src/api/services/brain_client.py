@@ -73,9 +73,7 @@ class BrainAPIClient:
             response.raise_for_status()
             return response.json()
 
-    async def get_document_chunks(
-        self, tenant_id: str, document_key: str, *, limit: int = 500
-    ) -> dict[str, Any]:
+    async def get_document_chunks(self, tenant_id: str, document_key: str, *, limit: int = 500) -> dict[str, Any]:
         async with httpx.AsyncClient(timeout=30) as client:
             response = await client.get(
                 f"{self._base_url}/api/documents/{tenant_id}/{document_key}/chunks",
@@ -101,8 +99,9 @@ class BrainAPIClient:
         forwards these chunks — we don't parse or repackage them so that
         the client sees exactly what brain-api emitted (including timing).
         """
-        async with httpx.AsyncClient(timeout=None) as client:
-            async with client.stream(
+        async with (
+            httpx.AsyncClient(timeout=None) as client,
+            client.stream(
                 "POST",
                 f"{self._base_url}/api/v1/ask/stream",
                 json={
@@ -114,10 +113,11 @@ class BrainAPIClient:
                     "use_knowledge_graph": use_knowledge_graph,
                 },
                 headers=self._headers(),
-            ) as response:
-                response.raise_for_status()
-                async for chunk in response.aiter_bytes():
-                    yield chunk
+            ) as response,
+        ):
+            response.raise_for_status()
+            async for chunk in response.aiter_bytes():
+                yield chunk
 
     async def init_tenant(self, tenant_id: str) -> dict[str, Any]:
         async with httpx.AsyncClient(timeout=60) as client:
