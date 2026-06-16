@@ -62,7 +62,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install dependencies
-        run: uv sync --all-packages --dev
+        run: uv sync --all-packages --extra dev --dev
       - name: Run tests
         run: uv run pytest --tb=short --cov=packages --cov=services --cov-report=xml
         env:
@@ -89,3 +89,29 @@ jobs:
       # NOTE: lint + unit tests are intentionally omitted here pending the
       # "UI lint+test harness repair" WO (no ESLint flat config yet; vitest
       # needs jsdom + a unit-test strategy). Tracked separately.
+
+  test-e2e:
+    runs-on: ubuntu-latest
+    needs: lint-and-type-check
+    defaults:
+      run:
+        working-directory: ui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.11"
+      - run: bun install --frozen-lockfile
+      - name: Install Playwright browsers
+        run: bunx playwright install --with-deps
+      - name: Run Playwright smoke tests
+        run: bun run test:e2e
+        # Note: E2E_WITH_BACKEND is unset, so test.skip() guards fire correctly
+        # BASE_URL is unset, so playwright.config.ts boots the dev server
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: tests/e2e/playwright-report/
+          retention-days: 30
