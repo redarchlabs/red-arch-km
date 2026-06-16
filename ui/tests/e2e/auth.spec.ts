@@ -56,4 +56,41 @@ test.describe("Authentication Flow", () => {
     const meRes = await apiContext.get("/api/users/me");
     expect(meRes.ok()).toBe(true);
   });
+
+  test("invalid session token is rejected", async ({ request, baseURL }) => {
+    // Try to access API with invalid credentials
+    const res = await request.get(`${baseURL}/api/users/me`, {
+      headers: {
+        "X-Test-User": "invalid:user@example.com",
+        "X-Test-Secret": "invalid-secret-12345",
+      },
+    });
+
+    // Should be rejected (401, 403, or 404)
+    expect([401, 403, 404]).toContain(res.status());
+  });
+
+  test("missing auth headers results in error", async ({ request, baseURL }) => {
+    // Try to access protected API without any auth headers
+    const res = await request.get(`${baseURL}/api/users/me`);
+
+    // Should be rejected
+    expect([401, 403, 404]).toContain(res.status());
+  });
+
+  test("expired/malformed session token is rejected", async ({ request, baseURL }) => {
+    // Try various malformed tokens
+    const badTokens = ["", "invalid-token", "eyJhbGc...", "null"];
+
+    for (const token of badTokens) {
+      const res = await request.get(`${baseURL}/api/users/me`, {
+        headers: {
+          "X-Test-User": "user@example.com",
+          "X-Test-Secret": token,
+        },
+      });
+
+      expect([401, 403, 404]).toContain(res.status());
+    }
+  });
 });
