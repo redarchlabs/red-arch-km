@@ -171,4 +171,111 @@ test.describe("RBAC / Permission Boundaries", () => {
       expect(org.name).toBeTruthy();
     });
   });
+
+  test("regular user cannot delete documents", async ({ request, baseURL }) => {
+    // Create document as user A
+    const createRes = await request.post(`${baseURL}/api/documents/`, {
+      headers: {
+        "X-Test-User": "user_a:usera@example.com",
+        "X-Test-Secret": process.env.E2E_TEST_SECRET || "",
+      },
+      data: {
+        title: `secure-doc-${Date.now()}`,
+        text: "Should not be deletable by others",
+      },
+    });
+
+    expect(createRes.ok()).toBe(true);
+    const docA = (await createRes.json()) as { id: string };
+
+    // Try to delete as user B
+    const deleteRes = await request.delete(
+      `${baseURL}/api/documents/${docA.id}`,
+      {
+        headers: {
+          "X-Test-User": "user_b:userb@example.com",
+          "X-Test-Secret": process.env.E2E_TEST_SECRET || "",
+        },
+      },
+    );
+
+    // Should be denied
+    expect([403, 404]).toContain(deleteRes.status());
+
+    // Clean up: delete as owner
+    await request.delete(`${baseURL}/api/documents/${docA.id}`, {
+      headers: {
+        "X-Test-User": "user_a:usera@example.com",
+        "X-Test-Secret": process.env.E2E_TEST_SECRET || "",
+      },
+    });
+  });
+
+  test("regular user cannot access other user's folders", async ({
+    request,
+    baseURL,
+  }) => {
+    // Create folder as user A
+    const folderRes = await request.post(`${baseURL}/api/folders/`, {
+      headers: {
+        "X-Test-User": "user_a:usera@example.com",
+        "X-Test-Secret": process.env.E2E_TEST_SECRET || "",
+      },
+      data: { name: `private-${Date.now()}` },
+    });
+
+    expect(folderRes.ok()).toBe(true);
+    const folder = (await folderRes.json()) as { id: string };
+
+    // Try to access directly as user B
+    const accessRes = await request.get(`${baseURL}/api/folders/${folder.id}`, {
+      headers: {
+        "X-Test-User": "user_b:userb@example.com",
+        "X-Test-Secret": process.env.E2E_TEST_SECRET || "",
+      },
+    });
+
+    // Should be denied
+    expect([403, 404]).toContain(accessRes.status());
+
+    // Clean up: delete as owner
+    await request.delete(`${baseURL}/api/folders/${folder.id}`, {
+      headers: {
+        "X-Test-User": "user_a:usera@example.com",
+        "X-Test-Secret": process.env.E2E_TEST_SECRET || "",
+      },
+    });
+  });
+
+  test("admin can access admin panel and see users", async ({
+    request,
+    baseURL,
+  }) => {
+    // Try to list users as admin
+    const usersRes = await request.get(`${baseURL}/api/admin/users`, {
+      headers: {
+        "X-Test-User": "e2e_admin:e2e_admin@e2e.local",
+        "X-Test-Secret": process.env.E2E_TEST_SECRET || "",
+      },
+    });
+
+    // Admin should be able to list users
+    expect(usersRes.ok()).toBe(true);
+  });
+
+  test("non-admin cannot access admin endpoints", async ({
+    request,
+    baseURL,
+  }) => {
+    // Try to list users as regular user
+    const usersRes = await request.get(`${baseURL}/api/admin/users`, {
+      headers: {
+        "X-Test-User": "regular_user:test@example.com",
+        "X-Test-Secret": process.env.E2E_TEST_SECRET || "",
+      },
+    });
+
+    // Should be denied
+    expect([403, 404]).toContain(usersRes.status());
+  });
 });
