@@ -106,10 +106,8 @@ jobs:
         run: bunx playwright install --with-deps
       - name: Run Playwright smoke tests
         run: bun run test:e2e
-        env:
-          # Smoke tests run without backend (no seeded environment in CI)
-          E2E_WITH_BACKEND: "false"
-          BASE_URL: "http://localhost:3000"
+        # Note: E2E_WITH_BACKEND is unset, so test.skip() guards fire correctly
+        # BASE_URL is unset, so playwright.config.ts boots the dev server
       - name: Upload Playwright report
         if: always()
         uses: actions/upload-artifact@v4

@@ -123,6 +123,59 @@ test.describe("Folder Management Flow", () => {
     expect(doc.folder_id).toBe(newFolder.id);
   });
 
+  test("cannot create folder with missing name", async ({ apiContext }) => {
+    const res = await apiContext.post("/api/folders/", {
+      data: { description: "Missing name" },
+    });
+
+    expect([400, 422]).toContain(res.status());
+  });
+
+  test("cannot create folder with empty name", async ({ apiContext }) => {
+    const res = await apiContext.post("/api/folders/", {
+      data: { name: "", description: "Empty name" },
+    });
+
+    expect([400, 422]).toContain(res.status());
+  });
+
+  test("access non-existent folder returns 404", async ({ apiContext }) => {
+    const fakeId = `nonexistent-${Date.now()}`;
+    const res = await apiContext.get(`/api/folders/${fakeId}`);
+
+    expect(res.status()).toBe(404);
+  });
+
+  test("cannot reparent folder under itself (cycle prevention)", async ({ apiContext }) => {
+    // Try to set a folder's parent to itself
+    const res = await apiContext.patch(`/api/folders/${parentFolderId}`, {
+      data: { parent_id: parentFolderId },
+    });
+
+    // Should reject as a cycle
+    expect([400, 422, 409]).toContain(res.status());
+  });
+
+  test("cannot reparent folder under its own descendant (cycle prevention)", async ({ apiContext }) => {
+    // Try to set parent's parent to child (would create a cycle)
+    const res = await apiContext.patch(`/api/folders/${parentFolderId}`, {
+      data: { parent_id: childFolderId },
+    });
+
+    // Should reject as a cycle
+    expect([400, 422, 409]).toContain(res.status());
+  });
+
+  test("cannot reparent to non-existent parent folder", async ({ apiContext }) => {
+    const fakeParentId = `nonexistent-${Date.now()}`;
+    const res = await apiContext.patch(`/api/folders/${parentFolderId}`, {
+      data: { parent_id: fakeParentId },
+    });
+
+    // Should reject (404 or 400)
+    expect([400, 404]).toContain(res.status());
+  });
+
   test("clean up: delete folders and documents", async ({ apiContext }) => {
     // Delete document
     await apiContext.delete(`/api/documents/${documentId}`);

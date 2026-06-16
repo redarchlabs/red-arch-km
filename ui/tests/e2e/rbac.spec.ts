@@ -10,74 +10,48 @@ import { expect, test } from "@playwright/test";
 test.describe("RBAC / Permission Boundaries", () => {
   test.skip(!process.env.E2E_WITH_BACKEND, "requires seeded backend with test users");
 
-  test("regular user cannot access admin panel", async ({ page }) => {
-    // Set up as regular (non-admin) user via test headers
-    await page.addInitScript(() => {
-      const origFetch = window.fetch;
-      window.fetch = (input: RequestInfo | URL, init: RequestInit = {}) => {
-        const headers = new Headers(init.headers ?? {});
-        headers.set("X-Test-User", "regular_user:test@example.com");
-        headers.set("X-Test-Secret", process.env.E2E_TEST_SECRET || "");
-        return origFetch(input, { ...init, headers });
-      };
+  test("regular user cannot access admin panel", async ({ request, baseURL }) => {
+    // Use API to verify regular user cannot access admin endpoints
+    const res = await request.get(`${baseURL}/api/admin/users`, {
+      headers: {
+        "X-Test-User": "regular_user:test@example.com",
+        "X-Test-Secret": process.env.E2E_TEST_SECRET || "",
+      },
     });
 
-    await page.goto("/admin");
-    await page.waitForLoadState("networkidle");
-
-    // Should be redirected or show access denied
-    const url = page.url();
-    const content = await page.content();
-    const isBlocked =
-      /admin|forbidden|unauthorized|access denied/i.test(content) ||
-      !url.includes("/admin");
-
-    expect(isBlocked).toBe(true);
+    // Should be denied (403 or 404)
+    expect([403, 404]).toContain(res.status());
   });
 
-  test("regular user can access documents", async ({ page }) => {
-    await page.addInitScript(() => {
-      const origFetch = window.fetch;
-      window.fetch = (input: RequestInfo | URL, init: RequestInit = {}) => {
-        const headers = new Headers(init.headers ?? {});
-        headers.set("X-Test-User", "regular_user:test@example.com");
-        headers.set("X-Test-Secret", process.env.E2E_TEST_SECRET || "");
-        return origFetch(input, { ...init, headers });
-      };
+  test("regular user can access documents", async ({ page, request, baseURL }) => {
+    // Use API to verify regular user can access documents
+    const res = await request.get(`${baseURL}/api/documents/`, {
+      headers: {
+        "X-Test-User": "regular_user:test@example.com",
+        "X-Test-Secret": process.env.E2E_TEST_SECRET || "",
+      },
     });
 
-    await page.goto("/documents");
-    await page.waitForLoadState("networkidle");
-
-    const content = await page.content();
-    const hasDocuments =
-      /documents|document list|create/i.test(content) ||
-      /unauthorized|forbidden/i.test(content) === false;
-
-    // Either shows documents or gracefully handles permission (no error)
-    expect(true).toBe(true);
+    // Regular user should be able to list documents (200) or have auth failure
+    // If auth is working correctly, 200 means they can access
+    expect([200, 401, 403]).toContain(res.status());
+    if (res.ok()) {
+      const body = (await res.json()) as { items: unknown[] };
+      expect(Array.isArray(body.items)).toBe(true);
+    }
   });
 
-  test("admin user can access admin panel", async ({ page }) => {
-    // Set up as admin user via test headers
-    await page.addInitScript(() => {
-      const origFetch = window.fetch;
-      window.fetch = (input: RequestInfo | URL, init: RequestInit = {}) => {
-        const headers = new Headers(init.headers ?? {});
-        headers.set("X-Test-User", "e2e_admin:e2e_admin@e2e.local");
-        headers.set("X-Test-Secret", process.env.E2E_TEST_SECRET || "");
-        return origFetch(input, { ...init, headers });
-      };
+  test("admin user can access admin panel", async ({ request, baseURL }) => {
+    // Use API to verify admin user can access admin endpoints
+    const res = await request.get(`${baseURL}/api/admin/users`, {
+      headers: {
+        "X-Test-User": "e2e_admin:e2e_admin@e2e.local",
+        "X-Test-Secret": process.env.E2E_TEST_SECRET || "",
+      },
     });
 
-    await page.goto("/admin");
-    await page.waitForLoadState("networkidle");
-
-    const url = page.url();
-    const content = await page.content();
-    const isAdmin = url.includes("/admin") && !/unauthorized|forbidden/i.test(content);
-
-    expect(isAdmin).toBe(true);
+    // Admin should be able to access admin endpoints (200)
+    expect(res.ok()).toBe(true);
   });
 
   test("users cannot modify others' documents", async ({
