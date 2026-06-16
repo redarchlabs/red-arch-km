@@ -107,4 +107,67 @@ test.describe("Document Management Flow", () => {
     const res = await apiContext.get(`/api/documents/${createdDocId}`);
     expect(res.status()).toBe(404);
   });
+
+  test("cannot create document with missing required fields", async ({ apiContext }) => {
+    // Missing title
+    const res1 = await apiContext.post("/api/documents/", {
+      data: {
+        description: "Missing title",
+        text: "Some content",
+      },
+    });
+    expect([400, 422]).toContain(res1.status());
+
+    // Missing text
+    const res2 = await apiContext.post("/api/documents/", {
+      data: {
+        title: "Missing content",
+      },
+    });
+    expect([400, 422]).toContain(res2.status());
+  });
+
+  test("cannot create document with empty title", async ({ apiContext }) => {
+    const res = await apiContext.post("/api/documents/", {
+      data: {
+        title: "",
+        text: "Some content",
+      },
+    });
+    expect([400, 422]).toContain(res.status());
+  });
+
+  test("access non-existent document returns 404", async ({ apiContext }) => {
+    const fakeId = "nonexistent-" + Date.now();
+    const res = await apiContext.get(`/api/documents/${fakeId}`);
+    expect(res.status()).toBe(404);
+  });
+
+  test("update non-existent document returns 404", async ({ apiContext }) => {
+    const fakeId = "nonexistent-" + Date.now();
+    const res = await apiContext.patch(`/api/documents/${fakeId}`, {
+      data: { title: "Updated" },
+    });
+    expect(res.status()).toBe(404);
+  });
+
+  test("cannot update document with invalid data", async ({ apiContext }) => {
+    // Create a document first
+    const createRes = await apiContext.post("/api/documents/", {
+      data: {
+        title: `doc-${Date.now()}`,
+        text: "Original content",
+      },
+    });
+    const doc = (await createRes.json()) as { id: string };
+
+    // Try to update with empty title
+    const updateRes = await apiContext.patch(`/api/documents/${doc.id}`, {
+      data: { title: "" },
+    });
+    expect([400, 422]).toContain(updateRes.status());
+
+    // Clean up
+    await apiContext.delete(`/api/documents/${doc.id}`);
+  });
 });
