@@ -9,7 +9,13 @@ members = [
     "packages/*",
     "services/*",
 ]
-exclude = ["packages/accessmask"]
+exclude = [
+    "packages/accessmask",
+    "packages/shared",
+    "services/api-go",
+    "services/brain-api-go",
+    "services/worker-go",
+]
 
 [tool.uv.sources]
 access-mask = { workspace = true }
