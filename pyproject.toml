@@ -4,10 +4,26 @@ version = "2.0.0"
 description = "Red Arch Knowledge Management Platform"
 requires-python = ">=3.12"
 
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.8.0",
+    "mypy>=1.8.0",
+    "pytest>=8.0.0",
+    "pytest-cov>=4.0.0",
+]
+
 [tool.uv.workspace]
 members = [
     "packages/*",
     "services/*",
+]
+exclude = [
+    # Go modules matched by the globs above but not uv (Python) members.
+    "packages/accessmask",
+    "packages/shared",
+    "services/api-go",
+    "services/brain-api-go",
+    "services/worker-go",
 ]
 
 [tool.uv.sources]
