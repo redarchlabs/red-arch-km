@@ -17,13 +17,12 @@ import logging
 import sys
 import uuid
 
-from sqlalchemy import select, text
-
 from api.config import get_settings
 from api.db import get_session_factory
 from api.models.document import Folder, Tag
 from api.models.org import Department, Group, Org, Region, Role
 from api.models.user import UserOrgMembership, UserProfile
+from sqlalchemy import select, text
 
 logger = logging.getLogger("seed")
 
@@ -40,9 +39,7 @@ TAGS = ["onboarding", "policy", "finance"]
 
 
 async def _get_or_create(session, model, *, filters, defaults):  # type: ignore[no-untyped-def]
-    result = await session.execute(
-        select(model).filter_by(**filters)
-    )
+    result = await session.execute(select(model).filter_by(**filters))
     existing = result.scalar_one_or_none()
     if existing is not None:
         return existing
@@ -59,7 +56,8 @@ async def seed() -> None:
     async with factory() as session:
         # Orgs are not RLS-scoped on create (seed script runs as admin/bypass role)
         org = await _get_or_create(
-            session, Org,
+            session,
+            Org,
             filters={"name": E2E_ORG_NAME},
             defaults={"permission_number": 1, "description": "Created by seed_e2e"},
         )
@@ -67,7 +65,8 @@ async def seed() -> None:
 
         # Site admin user
         admin = await _get_or_create(
-            session, UserProfile,
+            session,
+            UserProfile,
             filters={"keycloak_sub": E2E_ADMIN_SUB},
             defaults={
                 "username": E2E_ADMIN_USERNAME,
@@ -87,33 +86,38 @@ async def seed() -> None:
         for i, name in enumerate(REGIONS, start=1):
             created_regions.append(
                 await _get_or_create(
-                    session, Region,
+                    session,
+                    Region,
                     filters={"org_id": org_id, "name": name},
                     defaults={"permission_number": i},
                 )
             )
         for i, name in enumerate(DEPARTMENTS, start=1):
             await _get_or_create(
-                session, Department,
+                session,
+                Department,
                 filters={"org_id": org_id, "name": name},
                 defaults={"permission_number": i},
             )
         for i, name in enumerate(ROLES, start=1):
             await _get_or_create(
-                session, Role,
+                session,
+                Role,
                 filters={"org_id": org_id, "name": name},
                 defaults={"permission_number": i},
             )
         for i, name in enumerate(GROUPS, start=1):
             await _get_or_create(
-                session, Group,
+                session,
+                Group,
                 filters={"org_id": org_id, "name": name},
                 defaults={"permission_number": i},
             )
 
         # Membership
         membership = await _get_or_create(
-            session, UserOrgMembership,
+            session,
+            UserOrgMembership,
             filters={"profile_id": admin.id, "org_id": org_id},
             defaults={"is_org_admin": True},
         )
@@ -123,12 +127,14 @@ async def seed() -> None:
 
         # Folders
         await _get_or_create(
-            session, Folder,
+            session,
+            Folder,
             filters={"org_id": org_id, "name": "Public", "parent_id": None},
             defaults={"dot_path": "Public", "view_permission_masks": []},
         )
         await _get_or_create(
-            session, Folder,
+            session,
+            Folder,
             filters={"org_id": org_id, "name": "Engineering", "parent_id": None},
             defaults={"dot_path": "Engineering", "view_permission_masks": []},
         )
@@ -136,7 +142,8 @@ async def seed() -> None:
         # Tags
         for name in TAGS:
             await _get_or_create(
-                session, Tag,
+                session,
+                Tag,
                 filters={"org_id": org_id, "name": name},
                 defaults={},
             )

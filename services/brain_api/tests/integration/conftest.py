@@ -24,9 +24,7 @@ _QDRANT_PORT = 6333
 @pytest.fixture(scope="session")
 def qdrant_container() -> Generator[DockerContainer]:
     """Start a Qdrant container for the test session."""
-    container = (
-        DockerContainer(_QDRANT_IMAGE).with_exposed_ports(_QDRANT_PORT)
-    )
+    container = DockerContainer(_QDRANT_IMAGE).with_exposed_ports(_QDRANT_PORT)
     try:
         container.start()
     except Exception as e:

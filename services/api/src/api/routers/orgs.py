@@ -33,13 +33,9 @@ async def list_orgs(
 ) -> PaginatedResponse[OrgRead]:
     repo = OrgRepository(session)
     if user.is_site_admin:
-        orgs, total = await repo.list_all(
-            offset=pagination.offset, limit=pagination.page_size
-        )
+        orgs, total = await repo.list_all(offset=pagination.offset, limit=pagination.page_size)
     else:
-        orgs, total = await repo.list_for_user(
-            user.profile_id, offset=pagination.offset, limit=pagination.page_size
-        )
+        orgs, total = await repo.list_for_user(user.profile_id, offset=pagination.offset, limit=pagination.page_size)
     return make_page([OrgRead.model_validate(o) for o in orgs], total, pagination)
 
 
@@ -141,9 +137,9 @@ async def delete_org(
         await client.remove_tenant(str(org_id))
     except Exception as e:
         logger.error(
-            "brain-api tenant cleanup failed for deleted org %s: %s — "
-            "manual cleanup may be required",
-            org_id, e,
+            "brain-api tenant cleanup failed for deleted org %s: %s — manual cleanup may be required",
+            org_id,
+            e,
         )
 
     logger.warning("Site-admin deleted org %s", org_id)

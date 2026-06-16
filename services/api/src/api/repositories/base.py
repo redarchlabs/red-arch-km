@@ -27,9 +27,7 @@ class BaseRepository(Generic[ModelT]):
     async def find_by_id(self, id: uuid.UUID) -> ModelT | None:
         return await self._session.get(self._model, id)
 
-    async def find_all(
-        self, *, offset: int = 0, limit: int = 20, **filters: Any
-    ) -> tuple[list[ModelT], int]:
+    async def find_all(self, *, offset: int = 0, limit: int = 20, **filters: Any) -> tuple[list[ModelT], int]:
         query = select(self._model)
 
         for key, value in filters.items():

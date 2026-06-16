@@ -25,9 +25,7 @@ async def list_tags(
 ) -> PaginatedResponse[TagRead]:
     repo = TagRepository(session)
     tags, total = await repo.list_all(offset=pagination.offset, limit=pagination.page_size)
-    return make_page(
-        [TagRead.model_validate(t) for t in tags], total, pagination
-    )
+    return make_page([TagRead.model_validate(t) for t in tags], total, pagination)
 
 
 @router.post("/", response_model=TagRead, status_code=status.HTTP_201_CREATED)

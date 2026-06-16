@@ -42,9 +42,7 @@ async def create_membership(
     session: Annotated[AsyncSession, Depends(get_tenant_db)],
 ) -> MembershipRead:
     repo = MembershipRepository(session)
-    membership = await repo.upsert(
-        profile_id=body.profile_id, org_id=ctx.org_id, is_org_admin=body.is_org_admin
-    )
+    membership = await repo.upsert(profile_id=body.profile_id, org_id=ctx.org_id, is_org_admin=body.is_org_admin)
     try:
         membership = await repo.assign_dimensions(
             membership,

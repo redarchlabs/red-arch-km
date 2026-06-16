@@ -20,35 +20,21 @@ class OrgRepository:
     async def get(self, org_id: uuid.UUID) -> Org | None:
         return await self._session.get(Org, org_id)
 
-    async def list_for_user(
-        self, profile_id: uuid.UUID, *, offset: int = 0, limit: int = 200
-    ) -> tuple[list[Org], int]:
+    async def list_for_user(self, profile_id: uuid.UUID, *, offset: int = 0, limit: int = 200) -> tuple[list[Org], int]:
         """Return a page of orgs where the user has a membership, plus total."""
         base = (
             select(Org)
             .join(UserOrgMembership, UserOrgMembership.org_id == Org.id)
             .where(UserOrgMembership.profile_id == profile_id)
         )
-        total = (
-            await self._session.execute(
-                select(func.count()).select_from(base.subquery())
-            )
-        ).scalar_one()
-        result = await self._session.execute(
-            base.order_by(Org.name).offset(offset).limit(limit)
-        )
+        total = (await self._session.execute(select(func.count()).select_from(base.subquery()))).scalar_one()
+        result = await self._session.execute(base.order_by(Org.name).offset(offset).limit(limit))
         return list(result.scalars().all()), total
 
-    async def list_all(
-        self, *, offset: int = 0, limit: int = 200
-    ) -> tuple[list[Org], int]:
+    async def list_all(self, *, offset: int = 0, limit: int = 200) -> tuple[list[Org], int]:
         """Return a page of all orgs (site admin only), plus total count."""
-        total = (
-            await self._session.execute(select(func.count()).select_from(Org))
-        ).scalar_one()
-        result = await self._session.execute(
-            select(Org).order_by(Org.name).offset(offset).limit(limit)
-        )
+        total = (await self._session.execute(select(func.count()).select_from(Org))).scalar_one()
+        result = await self._session.execute(select(Org).order_by(Org.name).offset(offset).limit(limit))
         return list(result.scalars().all()), total
 
     async def delete(self, org_id: uuid.UUID) -> bool:
@@ -70,10 +56,7 @@ class OrgRepository:
         # Assign next permission_number (org_mask bit index). Row-level lock
         # prevents two concurrent org creations from picking the same number.
         count_result = await self._session.execute(
-            select(Org.permission_number)
-            .order_by(Org.permission_number.desc())
-            .limit(1)
-            .with_for_update()
+            select(Org.permission_number).order_by(Org.permission_number.desc()).limit(1).with_for_update()
         )
         last = count_result.scalar_one_or_none()
         permission_number = (last or 0) + 1

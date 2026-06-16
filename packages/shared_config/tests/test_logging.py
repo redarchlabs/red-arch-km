@@ -8,7 +8,6 @@ import logging
 from unittest.mock import patch
 
 import pytest
-
 from shared_config.logging import JSONFormatter, configure_logging
 
 

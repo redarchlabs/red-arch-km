@@ -5,7 +5,6 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import pytest
-
 from brain_api.services.search_service import SearchService
 from brain_sdk.vector_store.protocol import SearchResult
 
@@ -46,9 +45,7 @@ class TestVectorSearch:
         with patch("brain_api.services.search_service.OpenAI"):
             service = SearchService(mock_stores, fake_settings)
 
-        result = service.vector_search(
-            tenant_id="t1", query="hello", limit=5, access_keys=[1, 2], tags=["tag"]
-        )
+        result = service.vector_search(tenant_id="t1", query="hello", limit=5, access_keys=[1, 2], tags=["tag"])
         assert result["total"] == 1
         assert result["hits"][0]["id"] == "chunk-1"
 
@@ -61,9 +58,7 @@ class TestVectorSearch:
 
 
 class TestVectorChatStream:
-    def test_emits_sources_then_graph_then_done(
-        self, mock_stores: MagicMock, fake_settings: MagicMock
-    ) -> None:
+    def test_emits_sources_then_graph_then_done(self, mock_stores: MagicMock, fake_settings: MagicMock) -> None:
         with patch("brain_api.services.search_service.OpenAI") as mock_openai:
             fake_client = MagicMock()
             mock_openai.return_value = fake_client
@@ -76,11 +71,7 @@ class TestVectorChatStream:
             fake_client.chat.completions.create.return_value = iter([delta, stop])
 
             service = SearchService(mock_stores, fake_settings)
-            events = list(
-                service.vector_chat_stream(
-                    tenant_id="t1", query="hello", use_knowledge_graph=True
-                )
-            )
+            events = list(service.vector_chat_stream(tenant_id="t1", query="hello", use_knowledge_graph=True))
 
         event_types = [e["type"] for e in events]
         assert event_types[0] == "sources"
@@ -95,11 +86,7 @@ class TestVectorChatStream:
             fake_client.chat.completions.create.return_value = iter([])
 
             service = SearchService(mock_stores, fake_settings)
-            events = list(
-                service.vector_chat_stream(
-                    tenant_id="t1", query="hello", use_knowledge_graph=False
-                )
-            )
+            events = list(service.vector_chat_stream(tenant_id="t1", query="hello", use_knowledge_graph=False))
 
         # Graph event still emitted but with empty list; graph store not queried
         graph_events = [e for e in events if e["type"] == "graph"]
@@ -107,9 +94,7 @@ class TestVectorChatStream:
         assert graph_events[0]["triplets"] == []
         mock_stores.graph.fuzzy_relationship_search.assert_not_called()
 
-    def test_retrieval_error_emits_error_event(
-        self, mock_stores: MagicMock, fake_settings: MagicMock
-    ) -> None:
+    def test_retrieval_error_emits_error_event(self, mock_stores: MagicMock, fake_settings: MagicMock) -> None:
         mock_stores.embedder.embed.side_effect = RuntimeError("embedding failed")
         with patch("brain_api.services.search_service.OpenAI"):
             service = SearchService(mock_stores, fake_settings)

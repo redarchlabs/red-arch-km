@@ -13,7 +13,6 @@ from celery import Celery
 from celery.signals import worker_process_init
 from opentelemetry.instrumentation.celery import CeleryInstrumentor
 from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
-
 from shared_config import configure_logging, configure_telemetry
 
 logger = logging.getLogger(__name__)

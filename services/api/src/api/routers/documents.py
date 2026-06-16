@@ -105,17 +105,19 @@ async def create_document(
     await session.commit()
 
     if doc.text:
-        task_id = dispatch_ingest({
-            "document_id": str(doc.id),
-            "tenant_id": str(ctx.org_id),
-            "document_key": doc.document_key,
-            "title": doc.title,
-            "text": doc.text,
-            "tags": tag_names,
-            "access_keys": access_keys,
-            "use_knowledge_graph": doc.use_knowledge_graph if doc.use_knowledge_graph is not None else True,
-            "metadata": doc.metadata_ or {},
-        })
+        task_id = dispatch_ingest(
+            {
+                "document_id": str(doc.id),
+                "tenant_id": str(ctx.org_id),
+                "document_key": doc.document_key,
+                "title": doc.title,
+                "text": doc.text,
+                "tags": tag_names,
+                "access_keys": access_keys,
+                "use_knowledge_graph": doc.use_knowledge_graph if doc.use_knowledge_graph is not None else True,
+                "metadata": doc.metadata_ or {},
+            }
+        )
         logger.info("Document %s queued for ingestion (task %s)", doc.id, task_id)
     else:
         logger.info("Document %s created without text; skipping ingestion", doc.id)
@@ -208,9 +210,11 @@ async def delete_document(
         await client.remove_document(str(ctx.org_id), document_key)
     except Exception as e:
         logger.error(
-            "brain-api cleanup failed for deleted document %s (key %s) in org %s: %s — "
-            "manual cleanup may be required",
-            document_id, document_key, ctx.org_id, e,
+            "brain-api cleanup failed for deleted document %s (key %s) in org %s: %s — manual cleanup may be required",
+            document_id,
+            document_key,
+            ctx.org_id,
+            e,
         )
 
     logger.info("Deleted document %s in org %s", document_id, ctx.org_id)

@@ -31,12 +31,8 @@ class Settings(BaseSettings):
 
     # Shared infrastructure (read from unprefixed env vars)
     database_url: str = Field(default="", validation_alias="DATABASE_URL")
-    redis_url: str = Field(
-        default="redis://localhost:6379/0", validation_alias="REDIS_URL"
-    )
-    celery_broker_url: str = Field(
-        default="redis://localhost:6379/0", validation_alias="CELERY_BROKER_URL"
-    )
+    redis_url: str = Field(default="redis://localhost:6379/0", validation_alias="REDIS_URL")
+    celery_broker_url: str = Field(default="redis://localhost:6379/0", validation_alias="CELERY_BROKER_URL")
 
     # Brain API (url is per-API, key is shared secret)
     brain_api_url: str = Field(default="http://localhost:8020")
@@ -49,9 +45,7 @@ class Settings(BaseSettings):
     # Keycloak (shared identity provider config)
     keycloak_url: str = Field(default="", validation_alias="KEYCLOAK_URL")
     keycloak_realm: str = Field(default="redarch", validation_alias="KEYCLOAK_REALM")
-    keycloak_client_id: str = Field(
-        default="redarch-km", validation_alias="KEYCLOAK_CLIENT_ID"
-    )
+    keycloak_client_id: str = Field(default="redarch-km", validation_alias="KEYCLOAK_CLIENT_ID")
 
     # Observability (shared)
     log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
@@ -60,8 +54,7 @@ class Settings(BaseSettings):
     e2e_test_mode: bool = Field(
         default=False,
         description=(
-            "When true, API accepts an X-Test-User header in place of Keycloak JWTs. "
-            "NEVER enable in production."
+            "When true, API accepts an X-Test-User header in place of Keycloak JWTs. NEVER enable in production."
         ),
     )
     e2e_test_secret: SecretStr = Field(

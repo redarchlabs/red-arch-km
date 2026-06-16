@@ -40,9 +40,7 @@ async def list_sessions(
         offset=pagination.offset,
         limit=pagination.page_size,
     )
-    return make_page(
-        [ChatSessionRead.model_validate(s) for s in sessions], total, pagination
-    )
+    return make_page([ChatSessionRead.model_validate(s) for s in sessions], total, pagination)
 
 
 @router.post("/sessions", response_model=ChatSessionRead, status_code=status.HTTP_201_CREATED)

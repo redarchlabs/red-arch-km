@@ -49,7 +49,9 @@ def _report_status(
     except Exception as e:
         logger.warning(
             "Status callback failed for document %s (%s): %s",
-            document_id, status, e,
+            document_id,
+            status,
+            e,
         )
 
 
@@ -92,21 +94,30 @@ def task_ingest_document(self: Any, data: dict[str, Any]) -> dict[str, Any]:
         if _is_retryable_http_error(e):
             logger.warning(
                 "Transient brain-api error for %s (HTTP %d); retrying",
-                document_key, e.response.status_code,
+                document_key,
+                e.response.status_code,
             )
             # If this is the last retry, mark FAILED before Celery gives up.
             if self.request.retries >= self.max_retries:
                 _report_status(
-                    settings, document_id, tenant_id, "FAILED",
+                    settings,
+                    document_id,
+                    tenant_id,
+                    "FAILED",
                     {"error": f"HTTP {e.response.status_code}", "retries_exhausted": True},
                 )
             raise self.retry(exc=e) from e
         logger.error(
             "Permanent brain-api error for %s (HTTP %d): %s",
-            document_key, e.response.status_code, e.response.text[:500],
+            document_key,
+            e.response.status_code,
+            e.response.text[:500],
         )
         _report_status(
-            settings, document_id, tenant_id, "FAILED",
+            settings,
+            document_id,
+            tenant_id,
+            "FAILED",
             {"error": f"HTTP {e.response.status_code}", "body": e.response.text[:500]},
         )
         return {"status": "failed", "document_key": document_key, "error": str(e)}
@@ -115,7 +126,10 @@ def task_ingest_document(self: Any, data: dict[str, Any]) -> dict[str, Any]:
         logger.warning("Network error ingesting %s: %s", document_key, e)
         if self.request.retries >= self.max_retries:
             _report_status(
-                settings, document_id, tenant_id, "FAILED",
+                settings,
+                document_id,
+                tenant_id,
+                "FAILED",
                 {"error": "network", "message": str(e)},
             )
         raise self.retry(exc=e) from e
@@ -123,10 +137,15 @@ def task_ingest_document(self: Any, data: dict[str, Any]) -> dict[str, Any]:
     result: dict[str, Any] = response.json()
     logger.info(
         "Document %s ingested: %d chunks, %d triplets",
-        document_key, result.get("chunks", 0), result.get("triplets", 0),
+        document_key,
+        result.get("chunks", 0),
+        result.get("triplets", 0),
     )
     _report_status(
-        settings, document_id, tenant_id, "SUCCESS",
+        settings,
+        document_id,
+        tenant_id,
+        "SUCCESS",
         {"chunks": result.get("chunks", 0), "triplets": result.get("triplets", 0)},
     )
     return {"status": "success", **result}

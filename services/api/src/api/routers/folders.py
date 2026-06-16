@@ -53,9 +53,7 @@ async def list_folders(
             limit=pagination.page_size,
         )
 
-    return make_page(
-        [FolderRead.model_validate(f) for f in folders], total, pagination
-    )
+    return make_page([FolderRead.model_validate(f) for f in folders], total, pagination)
 
 
 @router.post("/", response_model=FolderRead, status_code=status.HTTP_201_CREATED)
@@ -131,13 +129,9 @@ async def update_folder(
         try:
             folder = await move_folder(session, folder, body.parent_id)
         except FolderCycleError as e:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)
-            ) from e
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
         except ValueError as e:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail=str(e)
-            ) from e
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e)) from e
 
     logger.info("Updated folder %s in org %s", folder_id, ctx.org_id)
     return FolderRead.model_validate(folder)

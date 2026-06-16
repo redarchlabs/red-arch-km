@@ -1,7 +1,6 @@
 """Tests for AccessMask permission matching logic."""
 
 import pytest
-
 from access_mask import (
     MAX_DEPT,
     MAX_GROUP,
@@ -133,15 +132,13 @@ class TestMultiMaskScenarios:
     @pytest.mark.parametrize(
         "doc_region,doc_role,expected",
         [
-            (2, 3, True),       # Exact match with second user mask
+            (2, 3, True),  # Exact match with second user mask
             (MAX_REGION, 3, True),  # Region wildcard
-            (2, MAX_ROLE, True),    # Role wildcard
-            (5, 10, False),     # No match
+            (2, MAX_ROLE, True),  # Role wildcard
+            (5, 10, False),  # No match
         ],
     )
-    def test_parametrized_access_check(
-        self, doc_region: int, doc_role: int, expected: bool
-    ) -> None:
+    def test_parametrized_access_check(self, doc_region: int, doc_role: int, expected: bool) -> None:
         user_masks = [
             encode(org=1, region=1, role=1),
             encode(org=1, region=2, role=3),

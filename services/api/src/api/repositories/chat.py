@@ -30,14 +30,8 @@ class ChatRepository:
         if not include_deleted:
             base = base.where(ChatSession.deleted.is_(False))
 
-        total = (
-            await self._session.execute(
-                select(func.count()).select_from(base.subquery())
-            )
-        ).scalar_one()
-        result = await self._session.execute(
-            base.order_by(ChatSession.updated_at.desc()).offset(offset).limit(limit)
-        )
+        total = (await self._session.execute(select(func.count()).select_from(base.subquery()))).scalar_one()
+        result = await self._session.execute(base.order_by(ChatSession.updated_at.desc()).offset(offset).limit(limit))
         return list(result.scalars().all()), total
 
     async def create(
@@ -56,9 +50,7 @@ class ChatRepository:
         await self._session.flush()
         return session
 
-    async def update_data(
-        self, session_id: uuid.UUID, chat_data: dict
-    ) -> ChatSession | None:
+    async def update_data(self, session_id: uuid.UUID, chat_data: dict) -> ChatSession | None:
         chat = await self.get(session_id)
         if chat is None:
             return None

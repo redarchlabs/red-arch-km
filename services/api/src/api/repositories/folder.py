@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import bindparam, func, or_, select, text as sql_text
+from sqlalchemy import bindparam, func, or_, select
+from sqlalchemy import text as sql_text
 from sqlalchemy.dialects.postgresql import ARRAY, BIGINT
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.models.document import Folder
-
 
 # PostgreSQL LIKE interprets % and _ as wildcards. dot_path is built from
 # user-supplied folder names (see folder_service.build_dot_path), so a
@@ -59,11 +59,7 @@ class FolderRepository:
                 )
             )
 
-        total = (
-            await self._session.execute(
-                select(func.count()).select_from(base.subquery())
-            )
-        ).scalar_one()
+        total = (await self._session.execute(select(func.count()).select_from(base.subquery()))).scalar_one()
 
         query = base.order_by(Folder.dot_path)
         if offset is not None:
@@ -112,10 +108,7 @@ class FolderRepository:
         prefix = folder.dot_path
         escaped = _escape_like(prefix)
         result = await self._session.execute(
-            select(Folder).where(
-                (Folder.dot_path == prefix)
-                | Folder.dot_path.like(f"{escaped}.%", escape="\\")
-            )
+            select(Folder).where((Folder.dot_path == prefix) | Folder.dot_path.like(f"{escaped}.%", escape="\\"))
         )
         return list(result.scalars().all())
 
@@ -137,27 +130,21 @@ class FolderRepository:
         descendant of `folder` (cycle prevention lives in the service layer).
         """
         old_prefix = folder.dot_path
-        new_prefix = (
-            f"{new_parent.dot_path}.{folder.name}" if new_parent else folder.name
-        )
+        new_prefix = f"{new_parent.dot_path}.{folder.name}" if new_parent else folder.name
 
         folder.parent_id = new_parent.id if new_parent else None
         await self._rewrite_subtree_paths(old_prefix, new_prefix, folder.id)
         await self._session.refresh(folder)
         return folder
 
-    async def _rewrite_subtree_paths(
-        self, old_prefix: str, new_prefix: str, folder_id: uuid.UUID
-    ) -> None:
+    async def _rewrite_subtree_paths(self, old_prefix: str, new_prefix: str, folder_id: uuid.UUID) -> None:
         """Rewrite dot_path for the given folder and all descendants atomically.
 
         RLS still enforces tenant scope on these UPDATE statements; we rely
         on the `app.current_tenant_id` session setting being in effect.
         """
         await self._session.execute(
-            sql_text(
-                "UPDATE folders SET dot_path = :new_prefix WHERE id = :folder_id"
-            ),
+            sql_text("UPDATE folders SET dot_path = :new_prefix WHERE id = :folder_id"),
             {"new_prefix": new_prefix, "folder_id": folder_id},
         )
         await self._session.execute(

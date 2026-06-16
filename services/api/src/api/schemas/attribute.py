@@ -49,11 +49,7 @@ class AttributeDefinitionUpdate(BaseModel):
 
     @model_validator(mode="after")
     def _picklist_options_consistent(self) -> AttributeDefinitionUpdate:
-        if (
-            self.attribute_type == "picklist"
-            and self.picklist_options is not None
-            and not self.picklist_options
-        ):
+        if self.attribute_type == "picklist" and self.picklist_options is not None and not self.picklist_options:
             msg = "picklist attributes must define at least one option"
             raise ValueError(msg)
         return self

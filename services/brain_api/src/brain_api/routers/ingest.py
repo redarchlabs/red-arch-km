@@ -154,9 +154,7 @@ async def get_document_chunks(
 ) -> dict[str, Any]:
     """Return all chunks for a document, ordered by chunk_order."""
     try:
-        chunks = await asyncio.to_thread(
-            stores.vector.get_document_chunks, tenant_id, document_key, limit=limit
-        )
+        chunks = await asyncio.to_thread(stores.vector.get_document_chunks, tenant_id, document_key, limit=limit)
     except Exception:
         logger.exception("Failed to fetch chunks for %s", document_key)
         raise HTTPException(

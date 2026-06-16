@@ -6,7 +6,6 @@ import uuid
 from dataclasses import dataclass
 
 import pytest
-
 from api.services.folder_service import FolderCycleError, would_create_cycle
 
 
@@ -57,17 +56,15 @@ class TestWouldCreateCycle:
     @pytest.mark.parametrize(
         "folder_path,target_path,expected",
         [
-            ("a", "a.b", True),           # child
-            ("a", "a.b.c.d", True),       # deep descendant
-            ("root.x", "root.x.y", True), # nested descendant
+            ("a", "a.b", True),  # child
+            ("a", "a.b.c.d", True),  # deep descendant
+            ("root.x", "root.x.y", True),  # nested descendant
             ("root.x", "root.y", False),  # sibling
-            ("root.x", "root", False),    # ancestor (move up)
-            ("root", "other", False),     # unrelated tree
+            ("root.x", "root", False),  # ancestor (move up)
+            ("root", "other", False),  # unrelated tree
         ],
     )
-    def test_parametrized_relationships(
-        self, folder_path: str, target_path: str, expected: bool
-    ) -> None:
+    def test_parametrized_relationships(self, folder_path: str, target_path: str, expected: bool) -> None:
         folder = _FakeFolder(id=uuid.uuid4(), dot_path=folder_path)
         target = _FakeFolder(id=uuid.uuid4(), dot_path=target_path)
         assert would_create_cycle(folder, target) is expected

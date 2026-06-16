@@ -8,7 +8,6 @@ import pytest
 from brain_sdk.vector_store.protocol import VectorRecord
 from brain_sdk.vector_store.qdrant_store import QdrantVectorStore
 
-
 pytestmark = pytest.mark.integration
 
 
@@ -33,9 +32,7 @@ def _make_records(tenant: str, doc_key: str, count: int) -> list[VectorRecord]:
 
 
 class TestQdrantStoreIntegration:
-    def test_ensure_collections_creates_tenant_collections(
-        self, vector_store: QdrantVectorStore
-    ) -> None:
+    def test_ensure_collections_creates_tenant_collections(self, vector_store: QdrantVectorStore) -> None:
         tenant = f"t-{uuid.uuid4().hex[:8]}"
         vector_store.ensure_collections(tenant)
         # Idempotent — calling again should not raise
@@ -75,9 +72,7 @@ class TestQdrantStoreIntegration:
 
         assert vector_store.document_exists(tenant, doc_key) is True
 
-    def test_delete_document_removes_all_chunks(
-        self, vector_store: QdrantVectorStore
-    ) -> None:
+    def test_delete_document_removes_all_chunks(self, vector_store: QdrantVectorStore) -> None:
         tenant = f"t-{uuid.uuid4().hex[:8]}"
         doc_key = f"doc-{uuid.uuid4().hex[:8]}"
         vector_store.ensure_collections(tenant)
@@ -118,9 +113,7 @@ class TestQdrantStoreIntegration:
         assert all(c.payload["tenant_id"] == tenant_a for c in chunks_a)
         assert all(c.payload["tenant_id"] == tenant_b for c in chunks_b)
 
-    def test_delete_tenant_removes_both_collections(
-        self, vector_store: QdrantVectorStore
-    ) -> None:
+    def test_delete_tenant_removes_both_collections(self, vector_store: QdrantVectorStore) -> None:
         tenant = f"t-{uuid.uuid4().hex[:8]}"
         doc_key = f"doc-{uuid.uuid4().hex[:8]}"
 
@@ -152,9 +145,7 @@ class TestQdrantStoreIntegration:
         vector_store.ensure_collections(tenant)
         vector_store.upsert_vectors(tenant, _make_records(tenant, doc_key, 2))
 
-        vector_store.update_metadata(
-            tenant, doc_key, tags=["updated"], access_keys=[42], title="New Title"
-        )
+        vector_store.update_metadata(tenant, doc_key, tags=["updated"], access_keys=[42], title="New Title")
 
         chunks = vector_store.get_document_chunks(tenant, doc_key)
         assert all(c.payload.get("tags") == ["updated"] for c in chunks)

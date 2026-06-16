@@ -48,7 +48,8 @@ def task_update_document_metadata(self: Any, data: dict[str, Any]) -> dict[str, 
             raise self.retry(exc=e) from e
         logger.error(
             "Permanent error updating metadata for %s: %s",
-            document_key, e.response.text[:500],
+            document_key,
+            e.response.text[:500],
         )
         return {"status": "failed", "document_key": document_key, "error": str(e)}
 
