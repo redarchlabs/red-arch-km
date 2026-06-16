@@ -18,7 +18,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install dependencies
-        run: uv sync --all-packages
+        run: uv sync --all-packages --extra dev
       - name: Lint
         run: uv run ruff check .
       - name: Format check
@@ -62,7 +62,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install dependencies
-        run: uv sync --all-packages --dev
+        run: uv sync --all-packages --extra dev --dev
       - name: Run tests
         run: uv run pytest --tb=short --cov=packages --cov=services --cov-report=xml
         env:
