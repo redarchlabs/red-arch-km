@@ -9,6 +9,7 @@ members = [
     "packages/*",
     "services/*",
 ]
+exclude = ["packages/accessmask"]
 
 [tool.uv.sources]
 access-mask = { workspace = true }

@@ -81,12 +81,10 @@ jobs:
         working-directory: ui
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: oven-sh/setup-bun@v1
         with:
-          node-version: "22"
-          cache: "npm"
-          cache-dependency-path: ui/package-lock.json
-      - run: npm ci
-      - run: npm run lint
-      - run: npm run type-check
-      - run: npm test
+          bun-version: latest
+      - run: bun install
+      - run: bun run lint
+      - run: bun run type-check
+      - run: bun test
