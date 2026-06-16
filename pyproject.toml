@@ -10,8 +10,12 @@ members = [
     "services/*",
 ]
 exclude = [
-    "packages/accessmask",  # Go package, not a uv member
-    "packages/shared",      # Go package, not a uv member
+    # Go modules matched by the globs above but not uv (Python) members.
+    "packages/accessmask",
+    "packages/shared",
+    "services/api-go",
+    "services/brain-api-go",
+    "services/worker-go",
 ]
 
 [tool.uv.sources]
