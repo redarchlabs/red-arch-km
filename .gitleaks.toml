@@ -1,0 +1,8 @@
+title = "RedArch KM-2 gitleaks configuration"
+
+[allowlist]
+  description = "Suppress false positives in test fixtures"
+  # Commit 26d9c0e uses a hard-coded UUID as a fake legacy Keycloak auth_subject
+  # in users_provision_test.go. The UUID triggers gitleaks' generic-api-key rule
+  # (entropy) but is not a secret — it is a low-value test fixture value.
+  commits = ["26d9c0e924499a16eaf10374c63455b746cbac5c"]
