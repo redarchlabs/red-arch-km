@@ -1,7 +1,7 @@
+import { ClerkProvider } from "@clerk/nextjs";
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
 
-import { AuthProvider } from "@/context/AuthContext";
 import { OrgProvider } from "@/context/OrgContext";
 
 import "./globals.css";
@@ -17,12 +17,13 @@ interface RootLayoutProps {
 
 export default function RootLayout({ children }: RootLayoutProps) {
   return (
-    <html lang="en">
-      <body>
-        <AuthProvider>
+    <ClerkProvider signInUrl="/login" signUpUrl="/sign-up" afterSignOutUrl="/login">
+      <html lang="en">
+        <body>
+          {/* OrgProvider reads Clerk auth via useAuth(), so it must nest inside ClerkProvider. */}
           <OrgProvider>{children}</OrgProvider>
-        </AuthProvider>
-      </body>
-    </html>
+        </body>
+      </html>
+    </ClerkProvider>
   );
 }

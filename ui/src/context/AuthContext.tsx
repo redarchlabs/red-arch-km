@@ -1,9 +1,15 @@
 "use client";
 
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { useAuth as useClerkAuth, useClerk, useUser } from "@clerk/nextjs";
 
-import { getKeycloak, initKeycloak, logout as kcLogout } from "@/lib/auth/keycloak";
-
+/**
+ * Auth facade over Clerk.
+ *
+ * `<ClerkProvider>` (in app/layout.tsx) replaces the old custom AuthProvider;
+ * this hook keeps the original `useAuth()` shape so existing consumers
+ * (Header, OrgContext, the authenticated-layout gate, the login page) need no
+ * change. Identity now comes from Clerk's `useAuth()`/`useUser()`.
+ */
 interface AuthState {
   isAuthenticated: boolean;
   isInitializing: boolean;
@@ -12,42 +18,23 @@ interface AuthState {
   logout: () => void;
 }
 
-const AuthContext = createContext<AuthState | null>(null);
-
-export function AuthProvider({ children }: { children: ReactNode }) {
-  const [isInitializing, setIsInitializing] = useState(true);
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [username, setUsername] = useState("");
-  const [email, setEmail] = useState("");
-
-  useEffect(() => {
-    initKeycloak()
-      .then((authenticated) => {
-        setIsAuthenticated(authenticated);
-        if (authenticated) {
-          const kc = getKeycloak();
-          const profile = kc.tokenParsed as { preferred_username?: string; email?: string } | undefined;
-          setUsername(profile?.preferred_username ?? "");
-          setEmail(profile?.email ?? "");
-        }
-      })
-      .catch(() => setIsAuthenticated(false))
-      .finally(() => setIsInitializing(false));
-  }, []);
-
-  return (
-    <AuthContext.Provider
-      value={{ isAuthenticated, isInitializing, username, email, logout: kcLogout }}
-    >
-      {children}
-    </AuthContext.Provider>
-  );
-}
-
 export function useAuth(): AuthState {
-  const ctx = useContext(AuthContext);
-  if (ctx === null) {
-    throw new Error("useAuth must be used within an AuthProvider");
-  }
-  return ctx;
+  const { isLoaded, isSignedIn } = useClerkAuth();
+  const { user } = useUser();
+  const { signOut } = useClerk();
+
+  return {
+    isAuthenticated: Boolean(isSignedIn),
+    isInitializing: !isLoaded,
+    username: user?.username ?? user?.firstName ?? "",
+    email: user?.primaryEmailAddress?.emailAddress ?? "",
+    logout: () => {
+      // Clear persisted per-user state before signing out so the next login
+      // doesn't inherit a stale org selection.
+      if (typeof window !== "undefined") {
+        localStorage.removeItem("redarch:currentOrgId");
+      }
+      void signOut({ redirectUrl: "/login" });
+    },
+  };
 }
