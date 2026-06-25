@@ -11,7 +11,7 @@
  */
 
 interface ClerkSession {
-  getToken: () => Promise<string | null>;
+  getToken: (options?: { template?: string }) => Promise<string | null>;
 }
 
 interface ClerkGlobal {
@@ -37,7 +37,14 @@ export async function getToken(): Promise<string | null> {
     return null;
   }
   try {
-    return await session.getToken();
+    // Mint via the configured JWT template so the token carries email/username
+    // — Clerk's DEFAULT session token does NOT include them, but the api-go/api
+    // verifiers extract email/username for provisioning. The template name MUST
+    // match a template configured in the Clerk dashboard (Phase 0). When unset,
+    // the default token is used and the backend provisions with empty
+    // email/username.
+    const template = process.env.NEXT_PUBLIC_CLERK_JWT_TEMPLATE;
+    return await session.getToken(template ? { template } : undefined);
   } catch {
     return null;
   }
