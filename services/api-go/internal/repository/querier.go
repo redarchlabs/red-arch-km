@@ -94,7 +94,11 @@ type Querier interface {
 	GetTagsByIDs(ctx context.Context, dollar_1 []pgtype.UUID) ([]Tag, error)
 	GetUserProfile(ctx context.Context, id pgtype.UUID) (UserProfile, error)
 	GetUserProfileByAuthSubject(ctx context.Context, authSubject string) (UserProfile, error)
-	GetUserProfileByEmail(ctx context.Context, email string) (UserProfile, error)
+	// Case-insensitive email lookup for the verified-email relink: Keycloak-stored
+	// emails and Clerk-supplied emails can differ only by case, and an exact match
+	// would miss → fresh provision → email UNIQUE violation (lockout). Email is
+	// UNIQUE so at most one row matches in practice.
+	GetUserProfileByEmailCI(ctx context.Context, lower string) (UserProfile, error)
 	IsUserMemberOfOrg(ctx context.Context, arg IsUserMemberOfOrgParams) (bool, error)
 	ListAllOrgs(ctx context.Context, arg ListAllOrgsParams) ([]Org, error)
 	ListChildFolders(ctx context.Context, parentID pgtype.UUID) ([]Folder, error)
