@@ -118,11 +118,14 @@ func run() error {
 		r.Get("/readyz", handlers.Healthz()) // Fallback without DB
 	}
 
-	// JWT middleware
+	// JWT middleware — dual-verify (Keycloak and/or Clerk) routed by issuer
+	// during the coexistence window (D4).
 	jwtMiddleware := middleware.NewJWTMiddleware(middleware.JWTConfig{
-		KeycloakURL: cfg.KeycloakURL,
-		Realm:       cfg.KeycloakRealm,
-		ClientID:    cfg.KeycloakClientID,
+		KeycloakURL:      cfg.KeycloakURL,
+		KeycloakRealm:    cfg.KeycloakRealm,
+		KeycloakClientID: cfg.KeycloakClientID,
+		ClerkIssuer:      cfg.ClerkIssuer,
+		ClerkAllowedAZP:  cfg.ClerkAllowedAZP,
 	})
 
 	// API routes (auth required)
