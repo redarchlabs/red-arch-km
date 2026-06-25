@@ -8,7 +8,7 @@ is declared.
 
 from functools import lru_cache
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -75,6 +75,16 @@ class Settings(BaseSettings):
     def clerk_allowed_azp_list(self) -> list[str]:
         """Parse CLERK_ALLOWED_AZP into a trimmed list (mirrors Go comma split)."""
         return [p.strip() for p in self.clerk_allowed_azp.split(",") if p.strip()]
+
+    @model_validator(mode="after")
+    def _require_azp_when_clerk_enabled(self) -> "Settings":
+        """Fail fast when Clerk is enabled without an azp allowlist — without it
+        the verify path cannot enforce G-AZP. Mirrors the Go config's
+        ErrMissingClerkAllowedAZP startup check."""
+        if self.clerk_jwt_issuer and not self.clerk_allowed_azp_list:
+            msg = "CLERK_ALLOWED_AZP is required when CLERK_JWT_ISSUER is set"
+            raise ValueError(msg)
+        return self
 
 
 @lru_cache(maxsize=1)
