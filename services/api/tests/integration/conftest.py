@@ -82,6 +82,21 @@ async def _enable_rls(engine: AsyncEngine) -> None:
                 )
 
 
+async def _grant_app_user(engine: AsyncEngine) -> None:
+    """Grant app_user the privileges it needs to exercise the schema.
+
+    app_user is a non-superuser, non-BYPASSRLS role, so RLS policies are
+    enforced against it (the testcontainers default login is a superuser and
+    would bypass RLS entirely). The enforcement `session` fixture runs as this
+    role. Granted after the schema + policies exist so ALL TABLES/SEQUENCES is
+    complete.
+    """
+    async with engine.begin() as conn:
+        await conn.execute(text("GRANT USAGE ON SCHEMA public TO app_user"))
+        await conn.execute(text("GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO app_user"))
+        await conn.execute(text("GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO app_user"))
+
+
 @pytest_asyncio.fixture(scope="session")
 async def engine(database_url: str) -> AsyncGenerator[AsyncEngine]:
     os.environ["DATABASE_URL"] = database_url
@@ -93,6 +108,7 @@ async def engine(database_url: str) -> AsyncGenerator[AsyncEngine]:
         await conn.run_sync(Base.metadata.create_all)
 
     await _enable_rls(engine)
+    await _grant_app_user(engine)
 
     yield engine
     await engine.dispose()
@@ -100,11 +116,21 @@ async def engine(database_url: str) -> AsyncGenerator[AsyncEngine]:
 
 @pytest_asyncio.fixture
 async def session(engine: AsyncEngine) -> AsyncGenerator[AsyncSession]:
-    """Per-test session; always starts with no tenant context set."""
+    """Per-test enforcement session, run as the non-superuser ``app_user``.
+
+    The testcontainers default login is a PostgreSQL superuser, which bypasses
+    RLS even with FORCE ROW LEVEL SECURITY — so a session left as that role
+    would make the isolation assertions vacuously pass. ``SET ROLE app_user``
+    drops to a non-superuser role against which the policies are enforced;
+    ``RESET ROLE`` on teardown keeps the pooled connection clean. Always starts
+    with no tenant context set.
+    """
     factory = async_sessionmaker(engine, expire_on_commit=False)
     async with factory() as session:
+        await session.execute(text("SET ROLE app_user"))
         yield session
         await session.rollback()
+        await session.execute(text("RESET ROLE"))
 
 
 @pytest_asyncio.fixture
