@@ -74,6 +74,24 @@ jobs:
           file: coverage.xml
         if: always()
 
+  test-go:
+    # G-CI (R6): gates the api-go Clerk auth change. Runs the full Go suite with
+    # race + coverage. NOTE: green requires the source ORM model packages to be
+    # tracked (the generic `.gitignore` `models/` rule shadows
+    # services/brain-api-go/internal/models and services/api/src/api/models) —
+    # tracked separately by the CI-remediation stream; this job goes green once
+    # that lands. The api-go auth packages (middleware/config) build and pass today.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+      - name: Provide .env for the Makefile include
+        run: cp .env.example .env
+      - name: Run Go tests (race + cover)
+        run: make go-test
+
   test-ui:
     runs-on: ubuntu-latest
     defaults:
