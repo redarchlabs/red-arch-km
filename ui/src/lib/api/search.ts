@@ -1,4 +1,4 @@
-import { getToken, refreshToken } from "@/lib/auth/keycloak";
+import { getToken } from "@/lib/auth/clerk";
 
 import apiClient from "./client";
 
@@ -64,8 +64,7 @@ export async function* streamChat(
   const orgId =
     typeof window !== "undefined" ? localStorage.getItem("redarch:currentOrgId") : null;
 
-  await refreshToken(30);
-  const token = getToken();
+  const token = await getToken();
 
   const response = await fetch(`${baseUrl}/search/chat/stream`, {
     method: "POST",
