@@ -74,6 +74,25 @@ jobs:
           file: coverage.xml
         if: always()
 
+  test-go:
+    # G-CI (R6): gates the api-go Clerk auth change (there was previously NO Go
+    # test job). Scoped to the buildable auth packages so it is GREEN on this
+    # branch independent of deferred work — the generic `.gitignore` `models/`
+    # rule hides services/brain-api-go/internal/models (net-new, not yet
+    # authored), so brain-api-go is intentionally excluded here.
+    # TODO(auth): broaden to ./services/brain-api-go/... once its ORM models land.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+      - name: Run Go tests (race + cover)
+        run: >-
+          go test -race -cover
+          ./packages/accessmask/... ./packages/shared/...
+          ./services/api-go/... ./services/worker-go/...
+
   test-ui:
     runs-on: ubuntu-latest
     defaults:

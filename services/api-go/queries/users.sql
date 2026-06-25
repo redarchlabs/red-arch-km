@@ -1,14 +1,18 @@
 -- name: GetUserProfile :one
 SELECT * FROM user_profiles WHERE id = $1;
 
--- name: GetUserProfileByKeycloakSub :one
-SELECT * FROM user_profiles WHERE keycloak_sub = $1;
+-- name: GetUserProfileByAuthSubject :one
+SELECT * FROM user_profiles WHERE auth_subject = $1;
 
--- name: GetUserProfileByEmail :one
-SELECT * FROM user_profiles WHERE email = $1;
+-- name: GetUserProfileByEmailCI :one
+-- Case-insensitive email lookup for the verified-email relink: Keycloak-stored
+-- emails and Clerk-supplied emails can differ only by case, and an exact match
+-- would miss → fresh provision → email UNIQUE violation (lockout). Email is
+-- UNIQUE so at most one row matches in practice.
+SELECT * FROM user_profiles WHERE LOWER(email) = LOWER($1);
 
 -- name: CreateUserProfile :one
-INSERT INTO user_profiles (id, keycloak_sub, username, email, description, is_site_admin)
+INSERT INTO user_profiles (id, auth_subject, username, email, description, is_site_admin)
 VALUES ($1, $2, $3, $4, $5, $6)
 RETURNING *;
 
@@ -23,12 +27,23 @@ WHERE id = $1
 RETURNING *;
 
 -- name: UpsertUserProfile :one
-INSERT INTO user_profiles (id, keycloak_sub, username, email, description, is_site_admin)
+INSERT INTO user_profiles (id, auth_subject, username, email, description, is_site_admin)
 VALUES ($1, $2, $3, $4, $5, $6)
-ON CONFLICT (keycloak_sub) DO UPDATE SET
+ON CONFLICT (auth_subject) DO UPDATE SET
     username = EXCLUDED.username,
     email = EXCLUDED.email,
     updated_at = NOW()
+RETURNING *;
+
+-- name: RelinkAuthSubject :one
+-- Rebind an existing profile's auth_subject to a new IdP subject (verified-email
+-- relink on first Clerk login). Keys on the internal id, so memberships and the
+-- access_mask are preserved. ONLY auth_subject changes — username/email are
+-- left untouched to avoid colliding with their UNIQUE constraints.
+UPDATE user_profiles SET
+    auth_subject = $2,
+    updated_at = NOW()
+WHERE id = $1
 RETURNING *;
 
 -- name: ListUsersInOrg :many

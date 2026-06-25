@@ -1,10 +1,10 @@
 /**
- * Type-safe API client with Keycloak token injection and org-scoping.
+ * Type-safe API client with Clerk token injection and org-scoping.
  */
 
 import axios, { type AxiosInstance } from "axios";
 
-import { getToken, refreshToken } from "@/lib/auth/keycloak";
+import { getToken } from "@/lib/auth/clerk";
 
 const STORAGE_KEY = "redarch:currentOrgId";
 
@@ -17,15 +17,11 @@ const apiClient: AxiosInstance = axios.create({
 });
 
 apiClient.interceptors.request.use(async (config) => {
-  try {
-    await refreshToken(30);
-    const token = getToken();
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`;
-    }
-  } catch {
-    // Token refresh failed — request will proceed without auth.
-    // The API will return 401 and the response interceptor will redirect.
+  // Clerk's getToken() transparently refreshes the short-lived session JWT.
+  // Cross-origin (:3000 → :8000), so the Bearer header is required.
+  const token = await getToken();
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
   }
 
   // Attach org scope for endpoints that require it
