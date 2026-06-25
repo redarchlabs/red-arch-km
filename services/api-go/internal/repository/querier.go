@@ -93,8 +93,8 @@ type Querier interface {
 	GetTagByName(ctx context.Context, arg GetTagByNameParams) (Tag, error)
 	GetTagsByIDs(ctx context.Context, dollar_1 []pgtype.UUID) ([]Tag, error)
 	GetUserProfile(ctx context.Context, id pgtype.UUID) (UserProfile, error)
+	GetUserProfileByAuthSubject(ctx context.Context, authSubject string) (UserProfile, error)
 	GetUserProfileByEmail(ctx context.Context, email string) (UserProfile, error)
-	GetUserProfileByKeycloakSub(ctx context.Context, keycloakSub string) (UserProfile, error)
 	IsUserMemberOfOrg(ctx context.Context, arg IsUserMemberOfOrgParams) (bool, error)
 	ListAllOrgs(ctx context.Context, arg ListAllOrgsParams) ([]Org, error)
 	ListChildFolders(ctx context.Context, parentID pgtype.UUID) ([]Folder, error)
@@ -123,6 +123,11 @@ type Querier interface {
 	ListTagsForDocument(ctx context.Context, documentID pgtype.UUID) ([]Tag, error)
 	ListTagsForOrg(ctx context.Context, arg ListTagsForOrgParams) ([]Tag, error)
 	ListUsersInOrg(ctx context.Context, arg ListUsersInOrgParams) ([]UserProfile, error)
+	// Rebind an existing profile's auth_subject to a new IdP subject (verified-email
+	// relink on first Clerk login). Keys on the internal id, so memberships and the
+	// access_mask are preserved. ONLY auth_subject changes — username/email are
+	// left untouched to avoid colliding with their UNIQUE constraints.
+	RelinkAuthSubject(ctx context.Context, arg RelinkAuthSubjectParams) (UserProfile, error)
 	RemoveDocumentTag(ctx context.Context, arg RemoveDocumentTagParams) error
 	// Update the order of folders for drag-and-drop reordering
 	ReorderFolders(ctx context.Context, arg ReorderFoldersParams) error

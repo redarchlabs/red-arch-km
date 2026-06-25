@@ -1,12 +1,15 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/redarchlabs/red-arch-km-2/packages/shared/httputil"
@@ -14,6 +17,67 @@ import (
 	"github.com/redarchlabs/red-arch-km-2/services/api-go/internal/middleware"
 	"github.com/redarchlabs/red-arch-km-2/services/api-go/internal/repository"
 )
+
+// errEmailTakenUnverified is returned when first-login provisioning finds the
+// IdP email already bound to an existing profile but the IdP has NOT verified
+// it — we refuse rather than relink (anti-takeover, AC-4.3).
+var errEmailTakenUnverified = errors.New("email belongs to an existing account but is unverified")
+
+// userProvisioner is the subset of repository.Queries that first-login
+// provisioning needs; an interface so the relink branches are unit-testable
+// without a database. *repository.Queries satisfies it.
+type userProvisioner interface {
+	GetUserProfileByEmail(ctx context.Context, email string) (repository.UserProfile, error)
+	RelinkAuthSubject(ctx context.Context, arg repository.RelinkAuthSubjectParams) (repository.UserProfile, error)
+	UpsertUserProfile(ctx context.Context, arg repository.UpsertUserProfileParams) (repository.UserProfile, error)
+}
+
+// provisionOrRelinkUser resolves the profile on first login (D3 user remap):
+//   - verified IdP email matching an existing profile → rebind that profile's
+//     auth_subject to the new subject (relink; memberships/access_mask preserved);
+//   - email matches but is NOT verified → refuse (errEmailTakenUnverified);
+//   - no email match → provision a brand-new profile (is_site_admin=false, no
+//     membership — unchanged first-login semantics, AC-4.4).
+func provisionOrRelinkUser(
+	ctx context.Context,
+	q userProvisioner,
+	claims middleware.UserClaims,
+) (repository.UserProfile, error) {
+	if claims.Email != "" {
+		existing, err := q.GetUserProfileByEmail(ctx, claims.Email)
+		switch {
+		case err == nil:
+			if !claims.EmailVerified {
+				return repository.UserProfile{}, errEmailTakenUnverified
+			}
+			relinked, rerr := q.RelinkAuthSubject(ctx, repository.RelinkAuthSubjectParams{
+				ID:          existing.ID,
+				AuthSubject: claims.Sub,
+			})
+			if rerr != nil {
+				return repository.UserProfile{}, rerr
+			}
+			slog.Info("relinked user by verified email",
+				"sub", claims.Sub,
+				"profile_id", FromPgUUID(existing.ID).String(),
+			)
+			return relinked, nil
+		case errors.Is(err, pgx.ErrNoRows):
+			// No email match — fall through to fresh provisioning.
+		default:
+			return repository.UserProfile{}, err
+		}
+	}
+
+	return q.UpsertUserProfile(ctx, repository.UpsertUserProfileParams{
+		ID:          ToPgUUID(uuid.New()),
+		AuthSubject: claims.Sub,
+		Username:    claims.PreferredUsername,
+		Email:       claims.Email,
+		Description: pgtype.Text{Valid: false},
+		IsSiteAdmin: pgtype.Bool{Bool: false, Valid: true},
+	})
+}
 
 // UserResponse represents a user profile in API responses.
 type UserResponse struct {
@@ -93,24 +157,22 @@ func (h *UserHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 
 	queries := repository.New(conn)
 
-	// Try to get existing profile, or auto-provision
-	profile, err := queries.GetUserProfileByKeycloakSub(ctx, claims.Sub)
+	// Resolve the profile for this IdP subject. On first login this provisions
+	// a fresh profile or relinks an existing user by verified email (D3).
+	profile, err := queries.GetUserProfileByAuthSubject(ctx, claims.Sub)
 	if err != nil {
-		// Auto-provision user on first login
-		profile, err = queries.UpsertUserProfile(ctx, repository.UpsertUserProfileParams{
-			ID:          ToPgUUID(uuid.New()),
-			KeycloakSub: claims.Sub,
-			Username:    claims.PreferredUsername,
-			Email:       claims.Email,
-			Description: pgtype.Text{Valid: false},
-			IsSiteAdmin: pgtype.Bool{Bool: false, Valid: true},
-		})
+		profile, err = provisionOrRelinkUser(ctx, queries, claims)
 		if err != nil {
-			slog.Error("upsert user profile", "error", err)
+			if errors.Is(err, errEmailTakenUnverified) {
+				slog.Warn("provision refused: email already in use and unverified",
+					"sub", claims.Sub)
+				httputil.Forbidden(w, "This email belongs to an existing account. Verify your email to continue.")
+				return
+			}
+			slog.Error("provision user", "error", err)
 			httputil.InternalError(w, "Failed to provision user")
 			return
 		}
-		slog.Info("auto-provisioned user", "sub", claims.Sub, "username", claims.PreferredUsername)
 	}
 
 	// Get accessible orgs
@@ -174,7 +236,7 @@ func (h *UserHandler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 	queries := repository.New(conn)
 
 	// Get existing profile
-	profile, err := queries.GetUserProfileByKeycloakSub(ctx, claims.Sub)
+	profile, err := queries.GetUserProfileByAuthSubject(ctx, claims.Sub)
 	if err != nil {
 		httputil.NotFound(w, "User not found")
 		return

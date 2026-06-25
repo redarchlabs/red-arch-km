@@ -25,14 +25,14 @@ func (q *Queries) CountUsersInOrg(ctx context.Context, orgID pgtype.UUID) (int64
 }
 
 const createUserProfile = `-- name: CreateUserProfile :one
-INSERT INTO user_profiles (id, keycloak_sub, username, email, description, is_site_admin)
+INSERT INTO user_profiles (id, auth_subject, username, email, description, is_site_admin)
 VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, keycloak_sub, username, email, description, is_site_admin, created_at, updated_at
+RETURNING id, auth_subject, username, email, description, is_site_admin, created_at, updated_at
 `
 
 type CreateUserProfileParams struct {
 	ID          pgtype.UUID `json:"id"`
-	KeycloakSub string      `json:"keycloak_sub"`
+	AuthSubject string      `json:"auth_subject"`
 	Username    string      `json:"username"`
 	Email       string      `json:"email"`
 	Description pgtype.Text `json:"description"`
@@ -42,7 +42,7 @@ type CreateUserProfileParams struct {
 func (q *Queries) CreateUserProfile(ctx context.Context, arg CreateUserProfileParams) (UserProfile, error) {
 	row := q.db.QueryRow(ctx, createUserProfile,
 		arg.ID,
-		arg.KeycloakSub,
+		arg.AuthSubject,
 		arg.Username,
 		arg.Email,
 		arg.Description,
@@ -51,7 +51,7 @@ func (q *Queries) CreateUserProfile(ctx context.Context, arg CreateUserProfilePa
 	var i UserProfile
 	err := row.Scan(
 		&i.ID,
-		&i.KeycloakSub,
+		&i.AuthSubject,
 		&i.Username,
 		&i.Email,
 		&i.Description,
@@ -63,7 +63,7 @@ func (q *Queries) CreateUserProfile(ctx context.Context, arg CreateUserProfilePa
 }
 
 const getUserProfile = `-- name: GetUserProfile :one
-SELECT id, keycloak_sub, username, email, description, is_site_admin, created_at, updated_at FROM user_profiles WHERE id = $1
+SELECT id, auth_subject, username, email, description, is_site_admin, created_at, updated_at FROM user_profiles WHERE id = $1
 `
 
 func (q *Queries) GetUserProfile(ctx context.Context, id pgtype.UUID) (UserProfile, error) {
@@ -71,7 +71,27 @@ func (q *Queries) GetUserProfile(ctx context.Context, id pgtype.UUID) (UserProfi
 	var i UserProfile
 	err := row.Scan(
 		&i.ID,
-		&i.KeycloakSub,
+		&i.AuthSubject,
+		&i.Username,
+		&i.Email,
+		&i.Description,
+		&i.IsSiteAdmin,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getUserProfileByAuthSubject = `-- name: GetUserProfileByAuthSubject :one
+SELECT id, auth_subject, username, email, description, is_site_admin, created_at, updated_at FROM user_profiles WHERE auth_subject = $1
+`
+
+func (q *Queries) GetUserProfileByAuthSubject(ctx context.Context, authSubject string) (UserProfile, error) {
+	row := q.db.QueryRow(ctx, getUserProfileByAuthSubject, authSubject)
+	var i UserProfile
+	err := row.Scan(
+		&i.ID,
+		&i.AuthSubject,
 		&i.Username,
 		&i.Email,
 		&i.Description,
@@ -83,7 +103,7 @@ func (q *Queries) GetUserProfile(ctx context.Context, id pgtype.UUID) (UserProfi
 }
 
 const getUserProfileByEmail = `-- name: GetUserProfileByEmail :one
-SELECT id, keycloak_sub, username, email, description, is_site_admin, created_at, updated_at FROM user_profiles WHERE email = $1
+SELECT id, auth_subject, username, email, description, is_site_admin, created_at, updated_at FROM user_profiles WHERE email = $1
 `
 
 func (q *Queries) GetUserProfileByEmail(ctx context.Context, email string) (UserProfile, error) {
@@ -91,27 +111,7 @@ func (q *Queries) GetUserProfileByEmail(ctx context.Context, email string) (User
 	var i UserProfile
 	err := row.Scan(
 		&i.ID,
-		&i.KeycloakSub,
-		&i.Username,
-		&i.Email,
-		&i.Description,
-		&i.IsSiteAdmin,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
-}
-
-const getUserProfileByKeycloakSub = `-- name: GetUserProfileByKeycloakSub :one
-SELECT id, keycloak_sub, username, email, description, is_site_admin, created_at, updated_at FROM user_profiles WHERE keycloak_sub = $1
-`
-
-func (q *Queries) GetUserProfileByKeycloakSub(ctx context.Context, keycloakSub string) (UserProfile, error) {
-	row := q.db.QueryRow(ctx, getUserProfileByKeycloakSub, keycloakSub)
-	var i UserProfile
-	err := row.Scan(
-		&i.ID,
-		&i.KeycloakSub,
+		&i.AuthSubject,
 		&i.Username,
 		&i.Email,
 		&i.Description,
@@ -123,7 +123,7 @@ func (q *Queries) GetUserProfileByKeycloakSub(ctx context.Context, keycloakSub s
 }
 
 const listUsersInOrg = `-- name: ListUsersInOrg :many
-SELECT up.id, up.keycloak_sub, up.username, up.email, up.description, up.is_site_admin, up.created_at, up.updated_at FROM user_profiles up
+SELECT up.id, up.auth_subject, up.username, up.email, up.description, up.is_site_admin, up.created_at, up.updated_at FROM user_profiles up
 JOIN user_org_memberships m ON m.profile_id = up.id
 WHERE m.org_id = $1
 ORDER BY up.username
@@ -147,7 +147,7 @@ func (q *Queries) ListUsersInOrg(ctx context.Context, arg ListUsersInOrgParams) 
 		var i UserProfile
 		if err := rows.Scan(
 			&i.ID,
-			&i.KeycloakSub,
+			&i.AuthSubject,
 			&i.Username,
 			&i.Email,
 			&i.Description,
@@ -165,6 +165,39 @@ func (q *Queries) ListUsersInOrg(ctx context.Context, arg ListUsersInOrgParams) 
 	return items, nil
 }
 
+const relinkAuthSubject = `-- name: RelinkAuthSubject :one
+UPDATE user_profiles SET
+    auth_subject = $2,
+    updated_at = NOW()
+WHERE id = $1
+RETURNING id, auth_subject, username, email, description, is_site_admin, created_at, updated_at
+`
+
+type RelinkAuthSubjectParams struct {
+	ID          pgtype.UUID `json:"id"`
+	AuthSubject string      `json:"auth_subject"`
+}
+
+// Rebind an existing profile's auth_subject to a new IdP subject (verified-email
+// relink on first Clerk login). Keys on the internal id, so memberships and the
+// access_mask are preserved. ONLY auth_subject changes — username/email are
+// left untouched to avoid colliding with their UNIQUE constraints.
+func (q *Queries) RelinkAuthSubject(ctx context.Context, arg RelinkAuthSubjectParams) (UserProfile, error) {
+	row := q.db.QueryRow(ctx, relinkAuthSubject, arg.ID, arg.AuthSubject)
+	var i UserProfile
+	err := row.Scan(
+		&i.ID,
+		&i.AuthSubject,
+		&i.Username,
+		&i.Email,
+		&i.Description,
+		&i.IsSiteAdmin,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const updateUserProfile = `-- name: UpdateUserProfile :one
 UPDATE user_profiles SET
     username = COALESCE($2, username),
@@ -173,7 +206,7 @@ UPDATE user_profiles SET
     is_site_admin = COALESCE($5, is_site_admin),
     updated_at = NOW()
 WHERE id = $1
-RETURNING id, keycloak_sub, username, email, description, is_site_admin, created_at, updated_at
+RETURNING id, auth_subject, username, email, description, is_site_admin, created_at, updated_at
 `
 
 type UpdateUserProfileParams struct {
@@ -195,7 +228,7 @@ func (q *Queries) UpdateUserProfile(ctx context.Context, arg UpdateUserProfilePa
 	var i UserProfile
 	err := row.Scan(
 		&i.ID,
-		&i.KeycloakSub,
+		&i.AuthSubject,
 		&i.Username,
 		&i.Email,
 		&i.Description,
@@ -207,18 +240,18 @@ func (q *Queries) UpdateUserProfile(ctx context.Context, arg UpdateUserProfilePa
 }
 
 const upsertUserProfile = `-- name: UpsertUserProfile :one
-INSERT INTO user_profiles (id, keycloak_sub, username, email, description, is_site_admin)
+INSERT INTO user_profiles (id, auth_subject, username, email, description, is_site_admin)
 VALUES ($1, $2, $3, $4, $5, $6)
-ON CONFLICT (keycloak_sub) DO UPDATE SET
+ON CONFLICT (auth_subject) DO UPDATE SET
     username = EXCLUDED.username,
     email = EXCLUDED.email,
     updated_at = NOW()
-RETURNING id, keycloak_sub, username, email, description, is_site_admin, created_at, updated_at
+RETURNING id, auth_subject, username, email, description, is_site_admin, created_at, updated_at
 `
 
 type UpsertUserProfileParams struct {
 	ID          pgtype.UUID `json:"id"`
-	KeycloakSub string      `json:"keycloak_sub"`
+	AuthSubject string      `json:"auth_subject"`
 	Username    string      `json:"username"`
 	Email       string      `json:"email"`
 	Description pgtype.Text `json:"description"`
@@ -228,7 +261,7 @@ type UpsertUserProfileParams struct {
 func (q *Queries) UpsertUserProfile(ctx context.Context, arg UpsertUserProfileParams) (UserProfile, error) {
 	row := q.db.QueryRow(ctx, upsertUserProfile,
 		arg.ID,
-		arg.KeycloakSub,
+		arg.AuthSubject,
 		arg.Username,
 		arg.Email,
 		arg.Description,
@@ -237,7 +270,7 @@ func (q *Queries) UpsertUserProfile(ctx context.Context, arg UpsertUserProfilePa
 	var i UserProfile
 	err := row.Scan(
 		&i.ID,
-		&i.KeycloakSub,
+		&i.AuthSubject,
 		&i.Username,
 		&i.Email,
 		&i.Description,

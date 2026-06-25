@@ -169,7 +169,7 @@ type UserOrgMembership struct {
 
 type UserProfile struct {
 	ID          pgtype.UUID        `json:"id"`
-	KeycloakSub string             `json:"keycloak_sub"`
+	AuthSubject string             `json:"auth_subject"`
 	Username    string             `json:"username"`
 	Email       string             `json:"email"`
 	Description pgtype.Text        `json:"description"`

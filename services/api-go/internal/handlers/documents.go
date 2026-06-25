@@ -667,7 +667,7 @@ func (h *DocumentHandler) getUserMasksForOrg(
 	defer conn.Release()
 
 	profileQueries := repository.New(conn)
-	profile, err := profileQueries.GetUserProfileByKeycloakSub(ctx, keycloakSub)
+	profile, err := profileQueries.GetUserProfileByAuthSubject(ctx, keycloakSub)
 	if err != nil {
 		return false, nil, err
 	}
@@ -731,5 +731,5 @@ func (h *DocumentHandler) getUserProfile(ctx context.Context, keycloakSub string
 	defer conn.Release()
 
 	queries := repository.New(conn)
-	return queries.GetUserProfileByKeycloakSub(ctx, keycloakSub)
+	return queries.GetUserProfileByAuthSubject(ctx, keycloakSub)
 }

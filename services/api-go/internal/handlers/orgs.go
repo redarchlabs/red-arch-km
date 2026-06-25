@@ -92,7 +92,7 @@ func (h *OrgHandler) ListOrgs(w http.ResponseWriter, r *http.Request) {
 	queries := repository.New(conn)
 
 	// Get user profile to check site admin status
-	profile, err := queries.GetUserProfileByKeycloakSub(ctx, claims.Sub)
+	profile, err := queries.GetUserProfileByAuthSubject(ctx, claims.Sub)
 	if err != nil {
 		// User not provisioned yet - return empty list
 		httputil.Success(w, MakePage([]OrgResponse{}, 0, pagination))
@@ -178,7 +178,7 @@ func (h *OrgHandler) CreateOrg(w http.ResponseWriter, r *http.Request) {
 	queries := repository.New(conn)
 
 	// Check if user is site admin
-	profile, err := queries.GetUserProfileByKeycloakSub(ctx, claims.Sub)
+	profile, err := queries.GetUserProfileByAuthSubject(ctx, claims.Sub)
 	if err != nil {
 		httputil.Forbidden(w, "User not provisioned")
 		return
@@ -261,7 +261,7 @@ func (h *OrgHandler) GetOrg(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check access: site admin or member
-	profile, err := queries.GetUserProfileByKeycloakSub(ctx, claims.Sub)
+	profile, err := queries.GetUserProfileByAuthSubject(ctx, claims.Sub)
 	if err != nil {
 		httputil.Forbidden(w, "User not provisioned")
 		return
@@ -314,7 +314,7 @@ func (h *OrgHandler) UpdateOrg(w http.ResponseWriter, r *http.Request) {
 	queries := repository.New(conn)
 
 	// Check if user is site admin
-	profile, err := queries.GetUserProfileByKeycloakSub(ctx, claims.Sub)
+	profile, err := queries.GetUserProfileByAuthSubject(ctx, claims.Sub)
 	if err != nil {
 		httputil.Forbidden(w, "User not provisioned")
 		return
@@ -383,7 +383,7 @@ func (h *OrgHandler) DeleteOrg(w http.ResponseWriter, r *http.Request) {
 	queries := repository.New(conn)
 
 	// Check if user is site admin
-	profile, err := queries.GetUserProfileByKeycloakSub(ctx, claims.Sub)
+	profile, err := queries.GetUserProfileByAuthSubject(ctx, claims.Sub)
 	if err != nil {
 		httputil.Forbidden(w, "User not provisioned")
 		return

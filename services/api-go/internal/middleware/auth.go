@@ -29,6 +29,7 @@ const (
 type UserClaims struct {
 	Sub               string `json:"sub"`
 	Email             string `json:"email"`
+	EmailVerified     bool   `json:"email_verified"`
 	PreferredUsername string `json:"preferred_username"`
 	Name              string `json:"name"`
 }
@@ -270,6 +271,16 @@ func extractClaims(token jwt.Token) UserClaims {
 	if email, ok := token.Get("email"); ok {
 		if s, ok := email.(string); ok {
 			claims.Email = s
+		}
+	}
+	// email_verified gates the verified-email relink (anti-takeover, AC-4.3).
+	// Tolerate both the OIDC boolean and a stringified form.
+	if ev, ok := token.Get("email_verified"); ok {
+		switch v := ev.(type) {
+		case bool:
+			claims.EmailVerified = v
+		case string:
+			claims.EmailVerified = v == "true"
 		}
 	}
 	if username, ok := token.Get("username"); ok {

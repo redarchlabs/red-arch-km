@@ -654,7 +654,7 @@ func (h *FolderHandler) getUserMasksForOrg(
 	defer conn.Release()
 
 	profileQueries := repository.New(conn)
-	profile, err := profileQueries.GetUserProfileByKeycloakSub(ctx, keycloakSub)
+	profile, err := profileQueries.GetUserProfileByAuthSubject(ctx, keycloakSub)
 	if err != nil {
 		return false, nil, err
 	}
@@ -723,7 +723,7 @@ func (h *FolderHandler) requireOrgAdmin(ctx context.Context, keycloakSub string)
 	defer conn.Release()
 
 	queries := repository.New(conn)
-	profile, err := queries.GetUserProfileByKeycloakSub(ctx, keycloakSub)
+	profile, err := queries.GetUserProfileByAuthSubject(ctx, keycloakSub)
 	if err != nil {
 		return err
 	}
