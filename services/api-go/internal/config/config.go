@@ -10,9 +10,9 @@ type Config struct {
 	config.BaseConfig
 
 	// Server settings
-	Port           int
-	SecretKey      string
-	CORSOrigins    []string
+	Port            int
+	SecretKey       string
+	CORSOrigins     []string
 	RateLimitPerMin int
 
 	// Database
@@ -28,10 +28,20 @@ type Config struct {
 	// Internal API Key (for service-to-service calls)
 	InternalAPIKey string
 
-	// Keycloak
+	// Keycloak (legacy — retained during the Clerk coexistence window, D4).
 	KeycloakURL      string
 	KeycloakRealm    string
 	KeycloakClientID string
+
+	// Clerk
+	//   ClerkIssuer     = Clerk Frontend API URL (token `iss`).
+	//   ClerkAllowedAZP = authorized-party allowlist (UI origins); required
+	//                     for azp enforcement (G-AZP/R2). Comma-separated.
+	//   ClerkSecretKey  = Clerk Backend API secret (sk_…); not needed for the
+	//                     JWKS verify path, reserved for Backend-API provisioning.
+	ClerkIssuer     string
+	ClerkAllowedAZP []string
+	ClerkSecretKey  string
 
 	// E2E Test Mode (development only)
 	E2ETestMode   bool
@@ -45,9 +55,9 @@ func Load() Config {
 	return Config{
 		BaseConfig: base,
 
-		Port:           config.GetEnvInt("API_PORT", 8000),
-		SecretKey:      config.GetEnv("API_SECRET_KEY", ""),
-		CORSOrigins:    config.GetEnvStringSlice("API_CORS_ORIGINS", []string{"http://localhost:3000"}),
+		Port:            config.GetEnvInt("API_PORT", 8000),
+		SecretKey:       config.GetEnv("API_SECRET_KEY", ""),
+		CORSOrigins:     config.GetEnvStringSlice("API_CORS_ORIGINS", []string{"http://localhost:3000"}),
 		RateLimitPerMin: config.GetEnvInt("API_RATE_LIMIT_PER_MINUTE", 60),
 
 		DatabaseURL: config.GetEnv("DATABASE_URL", ""),
@@ -62,6 +72,10 @@ func Load() Config {
 		KeycloakRealm:    config.GetEnv("KEYCLOAK_REALM", "redarch"),
 		KeycloakClientID: config.GetEnv("KEYCLOAK_CLIENT_ID", "redarch-km"),
 
+		ClerkIssuer:     config.GetEnv("CLERK_JWT_ISSUER", ""),
+		ClerkAllowedAZP: config.GetEnvStringSlice("CLERK_ALLOWED_AZP", nil),
+		ClerkSecretKey:  config.GetEnv("CLERK_SECRET_KEY", ""),
+
 		E2ETestMode:   config.GetEnvBool("API_E2E_TEST_MODE", false),
 		E2ETestSecret: config.GetEnv("API_E2E_TEST_SECRET", ""),
 	}
@@ -69,13 +83,21 @@ func Load() Config {
 
 // Validate checks that required configuration is present.
 func (c Config) Validate() error {
-	// In production, require certain fields
+	// Whenever Clerk is enabled (any env), an azp allowlist is mandatory —
+	// without it the verify path cannot enforce G-AZP and would be insecure.
+	if c.ClerkIssuer != "" && len(c.ClerkAllowedAZP) == 0 {
+		return ErrMissingClerkAllowedAZP
+	}
+
+	// In production, require certain fields.
 	if c.Env == "production" {
 		if c.DatabaseURL == "" {
 			return ErrMissingDatabaseURL
 		}
-		if c.KeycloakURL == "" {
-			return ErrMissingKeycloakURL
+		// At least one auth provider must be configured. During the Clerk
+		// coexistence window either (or both) is acceptable.
+		if c.KeycloakURL == "" && c.ClerkIssuer == "" {
+			return ErrMissingAuthProvider
 		}
 		if c.SecretKey == "" {
 			return ErrMissingSecretKey
@@ -90,7 +112,9 @@ type configError string
 func (e configError) Error() string { return string(e) }
 
 const (
-	ErrMissingDatabaseURL  configError = "DATABASE_URL is required"
-	ErrMissingKeycloakURL  configError = "KEYCLOAK_URL is required"
-	ErrMissingSecretKey    configError = "API_SECRET_KEY is required in production"
+	ErrMissingDatabaseURL     configError = "DATABASE_URL is required"
+	ErrMissingKeycloakURL     configError = "KEYCLOAK_URL is required"
+	ErrMissingAuthProvider    configError = "an auth provider is required: set KEYCLOAK_URL and/or CLERK_JWT_ISSUER"
+	ErrMissingClerkAllowedAZP configError = "CLERK_ALLOWED_AZP is required when CLERK_JWT_ISSUER is set"
+	ErrMissingSecretKey       configError = "API_SECRET_KEY is required in production"
 )

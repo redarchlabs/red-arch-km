@@ -21,31 +21,11 @@ func TestExtractBearerToken(t *testing.T) {
 		header   string
 		expected string
 	}{
-		{
-			name:     "valid bearer token",
-			header:   "Bearer token123",
-			expected: "token123",
-		},
-		{
-			name:     "lowercase bearer",
-			header:   "bearer token456",
-			expected: "token456",
-		},
-		{
-			name:     "no header",
-			header:   "",
-			expected: "",
-		},
-		{
-			name:     "no bearer prefix",
-			header:   "token789",
-			expected: "",
-		},
-		{
-			name:     "basic auth",
-			header:   "Basic abc123",
-			expected: "",
-		},
+		{name: "valid bearer token", header: "Bearer token123", expected: "token123"},
+		{name: "lowercase bearer", header: "bearer token456", expected: "token456"},
+		{name: "no header", header: "", expected: ""},
+		{name: "no bearer prefix", header: "token789", expected: ""},
+		{name: "basic auth", header: "Basic abc123", expected: ""},
 	}
 
 	for _, tt := range tests {
@@ -63,19 +43,12 @@ func TestExtractBearerToken(t *testing.T) {
 }
 
 func TestGetUserClaims(t *testing.T) {
-	// Test with no claims
 	ctx := context.Background()
-	_, ok := GetUserClaims(ctx)
-	if ok {
+	if _, ok := GetUserClaims(ctx); ok {
 		t.Error("expected no claims in empty context")
 	}
 
-	// Test with claims
-	claims := UserClaims{
-		Sub:               "user-123",
-		Email:             "test@example.com",
-		PreferredUsername: "testuser",
-	}
+	claims := UserClaims{Sub: "user-123", Email: "test@example.com", PreferredUsername: "testuser"}
 	ctx = context.WithValue(ctx, userClaimsKey, claims)
 	got, ok := GetUserClaims(ctx)
 	if !ok {
@@ -91,9 +64,9 @@ func TestGetUserClaims(t *testing.T) {
 
 func TestJWTMiddleware_Handler_MissingToken(t *testing.T) {
 	mw := NewJWTMiddleware(JWTConfig{
-		KeycloakURL: "http://keycloak:8080",
-		Realm:       "test",
-		ClientID:    "test-client",
+		KeycloakURL:      "http://keycloak:8080",
+		KeycloakRealm:    "test",
+		KeycloakClientID: "test-client",
 	})
 
 	handler := mw.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -102,7 +75,6 @@ func TestJWTMiddleware_Handler_MissingToken(t *testing.T) {
 
 	r := httptest.NewRequest("GET", "/", nil)
 	w := httptest.NewRecorder()
-
 	handler.ServeHTTP(w, r)
 
 	if w.Code != http.StatusUnauthorized {
@@ -110,87 +82,325 @@ func TestJWTMiddleware_Handler_MissingToken(t *testing.T) {
 	}
 }
 
-func TestJWTMiddleware_Handler_WithMockJWKS(t *testing.T) {
-	// Generate a test RSA key pair
-	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+// --- test helpers ------------------------------------------------------------
+
+type signer struct {
+	priv  *rsa.PrivateKey
+	priv2 *rsa.PrivateKey // a second key NOT published in the JWKS (for bad-sig tests)
+	kid   string
+}
+
+// newMockJWKS starts an httptest server that serves the public JWKS (for the
+// first key only) at ANY path, mirroring both Keycloak's /certs endpoint and
+// Clerk's /.well-known/jwks.json. Returns the server and a signer.
+func newMockJWKS(t *testing.T) (*httptest.Server, *signer) {
+	t.Helper()
+
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
-		t.Fatalf("failed to generate RSA key: %v", err)
+		t.Fatalf("generate RSA key: %v", err)
+	}
+	priv2, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate 2nd RSA key: %v", err)
 	}
 
-	// Create a JWK from the public key
-	pubJWK, err := jwk.FromRaw(privateKey.PublicKey)
+	const kid = "test-key-id"
+	pubJWK, err := jwk.FromRaw(priv.PublicKey)
 	if err != nil {
-		t.Fatalf("failed to create JWK: %v", err)
+		t.Fatalf("public JWK: %v", err)
 	}
-	pubJWK.Set(jwk.KeyIDKey, "test-key-id")
-	pubJWK.Set(jwk.AlgorithmKey, jwa.RS256)
-	pubJWK.Set(jwk.KeyUsageKey, "sig")
+	_ = pubJWK.Set(jwk.KeyIDKey, kid)
+	_ = pubJWK.Set(jwk.AlgorithmKey, jwa.RS256)
+	_ = pubJWK.Set(jwk.KeyUsageKey, "sig")
 
-	// Create a JWKS
 	jwks := jwk.NewSet()
-	jwks.AddKey(pubJWK)
+	_ = jwks.AddKey(pubJWK)
 
-	// Start a mock JWKS server
-	jwksServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(jwks)
+		_ = json.NewEncoder(w).Encode(jwks)
 	}))
-	defer jwksServer.Close()
+	t.Cleanup(srv.Close)
 
-	// Create a valid JWT
-	token := jwt.New()
-	token.Set(jwt.SubjectKey, "test-user-123")
-	token.Set(jwt.IssuerKey, jwksServer.URL+"/realms/test")
-	token.Set(jwt.AudienceKey, []string{"test-client"})
-	token.Set(jwt.ExpirationKey, time.Now().Add(time.Hour))
-	token.Set(jwt.IssuedAtKey, time.Now())
-	token.Set("email", "test@example.com")
-	token.Set("preferred_username", "testuser")
+	return srv, &signer{priv: priv, priv2: priv2, kid: kid}
+}
 
-	// Sign the token with the private key
-	privJWK, err := jwk.FromRaw(privateKey)
-	if err != nil {
-		t.Fatalf("failed to create private JWK: %v", err)
+// sign builds and signs a JWT with the published key.
+func (s *signer) sign(t *testing.T, claims map[string]any) string {
+	t.Helper()
+	return s.signWith(t, s.priv, claims)
+}
+
+// signBad signs with the unpublished key (signature won't verify).
+func (s *signer) signBad(t *testing.T, claims map[string]any) string {
+	t.Helper()
+	return s.signWith(t, s.priv2, claims)
+}
+
+func (s *signer) signWith(t *testing.T, key *rsa.PrivateKey, claims map[string]any) string {
+	t.Helper()
+	tok := jwt.New()
+	for k, v := range claims {
+		_ = tok.Set(k, v)
 	}
-	privJWK.Set(jwk.KeyIDKey, "test-key-id")
-	privJWK.Set(jwk.AlgorithmKey, jwa.RS256)
-
-	signedToken, err := jwt.Sign(token, jwt.WithKey(jwa.RS256, privJWK))
+	privJWK, err := jwk.FromRaw(key)
 	if err != nil {
-		t.Fatalf("failed to sign token: %v", err)
+		t.Fatalf("private JWK: %v", err)
 	}
+	_ = privJWK.Set(jwk.KeyIDKey, s.kid)
+	_ = privJWK.Set(jwk.AlgorithmKey, jwa.RS256)
 
-	// Create the middleware pointing to our mock server
-	mw := NewJWTMiddleware(JWTConfig{
-		KeycloakURL: jwksServer.URL,
-		Realm:       "test",
-		ClientID:    "test-client",
-	})
+	signed, err := jwt.Sign(tok, jwt.WithKey(jwa.RS256, privJWK))
+	if err != nil {
+		t.Fatalf("sign token: %v", err)
+	}
+	return string(signed)
+}
 
-	var capturedClaims UserClaims
+// serve drives a request with the given bearer token through the middleware and
+// returns the response recorder plus any captured claims.
+func serve(mw *JWTMiddleware, bearer string) (*httptest.ResponseRecorder, *UserClaims) {
+	var captured *UserClaims
 	handler := mw.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		claims, ok := GetUserClaims(r.Context())
-		if !ok {
-			t.Error("expected claims in context")
-			return
+		if c, ok := GetUserClaims(r.Context()); ok {
+			captured = &c
 		}
-		capturedClaims = claims
 		w.WriteHeader(http.StatusOK)
 	}))
-
 	r := httptest.NewRequest("GET", "/", nil)
-	r.Header.Set("Authorization", "Bearer "+string(signedToken))
+	if bearer != "" {
+		r.Header.Set("Authorization", "Bearer "+bearer)
+	}
 	w := httptest.NewRecorder()
-
 	handler.ServeHTTP(w, r)
+	return w, captured
+}
 
+func clerkClaims(issuer string) map[string]any {
+	return map[string]any{
+		jwt.SubjectKey:    "user_2abc",
+		jwt.IssuerKey:     issuer,
+		jwt.ExpirationKey: time.Now().Add(time.Hour),
+		jwt.IssuedAtKey:   time.Now(),
+		"azp":             "http://localhost:3000",
+		"email":           "alice@example.com",
+		"username":        "alice",
+	}
+}
+
+func keycloakClaims(issuer string) map[string]any {
+	return map[string]any{
+		jwt.SubjectKey:       "kc-uuid-123",
+		jwt.IssuerKey:        issuer,
+		jwt.AudienceKey:      []string{"redarch-km"},
+		jwt.ExpirationKey:    time.Now().Add(time.Hour),
+		jwt.IssuedAtKey:      time.Now(),
+		"email":              "bob@example.com",
+		"preferred_username": "bob",
+	}
+}
+
+// --- Clerk verify path (AC-1.1, AC-1.3) -------------------------------------
+
+func TestClerk_ValidToken_Authenticates(t *testing.T) {
+	srv, s := newMockJWKS(t)
+	mw := NewJWTMiddleware(JWTConfig{
+		ClerkIssuer:     srv.URL,
+		ClerkAllowedAZP: []string{"http://localhost:3000"},
+	})
+
+	w, claims := serve(mw, s.sign(t, clerkClaims(srv.URL)))
 	if w.Code != http.StatusOK {
-		t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
+		t.Fatalf("status = %d, want 200", w.Code)
 	}
-	if capturedClaims.Sub != "test-user-123" {
-		t.Errorf("Sub = %q, want %q", capturedClaims.Sub, "test-user-123")
+	if claims == nil {
+		t.Fatal("expected claims")
 	}
-	if capturedClaims.Email != "test@example.com" {
-		t.Errorf("Email = %q, want %q", capturedClaims.Email, "test@example.com")
+	if claims.Sub != "user_2abc" {
+		t.Errorf("Sub = %q, want user_2abc", claims.Sub)
+	}
+	if claims.Email != "alice@example.com" {
+		t.Errorf("Email = %q, want alice@example.com", claims.Email)
+	}
+	// Clerk `username` claim maps onto PreferredUsername (AC-1.1).
+	if claims.PreferredUsername != "alice" {
+		t.Errorf("PreferredUsername = %q, want alice", claims.PreferredUsername)
+	}
+}
+
+func TestClerk_RejectsBadAZP(t *testing.T) {
+	srv, s := newMockJWKS(t)
+	mw := NewJWTMiddleware(JWTConfig{
+		ClerkIssuer:     srv.URL,
+		ClerkAllowedAZP: []string{"http://localhost:3000"},
+	})
+
+	c := clerkClaims(srv.URL)
+	c["azp"] = "http://evil.example.com"
+	w, _ := serve(mw, s.sign(t, c))
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("bad azp: status = %d, want 401", w.Code)
+	}
+}
+
+func TestClerk_RejectsMissingAZP(t *testing.T) {
+	srv, s := newMockJWKS(t)
+	mw := NewJWTMiddleware(JWTConfig{
+		ClerkIssuer:     srv.URL,
+		ClerkAllowedAZP: []string{"http://localhost:3000"},
+	})
+
+	c := clerkClaims(srv.URL)
+	delete(c, "azp")
+	w, _ := serve(mw, s.sign(t, c))
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("missing azp: status = %d, want 401", w.Code)
+	}
+}
+
+func TestClerk_RejectsBadSignature(t *testing.T) {
+	srv, s := newMockJWKS(t)
+	mw := NewJWTMiddleware(JWTConfig{
+		ClerkIssuer:     srv.URL,
+		ClerkAllowedAZP: []string{"http://localhost:3000"},
+	})
+
+	// Signed with a key whose public half is NOT in the JWKS.
+	w, _ := serve(mw, s.signBad(t, clerkClaims(srv.URL)))
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("bad sig: status = %d, want 401", w.Code)
+	}
+}
+
+func TestClerk_RejectsExpired(t *testing.T) {
+	srv, s := newMockJWKS(t)
+	mw := NewJWTMiddleware(JWTConfig{
+		ClerkIssuer:     srv.URL,
+		ClerkAllowedAZP: []string{"http://localhost:3000"},
+	})
+
+	c := clerkClaims(srv.URL)
+	c[jwt.ExpirationKey] = time.Now().Add(-time.Hour)
+	c[jwt.IssuedAtKey] = time.Now().Add(-2 * time.Hour)
+	w, _ := serve(mw, s.sign(t, c))
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("expired: status = %d, want 401", w.Code)
+	}
+}
+
+func TestClerk_RejectsFutureNbf(t *testing.T) {
+	srv, s := newMockJWKS(t)
+	mw := NewJWTMiddleware(JWTConfig{
+		ClerkIssuer:     srv.URL,
+		ClerkAllowedAZP: []string{"http://localhost:3000"},
+	})
+
+	c := clerkClaims(srv.URL)
+	c[jwt.NotBeforeKey] = time.Now().Add(time.Hour)
+	w, _ := serve(mw, s.sign(t, c))
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("future nbf: status = %d, want 401", w.Code)
+	}
+}
+
+// --- Keycloak verify path retained (AC-1.2, AC-1.6) -------------------------
+
+func TestKeycloak_ValidToken_Authenticates(t *testing.T) {
+	srv, s := newMockJWKS(t)
+	mw := NewJWTMiddleware(JWTConfig{
+		KeycloakURL:      srv.URL,
+		KeycloakRealm:    "test",
+		KeycloakClientID: "redarch-km",
+	})
+
+	w, claims := serve(mw, s.sign(t, keycloakClaims(srv.URL+"/realms/test")))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	if claims == nil || claims.Sub != "kc-uuid-123" {
+		t.Fatalf("claims = %+v, want Sub=kc-uuid-123", claims)
+	}
+	if claims.PreferredUsername != "bob" {
+		t.Errorf("PreferredUsername = %q, want bob", claims.PreferredUsername)
+	}
+}
+
+func TestKeycloak_RejectsWrongAudience(t *testing.T) {
+	srv, s := newMockJWKS(t)
+	mw := NewJWTMiddleware(JWTConfig{
+		KeycloakURL:      srv.URL,
+		KeycloakRealm:    "test",
+		KeycloakClientID: "redarch-km",
+	})
+
+	c := keycloakClaims(srv.URL + "/realms/test")
+	c[jwt.AudienceKey] = []string{"some-other-client"}
+	w, _ := serve(mw, s.sign(t, c))
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("wrong aud: status = %d, want 401", w.Code)
+	}
+}
+
+// --- Dual-verify routing by issuer (AC-1.2) ---------------------------------
+
+func TestDualVerify_RoutesByIssuer(t *testing.T) {
+	srv, s := newMockJWKS(t)
+	// Both providers configured against the same mock JWKS.
+	mw := NewJWTMiddleware(JWTConfig{
+		KeycloakURL:      srv.URL,
+		KeycloakRealm:    "test",
+		KeycloakClientID: "redarch-km",
+		ClerkIssuer:      srv.URL + "/clerk",
+		ClerkAllowedAZP:  []string{"http://localhost:3000"},
+	})
+
+	// A Clerk-issued token authenticates via the Clerk verifier (azp checked).
+	if w, _ := serve(mw, s.sign(t, clerkClaims(srv.URL+"/clerk"))); w.Code != http.StatusOK {
+		t.Errorf("clerk token via dual-verify: status = %d, want 200", w.Code)
+	}
+	// A Keycloak-issued token still authenticates via the Keycloak verifier.
+	if w, _ := serve(mw, s.sign(t, keycloakClaims(srv.URL+"/realms/test"))); w.Code != http.StatusOK {
+		t.Errorf("keycloak token via dual-verify: status = %d, want 200", w.Code)
+	}
+	// A Clerk token must NOT pass the Keycloak audience path — its azp is still
+	// enforced (route is by issuer, not by trying every verifier).
+	c := clerkClaims(srv.URL + "/clerk")
+	c["azp"] = "http://evil.example.com"
+	if w, _ := serve(mw, s.sign(t, c)); w.Code != http.StatusUnauthorized {
+		t.Errorf("clerk token bad azp via dual-verify: status = %d, want 401", w.Code)
+	}
+}
+
+func TestDualVerify_RejectsUnknownIssuer(t *testing.T) {
+	srv, s := newMockJWKS(t)
+	mw := NewJWTMiddleware(JWTConfig{
+		ClerkIssuer:     srv.URL,
+		ClerkAllowedAZP: []string{"http://localhost:3000"},
+	})
+
+	c := clerkClaims("https://attacker.example.com")
+	w, _ := serve(mw, s.sign(t, c))
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("unknown issuer: status = %d, want 401", w.Code)
+	}
+}
+
+// --- JWKS outage is graceful, not fatal (AC-1.4) ----------------------------
+
+func TestClerk_JWKSOutage_ReturnsUnauthorizedNotPanic(t *testing.T) {
+	srv, s := newMockJWKS(t)
+	token := s.sign(t, clerkClaims(srv.URL))
+	// Take the JWKS endpoint down before the first request.
+	srv.Close()
+
+	mw := NewJWTMiddleware(JWTConfig{
+		ClerkIssuer:     srv.URL,
+		ClerkAllowedAZP: []string{"http://localhost:3000"},
+	})
+
+	w, _ := serve(mw, token)
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("jwks outage: status = %d, want 401 (no panic)", w.Code)
 	}
 }
