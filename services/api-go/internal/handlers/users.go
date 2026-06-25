@@ -200,7 +200,12 @@ func (h *UserHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 	// Resolve the profile for this IdP subject. On first login this provisions
 	// a fresh profile or relinks an existing user by verified email (D3).
 	profile, err := queries.GetUserProfileByAuthSubject(ctx, claims.Sub)
-	if err != nil {
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		slog.Error("get user profile", "error", err)
+		httputil.InternalError(w, "Failed to load user profile")
+		return
+	}
+	if errors.Is(err, pgx.ErrNoRows) {
 		profile, err = provisionOrRelinkUser(ctx, queries, claims)
 		if err != nil {
 			switch {
