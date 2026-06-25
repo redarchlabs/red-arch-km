@@ -12,7 +12,6 @@ from fastapi import FastAPI
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
 from prometheus_fastapi_instrumentator import Instrumentator
-
 from shared_config import configure_logging, configure_telemetry, get_meter
 
 logger = logging.getLogger(__name__)

@@ -1,7 +1,6 @@
 """Tests for AccessMask encode/decode round-trip and edge cases."""
 
 import pytest
-
 from access_mask import (
     MAX_DEPT,
     MAX_GROUP,
@@ -131,9 +130,7 @@ class TestDecode:
             (0, 0, 0, 0, 15),
         ],
     )
-    def test_round_trip_parametrized(
-        self, org: int, region: int, role: int, group: int, dept: int
-    ) -> None:
+    def test_round_trip_parametrized(self, org: int, region: int, role: int, group: int, dept: int) -> None:
         mask = encode(org=org, region=region, role=role, group=group, dept=dept)
         d = decode(mask)
         assert d == (org, region, role, group, dept)

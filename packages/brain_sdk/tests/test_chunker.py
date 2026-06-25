@@ -1,7 +1,6 @@
 """Tests for text chunking."""
 
 import pytest
-
 from brain_sdk.chunking.chunker import (
     chunk_text,
     create_sentence_based_overlapping_chunks,

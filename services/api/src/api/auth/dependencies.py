@@ -78,9 +78,7 @@ async def _resolve_e2e_user(
         )
     email = email or f"{username}@e2e.local"
 
-    profile = await provision_user_from_claims(
-        session, sub=f"e2e-{username}", username=username, email=email
-    )
+    profile = await provision_user_from_claims(session, sub=f"e2e-{username}", username=username, email=email)
     return CurrentUser(
         sub=profile.keycloak_sub,
         username=profile.username,
@@ -143,9 +141,7 @@ async def get_current_user(
     # E2E test mode takes precedence, but is locked behind the config flag
     # AND a matching shared secret. Never active in production.
     if settings.e2e_test_mode and x_test_user:
-        return await _resolve_e2e_user(
-            x_test_user, x_test_secret or "", settings, session
-        )
+        return await _resolve_e2e_user(x_test_user, x_test_secret or "", settings, session)
 
     if credentials is None:
         raise HTTPException(
@@ -174,9 +170,7 @@ async def get_current_user(
             detail="Token missing subject claim",
         )
 
-    profile = await provision_user_from_claims(
-        session, sub=sub, username=username, email=email
-    )
+    profile = await provision_user_from_claims(session, sub=sub, username=username, email=email)
 
     return CurrentUser(
         sub=sub,

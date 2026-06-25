@@ -17,16 +17,10 @@ class TagRepository:
     async def get(self, tag_id: uuid.UUID) -> Tag | None:
         return await self._session.get(Tag, tag_id)
 
-    async def list_all(
-        self, *, offset: int = 0, limit: int = 200
-    ) -> tuple[list[Tag], int]:
+    async def list_all(self, *, offset: int = 0, limit: int = 200) -> tuple[list[Tag], int]:
         """Return a page of tags along with the total count (RLS-scoped)."""
-        total = (
-            await self._session.execute(select(func.count()).select_from(Tag))
-        ).scalar_one()
-        result = await self._session.execute(
-            select(Tag).order_by(Tag.name).offset(offset).limit(limit)
-        )
+        total = (await self._session.execute(select(func.count()).select_from(Tag))).scalar_one()
+        result = await self._session.execute(select(Tag).order_by(Tag.name).offset(offset).limit(limit))
         return list(result.scalars().all()), total
 
     async def create(self, *, name: str, org_id: uuid.UUID) -> Tag:

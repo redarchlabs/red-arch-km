@@ -35,9 +35,7 @@ async def _resolve_dimension_number(
     org_id: uuid.UUID,
     name: str,
 ) -> int | None:
-    result = await session.execute(
-        select(model.permission_number).where(model.org_id == org_id, model.name == name)
-    )
+    result = await session.execute(select(model.permission_number).where(model.org_id == org_id, model.name == name))
     return result.scalar_one_or_none()
 
 
@@ -61,18 +59,26 @@ async def permission_config_to_masks(
 
     masks: list[int] = []
     for entry in config:
-        region = await _resolve_dimension_number(session, Region, org_id, entry["region"]) if "region" in entry else MAX_REGION
-        dept = await _resolve_dimension_number(session, Department, org_id, entry["department"]) if "department" in entry else MAX_DEPT
+        region = (
+            await _resolve_dimension_number(session, Region, org_id, entry["region"])
+            if "region" in entry
+            else MAX_REGION
+        )
+        dept = (
+            await _resolve_dimension_number(session, Department, org_id, entry["department"])
+            if "department" in entry
+            else MAX_DEPT
+        )
         role = await _resolve_dimension_number(session, Role, org_id, entry["role"]) if "role" in entry else MAX_ROLE
-        group = await _resolve_dimension_number(session, Group, org_id, entry["group"]) if "group" in entry else MAX_GROUP
+        group = (
+            await _resolve_dimension_number(session, Group, org_id, entry["group"]) if "group" in entry else MAX_GROUP
+        )
 
         if region is None or dept is None or role is None or group is None:
             logger.warning("Unresolved dimension in permission config entry %s (org=%s)", entry, org_id)
             continue
 
-        masks.append(
-            encode(org=org_number, region=region, dept=dept, role=role, group=group)
-        )
+        masks.append(encode(org=org_number, region=region, dept=dept, role=role, group=group))
 
     return masks
 
@@ -92,10 +98,6 @@ def calculate_user_masks_from_membership(
     group_numbers = [g.permission_number for g in membership.groups] or [0]
 
     masks: list[int] = []
-    for region, dept, role, group in cartesian_product(
-        region_numbers, dept_numbers, role_numbers, group_numbers
-    ):
-        masks.append(
-            encode(org=org_number, region=region, dept=dept, role=role, group=group)
-        )
+    for region, dept, role, group in cartesian_product(region_numbers, dept_numbers, role_numbers, group_numbers):
+        masks.append(encode(org=org_number, region=region, dept=dept, role=role, group=group))
     return masks

@@ -30,6 +30,7 @@ class OrgRead(BaseModel):
 
 class DimensionCreate(BaseModel):
     """Shared schema for Region, Department, Role, Group creation."""
+
     name: str = Field(min_length=1, max_length=255)
     description: str | None = None
 

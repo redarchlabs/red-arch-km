@@ -63,15 +63,14 @@ async def update_document_status(
         try:
             await _set_tenant(session, body.tenant_id)
             repo = DocumentRepository(session)
-            doc = await repo.update_status(
-                document_id, status=body.status, details=body.details
-            )
+            doc = await repo.update_status(document_id, status=body.status, details=body.details)
             if doc is None:
                 # RLS filtered it out, or it was deleted while processing.
                 # Either way this is a no-op — don't 500 the worker.
                 logger.warning(
                     "Status callback for unknown document %s (tenant %s) — ignored",
-                    document_id, body.tenant_id,
+                    document_id,
+                    body.tenant_id,
                 )
                 await session.rollback()
                 raise HTTPException(
@@ -84,9 +83,7 @@ async def update_document_status(
             raise
         except Exception:
             await session.rollback()
-            logger.exception(
-                "Failed to update status for document %s", document_id
-            )
+            logger.exception("Failed to update status for document %s", document_id)
             raise
 
 

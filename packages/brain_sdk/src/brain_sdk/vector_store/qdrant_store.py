@@ -9,7 +9,6 @@ from typing import Any
 
 from qdrant_client import QdrantClient
 from qdrant_client.http import models as rest
-from qdrant_client.http.exceptions import UnexpectedResponse
 
 from brain_sdk.vector_store.protocol import SearchResult, VectorRecord
 
@@ -93,9 +92,7 @@ class QdrantVectorStore:
         collection_type: str = "chunks",
     ) -> None:
         collection = (
-            self._chunk_collection(tenant_id)
-            if collection_type == "chunks"
-            else self._doc_collection(tenant_id)
+            self._chunk_collection(tenant_id) if collection_type == "chunks" else self._doc_collection(tenant_id)
         )
         points = [
             rest.PointStruct(
@@ -130,15 +127,10 @@ class QdrantVectorStore:
                     must.append(rest.FieldCondition(key=field_name, match=rest.MatchValue(value=value)))
 
         if required_tags:
-            must.extend(
-                rest.FieldCondition(key="tags", match=rest.MatchValue(value=tag))
-                for tag in required_tags
-            )
+            must.extend(rest.FieldCondition(key="tags", match=rest.MatchValue(value=tag)) for tag in required_tags)
 
         if access_keys:
-            must.append(
-                rest.FieldCondition(key="access_keys", match=rest.MatchAny(any=access_keys))
-            )
+            must.append(rest.FieldCondition(key="access_keys", match=rest.MatchAny(any=access_keys)))
 
         query_filter = rest.Filter(must=must) if must else None
 
@@ -290,10 +282,7 @@ class QdrantVectorStore:
             )
             if not points:
                 break
-            all_results.extend(
-                SearchResult(id=str(p.id), score=0.0, payload=p.payload or {})
-                for p in points
-            )
+            all_results.extend(SearchResult(id=str(p.id), score=0.0, payload=p.payload or {}) for p in points)
             if next_offset is None or len(all_results) >= limit:
                 break
 

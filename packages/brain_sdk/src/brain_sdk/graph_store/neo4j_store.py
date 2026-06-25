@@ -97,12 +97,8 @@ class Neo4jGraphStore:
         subj_access: list[int] | None = None,
         obj_access: list[int] | None = None,
     ) -> None:
-        sid = self._upsert_vertex(
-            tenant_id, subj, document_key=document_key, tags=subj_tags, access_keys=subj_access
-        )
-        oid = self._upsert_vertex(
-            tenant_id, obj, document_key=document_key, tags=obj_tags, access_keys=obj_access
-        )
+        sid = self._upsert_vertex(tenant_id, subj, document_key=document_key, tags=subj_tags, access_keys=subj_access)
+        oid = self._upsert_vertex(tenant_id, obj, document_key=document_key, tags=obj_tags, access_keys=obj_access)
 
         cyph = (
             "MATCH (s) WHERE elementId(s) = $sid\n"
@@ -132,11 +128,7 @@ class Neo4jGraphStore:
         latency for a document with ~10 triplets/chunk drops roughly an
         order of magnitude.
         """
-        clean = [
-            {"subj": s, "pred": p, "obj": o}
-            for s, p, o in triplets
-            if s and p and o
-        ]
+        clean = [{"subj": s, "pred": p, "obj": o} for s, p, o in triplets if s and p and o]
         if not clean:
             return
 
@@ -203,8 +195,7 @@ FOREACH (_ IN CASE WHEN $dk IS NOT NULL THEN [1] ELSE [] END |
             parts.append(f"WHERE {' AND '.join(conds)}")
 
         parts.append(
-            f"RETURN s.{_PROP_NAME} AS subj, r.{_PROP_TYPE} AS pred, o.{_PROP_NAME} AS obj "
-            "ORDER BY subj, pred, obj"
+            f"RETURN s.{_PROP_NAME} AS subj, r.{_PROP_TYPE} AS pred, o.{_PROP_NAME} AS obj ORDER BY subj, pred, obj"
         )
         return self._cypher("\n".join(parts), **params)
 
@@ -219,11 +210,9 @@ FOREACH (_ IN CASE WHEN $dk IS NOT NULL THEN [1] ELSE [] END |
         all_triplets = self._get_all_triplets(tenant_id, tags=tags, user_access=user_access)
         pattern = re.compile(re.escape(term), re.IGNORECASE)
         return [
-            t for t in all_triplets
-            if any(
-                isinstance(t.get(key), str) and pattern.search(t[key])
-                for key in ("subj", "obj", "pred")
-            )
+            t
+            for t in all_triplets
+            if any(isinstance(t.get(key), str) and pattern.search(t[key]) for key in ("subj", "obj", "pred"))
         ]
 
     def fuzzy_entity_search(
@@ -259,8 +248,7 @@ FOREACH (_ IN CASE WHEN $dk IS NOT NULL THEN [1] ELSE [] END |
     def delete_by_document_key(self, tenant_id: str, document_key: str) -> None:
         lbls = self._tenant_labels(tenant_id)
         self._cypher(
-            f"MATCH (n{lbls})-[r:{_REL_TYPE}]-(m{lbls}) "
-            f"WHERE r.{_PROP_DOCUMENT_KEY} = $dk DETACH DELETE r",
+            f"MATCH (n{lbls})-[r:{_REL_TYPE}]-(m{lbls}) WHERE r.{_PROP_DOCUMENT_KEY} = $dk DETACH DELETE r",
             dk=document_key,
         )
         self._cypher(
@@ -310,9 +298,7 @@ FOREACH (_ IN CASE WHEN $dk IS NOT NULL THEN [1] ELSE [] END |
         lbls = self._tenant_labels(tenant_id)
         # Count first (COUNT after DETACH DELETE is unreliable across driver
         # versions), then delete.
-        count_result = self._cypher(
-            f"MATCH (n{lbls}) RETURN count(n) AS c"
-        )
+        count_result = self._cypher(f"MATCH (n{lbls}) RETURN count(n) AS c")
         count = count_result[0]["c"] if count_result else 0
         if count:
             self._cypher(f"MATCH (n{lbls}) DETACH DELETE n")

@@ -6,7 +6,6 @@ from unittest.mock import MagicMock
 
 import httpx
 import pytest
-
 from worker.tasks.ingest import _is_retryable_http_error
 
 

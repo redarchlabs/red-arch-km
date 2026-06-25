@@ -18,7 +18,5 @@ def dispatch_ingest(data: dict[str, Any]) -> str:
 
 
 def dispatch_metadata_update(data: dict[str, Any]) -> str:
-    result = celery_app.send_task(
-        "worker.tasks.metadata.task_update_document_metadata", args=[data]
-    )
+    result = celery_app.send_task("worker.tasks.metadata.task_update_document_metadata", args=[data])
     return str(result.id)

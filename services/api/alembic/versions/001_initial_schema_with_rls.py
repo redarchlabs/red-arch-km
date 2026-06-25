@@ -4,8 +4,8 @@ Revision ID: 001
 Create Date: 2026-03-29
 """
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision = "001"
@@ -69,7 +69,13 @@ def upgrade() -> None:
             sa.Column("name", sa.String(255), nullable=False),
             sa.Column("description", sa.Text, nullable=True),
             sa.Column("permission_number", sa.SmallInteger, default=0),
-            sa.Column("org_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("orgs.id", ondelete="CASCADE"), nullable=False, index=True),
+            sa.Column(
+                "org_id",
+                postgresql.UUID(as_uuid=True),
+                sa.ForeignKey("orgs.id", ondelete="CASCADE"),
+                nullable=False,
+                index=True,
+            ),
             sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
             sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
             sa.UniqueConstraint("org_id", "name", name=f"uq_{table_name}_name_per_org"),
@@ -79,8 +85,19 @@ def upgrade() -> None:
     op.create_table(
         "user_org_memberships",
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
-        sa.Column("profile_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("user_profiles.id", ondelete="CASCADE"), nullable=False),
-        sa.Column("org_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("orgs.id", ondelete="CASCADE"), nullable=False, index=True),
+        sa.Column(
+            "profile_id",
+            postgresql.UUID(as_uuid=True),
+            sa.ForeignKey("user_profiles.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        sa.Column(
+            "org_id",
+            postgresql.UUID(as_uuid=True),
+            sa.ForeignKey("orgs.id", ondelete="CASCADE"),
+            nullable=False,
+            index=True,
+        ),
         sa.Column("is_org_admin", sa.Boolean, default=False),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
@@ -94,8 +111,18 @@ def upgrade() -> None:
         singular = dim.rstrip("s") if dim != "groups" else "group"
         op.create_table(
             f"membership_{dim}",
-            sa.Column("membership_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("user_org_memberships.id", ondelete="CASCADE"), nullable=False),
-            sa.Column(f"{singular}_id", postgresql.UUID(as_uuid=True), sa.ForeignKey(f"{dim}.id", ondelete="CASCADE"), nullable=False),
+            sa.Column(
+                "membership_id",
+                postgresql.UUID(as_uuid=True),
+                sa.ForeignKey("user_org_memberships.id", ondelete="CASCADE"),
+                nullable=False,
+            ),
+            sa.Column(
+                f"{singular}_id",
+                postgresql.UUID(as_uuid=True),
+                sa.ForeignKey(f"{dim}.id", ondelete="CASCADE"),
+                nullable=False,
+            ),
             sa.PrimaryKeyConstraint("membership_id", f"{singular}_id", name=f"pk_membership_{dim}"),
         )
         op.create_index(
@@ -116,8 +143,16 @@ def upgrade() -> None:
         sa.Column("contributor_permission_masks", postgresql.ARRAY(sa.BigInteger), server_default="{}"),
         sa.Column("viewer_permissions_config", postgresql.JSONB, nullable=True),
         sa.Column("contributor_permissions_config", postgresql.JSONB, nullable=True),
-        sa.Column("org_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("orgs.id", ondelete="CASCADE"), nullable=False, index=True),
-        sa.Column("parent_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("folders.id", ondelete="CASCADE"), nullable=True),
+        sa.Column(
+            "org_id",
+            postgresql.UUID(as_uuid=True),
+            sa.ForeignKey("orgs.id", ondelete="CASCADE"),
+            nullable=False,
+            index=True,
+        ),
+        sa.Column(
+            "parent_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("folders.id", ondelete="CASCADE"), nullable=True
+        ),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
         sa.UniqueConstraint("org_id", "name", "parent_id", name="uq_folder_name_per_org_parent"),
@@ -128,7 +163,9 @@ def upgrade() -> None:
         "tags",
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
         sa.Column("name", sa.String(100), nullable=False),
-        sa.Column("org_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("orgs.id", ondelete="CASCADE"), nullable=False),
+        sa.Column(
+            "org_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("orgs.id", ondelete="CASCADE"), nullable=False
+        ),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
         sa.UniqueConstraint("org_id", "name", name="uq_tag_per_org"),
@@ -147,9 +184,22 @@ def upgrade() -> None:
         sa.Column("processing_details", postgresql.JSONB, nullable=True),
         sa.Column("metadata", postgresql.JSONB, nullable=True),
         sa.Column("use_knowledge_graph", sa.Boolean, nullable=True),
-        sa.Column("org_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("orgs.id", ondelete="CASCADE"), nullable=False, index=True),
-        sa.Column("folder_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("folders.id", ondelete="SET NULL"), nullable=True),
-        sa.Column("uploaded_by_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("user_profiles.id", ondelete="SET NULL"), nullable=True),
+        sa.Column(
+            "org_id",
+            postgresql.UUID(as_uuid=True),
+            sa.ForeignKey("orgs.id", ondelete="CASCADE"),
+            nullable=False,
+            index=True,
+        ),
+        sa.Column(
+            "folder_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("folders.id", ondelete="SET NULL"), nullable=True
+        ),
+        sa.Column(
+            "uploaded_by_id",
+            postgresql.UUID(as_uuid=True),
+            sa.ForeignKey("user_profiles.id", ondelete="SET NULL"),
+            nullable=True,
+        ),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
         sa.UniqueConstraint("org_id", "document_key", name="uq_doc_key_per_org"),
@@ -158,8 +208,15 @@ def upgrade() -> None:
     # Document-Tag M2M with composite PK to prevent duplicate tag assignments
     op.create_table(
         "document_tags",
-        sa.Column("document_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("documents.id", ondelete="CASCADE"), nullable=False),
-        sa.Column("tag_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("tags.id", ondelete="CASCADE"), nullable=False),
+        sa.Column(
+            "document_id",
+            postgresql.UUID(as_uuid=True),
+            sa.ForeignKey("documents.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        sa.Column(
+            "tag_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("tags.id", ondelete="CASCADE"), nullable=False
+        ),
         sa.PrimaryKeyConstraint("document_id", "tag_id", name="pk_document_tags"),
     )
     op.create_index("ix_document_tags_tag_id", "document_tags", ["tag_id"])
@@ -172,9 +229,18 @@ def upgrade() -> None:
     op.create_table(
         "document_access",
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
-        sa.Column("user_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("user_profiles.id", ondelete="CASCADE"), nullable=False),
-        sa.Column("folder_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("folders.id", ondelete="CASCADE"), nullable=False),
-        sa.Column("org_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("orgs.id", ondelete="CASCADE"), nullable=False),
+        sa.Column(
+            "user_id",
+            postgresql.UUID(as_uuid=True),
+            sa.ForeignKey("user_profiles.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        sa.Column(
+            "folder_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("folders.id", ondelete="CASCADE"), nullable=False
+        ),
+        sa.Column(
+            "org_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("orgs.id", ondelete="CASCADE"), nullable=False
+        ),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
         sa.UniqueConstraint("user_id", "folder_id", name="uq_document_access_user_folder"),
@@ -191,7 +257,9 @@ def upgrade() -> None:
         sa.Column("picklist_options", postgresql.JSONB, default=[]),
         sa.Column("required", sa.Boolean, default=False),
         sa.Column("order", sa.Integer, default=0),
-        sa.Column("org_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("orgs.id", ondelete="CASCADE"), nullable=False),
+        sa.Column(
+            "org_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("orgs.id", ondelete="CASCADE"), nullable=False
+        ),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
         sa.UniqueConstraint("org_id", "slug", name="uq_attr_slug_per_org"),
@@ -203,8 +271,19 @@ def upgrade() -> None:
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
         sa.Column("chat_data", postgresql.JSONB, nullable=True),
         sa.Column("deleted", sa.Boolean, default=False),
-        sa.Column("org_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("orgs.id", ondelete="CASCADE"), nullable=False, index=True),
-        sa.Column("user_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("user_profiles.id", ondelete="SET NULL"), nullable=True),
+        sa.Column(
+            "org_id",
+            postgresql.UUID(as_uuid=True),
+            sa.ForeignKey("orgs.id", ondelete="CASCADE"),
+            nullable=False,
+            index=True,
+        ),
+        sa.Column(
+            "user_id",
+            postgresql.UUID(as_uuid=True),
+            sa.ForeignKey("user_profiles.id", ondelete="SET NULL"),
+            nullable=True,
+        ),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
     )
@@ -243,9 +322,15 @@ def upgrade() -> None:
         """)
 
     # Grant app_user access (RLS applies)
-    for table in _RLS_TABLES + ["orgs", "user_profiles", "document_tags",
-                                  "membership_regions", "membership_departments",
-                                  "membership_roles", "membership_groups"]:
+    for table in _RLS_TABLES + [
+        "orgs",
+        "user_profiles",
+        "document_tags",
+        "membership_regions",
+        "membership_departments",
+        "membership_roles",
+        "membership_groups",
+    ]:
         op.execute(f"GRANT SELECT, INSERT, UPDATE, DELETE ON {table} TO app_user")
 
 

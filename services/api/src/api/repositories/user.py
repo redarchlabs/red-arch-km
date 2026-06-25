@@ -19,9 +19,7 @@ class UserRepository:
         return await self._session.get(UserProfile, profile_id)
 
     async def get_by_keycloak_sub(self, sub: str) -> UserProfile | None:
-        result = await self._session.execute(
-            select(UserProfile).where(UserProfile.keycloak_sub == sub)
-        )
+        result = await self._session.execute(select(UserProfile).where(UserProfile.keycloak_sub == sub))
         return result.scalar_one_or_none()
 
     async def list_in_org(
@@ -35,19 +33,11 @@ class UserRepository:
             .join(UserOrgMembership, UserOrgMembership.profile_id == UserProfile.id)
             .where(UserOrgMembership.org_id == org_id)
         )
-        total = (
-            await self._session.execute(
-                select(func.count()).select_from(base.subquery())
-            )
-        ).scalar_one()
-        result = await self._session.execute(
-            base.order_by(UserProfile.username).offset(offset).limit(limit)
-        )
+        total = (await self._session.execute(select(func.count()).select_from(base.subquery()))).scalar_one()
+        result = await self._session.execute(base.order_by(UserProfile.username).offset(offset).limit(limit))
         return list(result.scalars().all()), total
 
-    async def get_membership(
-        self, profile_id: uuid.UUID, org_id: uuid.UUID
-    ) -> UserOrgMembership | None:
+    async def get_membership(self, profile_id: uuid.UUID, org_id: uuid.UUID) -> UserOrgMembership | None:
         result = await self._session.execute(
             select(UserOrgMembership)
             .where(
