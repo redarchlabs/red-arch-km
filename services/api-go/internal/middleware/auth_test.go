@@ -469,3 +469,79 @@ func TestClerk_RejectsAlgNone(t *testing.T) {
 		t.Errorf("alg:none: status = %d, want 401", w.Code)
 	}
 }
+
+// --- Fail-closed identity contract (QA HIGH-1) ------------------------------
+
+// A validly-signed, correct-issuer, azp-valid token with NO `sub` must be
+// rejected — auth must never grant an empty identity.
+func TestClerk_RejectsMissingSub(t *testing.T) {
+	srv, s := newMockJWKS(t)
+	mw := NewJWTMiddleware(JWTConfig{
+		ClerkIssuer:     srv.URL,
+		ClerkAllowedAZP: []string{"http://localhost:3000"},
+	})
+
+	c := clerkClaims(srv.URL)
+	delete(c, jwt.SubjectKey)
+	w, _ := serve(mw, s.sign(t, c))
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("missing sub: status = %d, want 401", w.Code)
+	}
+}
+
+func TestClerk_RejectsEmptyAZP(t *testing.T) {
+	srv, s := newMockJWKS(t)
+	mw := NewJWTMiddleware(JWTConfig{
+		ClerkIssuer:     srv.URL,
+		ClerkAllowedAZP: []string{"http://localhost:3000"},
+	})
+
+	c := clerkClaims(srv.URL)
+	c["azp"] = ""
+	w, _ := serve(mw, s.sign(t, c))
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("empty azp: status = %d, want 401", w.Code)
+	}
+}
+
+// --- Cross-provider key confusion (QA MEDIUM-2) -----------------------------
+// Two DISTINCT mock JWKS (distinct keys). A token claiming the Clerk issuer but
+// signed by the Keycloak key must 401 — each verifier reads ONLY its own keyset.
+func TestDualVerify_RejectsCrossProviderKey(t *testing.T) {
+	srvKC, sKC := newMockJWKS(t)
+	srvClerk, sClerk := newMockJWKS(t)
+
+	mw := NewJWTMiddleware(JWTConfig{
+		KeycloakURL:      srvKC.URL,
+		KeycloakRealm:    "test",
+		KeycloakClientID: "redarch-km",
+		ClerkIssuer:      srvClerk.URL,
+		ClerkAllowedAZP:  []string{"http://localhost:3000"},
+	})
+
+	// iss = Clerk, but signed with the Keycloak key → Clerk verifier's keyset
+	// (srvClerk) has no matching key → signature fails → 401.
+	if w, _ := serve(mw, sKC.sign(t, clerkClaims(srvClerk.URL))); w.Code != http.StatusUnauthorized {
+		t.Errorf("cross-provider key: status = %d, want 401", w.Code)
+	}
+	// Sanity: a token properly signed by the Clerk key still authenticates.
+	if w, _ := serve(mw, sClerk.sign(t, clerkClaims(srvClerk.URL))); w.Code != http.StatusOK {
+		t.Errorf("legit clerk token: status = %d, want 200", w.Code)
+	}
+}
+
+// --- Malformed bearer reaches the routing parse first (QA LOW-3) -------------
+func TestMalformedBearer_RejectedNotPanic(t *testing.T) {
+	srv, _ := newMockJWKS(t)
+	mw := NewJWTMiddleware(JWTConfig{
+		ClerkIssuer:     srv.URL,
+		ClerkAllowedAZP: []string{"http://localhost:3000"},
+	})
+
+	for _, bad := range []string{"not.a.jwt", "a.b", "garbage", "...", "ZZZ.ZZZ.ZZZ"} {
+		w, _ := serve(mw, bad)
+		if w.Code != http.StatusUnauthorized {
+			t.Errorf("malformed %q: status = %d, want 401 (no panic)", bad, w.Code)
+		}
+	}
+}

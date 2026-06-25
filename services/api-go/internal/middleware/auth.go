@@ -144,8 +144,12 @@ func (m *JWTMiddleware) initCache(ctx context.Context) error {
 		c := jwk.NewCache(ctx)
 		for _, u := range m.jwksURLs {
 			if err := c.Register(u, jwk.WithMinRefreshInterval(m.cacheTTL)); err != nil {
-				initErr = err
-				return
+				// Non-fatal: a URL that fails to register simply yields a 401 on
+				// Get (fail-closed). Don't abort — that would leave m.cache
+				// unassigned and, since cacheOnce won't re-run, brick every
+				// later request with a zero-value cache.
+				slog.Warn("JWKS register failed", "url", u, "error", err)
+				continue
 			}
 			if _, err := c.Refresh(ctx, u); err != nil {
 				slog.Warn("initial JWKS fetch failed", "url", u, "error", err)
@@ -229,7 +233,15 @@ func (m *JWTMiddleware) validateToken(ctx context.Context, tokenString string) (
 		}
 	}
 
-	return extractClaims(token), nil
+	// Fail closed if the token carries no subject — auth must never grant an
+	// empty identity (downstream provisioning keys on `sub`; a misconfigured
+	// Clerk JWT template could omit it). Mirrors the Python get_current_user
+	// "Token missing subject claim" guard.
+	claims := extractClaims(token)
+	if claims.Sub == "" {
+		return UserClaims{}, errors.New("token missing subject claim")
+	}
+	return claims, nil
 }
 
 // checkAuthorizedParty enforces the Clerk `azp` allowlist (G-AZP).
