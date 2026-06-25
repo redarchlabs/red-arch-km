@@ -142,7 +142,10 @@ func NewJWTMiddleware(cfg JWTConfig) *JWTMiddleware {
 func (m *JWTMiddleware) initCache(ctx context.Context) error {
 	var initErr error
 	m.cacheOnce.Do(func() {
-		c := jwk.NewCache(ctx)
+		// Use context.Background() so the cache's background-refresh goroutine
+		// is not tied to the first request's context (which is cancelled when
+		// that request completes, killing all subsequent JWKS refreshes).
+		c := jwk.NewCache(context.Background())
 		for _, u := range m.jwksURLs {
 			if err := c.Register(u, jwk.WithMinRefreshInterval(m.cacheTTL)); err != nil {
 				// Non-fatal: a URL that fails to register simply yields a 401 on
