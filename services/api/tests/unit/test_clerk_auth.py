@@ -113,8 +113,25 @@ async def test_rejects_wrong_issuer(rsa_key: rsa.RSAPrivateKey) -> None:
         await validate_clerk_token(_sign(rsa_key, iss="https://attacker.example.com"), ISSUER, ALLOWED)
 
 
+async def test_rejects_future_nbf(rsa_key: rsa.RSAPrivateKey) -> None:
+    with pytest.raises(JWTError):
+        await validate_clerk_token(_sign(rsa_key, nbf=int(time.time()) + 3600), ISSUER, ALLOWED)
+
+
 async def test_rejects_bad_signature(rsa_key: rsa.RSAPrivateKey) -> None:
     # Sign with a different key whose public half is NOT in the JWKS.
     other = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     with pytest.raises(JWTError):
         await validate_clerk_token(_sign(other), ISSUER, ALLOWED)
+
+
+def test_config_requires_azp_when_clerk_enabled() -> None:
+    """Mirrors Go's ErrMissingClerkAllowedAZP fail-fast (security LOW-1)."""
+    from api.config import Settings
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        Settings(secret_key="x", clerk_jwt_issuer=ISSUER, clerk_allowed_azp="")
+    # With an allowlist it constructs fine.
+    s = Settings(secret_key="x", clerk_jwt_issuer=ISSUER, clerk_allowed_azp="http://localhost:3000")
+    assert s.clerk_allowed_azp_list == ["http://localhost:3000"]
