@@ -25,20 +25,14 @@ class BrainAPISettings(BaseSettings):
     debug: bool = Field(default=False)
 
     # Shared infrastructure (unprefixed)
-    qdrant_url: str = Field(
-        default="http://localhost:6333", validation_alias="QDRANT_URL"
-    )
+    qdrant_url: str = Field(default="http://localhost:6333", validation_alias="QDRANT_URL")
     qdrant_api_key: str = Field(default="", validation_alias="QDRANT_API_KEY")
-    neo4j_uri: str = Field(
-        default="bolt://localhost:7687", validation_alias="NEO4J_URI"
-    )
+    neo4j_uri: str = Field(default="bolt://localhost:7687", validation_alias="NEO4J_URI")
     neo4j_user: str = Field(default="neo4j", validation_alias="NEO4J_USER")
     neo4j_password: str = Field(default="", validation_alias="NEO4J_PASSWORD")
 
     openai_api_key: str = Field(default="", validation_alias="OPENAI_API_KEY")
-    openai_chat_model: str = Field(
-        default="gpt-5-mini", validation_alias="OPENAI_CHAT_MODEL"
-    )
+    openai_chat_model: str = Field(default="gpt-5-mini", validation_alias="OPENAI_CHAT_MODEL")
     openai_embedding_model: str = Field(
         default="text-embedding-3-small",
         validation_alias="OPENAI_EMBEDDING_MODEL",

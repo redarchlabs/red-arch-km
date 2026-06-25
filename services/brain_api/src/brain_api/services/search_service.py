@@ -70,10 +70,7 @@ class SearchService:
                 {"tenant_id": tenant_id, "status": status},
             )
         return {
-            "hits": [
-                {"id": r.id, "score": r.score, "payload": r.payload}
-                for r in results
-            ],
+            "hits": [{"id": r.id, "score": r.score, "payload": r.payload} for r in results],
             "total": len(results),
         }
 
@@ -243,9 +240,7 @@ class SearchService:
         if graph_context:
             parts.append("\n### Knowledge Graph Relationships\n")
             for triplet in graph_context:
-                parts.append(
-                    f"- {triplet.get('subj', '')} → {triplet.get('pred', '')} → {triplet.get('obj', '')}"
-                )
+                parts.append(f"- {triplet.get('subj', '')} → {triplet.get('pred', '')} → {triplet.get('obj', '')}")
 
         return "\n".join(parts)
 

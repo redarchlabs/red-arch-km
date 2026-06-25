@@ -52,9 +52,7 @@ def create_app() -> FastAPI:
     # Observability must be wired before startup — the Prometheus
     # instrumentator adds middleware, which Starlette forbids once the
     # app has entered the lifespan context.
-    setup_observability(
-        app, service_name="red-arch-km-brain-api", log_level=settings.log_level
-    )
+    setup_observability(app, service_name="red-arch-km-brain-api", log_level=settings.log_level)
 
     app.include_router(health.router)
     app.include_router(ingest.router, prefix="/api", tags=["ingest"])

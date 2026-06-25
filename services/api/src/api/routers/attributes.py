@@ -28,12 +28,8 @@ async def list_attributes(
     pagination: Annotated[PaginationParams, Depends()],
 ) -> PaginatedResponse[AttributeDefinitionRead]:
     repo = AttributeDefinitionRepository(session)
-    items, total = await repo.list_all(
-        offset=pagination.offset, limit=pagination.page_size
-    )
-    return make_page(
-        [AttributeDefinitionRead.model_validate(i) for i in items], total, pagination
-    )
+    items, total = await repo.list_all(offset=pagination.offset, limit=pagination.page_size)
+    return make_page([AttributeDefinitionRead.model_validate(i) for i in items], total, pagination)
 
 
 @router.get("/{attribute_id}", response_model=AttributeDefinitionRead)
@@ -49,9 +45,7 @@ async def get_attribute(
     return AttributeDefinitionRead.model_validate(instance)
 
 
-@router.post(
-    "/", response_model=AttributeDefinitionRead, status_code=status.HTTP_201_CREATED
-)
+@router.post("/", response_model=AttributeDefinitionRead, status_code=status.HTTP_201_CREATED)
 async def create_attribute(
     body: AttributeDefinitionCreate,
     ctx: Annotated[OrgContext, Depends(require_org_admin)],

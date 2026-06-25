@@ -20,8 +20,7 @@ from openai import OpenAI
 logger = logging.getLogger(__name__)
 
 _SUMMARIZE_PROMPT = (
-    "Summarize the following text concisely, preserving key facts and entities. "
-    "Output only the summary, no preamble."
+    "Summarize the following text concisely, preserving key facts and entities. Output only the summary, no preamble."
 )
 
 _GROUP_SUMMARY_PROMPT = (
@@ -101,17 +100,14 @@ class ChunkSummarizer:
 
         level = chunk_summaries
         for depth in range(self._max_depth):
-            groups = [
-                level[i : i + self._group_size]
-                for i in range(0, len(level), self._group_size)
-            ]
+            groups = [level[i : i + self._group_size] for i in range(0, len(level), self._group_size)]
             logger.debug(
                 "Hierarchical summary depth=%d: %d items -> %d groups",
-                depth, len(level), len(groups),
+                depth,
+                len(level),
+                len(groups),
             )
-            with concurrent.futures.ThreadPoolExecutor(
-                max_workers=self._max_workers
-            ) as exe:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=self._max_workers) as exe:
                 level = list(exe.map(self._summarize_group, groups))
             if len(level) <= 1:
                 break

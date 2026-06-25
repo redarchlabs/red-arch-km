@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import pytest
-from pydantic import ValidationError
-
 from api.schemas.attribute import (
     AttributeDefinitionCreate,
     AttributeDefinitionUpdate,
 )
+from pydantic import ValidationError
 
 
 class TestAttributeCreate:
@@ -20,9 +19,7 @@ class TestAttributeCreate:
 
     def test_picklist_requires_options(self) -> None:
         with pytest.raises(ValidationError, match="at least one option"):
-            AttributeDefinitionCreate(
-                name="Quality", slug="quality", attribute_type="picklist"
-            )
+            AttributeDefinitionCreate(name="Quality", slug="quality", attribute_type="picklist")
 
     def test_picklist_with_options_ok(self) -> None:
         attr = AttributeDefinitionCreate(
