@@ -31,12 +31,8 @@ class Settings(BaseSettings):
 
     # Shared infrastructure (read from unprefixed env vars)
     database_url: str = Field(default="", validation_alias="DATABASE_URL")
-    redis_url: str = Field(
-        default="redis://localhost:6379/0", validation_alias="REDIS_URL"
-    )
-    celery_broker_url: str = Field(
-        default="redis://localhost:6379/0", validation_alias="CELERY_BROKER_URL"
-    )
+    redis_url: str = Field(default="redis://localhost:6379/0", validation_alias="REDIS_URL")
+    celery_broker_url: str = Field(default="redis://localhost:6379/0", validation_alias="CELERY_BROKER_URL")
 
     # Brain API (url is per-API, key is shared secret)
     brain_api_url: str = Field(default="http://localhost:8020")
@@ -46,12 +42,19 @@ class Settings(BaseSettings):
     # Separate from brain_api_key so compromise of one doesn't grant the other.
     internal_api_key: str = Field(default="", validation_alias="INTERNAL_API_KEY")
 
-    # Keycloak (shared identity provider config)
+    # Keycloak (legacy IdP — retained during the Clerk coexistence window, D4)
     keycloak_url: str = Field(default="", validation_alias="KEYCLOAK_URL")
     keycloak_realm: str = Field(default="redarch", validation_alias="KEYCLOAK_REALM")
-    keycloak_client_id: str = Field(
-        default="redarch-km", validation_alias="KEYCLOAK_CLIENT_ID"
-    )
+    keycloak_client_id: str = Field(default="redarch-km", validation_alias="KEYCLOAK_CLIENT_ID")
+
+    # Clerk (target IdP). Backends dual-verify by token `iss`: a token routes to
+    # Keycloak OR Clerk. clerk_jwt_issuer = Clerk Frontend API URL (the `iss`).
+    # CLERK_ALLOWED_AZP is comma-separated to share ONE env format with the Go
+    # verifier; see clerk_allowed_azp_list. clerk_secret_key is reserved for
+    # Backend-API provisioning (not needed for JWKS verify).
+    clerk_jwt_issuer: str = Field(default="", validation_alias="CLERK_JWT_ISSUER")
+    clerk_allowed_azp: str = Field(default="", validation_alias="CLERK_ALLOWED_AZP")
+    clerk_secret_key: SecretStr = Field(default=SecretStr(""), validation_alias="CLERK_SECRET_KEY")
 
     # Observability (shared)
     log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
@@ -60,14 +63,18 @@ class Settings(BaseSettings):
     e2e_test_mode: bool = Field(
         default=False,
         description=(
-            "When true, API accepts an X-Test-User header in place of Keycloak JWTs. "
-            "NEVER enable in production."
+            "When true, API accepts an X-Test-User header in place of Keycloak JWTs. NEVER enable in production."
         ),
     )
     e2e_test_secret: SecretStr = Field(
         default=SecretStr(""),
         description="Shared secret required alongside X-Test-User; prevents abuse.",
     )
+
+    @property
+    def clerk_allowed_azp_list(self) -> list[str]:
+        """Parse CLERK_ALLOWED_AZP into a trimmed list (mirrors Go comma split)."""
+        return [p.strip() for p in self.clerk_allowed_azp.split(",") if p.strip()]
 
 
 @lru_cache(maxsize=1)
