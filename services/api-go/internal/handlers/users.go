@@ -6,10 +6,12 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/redarchlabs/red-arch-km-2/packages/shared/httputil"
@@ -18,24 +20,49 @@ import (
 	"github.com/redarchlabs/red-arch-km-2/services/api-go/internal/repository"
 )
 
-// errEmailTakenUnverified is returned when first-login provisioning finds the
-// IdP email already bound to an existing profile but the IdP has NOT verified
-// it — we refuse rather than relink (anti-takeover, AC-4.3).
-var errEmailTakenUnverified = errors.New("email belongs to an existing account but is unverified")
+// First-login provisioning refusals (all surfaced as a single generic 403 to
+// avoid an account-existence/email-enumeration oracle):
+var (
+	// errEmailTakenUnverified: the IdP email matches an existing profile but the
+	// IdP has NOT verified it — refuse rather than relink (anti-takeover, AC-4.3).
+	errEmailTakenUnverified = errors.New("email matches an existing account but is unverified")
+	// errEmailBoundToOtherAccount: the verified email matches a profile already
+	// bound to a Clerk subject (e.g. an email/mailbox reassigned to a new hire).
+	// Relinking would transfer memberships + access_mask to a different person,
+	// so refuse — relink is confined to the legacy Keycloak→Clerk remap (M-1).
+	errEmailBoundToOtherAccount = errors.New("email is bound to a different account")
+	// errEmailConflict: a fresh provision would violate the email UNIQUE
+	// constraint (case-variant / race) — refuse cleanly instead of a 500.
+	errEmailConflict = errors.New("email already in use")
+)
+
+// isClerkSubject reports whether an auth_subject was issued by Clerk (user_…).
+// Legacy Keycloak subjects are UUIDs; relink only rebinds those.
+func isClerkSubject(sub string) bool {
+	return strings.HasPrefix(sub, "user_")
+}
+
+// isUniqueViolation reports whether err is a Postgres unique-constraint
+// violation (SQLSTATE 23505).
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+}
 
 // userProvisioner is the subset of repository.Queries that first-login
 // provisioning needs; an interface so the relink branches are unit-testable
 // without a database. *repository.Queries satisfies it.
 type userProvisioner interface {
-	GetUserProfileByEmail(ctx context.Context, email string) (repository.UserProfile, error)
+	GetUserProfileByEmailCI(ctx context.Context, email string) (repository.UserProfile, error)
 	RelinkAuthSubject(ctx context.Context, arg repository.RelinkAuthSubjectParams) (repository.UserProfile, error)
 	UpsertUserProfile(ctx context.Context, arg repository.UpsertUserProfileParams) (repository.UserProfile, error)
 }
 
 // provisionOrRelinkUser resolves the profile on first login (D3 user remap):
-//   - verified IdP email matching an existing profile → rebind that profile's
+//   - verified IdP email matching a LEGACY (non-Clerk) profile → rebind its
 //     auth_subject to the new subject (relink; memberships/access_mask preserved);
-//   - email matches but is NOT verified → refuse (errEmailTakenUnverified);
+//   - email matches but is NOT verified → refuse (anti-takeover, AC-4.3);
+//   - email matches a profile already bound to a Clerk subject → refuse (M-1);
 //   - no email match → provision a brand-new profile (is_site_admin=false, no
 //     membership — unchanged first-login semantics, AC-4.4).
 func provisionOrRelinkUser(
@@ -44,11 +71,16 @@ func provisionOrRelinkUser(
 	claims middleware.UserClaims,
 ) (repository.UserProfile, error) {
 	if claims.Email != "" {
-		existing, err := q.GetUserProfileByEmail(ctx, claims.Email)
+		existing, err := q.GetUserProfileByEmailCI(ctx, claims.Email)
 		switch {
 		case err == nil:
 			if !claims.EmailVerified {
 				return repository.UserProfile{}, errEmailTakenUnverified
+			}
+			// M-1: confine relink to the legacy migration — never transfer a
+			// profile already bound to another Clerk user.
+			if isClerkSubject(existing.AuthSubject) {
+				return repository.UserProfile{}, errEmailBoundToOtherAccount
 			}
 			relinked, rerr := q.RelinkAuthSubject(ctx, repository.RelinkAuthSubjectParams{
 				ID:          existing.ID,
@@ -57,8 +89,10 @@ func provisionOrRelinkUser(
 			if rerr != nil {
 				return repository.UserProfile{}, rerr
 			}
-			slog.Info("relinked user by verified email",
-				"sub", claims.Sub,
+			// Auditable security event: record old→new subject + the matched id.
+			slog.Info("relinked user by verified email (legacy -> clerk)",
+				"old_sub", existing.AuthSubject,
+				"new_sub", claims.Sub,
 				"profile_id", FromPgUUID(existing.ID).String(),
 			)
 			return relinked, nil
@@ -69,7 +103,7 @@ func provisionOrRelinkUser(
 		}
 	}
 
-	return q.UpsertUserProfile(ctx, repository.UpsertUserProfileParams{
+	profile, err := q.UpsertUserProfile(ctx, repository.UpsertUserProfileParams{
 		ID:          ToPgUUID(uuid.New()),
 		AuthSubject: claims.Sub,
 		Username:    claims.PreferredUsername,
@@ -77,6 +111,12 @@ func provisionOrRelinkUser(
 		Description: pgtype.Text{Valid: false},
 		IsSiteAdmin: pgtype.Bool{Bool: false, Valid: true},
 	})
+	if err != nil && isUniqueViolation(err) {
+		// Email/username collided (case-variant or race) — refuse cleanly so the
+		// caller returns 403, not a 500.
+		return repository.UserProfile{}, errEmailConflict
+	}
+	return profile, err
 }
 
 // UserResponse represents a user profile in API responses.
@@ -163,15 +203,20 @@ func (h *UserHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		profile, err = provisionOrRelinkUser(ctx, queries, claims)
 		if err != nil {
-			if errors.Is(err, errEmailTakenUnverified) {
-				slog.Warn("provision refused: email already in use and unverified",
-					"sub", claims.Sub)
-				httputil.Forbidden(w, "This email belongs to an existing account. Verify your email to continue.")
+			switch {
+			case errors.Is(err, errEmailTakenUnverified),
+				errors.Is(err, errEmailBoundToOtherAccount),
+				errors.Is(err, errEmailConflict):
+				// Generic message — do not confirm whether the email exists
+				// (avoids an account-existence/enumeration oracle).
+				slog.Warn("provision refused", "sub", claims.Sub, "reason", err.Error())
+				httputil.Forbidden(w, "We couldn't complete sign-in for this account. Verify your email or contact your administrator.")
+				return
+			default:
+				slog.Error("provision user", "error", err)
+				httputil.InternalError(w, "Failed to provision user")
 				return
 			}
-			slog.Error("provision user", "error", err)
-			httputil.InternalError(w, "Failed to provision user")
-			return
 		}
 	}
 

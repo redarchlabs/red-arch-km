@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/redarchlabs/red-arch-km-2/services/api-go/internal/middleware"
 	"github.com/redarchlabs/red-arch-km-2/services/api-go/internal/repository"
@@ -29,7 +30,7 @@ type fakeProvisioner struct {
 	upsertArg     repository.UpsertUserProfileParams
 }
 
-func (f *fakeProvisioner) GetUserProfileByEmail(_ context.Context, _ string) (repository.UserProfile, error) {
+func (f *fakeProvisioner) GetUserProfileByEmailCI(_ context.Context, _ string) (repository.UserProfile, error) {
 	f.byEmailCalled = true
 	return f.byEmail, f.byEmailErr
 }
@@ -50,7 +51,8 @@ func (f *fakeProvisioner) UpsertUserProfile(_ context.Context, arg repository.Up
 func TestProvisionOrRelink_VerifiedEmailRelinks(t *testing.T) {
 	existingID := ToPgUUID(uuid.New())
 	f := &fakeProvisioner{
-		byEmail:  repository.UserProfile{ID: existingID, Email: "alice@example.com"},
+		// Existing profile holds a LEGACY (Keycloak UUID) subject — relinkable.
+		byEmail:  repository.UserProfile{ID: existingID, Email: "alice@example.com", AuthSubject: "f47ac10b-58cc-4372-a567-0e02b2c3d479"},
 		relinked: repository.UserProfile{ID: existingID, AuthSubject: "user_clerk", Email: "alice@example.com"},
 	}
 	claims := middleware.UserClaims{Sub: "user_clerk", Email: "alice@example.com", EmailVerified: true}
@@ -90,6 +92,42 @@ func TestProvisionOrRelink_UnverifiedEmailRefused(t *testing.T) {
 	}
 	if f.upsertCalled {
 		t.Error("must NOT provision over an existing email")
+	}
+}
+
+// M-1 (security): a verified email matching a profile already bound to a CLERK
+// subject (e.g. a reassigned mailbox) must be refused, never relinked — relink
+// is confined to the legacy Keycloak→Clerk remap.
+func TestProvisionOrRelink_VerifiedEmailBoundToClerkRefused(t *testing.T) {
+	f := &fakeProvisioner{
+		byEmail: repository.UserProfile{ID: ToPgUUID(uuid.New()), Email: "reused@example.com", AuthSubject: "user_existing"},
+	}
+	claims := middleware.UserClaims{Sub: "user_newhire", Email: "reused@example.com", EmailVerified: true}
+
+	_, err := provisionOrRelinkUser(context.Background(), f, claims)
+	if !errors.Is(err, errEmailBoundToOtherAccount) {
+		t.Fatalf("err = %v, want errEmailBoundToOtherAccount", err)
+	}
+	if f.relinkCalled {
+		t.Error("must NOT relink a profile already bound to another Clerk user")
+	}
+	if f.upsertCalled {
+		t.Error("must NOT provision over an existing email")
+	}
+}
+
+// #2 (availability): a unique-constraint violation on the fresh-provision INSERT
+// (case-variant email race) is refused cleanly, not surfaced as a 500.
+func TestProvisionOrRelink_UniqueViolationRefused(t *testing.T) {
+	f := &fakeProvisioner{
+		byEmailErr: pgx.ErrNoRows,
+		upsertErr:  &pgconn.PgError{Code: "23505"},
+	}
+	claims := middleware.UserClaims{Sub: "user_x", Email: "x@example.com", EmailVerified: true}
+
+	_, err := provisionOrRelinkUser(context.Background(), f, claims)
+	if !errors.Is(err, errEmailConflict) {
+		t.Fatalf("err = %v, want errEmailConflict", err)
 	}
 }
 

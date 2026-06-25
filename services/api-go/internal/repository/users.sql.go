@@ -102,12 +102,16 @@ func (q *Queries) GetUserProfileByAuthSubject(ctx context.Context, authSubject s
 	return i, err
 }
 
-const getUserProfileByEmail = `-- name: GetUserProfileByEmail :one
-SELECT id, auth_subject, username, email, description, is_site_admin, created_at, updated_at FROM user_profiles WHERE email = $1
+const getUserProfileByEmailCI = `-- name: GetUserProfileByEmailCI :one
+SELECT id, auth_subject, username, email, description, is_site_admin, created_at, updated_at FROM user_profiles WHERE LOWER(email) = LOWER($1)
 `
 
-func (q *Queries) GetUserProfileByEmail(ctx context.Context, email string) (UserProfile, error) {
-	row := q.db.QueryRow(ctx, getUserProfileByEmail, email)
+// Case-insensitive email lookup for the verified-email relink: Keycloak-stored
+// emails and Clerk-supplied emails can differ only by case, and an exact match
+// would miss → fresh provision → email UNIQUE violation (lockout). Email is
+// UNIQUE so at most one row matches in practice.
+func (q *Queries) GetUserProfileByEmailCI(ctx context.Context, lower string) (UserProfile, error) {
+	row := q.db.QueryRow(ctx, getUserProfileByEmailCI, lower)
 	var i UserProfile
 	err := row.Scan(
 		&i.ID,
