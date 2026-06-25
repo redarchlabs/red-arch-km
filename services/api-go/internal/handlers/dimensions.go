@@ -122,7 +122,7 @@ func (h *DimensionHandler) requireOrgAdminForDimension(ctx context.Context, keyc
 	defer conn.Release()
 
 	queries := repository.New(conn)
-	profile, err := queries.GetUserProfileByKeycloakSub(ctx, keycloakSub)
+	profile, err := queries.GetUserProfileByAuthSubject(ctx, keycloakSub)
 	if err != nil {
 		return err
 	}

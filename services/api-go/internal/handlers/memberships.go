@@ -468,7 +468,7 @@ func (h *MembershipHandler) requireOrgAdmin(ctx context.Context, queries *reposi
 	defer conn.Release()
 
 	profileQueries := repository.New(conn)
-	profile, err := profileQueries.GetUserProfileByKeycloakSub(ctx, keycloakSub)
+	profile, err := profileQueries.GetUserProfileByAuthSubject(ctx, keycloakSub)
 	if err != nil {
 		return err
 	}
