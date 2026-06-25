@@ -4,9 +4,12 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -402,5 +405,67 @@ func TestClerk_JWKSOutage_ReturnsUnauthorizedNotPanic(t *testing.T) {
 	w, _ := serve(mw, token)
 	if w.Code != http.StatusUnauthorized {
 		t.Errorf("jwks outage: status = %d, want 401 (no panic)", w.Code)
+	}
+}
+
+// --- Algorithm-confusion vectors (security-analyst LOW-1) --------------------
+// The verifier pins RS256 via the JWKS keys' published `alg`; these assert the
+// two classic downgrade attacks fail closed.
+
+// An HS256 token signed with the RSA public-key bytes as the HMAC secret (the
+// canonical RS256→HS256 confusion) must be rejected — the keyset is RS256-only.
+func TestClerk_RejectsHS256AlgConfusion(t *testing.T) {
+	srv, s := newMockJWKS(t)
+	mw := NewJWTMiddleware(JWTConfig{
+		ClerkIssuer:     srv.URL,
+		ClerkAllowedAZP: []string{"http://localhost:3000"},
+	})
+
+	// What an attacker has: the public key (published in the JWKS), used as the
+	// symmetric HMAC secret.
+	pubDER, err := x509.MarshalPKIXPublicKey(&s.priv.PublicKey)
+	if err != nil {
+		t.Fatalf("marshal public key: %v", err)
+	}
+	tok := jwt.New()
+	for k, v := range clerkClaims(srv.URL) {
+		_ = tok.Set(k, v)
+	}
+	forged, err := jwt.Sign(tok, jwt.WithKey(jwa.HS256, pubDER))
+	if err != nil {
+		t.Fatalf("sign HS256: %v", err)
+	}
+
+	w, _ := serve(mw, string(forged))
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("HS256 alg-confusion: status = %d, want 401", w.Code)
+	}
+}
+
+// An unsigned (alg:none) token must be rejected.
+func TestClerk_RejectsAlgNone(t *testing.T) {
+	srv, s := newMockJWKS(t)
+	_ = s
+	mw := NewJWTMiddleware(JWTConfig{
+		ClerkIssuer:     srv.URL,
+		ClerkAllowedAZP: []string{"http://localhost:3000"},
+	})
+
+	b64 := func(v any) string {
+		raw, _ := json.Marshal(v)
+		return base64.RawURLEncoding.EncodeToString(raw)
+	}
+	header := b64(map[string]string{"alg": "none", "typ": "JWT"})
+	payload := b64(map[string]any{
+		"sub": "user_2abc",
+		"iss": srv.URL,
+		"azp": "http://localhost:3000",
+		"exp": time.Now().Add(time.Hour).Unix(),
+	})
+	noneToken := strings.Join([]string{header, payload, ""}, ".")
+
+	w, _ := serve(mw, noneToken)
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("alg:none: status = %d, want 401", w.Code)
 	}
 }
