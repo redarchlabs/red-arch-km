@@ -6,13 +6,12 @@ import uuid
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from api.models.chat import ChatSession
 from api.models.org import Org
 from api.models.user import UserProfile
 from api.repositories.chat import ChatRepository
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 @pytest_asyncio.fixture
@@ -61,9 +60,7 @@ async def user_b(admin_session: AsyncSession) -> UserProfile:
 
 class TestChatSessionRepository:
     @pytest.mark.asyncio
-    async def test_create_session(
-        self, session: AsyncSession, org_a: Org, user_a: UserProfile
-    ) -> None:
+    async def test_create_session(self, session: AsyncSession, org_a: Org, user_a: UserProfile) -> None:
         # Set tenant context
         await session.execute(
             text("SELECT set_config('app.current_tenant_id', :tid, true)"),
@@ -84,9 +81,7 @@ class TestChatSessionRepository:
         assert chat.deleted is False
 
     @pytest.mark.asyncio
-    async def test_list_for_user(
-        self, session: AsyncSession, org_a: Org, user_a: UserProfile
-    ) -> None:
+    async def test_list_for_user(self, session: AsyncSession, org_a: Org, user_a: UserProfile) -> None:
         await session.execute(
             text("SELECT set_config('app.current_tenant_id', :tid, true)"),
             {"tid": str(org_a.id)},
@@ -107,9 +102,7 @@ class TestChatSessionRepository:
         assert len(sessions) == 3
 
     @pytest.mark.asyncio
-    async def test_soft_delete(
-        self, session: AsyncSession, org_a: Org, user_a: UserProfile
-    ) -> None:
+    async def test_soft_delete(self, session: AsyncSession, org_a: Org, user_a: UserProfile) -> None:
         await session.execute(
             text("SELECT set_config('app.current_tenant_id', :tid, true)"),
             {"tid": str(org_a.id)},
@@ -134,9 +127,7 @@ class TestChatSessionRepository:
         assert total == 0
 
     @pytest.mark.asyncio
-    async def test_append_messages(
-        self, session: AsyncSession, org_a: Org, user_a: UserProfile
-    ) -> None:
+    async def test_append_messages(self, session: AsyncSession, org_a: Org, user_a: UserProfile) -> None:
         await session.execute(
             text("SELECT set_config('app.current_tenant_id', :tid, true)"),
             {"tid": str(org_a.id)},
@@ -231,9 +222,7 @@ class TestChatAskEndpoint:
     """Integration tests for the /sessions/{id}/ask endpoint logic."""
 
     @pytest.mark.asyncio
-    async def test_ask_session_not_found(
-        self, session: AsyncSession, org_a: Org, user_a: UserProfile
-    ) -> None:
+    async def test_ask_session_not_found(self, session: AsyncSession, org_a: Org, user_a: UserProfile) -> None:
         """Asking on a nonexistent session should fail to find it."""
         await session.execute(
             text("SELECT set_config('app.current_tenant_id', :tid, true)"),
@@ -308,9 +297,7 @@ class TestChatAskEndpoint:
             "role": "assistant",
             "content": "According to the company policy...",
             "timestamp": "2026-06-14T12:00:01Z",
-            "sources": [
-                {"document_key": "policy-2026", "title": "Policy Handbook", "chunk_order": 2}
-            ],
+            "sources": [{"document_key": "policy-2026", "title": "Policy Handbook", "chunk_order": 2}],
         }
 
         updated = await repo.append_messages(chat.id, [user_message, assistant_message])

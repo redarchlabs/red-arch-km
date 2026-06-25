@@ -6,7 +6,7 @@ import json
 import logging
 import uuid
 from collections.abc import AsyncGenerator
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -148,9 +148,7 @@ async def ask(
     if body.context_filters and body.context_filters.tag_ids:
         from api.models.document import Tag
 
-        tag_result = await session.execute(
-            select(Tag.name).where(Tag.id.in_(body.context_filters.tag_ids))
-        )
+        tag_result = await session.execute(select(Tag.name).where(Tag.id.in_(body.context_filters.tag_ids)))
         tags = [row[0] for row in tag_result.all()]
 
     # Create brain API client
@@ -159,7 +157,7 @@ async def ask(
     # Prepare messages to append after streaming
     user_message_id = uuid.uuid4()
     assistant_message_id = uuid.uuid4()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     async def stream_and_persist() -> AsyncGenerator[bytes, None]:
         """Stream from brain-api and persist messages after completion."""
@@ -215,7 +213,7 @@ async def ask(
                     "id": str(assistant_message_id),
                     "role": "assistant",
                     "content": accumulated_content,
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "timestamp": datetime.now(UTC).isoformat(),
                     "sources": sources,
                 },
             ]
