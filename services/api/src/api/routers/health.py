@@ -12,5 +12,7 @@ async def healthz() -> dict[str, str]:
 
 @router.get("/readyz")
 async def readyz() -> dict[str, str]:
-    # TODO: check DB, Redis, brain-api connectivity
+    # NOTE(REDARCH-12): readiness currently returns a static "ok". Wiring real
+    # DB / Redis / brain-api connectivity probes is tracked separately and
+    # intentionally deferred here to avoid changing health-probe behavior.
     return {"status": "ok"}

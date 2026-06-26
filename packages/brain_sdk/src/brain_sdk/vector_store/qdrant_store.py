@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import time
 import uuid
@@ -56,10 +57,8 @@ class QdrantVectorStore:
                 self._ensure_collection(name)
 
     def _recreate_collection(self, name: str) -> None:
-        try:
+        with contextlib.suppress(Exception):
             self._client.delete_collection(collection_name=name)
-        except Exception:  # noqa: BLE001
-            pass
         self._create_collection(name)
 
     def _ensure_collection(self, name: str) -> None:

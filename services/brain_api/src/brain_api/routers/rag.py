@@ -61,7 +61,7 @@ async def ask(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="RAG query failed",
-        )
+        ) from None
 
 
 @router.post("/ask/stream")

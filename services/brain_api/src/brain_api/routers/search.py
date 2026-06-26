@@ -64,7 +64,7 @@ async def vector_search(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Search failed",
-        )
+        ) from None
 
 
 @router.post("/vector-chat")
@@ -89,4 +89,4 @@ async def vector_chat(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Chat failed",
-        )
+        ) from None

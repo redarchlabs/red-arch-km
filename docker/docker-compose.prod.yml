@@ -1,0 +1,292 @@
+# =============================================================================
+# PRODUCTION TEMPLATE — review and adapt before deploying.
+#
+# This is a self-contained production-oriented compose template. It is
+# deliberately separate from docker-compose.yml / docker-compose.infra.yml
+# (which target local development) and is NOT wired into the Makefile.
+#
+# Hardening relative to the dev stack:
+#   * Pinned image tags for every service (override REGISTRY/TAG via env).
+#   * `restart: always` on every service.
+#   * Resource limits + reservations (deploy.resources).
+#   * Strict healthchecks; dependants gate on service_healthy.
+#   * No source bind-mounts, no live reload, no debug mode.
+#   * No dev-only services (pgAdmin, Flower are omitted).
+#   * Secrets supplied via environment / env files; required values use the
+#     `${VAR:?}` form so the stack refuses to start when they are unset.
+#
+# Usage (provide a production .env or export the required variables):
+#   docker compose -f docker/docker-compose.prod.yml --env-file .env.prod up -d
+#
+# Required secrets: POSTGRES_PASSWORD, NEO4J_PASSWORD, API_SECRET_KEY,
+# BRAIN_API_KEY, INTERNAL_API_KEY, OPENAI_API_KEY.
+# =============================================================================
+
+x-restart-policy: &restart-policy
+  restart: always
+
+services:
+  # --- Application services ---------------------------------------------------
+  api:
+    <<: *restart-policy
+    image: ${REGISTRY:-ghcr.io/redarchlabs}/km2-api:${TAG:-2.0.0}
+    build:
+      context: ..
+      dockerfile: docker/api.Dockerfile
+    env_file:
+      - ../.env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-redarch}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-redarch_km}
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      API_DEBUG: "false"
+      API_SECRET_KEY: ${API_SECRET_KEY:?Set API_SECRET_KEY}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/healthz || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1g
+        reservations:
+          cpus: "0.25"
+          memory: 256m
+    networks:
+      - km2
+
+  brain-api:
+    <<: *restart-policy
+    image: ${REGISTRY:-ghcr.io/redarchlabs}/km2-brain-api:${TAG:-2.0.0}
+    build:
+      context: ..
+      dockerfile: docker/brain-api.Dockerfile
+    env_file:
+      - ../.env
+    environment:
+      QDRANT_URL: http://qdrant:6333
+      NEO4J_URI: bolt://neo4j:7687
+      BRAIN_API_KEY: ${BRAIN_API_KEY:?Set BRAIN_API_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?Set OPENAI_API_KEY}
+    depends_on:
+      qdrant:
+        condition: service_started
+      neo4j:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8020/healthz || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1g
+        reservations:
+          cpus: "0.25"
+          memory: 256m
+    networks:
+      - km2
+
+  worker:
+    <<: *restart-policy
+    image: ${REGISTRY:-ghcr.io/redarchlabs}/km2-worker:${TAG:-2.0.0}
+    build:
+      context: ..
+      dockerfile: docker/worker.Dockerfile
+    env_file:
+      - ../.env
+    environment:
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY:?Set INTERNAL_API_KEY}
+      API_URL: http://api:8000
+    command: celery -A worker.celery_app worker --loglevel=info --concurrency=${WORKER_CONCURRENCY:-4}
+    depends_on:
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+      brain-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A worker.celery_app inspect ping -d celery@$$HOSTNAME || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2g
+        reservations:
+          cpus: "0.5"
+          memory: 512m
+    networks:
+      - km2
+
+  celery-beat:
+    <<: *restart-policy
+    image: ${REGISTRY:-ghcr.io/redarchlabs}/km2-worker:${TAG:-2.0.0}
+    build:
+      context: ..
+      dockerfile: docker/worker.Dockerfile
+    env_file:
+      - ../.env
+    environment:
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+    command: celery -A worker.celery_app beat --loglevel=info
+    depends_on:
+      redis:
+        condition: service_healthy
+      worker:
+        condition: service_started
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256m
+    networks:
+      - km2
+
+  ui:
+    <<: *restart-policy
+    image: ${REGISTRY:-ghcr.io/redarchlabs}/km2-ui:${TAG:-2.0.0}
+    build:
+      context: ..
+      dockerfile: docker/ui.Dockerfile
+    ports:
+      - "3000:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    # node:22-alpine doesn't ship curl; use node's own http module instead.
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "node -e \"require('http').get('http://localhost:3000', r => process.exit(r.statusCode < 500 ? 0 : 1)).on('error', () => process.exit(1))\""
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512m
+        reservations:
+          cpus: "0.25"
+          memory: 128m
+    networks:
+      - km2
+
+  # --- Infrastructure ---------------------------------------------------------
+  postgres:
+    <<: *restart-policy
+    image: postgres:18
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-redarch}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-redarch_km}
+    volumes:
+      - postgres-data:/var/lib/postgresql
+      - ./init-db.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-redarch} -d ${POSTGRES_DB:-redarch_km}"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2g
+        reservations:
+          cpus: "0.5"
+          memory: 512m
+    networks:
+      - km2
+
+  redis:
+    <<: *restart-policy
+    image: redis:7.4-alpine
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512m
+    networks:
+      - km2
+
+  qdrant:
+    <<: *restart-policy
+    image: qdrant/qdrant:v1.12.4
+    volumes:
+      - qdrant-data:/qdrant/storage
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 2g
+    networks:
+      - km2
+
+  neo4j:
+    <<: *restart-policy
+    image: neo4j:5.25.1
+    environment:
+      NEO4J_AUTH: ${NEO4J_USER:-neo4j}/${NEO4J_PASSWORD:?Set NEO4J_PASSWORD}
+      NEO4J_PLUGINS: '["apoc"]'
+      NEO4J_dbms_security_procedures_unrestricted: "apoc.*"
+    volumes:
+      - neo4j-data:/data
+      - neo4j-logs:/logs
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u ${NEO4J_USER:-neo4j} -p ${NEO4J_PASSWORD} 'RETURN 1' || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 2g
+    networks:
+      - km2
+
+volumes:
+  postgres-data:
+  redis-data:
+  qdrant-data:
+  neo4j-data:
+  neo4j-logs:
+
+networks:
+  km2:
+    name: km2_network

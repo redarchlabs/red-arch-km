@@ -276,15 +276,19 @@ Move folder to new parent.
 ### Users
 
 #### GET /users
-List users in organization.
+List users in the current organization.
 
-#### GET /users/{user_id}
-Get user details.
+#### GET /users/me
+Get the current user along with their accessible orgs.
+
+#### PATCH /users/me
+Update the current user's own profile (description only). Username and
+email are sourced from Keycloak and cannot be changed here.
 
 ### Memberships
 
-#### GET /memberships
-List org memberships.
+#### GET /memberships/by-user/{user_id}
+Get a user's membership in the current org (or `null` if none exists). Org admin only.
 
 #### POST /memberships
 Create membership (org admin only).
@@ -303,9 +307,6 @@ Create membership (org admin only).
 
 #### PATCH /memberships/{membership_id}
 Update membership.
-
-#### DELETE /memberships/{membership_id}
-Remove membership.
 
 ### Tags
 
@@ -370,18 +371,25 @@ List user's chat sessions.
 #### GET /chat/sessions/{session_id}
 Get chat session with history.
 
-#### POST /chat/sessions/{session_id}/messages
-Send message to chat.
+#### POST /chat/sessions/{session_id}/ask
+Ask a question in a chat session and stream the RAG response.
 
 **Request:**
 ```json
 {
-  "message": "How do I configure the system?",
-  "use_knowledge_graph": true
+  "query": "How do I configure the system?",
+  "context_filters": {
+    "folder_ids": ["uuid"],
+    "tag_ids": ["uuid"],
+    "document_keys": ["string"]
+  }
 }
 ```
 
-**Response (streaming):** Server-Sent Events
+`context_filters` is optional. The knowledge graph is always consulted for
+this endpoint.
+
+**Response (streaming):** Server-Sent Events (`sources`, `graph`, `delta`, `done`, `error` event types)
 
 #### DELETE /chat/sessions/{session_id}
 Delete chat session.

@@ -4,20 +4,14 @@ from __future__ import annotations
 
 import json
 import uuid
-from collections.abc import AsyncIterator
-from datetime import datetime, timezone
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from datetime import UTC, datetime
+from unittest.mock import MagicMock
 
 import pytest
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
-
 from api.auth.dependencies import CurrentUser, OrgContext
 from api.config import Settings
 from api.models.chat import ChatSession
 from api.models.user import UserOrgMembership
-from api.routers.chat import router
 from api.schemas.chat import AskRequest
 
 
@@ -180,7 +174,7 @@ class TestAskEndpointMessagePersistence:
 
     def test_user_message_format(self) -> None:
         """User message should have correct structure."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         user_message = {
             "id": str(uuid.uuid4()),
             "role": "user",
@@ -197,10 +191,8 @@ class TestAskEndpointMessagePersistence:
 
     def test_assistant_message_with_sources(self) -> None:
         """Assistant message should include sources from RAG."""
-        now = datetime.now(timezone.utc)
-        sources = [
-            {"document_key": "policy-2026", "title": "Policy Handbook", "chunk_order": 2}
-        ]
+        now = datetime.now(UTC)
+        sources = [{"document_key": "policy-2026", "title": "Policy Handbook", "chunk_order": 2}]
         assistant_message = {
             "id": str(uuid.uuid4()),
             "role": "assistant",
@@ -215,7 +207,7 @@ class TestAskEndpointMessagePersistence:
 
     def test_message_pair_for_persistence(self) -> None:
         """Both user and assistant messages should be persisted together."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         messages = [
             {
                 "id": str(uuid.uuid4()),
