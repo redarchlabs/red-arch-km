@@ -1,0 +1,59 @@
+# =============================================================================
+# Development override — hot-reload stack.
+#
+# This file is ADDITIVE. It includes the canonical full stack
+# (docker-compose.yml, which in turn includes docker-compose.infra.yml) and
+# layers development conveniences on top of the Python services:
+#   * source bind-mounts so edits on the host are seen inside the container,
+#   * `uvicorn --reload` for the api / brain-api services,
+#   * API_DEBUG=true.
+#
+# Usage:
+#   docker compose -f docker/docker-compose.dev.yml up -d --build
+#
+# The base images, ports, healthchecks and infra services are inherited from
+# docker-compose.yml / docker-compose.infra.yml and are NOT redefined here.
+# =============================================================================
+
+include:
+  - docker-compose.yml
+
+services:
+  api:
+    environment:
+      API_DEBUG: "true"
+    # Editable installs in the image point at /app/services/api and /app/packages,
+    # so bind-mounting the sources makes --reload pick up host edits live.
+    volumes:
+      - ../services/api/src:/app/services/api/src
+      - ../packages:/app/packages
+    command:
+      - uvicorn
+      - api.main:app
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8000"
+      - --reload
+
+  brain-api:
+    environment:
+      BRAIN_API_DEBUG: "true"
+    volumes:
+      - ../services/brain_api/src:/app/services/brain_api/src
+      - ../packages:/app/packages
+    command:
+      - uvicorn
+      - brain_api.main:app
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8020"
+      - --reload
+
+  worker:
+    # Celery has no built-in reloader; mount the sources so a `docker compose
+    # restart worker` (or a watchdog you add locally) picks up host edits.
+    volumes:
+      - ../services/worker/src:/app/services/worker/src
+      - ../packages:/app/packages

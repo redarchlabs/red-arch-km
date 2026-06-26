@@ -13,7 +13,7 @@ from api.models.base import Base
 ModelT = TypeVar("ModelT", bound=Base)
 
 
-class BaseRepository(Generic[ModelT]):
+class BaseRepository(Generic[ModelT]):  # noqa: UP046  # deferred: REDARCH-14 (PEP 695 generic rewrite)
     """Generic repository providing async CRUD operations.
 
     RLS policies on the database handle tenant scoping automatically

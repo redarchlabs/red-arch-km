@@ -30,7 +30,7 @@ def make_page[TItem](items: list[TItem], total: int, params: PaginationParams) -
     )
 
 
-class PaginatedResponse(BaseModel, Generic[T]):
+class PaginatedResponse(BaseModel, Generic[T]):  # noqa: UP046  # deferred: REDARCH-14 (PEP 695 generic rewrite)
     model_config = ConfigDict(from_attributes=True)
 
     items: list[T]

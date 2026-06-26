@@ -12,6 +12,7 @@ import pytest
 from api.models.document import Document, Folder
 from api.models.org import Org
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .helpers import set_tenant
@@ -67,7 +68,7 @@ class TestRLSIsolation:
         bogus = Document(title="cross-tenant", org_id=org_b.id, document_key=str(uuid.uuid4()))
         session.add(bogus)
 
-        with pytest.raises(Exception):  # RLS policy violation raises
+        with pytest.raises(SQLAlchemyError):  # RLS policy violation raises a DB error
             await session.flush()
 
     async def test_no_tenant_set_returns_empty(self, admin_session: AsyncSession, session: AsyncSession) -> None:

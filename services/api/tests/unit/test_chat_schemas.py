@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
-from pydantic import ValidationError
-
 from api.schemas.chat import (
     AskRequest,
     ChatData,
@@ -16,6 +14,7 @@ from api.schemas.chat import (
     ChatSessionRead,
     ContextFilters,
 )
+from pydantic import ValidationError
 
 
 class TestContextFilters:
@@ -68,7 +67,7 @@ class TestAskRequest:
 class TestChatMessage:
     def test_user_message(self) -> None:
         msg_id = uuid.uuid4()
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         msg = ChatMessage(
             id=msg_id,
             role="user",
@@ -83,10 +82,8 @@ class TestChatMessage:
 
     def test_assistant_message_with_sources(self) -> None:
         msg_id = uuid.uuid4()
-        now = datetime.now(timezone.utc)
-        sources = [
-            {"document_key": "doc-1", "title": "Policy Handbook", "score": 0.9}
-        ]
+        now = datetime.now(UTC)
+        sources = [{"document_key": "doc-1", "title": "Policy Handbook", "score": 0.9}]
         msg = ChatMessage(
             id=msg_id,
             role="assistant",
@@ -109,7 +106,7 @@ class TestChatData:
             id=uuid.uuid4(),
             role="user",
             content="Hello",
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
         )
         data = ChatData(messages=[msg])
         assert len(data.messages) == 1
@@ -132,8 +129,8 @@ class TestChatSessionRead:
         class MockSession:
             id = uuid.uuid4()
             chat_data = {"messages": []}
-            created_at = datetime.now(timezone.utc)
-            updated_at = datetime.now(timezone.utc)
+            created_at = datetime.now(UTC)
+            updated_at = datetime.now(UTC)
 
         read = ChatSessionRead.model_validate(MockSession())
         assert read.id == MockSession.id

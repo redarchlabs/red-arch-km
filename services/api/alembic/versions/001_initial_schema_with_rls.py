@@ -57,7 +57,7 @@ def upgrade() -> None:
     )
 
     # --- Permission dimension tables ---
-    for table_name, related_name in [
+    for table_name, _related_name in [
         ("regions", "regions"),
         ("departments", "departments"),
         ("roles", "roles"),

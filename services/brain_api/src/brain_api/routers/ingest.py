@@ -160,7 +160,7 @@ async def get_document_chunks(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to fetch chunks",
-        )
+        ) from None
 
     return {
         "document_key": document_key,

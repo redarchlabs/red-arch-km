@@ -100,7 +100,7 @@ class BrainAPIClient:
         the client sees exactly what brain-api emitted (including timing).
         """
         async with (
-            httpx.AsyncClient(timeout=None) as client,
+            httpx.AsyncClient(timeout=None) as client,  # noqa: S113  # deferred: REDARCH-14 (add request timeout)
             client.stream(
                 "POST",
                 f"{self._base_url}/api/v1/ask/stream",

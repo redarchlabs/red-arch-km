@@ -66,9 +66,7 @@ class ChatRepository:
         await self._session.flush()
         return True
 
-    async def append_messages(
-        self, session_id: uuid.UUID, messages: list[dict]
-    ) -> ChatSession | None:
+    async def append_messages(self, session_id: uuid.UUID, messages: list[dict]) -> ChatSession | None:
         """Append messages to the session's chat_data."""
         chat = await self.get(session_id)
         if chat is None:
