@@ -52,4 +52,6 @@ var/
 
 # Models (large ML model files)
 models/
+# Re-include the API ORM package shadowed by the generic models/ rule above.
+!services/api/src/api/models/
 ui/tsconfig.tsbuildinfo

@@ -43,3 +43,11 @@ packages = ["src/api"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+# Pin the default async-fixture loop scope so the session-scoped engine
+# fixture and per-function session fixtures share one event loop. Without
+# this, pytest-asyncio>=1.x runs them on different loops and asyncpg raises
+# InterfaceError. Both fixture AND test loop scope must be session so the
+# session-scoped engine and the tests share one loop (otherwise: RuntimeError
+# "Future attached to a different loop"). Test-config only; no product behavior change.
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
