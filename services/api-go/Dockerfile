@@ -11,6 +11,8 @@ COPY go.work go.work.sum* ./
 COPY packages/accessmask/go.mod packages/accessmask/go.sum* ./packages/accessmask/
 COPY packages/shared/go.mod packages/shared/go.sum* ./packages/shared/
 COPY services/api-go/go.mod services/api-go/go.sum* ./services/api-go/
+COPY services/brain-api-go/go.mod services/brain-api-go/go.sum* ./services/brain-api-go/
+COPY services/worker-go/go.mod services/worker-go/go.sum* ./services/worker-go/
 
 # Download dependencies
 RUN cd services/api-go && go mod download
