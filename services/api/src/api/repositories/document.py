@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -52,7 +53,7 @@ class DocumentRepository:
         folder_id: uuid.UUID | None = None,
         uploaded_by_id: uuid.UUID | None = None,
         use_knowledge_graph: bool | None = None,
-        metadata: dict | None = None,
+        metadata: dict[str, Any] | None = None,
         tag_ids: list[uuid.UUID] | None = None,
     ) -> Document:
         doc = Document(
@@ -81,7 +82,7 @@ class DocumentRepository:
         document_id: uuid.UUID,
         *,
         status: str,
-        details: dict | None = None,
+        details: dict[str, Any] | None = None,
     ) -> Document | None:
         doc = await self.get(document_id)
         if doc is None:

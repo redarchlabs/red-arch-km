@@ -15,13 +15,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.auth.dependencies import OrgContext, require_org_admin
 from api.dependencies import get_tenant_db
 from api.models.org import Department, Group, Region, Role
-from api.repositories.dimension import DimensionRepository
+from api.repositories.dimension import DimensionRepository, DimensionType
 from api.schemas.common import PaginatedResponse, PaginationParams, make_page
 from api.schemas.org import DimensionCreate, DimensionRead
 
 router = APIRouter()
 
-_DIMENSIONS = {
+_DIMENSIONS: dict[str, DimensionType] = {
     "regions": Region,
     "departments": Department,
     "roles": Role,
@@ -29,7 +29,7 @@ _DIMENSIONS = {
 }
 
 
-def _resolve_model(dimension: str) -> type[Region | Department | Role | Group]:
+def _resolve_model(dimension: str) -> DimensionType:
     model = _DIMENSIONS.get(dimension)
     if model is None:
         raise HTTPException(

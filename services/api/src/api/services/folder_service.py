@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,8 +27,8 @@ async def build_dot_path(session: AsyncSession, name: str, parent_id: uuid.UUID 
 async def compute_folder_masks(
     session: AsyncSession,
     org_id: uuid.UUID,
-    viewer_config: list[dict] | None,
-    contributor_config: list[dict] | None,
+    viewer_config: list[dict[str, Any]] | None,
+    contributor_config: list[dict[str, Any]] | None,
 ) -> tuple[list[int], list[int]]:
     """Resolve viewer and contributor permission configs to mask lists."""
     viewer_masks = await permission_config_to_masks(session, org_id, viewer_config)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -39,7 +40,7 @@ class ChatRepository:
         *,
         user_id: uuid.UUID,
         org_id: uuid.UUID,
-        chat_data: dict | None = None,
+        chat_data: dict[str, Any] | None = None,
     ) -> ChatSession:
         session = ChatSession(
             user_id=user_id,
@@ -50,7 +51,7 @@ class ChatRepository:
         await self._session.flush()
         return session
 
-    async def update_data(self, session_id: uuid.UUID, chat_data: dict) -> ChatSession | None:
+    async def update_data(self, session_id: uuid.UUID, chat_data: dict[str, Any]) -> ChatSession | None:
         chat = await self.get(session_id)
         if chat is None:
             return None
@@ -66,7 +67,7 @@ class ChatRepository:
         await self._session.flush()
         return True
 
-    async def append_messages(self, session_id: uuid.UUID, messages: list[dict]) -> ChatSession | None:
+    async def append_messages(self, session_id: uuid.UUID, messages: list[dict[str, Any]]) -> ChatSession | None:
         """Append messages to the session's chat_data."""
         chat = await self.get(session_id)
         if chat is None:

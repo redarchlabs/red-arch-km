@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
@@ -45,7 +45,7 @@ class BrainAPIClient:
                 headers=self._headers(),
             )
             response.raise_for_status()
-            return response.json()
+            return cast("dict[str, Any]", response.json())
 
     async def vector_chat(
         self,
@@ -71,7 +71,7 @@ class BrainAPIClient:
                 headers=self._headers(),
             )
             response.raise_for_status()
-            return response.json()
+            return cast("dict[str, Any]", response.json())
 
     async def get_document_chunks(self, tenant_id: str, document_key: str, *, limit: int = 500) -> dict[str, Any]:
         async with httpx.AsyncClient(timeout=30) as client:
@@ -81,7 +81,7 @@ class BrainAPIClient:
                 headers=self._headers(),
             )
             response.raise_for_status()
-            return response.json()
+            return cast("dict[str, Any]", response.json())
 
     async def vector_chat_stream(
         self,
@@ -127,7 +127,7 @@ class BrainAPIClient:
                 headers=self._headers(),
             )
             response.raise_for_status()
-            return response.json()
+            return cast("dict[str, Any]", response.json())
 
     async def remove_tenant(self, tenant_id: str) -> dict[str, Any]:
         """Ask brain-api to purge a tenant's Qdrant + Neo4j data."""
@@ -138,7 +138,7 @@ class BrainAPIClient:
                 headers=self._headers(),
             )
             response.raise_for_status()
-            return response.json()
+            return cast("dict[str, Any]", response.json())
 
     async def remove_document(self, tenant_id: str, document_key: str) -> dict[str, Any]:
         """Purge a single document's vectors + graph nodes from brain-api."""
@@ -149,4 +149,4 @@ class BrainAPIClient:
                 headers=self._headers(),
             )
             response.raise_for_status()
-            return response.json()
+            return cast("dict[str, Any]", response.json())
