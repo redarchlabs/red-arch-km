@@ -18,7 +18,7 @@ def _is_retryable_http_error(exc: httpx.HTTPStatusError) -> bool:
     return status_code >= 500 or status_code == 429
 
 
-@app.task(
+@app.task(  # type: ignore[untyped-decorator]  # celery's app.task is untyped
     bind=True,
     max_retries=3,
     default_retry_delay=10,
@@ -30,7 +30,7 @@ def task_update_document_metadata(self: Any, data: dict[str, Any]) -> dict[str, 
     Expected data keys:
         tenant_id, document_key, new_tags, new_access_keys, title
     """
-    settings = WorkerSettings()  # type: ignore[call-arg]
+    settings = WorkerSettings()
     document_key = data.get("document_key", "")
 
     try:

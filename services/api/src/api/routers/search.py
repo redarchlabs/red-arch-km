@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import AsyncIterator
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -114,7 +115,7 @@ async def chat_stream(
     access_keys = await _get_user_access_keys(session, ctx)
     client = BrainAPIClient(settings)
 
-    async def iterator():  # type: ignore[no-untyped-def]
+    async def iterator() -> AsyncIterator[bytes]:
         try:
             async for chunk in client.vector_chat_stream(
                 tenant_id=str(ctx.org_id),

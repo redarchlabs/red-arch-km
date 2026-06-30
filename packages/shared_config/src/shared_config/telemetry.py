@@ -44,7 +44,7 @@ def configure_telemetry(
     Safe to call multiple times — only the first call installs providers.
     """
     global _configured
-    settings = settings or ObservabilitySettings()  # type: ignore[call-arg]
+    settings = settings or ObservabilitySettings()
 
     resource = Resource.create({SERVICE_NAME: service_name})
     tracer_provider = TracerProvider(resource=resource)

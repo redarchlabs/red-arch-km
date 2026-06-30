@@ -39,7 +39,7 @@ app.conf.update(
 app.autodiscover_tasks(["worker.tasks"])
 
 
-@worker_process_init.connect(weak=False)
+@worker_process_init.connect(weak=False)  # type: ignore[untyped-decorator]  # celery signals are untyped
 def _init_observability(**_kwargs: object) -> None:
     """Configure logging + telemetry in each worker process.
 
@@ -49,6 +49,6 @@ def _init_observability(**_kwargs: object) -> None:
     """
     configure_logging(level=os.environ.get("LOG_LEVEL", "INFO"))
     configure_telemetry(service_name="red-arch-km-worker")
-    CeleryInstrumentor().instrument()
+    CeleryInstrumentor().instrument()  # type: ignore[no-untyped-call]  # otel celery instrumentor is untyped
     HTTPXClientInstrumentor().instrument()
     logger.info("Worker observability configured")

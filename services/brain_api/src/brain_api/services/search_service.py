@@ -5,9 +5,10 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Iterator
-from typing import Any
+from typing import Any, cast
 
 from openai import OpenAI
+from openai.types.chat import ChatCompletionMessageParam
 from shared_config import get_tracer
 
 from brain_api.config import BrainAPISettings
@@ -111,7 +112,10 @@ class SearchService:
 
         # 3. Build LLM prompt
         context_blocks = self._format_context(hits, graph_context)
-        messages = self._build_messages(query, chat_history or [], context_blocks)
+        messages = cast(
+            "list[ChatCompletionMessageParam]",
+            self._build_messages(query, chat_history or [], context_blocks),
+        )
 
         # 4. Synthesize answer
         try:
@@ -199,7 +203,10 @@ class SearchService:
 
         # 3. Stream LLM completion
         context_blocks = self._format_context(hits, graph_context)
-        messages = self._build_messages(query, chat_history or [], context_blocks)
+        messages = cast(
+            "list[ChatCompletionMessageParam]",
+            self._build_messages(query, chat_history or [], context_blocks),
+        )
 
         try:
             stream = self._llm.chat.completions.create(
