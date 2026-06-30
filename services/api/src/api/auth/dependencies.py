@@ -107,19 +107,11 @@ async def _verify_bearer_token(token: str, settings: Settings) -> dict[str, Any]
     its own issuer + JWKS + provider-specific check (Keycloak `aud`, Clerk `azp`).
     """
     issuer = _token_issuer(token)
-    clerk_issuer = (
-        settings.clerk_jwt_issuer.rstrip("/") if settings.clerk_jwt_issuer else ""
-    )
-    keycloak_issuer = (
-        f"{settings.keycloak_url}/realms/{settings.keycloak_realm}"
-        if settings.keycloak_url
-        else ""
-    )
+    clerk_issuer = settings.clerk_jwt_issuer.rstrip("/") if settings.clerk_jwt_issuer else ""
+    keycloak_issuer = f"{settings.keycloak_url}/realms/{settings.keycloak_realm}" if settings.keycloak_url else ""
 
     if clerk_issuer and issuer == clerk_issuer:
-        return await validate_clerk_token(
-            token, issuer=clerk_issuer, allowed_azp=settings.clerk_allowed_azp_list
-        )
+        return await validate_clerk_token(token, issuer=clerk_issuer, allowed_azp=settings.clerk_allowed_azp_list)
     if keycloak_issuer and issuer == keycloak_issuer:
         return await validate_keycloak_token(
             token,
