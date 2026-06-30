@@ -201,7 +201,7 @@ async def ask(
 
         # Persist messages to database after stream completes
         try:
-            new_messages = [
+            new_messages: list[dict[str, Any]] = [
                 {
                     "id": str(user_message_id),
                     "role": "user",

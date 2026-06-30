@@ -117,7 +117,7 @@ class QdrantVectorStore:
         filters: list[dict[str, Any]] | None = None,
     ) -> list[SearchResult]:
         collection = self._chunk_collection(tenant_id)
-        must: list[rest.FieldCondition] = []
+        must: list[rest.Condition] = []
 
         if filters:
             for f in filters:
@@ -148,21 +148,22 @@ class QdrantVectorStore:
                 id=str(p.id),
                 score=p.score,
                 payload={
-                    "text": p.payload.get("text", ""),
-                    "summary": p.payload.get("summary", ""),
-                    "chunk_order": p.payload.get("chunk_order", 0),
-                    "document_id": p.payload.get("document_id", ""),
-                    "document_key": p.payload.get("document_key", ""),
-                    "document_title": p.payload.get("document_title", ""),
-                    "type": p.payload.get("type", ""),
+                    "text": payload.get("text", ""),
+                    "summary": payload.get("summary", ""),
+                    "chunk_order": payload.get("chunk_order", 0),
+                    "document_id": payload.get("document_id", ""),
+                    "document_key": payload.get("document_key", ""),
+                    "document_title": payload.get("document_title", ""),
+                    "type": payload.get("type", ""),
                 },
             )
             for p in results
             if p
+            for payload in (p.payload or {},)
         ]
 
     def delete_document(self, tenant_id: str, document_key: str) -> None:
-        conditions = [
+        conditions: list[rest.Condition] = [
             rest.FieldCondition(key="document_key", match=rest.MatchValue(value=document_key)),
             rest.FieldCondition(key="tenant_id", match=rest.MatchValue(value=tenant_id)),
         ]
@@ -188,7 +189,7 @@ class QdrantVectorStore:
         logger.info("Deleted Qdrant collections for tenant %s", tenant_id)
 
     def document_exists(self, tenant_id: str, document_key: str) -> bool:
-        conditions = [
+        conditions: list[rest.Condition] = [
             rest.FieldCondition(key="document_key", match=rest.MatchValue(value=document_key)),
             rest.FieldCondition(key="tenant_id", match=rest.MatchValue(value=tenant_id)),
         ]
@@ -215,7 +216,7 @@ class QdrantVectorStore:
         title: str | None = None,
     ) -> None:
         collection = self._chunk_collection(tenant_id)
-        conditions = [
+        conditions: list[rest.Condition] = [
             rest.FieldCondition(key="document_key", match=rest.MatchValue(value=document_key)),
             rest.FieldCondition(key="tenant_id", match=rest.MatchValue(value=tenant_id)),
         ]
@@ -262,7 +263,7 @@ class QdrantVectorStore:
     ) -> list[SearchResult]:
         """Return all chunks for a document, ordered by chunk_order."""
         collection = self._chunk_collection(tenant_id)
-        conditions = [
+        conditions: list[rest.Condition] = [
             rest.FieldCondition(key="document_key", match=rest.MatchValue(value=document_key)),
             rest.FieldCondition(key="tenant_id", match=rest.MatchValue(value=tenant_id)),
         ]

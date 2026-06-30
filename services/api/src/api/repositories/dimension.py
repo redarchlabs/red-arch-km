@@ -7,22 +7,27 @@ All four share the same shape: name, description, org-scoped uniqueness, and a
 from __future__ import annotations
 
 import uuid
-from typing import TypeVar
+from typing import cast
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.models.org import Department, Group, Region, Role
 
-DimensionModel = TypeVar("DimensionModel", Region, Department, Role, Group)
+# The four permission dimensions are structurally identical (name, description,
+# org-scoped uniqueness, auto-assigned permission_number) but share no common
+# mapped base, so the repository is typed against their union rather than a
+# constrained TypeVar (which a union argument cannot satisfy).
+DimensionModel = Region | Department | Role | Group
+DimensionType = type[Region] | type[Department] | type[Role] | type[Group]
 
 
 class DimensionRepository:
     """Generic repository for any permission dimension model."""
 
-    def __init__(self, session: AsyncSession, model: type[DimensionModel]) -> None:
+    def __init__(self, session: AsyncSession, model: DimensionType) -> None:
         self._session = session
-        self._model = model
+        self._model: DimensionType = model
 
     async def get(self, dimension_id: uuid.UUID) -> DimensionModel | None:
         return await self._session.get(self._model, dimension_id)
@@ -33,7 +38,9 @@ class DimensionRepository:
 
         total = (await self._session.execute(select(func.count()).select_from(self._model))).scalar_one()
         result = await self._session.execute(select(self._model).order_by(self._model.name).offset(offset).limit(limit))
-        return list(result.scalars().all()), total
+        # select() over the model union yields rows typed as the shared Base; the
+        # runtime rows are always one concrete dimension type.
+        return cast("list[DimensionModel]", list(result.scalars().all())), total
 
     async def create(self, *, name: str, org_id: uuid.UUID, description: str | None = None) -> DimensionModel:
         # Assign next permission_number per-org. Row-level lock prevents the

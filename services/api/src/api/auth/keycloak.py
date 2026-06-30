@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any
+from typing import Any, cast
 
 import httpx
 from jose import JWTError, jwt
@@ -66,4 +66,4 @@ async def validate_keycloak_token(
         issuer=f"{keycloak_url}/realms/{realm}",
     )
 
-    return claims
+    return cast("dict[str, Any]", claims)

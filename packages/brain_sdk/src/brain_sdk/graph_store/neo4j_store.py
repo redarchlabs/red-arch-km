@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any
+from typing import Any, cast
 
 from neo4j import Driver, GraphDatabase
 
@@ -82,7 +82,7 @@ class Neo4jGraphStore:
         )
 
         rec = self._cypher(cyph, name=name, dk=document_key, tags=tags or [], access_keys=access_keys or [])
-        return rec[0]["vid"]
+        return cast("str", rec[0]["vid"])
 
     def insert_triplet(
         self,

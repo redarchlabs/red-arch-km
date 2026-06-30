@@ -89,23 +89,23 @@ class MembershipRepository:
             await self._session.refresh(membership, to_refresh)
 
         if region_ids is not None:
-            result = await self._session.execute(select(Region).where(Region.id.in_(region_ids)))
-            regions = list(result.scalars().all())
+            region_result = await self._session.execute(select(Region).where(Region.id.in_(region_ids)))
+            regions = list(region_result.scalars().all())
             _assert_all_found("region", region_ids, {r.id for r in regions})
             membership.regions = regions
         if department_ids is not None:
-            result = await self._session.execute(select(Department).where(Department.id.in_(department_ids)))
-            departments = list(result.scalars().all())
+            department_result = await self._session.execute(select(Department).where(Department.id.in_(department_ids)))
+            departments = list(department_result.scalars().all())
             _assert_all_found("department", department_ids, {d.id for d in departments})
             membership.departments = departments
         if role_ids is not None:
-            result = await self._session.execute(select(Role).where(Role.id.in_(role_ids)))
-            roles = list(result.scalars().all())
+            role_result = await self._session.execute(select(Role).where(Role.id.in_(role_ids)))
+            roles = list(role_result.scalars().all())
             _assert_all_found("role", role_ids, {r.id for r in roles})
             membership.roles = roles
         if group_ids is not None:
-            result = await self._session.execute(select(Group).where(Group.id.in_(group_ids)))
-            groups = list(result.scalars().all())
+            group_result = await self._session.execute(select(Group).where(Group.id.in_(group_ids)))
+            groups = list(group_result.scalars().all())
             _assert_all_found("group", group_ids, {g.id for g in groups})
             membership.groups = groups
         await self._session.flush()

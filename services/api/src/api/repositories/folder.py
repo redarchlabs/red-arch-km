@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from typing import Any
 
 from sqlalchemy import bindparam, func, or_, select
 from sqlalchemy import text as sql_text
@@ -82,8 +83,8 @@ class FolderRepository:
         org_id: uuid.UUID,
         parent_id: uuid.UUID | None = None,
         description: str | None = None,
-        viewer_permissions_config: list[dict] | None = None,
-        contributor_permissions_config: list[dict] | None = None,
+        viewer_permissions_config: list[dict[str, Any]] | None = None,
+        contributor_permissions_config: list[dict[str, Any]] | None = None,
         view_permission_masks: list[int] | None = None,
         contributor_permission_masks: list[int] | None = None,
         dot_path: str = "",

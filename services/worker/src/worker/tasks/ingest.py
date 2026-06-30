@@ -55,7 +55,7 @@ def _report_status(
         )
 
 
-@app.task(
+@app.task(  # type: ignore[untyped-decorator]  # celery's app.task is untyped
     bind=True,
     max_retries=3,
     default_retry_delay=30,
@@ -68,7 +68,7 @@ def task_ingest_document(self: Any, data: dict[str, Any]) -> dict[str, Any]:
         document_id, tenant_id, document_key, title, text, tags,
         access_keys, use_knowledge_graph, metadata
     """
-    settings = WorkerSettings()  # type: ignore[call-arg]
+    settings = WorkerSettings()
     document_id = data.get("document_id", "")
     document_key = data.get("document_key", "")
     tenant_id = data.get("tenant_id", "")

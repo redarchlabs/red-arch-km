@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections.abc import Iterator
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -80,7 +81,7 @@ async def ask_stream(
       - error: terminal error marker
     """
 
-    def event_generator():  # type: ignore[no-untyped-def]
+    def event_generator() -> Iterator[str]:
         for event in service.vector_chat_stream(
             tenant_id=body.tenant_id,
             query=body.query,
