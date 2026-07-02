@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Generator
 
+import docker.types
 import pytest
 from brain_sdk.graph_store.neo4j_store import Neo4jGraphStore
 from brain_sdk.vector_store.qdrant_store import QdrantVectorStore
@@ -16,15 +17,29 @@ from testcontainers.core.container import DockerContainer
 from testcontainers.core.waiting_utils import wait_for_logs
 from testcontainers.neo4j import Neo4jContainer
 
-_QDRANT_IMAGE = "qdrant/qdrant:v1.12.4"
+# Qdrant server pinned to match the resolved qdrant-client (1.17.x) so the client's
+# major/minor compatibility check passes cleanly. Qdrant requires the client/server
+# minor versions differ by at most one.
+_QDRANT_IMAGE = "qdrant/qdrant:v1.17.0"
 _NEO4J_IMAGE = "neo4j:5.25.1"
 _QDRANT_PORT = 6333
+# RocksDB opens a large number of segment files as tenant collections accumulate
+# over a session-scoped container; the container's default nofile ceiling is easily
+# exhausted ("RocksDB open error: ... Too many open files"). Raise it explicitly so
+# the integration suite is not gated by the host/container fd default.
+_QDRANT_NOFILE = 1048576
 
 
 @pytest.fixture(scope="session")
 def qdrant_container() -> Generator[DockerContainer]:
     """Start a Qdrant container for the test session."""
-    container = DockerContainer(_QDRANT_IMAGE).with_exposed_ports(_QDRANT_PORT)
+    container = (
+        DockerContainer(_QDRANT_IMAGE)
+        .with_exposed_ports(_QDRANT_PORT)
+        .with_kwargs(
+            ulimits=[docker.types.Ulimit(name="nofile", soft=_QDRANT_NOFILE, hard=_QDRANT_NOFILE)],
+        )
+    )
     try:
         container.start()
     except Exception as e:

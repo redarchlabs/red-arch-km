@@ -104,6 +104,25 @@ ignore_errors = true
 [tool.pytest.ini_options]
 testpaths = ["packages", "services"]
 asyncio_mode = "auto"
+# The API integration suite uses a session-scoped async engine fixture shared by
+# per-function session fixtures. pytest-asyncio>=1.x defaults to a fresh event loop
+# per function, which puts the engine and the tests on different loops → asyncpg
+# "another operation is in progress" / "Future attached to a different loop". These
+# loop scopes (mirrored from services/api/pyproject.toml) pin everything to one loop.
+# The per-package pyproject value only applies when pytest is invoked inside that
+# package; the CI gate runs from the repo root, so the root config must set them too.
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+# `importlib` import mode gives every test module a unique, fully-qualified name
+# derived from its path relative to the rootdir. The default `prepend` mode
+# instead derives the package name by walking up while `__init__.py` files exist,
+# which mapped both services/api/tests/integration and services/brain_api/tests/
+# integration to the bare package `integration` → a deterministic
+# ImportPathMismatchError that aborted the whole collection. importlib mode
+# requires that test directories NOT carry `__init__.py` (those truncate the
+# derived name back to the colliding bare package), so the empty marker files
+# under services/*/tests/** were removed alongside this change.
+addopts = "--import-mode=importlib"
 markers = [
     "unit: unit tests",
     "integration: integration tests requiring external services",
