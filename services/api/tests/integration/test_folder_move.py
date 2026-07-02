@@ -86,9 +86,7 @@ class TestFolderMove:
         await admin_session.commit()
 
         refreshed = await admin_session.execute(
-            select(Folder)
-            .where(Folder.name == "b", Folder.org_id == org.id)
-            .execution_options(populate_existing=True)
+            select(Folder).where(Folder.name == "b", Folder.org_id == org.id).execution_options(populate_existing=True)
         )
         folder = refreshed.scalar_one()
         assert folder.dot_path == "b"
