@@ -67,9 +67,19 @@ class TestChunking:
 
 class TestLongSentence:
     def test_sentence_exceeding_chunk_size(self) -> None:
-        """A sentence longer than chunk_size gets its own chunk."""
-        long_sentence = "word " * 200  # ~200 tokens
-        short = "Short sentence."
-        text = f"{short} {long_sentence} {short}"
-        chunks = create_sentence_based_overlapping_chunks(text, 50, 10)
+        """A single sentence longer than chunk_size is emitted as its own chunk.
+
+        The sentence splitter only breaks on a period followed by a capitalised
+        word, so the flanking short sentences must start with capitals for the
+        long middle sentence to be segmented out. The chunker intentionally does
+        not hard-split within a sentence (see test_chunks_respect_token_limit),
+        so the oversized sentence occupies one chunk that overshoots chunk_size.
+        """
+        long_sentence = "The " + "quick brown fox jumps over the lazy dog " * 15 + "again."
+        text = f"Short sentence. {long_sentence} Another short one."
+        chunk_size = 50
+        chunks = create_sentence_based_overlapping_chunks(text, chunk_size, 10)
+        # The oversized sentence is split out from its short neighbours.
         assert len(chunks) >= 2
+        # ...and it lands in a chunk that exceeds chunk_size on its own.
+        assert any(len(text_to_tokens(c)) > chunk_size for c in chunks)

@@ -107,20 +107,31 @@ class TestIngestService:
         """Empty doc summary → doc vector is the centroid of chunk embeddings."""
         mock_stores.summarizer.summarize_document.return_value = ""
         service = IngestService(mock_stores)
+        # Text long enough to span multiple chunks (chunk_size is 500 tokens), so the
+        # centroid is a genuine mean of differing chunk embeddings rather than a single
+        # chunk equal to itself. _FakeEmbedder.embed_batch returns a distinct vector per
+        # chunk index, so the mean must differ from any individual chunk's embedding.
+        text = " ".join(f"Sentence number {i} has some content." for i in range(200))
         service.ingest_document(
             tenant_id="t1",
             document_key="dk1",
             title="Doc",
-            text="Hello world. This is a test.",
+            text=text,
             tags=[],
             access_keys=[],
             use_knowledge_graph=False,
         )
 
+        chunk_call = mock_stores.vector.upsert_vectors.call_args_list[0]
+        chunk_vectors = [record.vector for record in chunk_call.args[1]]
+        assert len(chunk_vectors) >= 2, "test requires >1 chunk for a meaningful centroid"
+
         doc_call = mock_stores.vector.upsert_vectors.call_args_list[1]
         doc_record = doc_call.args[1][0]
-        # The centroid is not equal to the first chunk embedding alone.
-        assert doc_record.vector != [0.1] * 4
+        # The doc vector is the centroid (mean) of the chunk embeddings...
+        assert doc_record.vector == _centroid(chunk_vectors)
+        # ...not merely the first chunk's embedding.
+        assert doc_record.vector != chunk_vectors[0]
 
     def test_knowledge_graph_batched_insert(self, mock_stores: MagicMock) -> None:
         """All triplets are collected then inserted in one batch call."""

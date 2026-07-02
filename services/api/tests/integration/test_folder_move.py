@@ -53,7 +53,17 @@ class TestFolderMove:
         await move_folder(admin_session, a, x.id)
         await admin_session.commit()
 
-        result = await admin_session.execute(select(Folder).order_by(Folder.name))
+        # The subtree rewrite runs as raw SQL (bypassing the ORM), so cached
+        # descendant objects hold stale dot_paths — populate_existing forces the
+        # query to overwrite them with fresh DB values. Scope to this org:
+        # admin_session is a superuser that bypasses RLS, so an unscoped query
+        # would also see folders committed by sibling tests.
+        result = await admin_session.execute(
+            select(Folder)
+            .where(Folder.org_id == org.id)
+            .order_by(Folder.name)
+            .execution_options(populate_existing=True)
+        )
         folders = {f.name: f.dot_path for f in result.scalars().all()}
         assert folders["a"] == "x.a"
         assert folders["b"] == "x.a.b"
@@ -75,7 +85,9 @@ class TestFolderMove:
         await move_folder(admin_session, b, None)
         await admin_session.commit()
 
-        refreshed = await admin_session.execute(select(Folder).where(Folder.name == "b"))
+        refreshed = await admin_session.execute(
+            select(Folder).where(Folder.name == "b", Folder.org_id == org.id).execution_options(populate_existing=True)
+        )
         folder = refreshed.scalar_one()
         assert folder.dot_path == "b"
         assert folder.parent_id is None
@@ -111,7 +123,12 @@ class TestFolderMove:
         await move_folder(admin_session, alpha, target.id)
         await admin_session.commit()
 
-        result = await admin_session.execute(select(Folder).order_by(Folder.name))
+        result = await admin_session.execute(
+            select(Folder)
+            .where(Folder.org_id == org.id)
+            .order_by(Folder.name)
+            .execution_options(populate_existing=True)
+        )
         folders = {f.name: f.dot_path for f in result.scalars().all()}
         assert folders["alpha"] == "target.alpha"
         assert folders["alpha2"] == "alpha2"  # untouched
