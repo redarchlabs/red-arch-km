@@ -50,12 +50,12 @@ Multi-tenant organization root.
 | updated_at | TIMESTAMPTZ | Last update timestamp |
 
 #### user_profiles
-User identities synchronized from Keycloak.
+User identities synchronized from Clerk.
 
 | Column | Type | Description |
 |--------|------|-------------|
 | id | UUID | Primary key |
-| keycloak_sub | VARCHAR(255) | Keycloak subject ID (unique) |
+| keycloak_sub | VARCHAR(255) | Clerk subject ID (unique) |
 | username | VARCHAR(150) | Unique username |
 | email | VARCHAR(254) | Unique email |
 | description | TEXT | Profile description |

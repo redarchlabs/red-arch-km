@@ -23,9 +23,8 @@ const (
 	userClaimsKey contextKey = "user_claims"
 )
 
-// UserClaims represents the decoded JWT claims for a user. The shape is
-// provider-agnostic: both the legacy Keycloak path and the Clerk path populate
-// the same fields so downstream provisioning/handlers are unchanged.
+// UserClaims represents the decoded JWT claims for a user extracted from a
+// Clerk session token (via the configured JWT template).
 type UserClaims struct {
 	Sub               string `json:"sub"`
 	Email             string `json:"email"`
@@ -40,18 +39,12 @@ func GetUserClaims(ctx context.Context) (UserClaims, bool) {
 	return claims, ok
 }
 
-// ErrNoVerifier indicates the token's issuer matched no configured provider.
-var ErrNoVerifier = errors.New("token issuer matches no configured auth provider")
+// ErrNoVerifier indicates the token's issuer did not match the configured
+// Clerk issuer.
+var ErrNoVerifier = errors.New("token issuer does not match the configured auth provider")
 
-// JWTConfig holds JWT middleware configuration. During the Keycloak→Clerk
-// coexistence window (D4 dual-verify), both providers may be configured at
-// once; tokens are routed to a verifier by their `iss` claim.
+// JWTConfig holds JWT middleware configuration for the Clerk verifier.
 type JWTConfig struct {
-	// Keycloak (legacy — retained during coexistence, removed in Phase 6).
-	KeycloakURL      string
-	KeycloakRealm    string
-	KeycloakClientID string
-
 	// Clerk.
 	//   ClerkIssuer     = Clerk Frontend API URL (the token `iss`), e.g.
 	//                     https://clerk.example.com or https://<slug>.clerk.accounts.dev
@@ -65,20 +58,16 @@ type JWTConfig struct {
 	CacheTTL time.Duration
 }
 
-// verifier holds per-provider verification parameters, keyed by issuer.
+// verifier holds the Clerk verification parameters, keyed by issuer.
 type verifier struct {
 	issuer  string
 	jwksURL string
-	// audience, when non-empty, is enforced via jwt.WithAudience (Keycloak).
-	audience string
-	// allowedAZP, when non-nil, enables strict `azp` enforcement (Clerk).
-	// A nil map means "no azp check" (Keycloak); a non-nil map means the
-	// token's `azp` MUST be present AND a member of the set.
+	// allowedAZP enables strict `azp` enforcement (G-AZP): the token's `azp`
+	// MUST be present AND a member of the set.
 	allowedAZP map[string]struct{}
 }
 
-// JWTMiddleware validates RS256 JWTs from one or more configured providers
-// (Keycloak and/or Clerk) selected by issuer.
+// JWTMiddleware validates RS256 Clerk session tokens selected by issuer.
 type JWTMiddleware struct {
 	verifiers map[string]*verifier // keyed by issuer
 	jwksURLs  []string
@@ -87,10 +76,9 @@ type JWTMiddleware struct {
 	cacheOnce sync.Once
 }
 
-// NewJWTMiddleware creates a new JWT validation middleware. It registers a
-// verifier for each configured provider (Keycloak when KeycloakURL is set,
-// Clerk when ClerkIssuer is set). At least one must be configured for any
-// request to authenticate.
+// NewJWTMiddleware creates a new JWT validation middleware. It registers the
+// Clerk verifier when ClerkIssuer is set; it must be configured for any request
+// to authenticate.
 func NewJWTMiddleware(cfg JWTConfig) *JWTMiddleware {
 	ttl := cfg.CacheTTL
 	if ttl == 0 {
@@ -100,18 +88,6 @@ func NewJWTMiddleware(cfg JWTConfig) *JWTMiddleware {
 	m := &JWTMiddleware{
 		verifiers: make(map[string]*verifier),
 		cacheTTL:  ttl,
-	}
-
-	// Keycloak verifier (legacy, audience-checked).
-	if cfg.KeycloakURL != "" {
-		issuer := cfg.KeycloakURL + "/realms/" + cfg.KeycloakRealm
-		v := &verifier{
-			issuer:   issuer,
-			jwksURL:  cfg.KeycloakURL + "/realms/" + cfg.KeycloakRealm + "/protocol/openid-connect/certs",
-			audience: cfg.KeycloakClientID,
-		}
-		m.verifiers[issuer] = v
-		m.jwksURLs = append(m.jwksURLs, v.jwksURL)
 	}
 
 	// Clerk verifier (azp allowlist instead of audience).
@@ -135,8 +111,8 @@ func NewJWTMiddleware(cfg JWTConfig) *JWTMiddleware {
 	return m
 }
 
-// initCache initializes the shared JWKS cache lazily, registering every
-// configured provider's JWKS endpoint. A failed initial fetch is logged but
+// initCache initializes the shared JWKS cache lazily, registering the Clerk
+// JWKS endpoint. A failed initial fetch is logged but
 // not fatal — the cache retries on first use, and validateToken surfaces a
 // clean 401 if keys are still unavailable (AC-1.4 graceful outage).
 func (m *JWTMiddleware) initCache(ctx context.Context) error {
@@ -186,10 +162,10 @@ func (m *JWTMiddleware) Handler(next http.Handler) http.Handler {
 	})
 }
 
-// validateToken validates the JWT against the verifier matching its issuer and
-// returns the extracted claims. Routing by `iss` implements the D4 dual-verify
-// coexistence window: a Keycloak-issued token still authenticates while a
-// Clerk-issued token is verified with the azp allowlist.
+// validateToken validates the JWT against the Clerk verifier matching its
+// issuer and returns the extracted claims. The `iss` is read unverified only to
+// select the verifier; the verified parse below re-pins the issuer, so a forged
+// `iss` cannot bypass signature/issuer validation.
 func (m *JWTMiddleware) validateToken(ctx context.Context, tokenString string) (UserClaims, error) {
 	if err := m.initCache(ctx); err != nil {
 		return UserClaims{}, err
@@ -213,28 +189,21 @@ func (m *JWTMiddleware) validateToken(ctx context.Context, tokenString string) (
 		return UserClaims{}, err
 	}
 
-	opts := []jwt.ParseOption{
+	token, err := jwt.Parse([]byte(tokenString),
 		jwt.WithKeySet(keySet),
 		jwt.WithValidate(true),
 		jwt.WithIssuer(v.issuer),
-	}
-	if v.audience != "" {
-		opts = append(opts, jwt.WithAudience(v.audience))
-	}
-
-	token, err := jwt.Parse([]byte(tokenString), opts...)
+	)
 	if err != nil {
 		return UserClaims{}, err
 	}
 
 	// G-AZP (R2): Clerk tokens carry no `aud`; enforce the authorized-party
-	// allowlist instead. When configured, the token's `azp` MUST be present
-	// and a member of CLERK_ALLOWED_AZP, else the request is rejected — this
-	// blocks token-origin confusion across Clerk frontends.
-	if v.allowedAZP != nil {
-		if err := checkAuthorizedParty(token, v.allowedAZP); err != nil {
-			return UserClaims{}, err
-		}
+	// allowlist instead. The token's `azp` MUST be present and a member of
+	// CLERK_ALLOWED_AZP, else the request is rejected — this blocks token-origin
+	// confusion across Clerk frontends.
+	if err := checkAuthorizedParty(token, v.allowedAZP); err != nil {
+		return UserClaims{}, err
 	}
 
 	// Fail closed if the token carries no subject — auth must never grant an
@@ -264,10 +233,9 @@ func checkAuthorizedParty(token jwt.Token, allowed map[string]struct{}) error {
 	return nil
 }
 
-// extractClaims maps verified token claims onto the provider-agnostic
-// UserClaims. Clerk exposes `username` (via JWT template); Keycloak exposes
-// `preferred_username`. Either populates PreferredUsername, so downstream
-// provisioning is unchanged.
+// extractClaims maps verified Clerk token claims onto UserClaims. Clerk exposes
+// `username` via the JWT template; a `preferred_username` claim is also accepted
+// as a fallback. Either populates PreferredUsername for downstream provisioning.
 func extractClaims(token jwt.Token) UserClaims {
 	claims := UserClaims{Sub: token.Subject()}
 

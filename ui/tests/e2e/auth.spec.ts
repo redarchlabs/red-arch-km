@@ -3,9 +3,9 @@ import { LoginPage } from "./pages/login.page";
 
 /**
  * Authentication flow tests.
- * Verifies Keycloak login, session establishment, and auth boundaries.
+ * Verifies Clerk sign-in, session establishment, and auth boundaries.
  *
- * Requires E2E_WITH_BACKEND=1 for full journey with Keycloak.
+ * Requires E2E_WITH_BACKEND=1 for the full journey with Clerk.
  */
 
 test.describe("Authentication Flow", () => {
@@ -18,7 +18,7 @@ test.describe("Authentication Flow", () => {
     await loginPage.expectPageTitle();
   });
 
-  test("root redirects to login or Keycloak", async ({ page }) => {
+  test("root redirects to the Clerk sign-in page", async ({ page }) => {
     const loginPage = new LoginPage(page);
     await page.goto("/");
     await page.waitForLoadState("domcontentloaded");
@@ -42,7 +42,7 @@ test.describe("Authentication Flow", () => {
     await page.waitForLoadState("networkidle");
 
     const url = page.url();
-    const isRedirected = /login|auth|keycloak/i.test(url) || !url.includes("/documents");
+    const isRedirected = /login|sign-in|auth|clerk/i.test(url) || !url.includes("/documents");
     expect(isRedirected).toBe(true);
   });
 

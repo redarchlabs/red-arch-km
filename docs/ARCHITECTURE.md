@@ -17,8 +17,8 @@ Red Arch Knowledge Management Platform v2 is a multi-tenant, AI-powered enterpri
               ┌───────────────────┼───────────────────┐
               │                   │                   │
        ┌──────▼──────┐     ┌──────▼──────┐     ┌──────▼──────┐
-       │   Keycloak  │     │   FastAPI   │     │  Brain API  │
-       │   (8080)    │     │   (8000)    │     │   (8020)    │
+       │    Clerk    │     │   FastAPI   │     │  Brain API  │
+       │  (External) │     │   (8000)    │     │   (8020)    │
        └─────────────┘     └──────┬──────┘     └──────┬──────┘
                                   │                   │
               ┌───────────────────┼───────────────────┤
@@ -47,7 +47,7 @@ Red Arch Knowledge Management Platform v2 is a multi-tenant, AI-powered enterpri
 **Framework:** FastAPI with async SQLAlchemy
 
 The main REST API handles:
-- Authentication and authorization (Keycloak OIDC)
+- Authentication and authorization (Clerk session JWT)
 - Multi-tenant CRUD operations (orgs, users, documents, folders)
 - Row-Level Security (RLS) enforcement via PostgreSQL
 - Document ingestion dispatch to Celery workers
@@ -58,7 +58,7 @@ The main REST API handles:
 - `models/` — SQLAlchemy ORM models with RLS integration
 - `repositories/` — Data access layer with tenant isolation
 - `services/` — Business logic (permissions, user provisioning)
-- `auth/` — Keycloak JWT validation and user context
+- `auth/` — Clerk session JWT validation and user context
 
 ### Brain API (services/brain_api)
 
@@ -94,7 +94,7 @@ Background task processing:
 React-based single-page application:
 - Server-side rendering for initial load
 - Client-side navigation with React Query
-- Keycloak OIDC authentication flow
+- Clerk authentication flow
 - Real-time chat with streaming responses
 
 ## Shared Packages
@@ -181,7 +181,7 @@ Neo4j nodes are labeled with tenant ID:
 | Redis 7.4 | redis:7-alpine | Celery broker, caching |
 | Qdrant | qdrant/qdrant:v1.12.4 | Vector database |
 | Neo4j 5.25 | neo4j:5.25.1 | Knowledge graph |
-| Keycloak | quay.io/keycloak/keycloak | Identity provider |
+| Clerk | External SaaS | Identity provider |
 
 ## Observability
 

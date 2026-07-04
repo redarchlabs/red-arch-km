@@ -44,7 +44,9 @@ membership_groups = Table(
 class UserProfile(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "user_profiles"
 
-    # Keycloak subject ID (unique identifier from OIDC)
+    # IdP subject ID (the Clerk `sub`; unique identifier from OIDC). The column
+    # name is retained for now — the rename to `auth_subject` is a deferred DB
+    # migration, so the Go stack (already renamed) and Python must not diverge here.
     keycloak_sub: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     username: Mapped[str] = mapped_column(String(150), unique=True)
     email: Mapped[str] = mapped_column(String(254), unique=True)

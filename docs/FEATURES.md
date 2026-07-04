@@ -145,7 +145,7 @@ Red Arch Knowledge Manager is an enterprise-grade, AI-powered knowledge manageme
 **What it does:** Secure authentication via enterprise identity provider integration.
 
 **Supported methods:**
-- **Keycloak (OIDC/OAuth2)** - Enterprise SSO integration
+- **Clerk (OIDC/OAuth2)** - Modern SaaS authentication
 - **JWT tokens** - Stateless API authentication
 
 **Features:**
@@ -215,7 +215,7 @@ Red Arch Knowledge Manager is an enterprise-grade, AI-powered knowledge manageme
 | **Neo4j** | Knowledge graph storage |
 | **PostgreSQL** | Primary data store with RLS |
 | **Redis** | Caching + task queue broker |
-| **Keycloak** | Identity provider (OIDC) |
+| **Clerk** | Identity provider (OIDC) |
 
 ---
 
