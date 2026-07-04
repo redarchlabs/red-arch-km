@@ -211,6 +211,67 @@ async def test_get_current_user_rejects_missing_sub(
     assert exc.value.detail == "Token missing subject claim"
 
 
+async def test_get_current_user_rejects_missing_credentials() -> None:
+    """get_current_user must 401 when no Authorization header is sent — the
+    `credentials is None` branch fires before any token verification. The Python
+    mirror of Go's TestJWTMiddleware_Handler_MissingToken (fail-closed on no creds)."""
+    from api.auth import dependencies
+    from api.config import Settings
+    from fastapi import HTTPException
+
+    settings = Settings(secret_key="x", clerk_jwt_issuer=ISSUER, clerk_allowed_azp="http://localhost:3000")
+
+    with pytest.raises(HTTPException) as exc:
+        await dependencies.get_current_user(settings=settings, session=None, credentials=None)  # type: ignore[arg-type]
+    assert exc.value.status_code == 401
+    assert exc.value.detail == "Authorization required"
+
+
+async def test_verify_bearer_rejects_unknown_issuer(rsa_key: rsa.RSAPrivateKey) -> None:
+    """_verify_bearer_token must reject a token whose `iss` matches no configured
+    provider via the dispatch branch (dependencies.py), distinct from the verifier's
+    own jose issuer pin (validate_clerk_token). The `match=` pins the ROUTING branch
+    specifically: only `_verify_bearer_token`'s guard emits this exact message, so if
+    the routing were deleted (token always handed to validate_clerk_token) this test
+    would fail even though the verifier's own pin still fails closed. Mirrors Go's
+    TestClerk_RejectsUnknownIssuer."""
+    from api.auth import dependencies
+    from api.config import Settings
+
+    settings = Settings(secret_key="x", clerk_jwt_issuer=ISSUER, clerk_allowed_azp="http://localhost:3000")
+    token = _sign(rsa_key, iss="https://attacker.example.com")
+
+    with pytest.raises(JWTError, match="does not match the configured auth provider"):
+        await dependencies._verify_bearer_token(token, settings)
+
+
+async def test_get_current_user_handles_jwks_outage(
+    rsa_key: rsa.RSAPrivateKey, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A JWKS-fetch outage must surface as a clean 401, never an unhandled 500 —
+    the broad-except conversion in get_current_user is the guard. The Python mirror
+    of Go's TestClerk_JWKSOutage_ReturnsUnauthorizedNotPanic. Overrides the autouse
+    JWKS stub to raise a network error at fetch time."""
+    import httpx
+    from api.auth import dependencies
+    from api.config import Settings
+    from fastapi import HTTPException
+    from fastapi.security import HTTPAuthorizationCredentials
+
+    async def _boom(issuer: str) -> dict[str, Any]:
+        raise httpx.ConnectError("JWKS endpoint unreachable")
+
+    monkeypatch.setattr(clerk, "get_clerk_jwks", _boom)
+
+    settings = Settings(secret_key="x", clerk_jwt_issuer=ISSUER, clerk_allowed_azp="http://localhost:3000")
+    creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials=_sign(rsa_key))
+
+    with pytest.raises(HTTPException) as exc:
+        await dependencies.get_current_user(settings=settings, session=None, credentials=creds)  # type: ignore[arg-type]
+    assert exc.value.status_code == 401
+    assert exc.value.detail == "Invalid or expired token"
+
+
 def test_config_requires_azp_when_clerk_enabled() -> None:
     """Mirrors Go's ErrMissingClerkAllowedAZP fail-fast (security LOW-1)."""
     from api.config import Settings
