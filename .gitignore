@@ -32,6 +32,9 @@ secrets/
 htmlcov/
 .pytest_cache/
 .mypy_cache/
+# E2E state file — global-setup.ts writes the test secret into it in plaintext.
+*.state.json
+ui/tests/e2e/.state.json
 
 # Docker
 docker/secrets/

@@ -2,7 +2,7 @@ include .env
 export
 
 .PHONY: help dev dev-infra dev-go down lint type-check test test-unit test-integration format install-hooks clean \
-        go-build go-test go-lint go-run-api go-clean go-mod-tidy
+        go-build go-test go-lint go-run-api go-clean go-mod-tidy seed-e2e
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -57,6 +57,9 @@ migrate: ## Run Alembic migrations
 
 migrate-create: ## Create a new migration (usage: make migrate-create MSG="add users table")
 	cd services/api && DATABASE_URL=$(DATABASE_URL_LOCAL) uv run alembic revision --autogenerate -m "$(MSG)"
+
+seed-e2e: ## Seed the local DB with E2E fixtures (org, roles, e2e_admin) — idempotent
+	cd services/api && DATABASE_URL=$(DATABASE_URL_LOCAL) uv run python -m scripts.seed_e2e
 
 # --- Setup ---
 
