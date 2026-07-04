@@ -93,26 +93,35 @@ async def seed() -> None:
                     defaults={"permission_number": i},
                 )
             )
+        created_departments = []
         for i, name in enumerate(DEPARTMENTS, start=1):
-            await _get_or_create(
-                session,
-                Department,
-                filters={"org_id": org_id, "name": name},
-                defaults={"permission_number": i},
+            created_departments.append(
+                await _get_or_create(
+                    session,
+                    Department,
+                    filters={"org_id": org_id, "name": name},
+                    defaults={"permission_number": i},
+                )
             )
+        created_roles = []
         for i, name in enumerate(ROLES, start=1):
-            await _get_or_create(
-                session,
-                Role,
-                filters={"org_id": org_id, "name": name},
-                defaults={"permission_number": i},
+            created_roles.append(
+                await _get_or_create(
+                    session,
+                    Role,
+                    filters={"org_id": org_id, "name": name},
+                    defaults={"permission_number": i},
+                )
             )
+        created_groups = []
         for i, name in enumerate(GROUPS, start=1):
-            await _get_or_create(
-                session,
-                Group,
-                filters={"org_id": org_id, "name": name},
-                defaults={"permission_number": i},
+            created_groups.append(
+                await _get_or_create(
+                    session,
+                    Group,
+                    filters={"org_id": org_id, "name": name},
+                    defaults={"permission_number": i},
+                )
             )
 
         # Membership
@@ -136,8 +145,18 @@ async def seed() -> None:
         # user with no membership gets 403). Their subs match the API bypass
         # convention (`e2e-<username>`, see auth/dependencies._resolve_e2e_user),
         # so the later auto-provision reuses these rows instead of duplicating.
-        # region North vs South gives user_a / user_b disjoint permission masks.
+        # Each member gets a FULL dimension tuple (region + department + role +
+        # group). Folder-list visibility is an exact array-overlap (`&&`) between
+        # the folder's view_permission_masks and the user's masks (see
+        # FolderRepository.list_visible_to_masks), NOT a field-wise wildcard —
+        # so a user only sees a mask-scoped folder when their fully-specified
+        # mask EQUALS a mask the folder was created with. region North vs South
+        # is the ONLY axis that differs, so a North-scoped folder is visible to
+        # user_a (North) and hidden from user_b (South).
         south = created_regions[1] if len(created_regions) > 1 else created_regions[0]
+        dept0 = created_departments[0]
+        role0 = created_roles[0]
+        group0 = created_groups[0]
         member_specs = [
             ("regular_user", "test@example.com", created_regions[0]),
             ("user_a", "usera@example.com", created_regions[0]),
@@ -156,9 +175,18 @@ async def seed() -> None:
                 filters={"profile_id": m_profile.id, "org_id": org_id},
                 defaults={"is_org_admin": False},
             )
-            await session.refresh(m_membership, attribute_names=["regions"])
+            await session.refresh(
+                m_membership,
+                attribute_names=["regions", "departments", "roles", "groups"],
+            )
             if not m_membership.regions:
                 m_membership.regions = [m_region]
+            if not m_membership.departments:
+                m_membership.departments = [dept0]
+            if not m_membership.roles:
+                m_membership.roles = [role0]
+            if not m_membership.groups:
+                m_membership.groups = [group0]
 
         # Folders
         await _get_or_create(

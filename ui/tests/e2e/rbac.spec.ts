@@ -128,8 +128,14 @@ test.describe("RBAC / Permission Boundaries", () => {
 
   test("folder list is filtered by permission mask", async ({ request, e2eState }) => {
     // Folder create is admin-only (require_org_admin → 403 for regular members).
-    // Admin creates a North-only folder via viewer_permissions_config.
-    // user_a (seeded with North region) can see it; user_b (South) cannot.
+    // Admin creates a North-scoped folder via viewer_permissions_config.
+    // Folder-list visibility is an EXACT array overlap (`&&`) between the
+    // folder's permission masks and the user's masks — not a field-wise
+    // wildcard — so the folder config must name the SAME full dimension tuple
+    // the members are seeded with (region + department + role + group; see
+    // seed_e2e.py). Only the region axis differs between users, so this folder
+    // is visible to user_a (North, Engineering, Manager, Alpha) and hidden from
+    // user_b (South, ...).
     const folderRes = await request.post(`${e2eState.apiUrl}/api/folders/`, {
       headers: {
         "X-Test-User": "e2e_admin:e2e_admin@e2e.local",
@@ -138,7 +144,14 @@ test.describe("RBAC / Permission Boundaries", () => {
       },
       data: {
         name: `north-only-${Date.now()}`,
-        viewer_permissions_config: [{ region: "North" }],
+        viewer_permissions_config: [
+          {
+            region: "North",
+            department: "Engineering",
+            role: "Manager",
+            group: "Alpha",
+          },
+        ],
       },
     });
 

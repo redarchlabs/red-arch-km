@@ -15,7 +15,7 @@ import * as path from "node:path";
  *   - E2E_TEST_SECRET (must match API_E2E_TEST_SECRET server-side)
  *   - E2E_TEST_USER  (default "e2e_admin:e2e_admin@e2e.local")
  */
-async function globalSetup(config: FullConfig) {
+async function globalSetup(_config: FullConfig) {
   if (!process.env.E2E_WITH_BACKEND) {
     return;
   }
@@ -49,8 +49,10 @@ async function globalSetup(config: FullConfig) {
 
   // Persist the state for tests to pick up — Playwright stores cookies + origins,
   // but we also stash our own values the tests read from process.env-style globals.
+  // Resolve the same way fixtures.ts reads it (cwd-relative, cwd = ui/), so the
+  // writer and reader agree. Using config.rootDir here doubled the path
+  // (rootDir is the testDir tests/e2e → tests/e2e/tests/e2e/.state.json).
   const statePath = path.resolve(
-    config.rootDir,
     process.env.E2E_STATE_FILE ?? "tests/e2e/.state.json",
   );
   await fs.writeFile(
