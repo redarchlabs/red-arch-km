@@ -118,10 +118,48 @@ class TestRLSIsolation:
         result = await session.execute(select(Document))
         assert result.scalars().all() == []
 
-        # INSERT must be blocked by the WITH CHECK policy, not a cast error.
+        # INSERT must be blocked by the WITH CHECK *policy*, not by a uuid cast error.
         session.add(Document(title="empty-guc-insert", org_id=org.id, document_key=str(uuid.uuid4())))
-        with pytest.raises(SQLAlchemyError):
+        with pytest.raises(SQLAlchemyError) as exc_info:
             await session.flush()
+        # Discriminate: the rejection is an RLS policy violation, NOT the RED-3 cast error.
+        assert "invalid input syntax for type uuid" not in str(exc_info.value)
+
+    async def test_update_delete_under_empty_guc_are_noops(
+        self, admin_session: AsyncSession, session: AsyncSession
+    ) -> None:
+        """RED-3: UPDATE/DELETE under an empty tenant GUC affect 0 rows with no cast error.
+
+        The hardened policy covers all four verbs; SELECT and INSERT are pinned by
+        the tests above. This pins the two remaining verbs: with a '' GUC, a bare
+        UPDATE/DELETE must silently match no rows (org_id = NULL is never true)
+        rather than raising ``invalid input syntax for type uuid``.
+        """
+        await set_tenant(admin_session, None)
+        org = Org(name="OrgEmptyGUCWrite", permission_number=22)
+        admin_session.add(org)
+        await admin_session.commit()
+
+        await set_tenant(admin_session, str(org.id))
+        admin_session.add(Document(title="write-target", org_id=org.id, document_key=str(uuid.uuid4())))
+        await admin_session.commit()
+
+        # Enforcement session on an empty (reverted/pooled) GUC.
+        await session.execute(text("SELECT set_config('app.current_tenant_id', '', true)"))
+
+        # UPDATE: no cast error raised, and zero rows affected (fail closed).
+        upd = await session.execute(text("UPDATE documents SET title = 'hacked'"))
+        assert upd.rowcount == 0
+
+        # DELETE: no cast error raised, and zero rows affected (fail closed).
+        dele = await session.execute(text("DELETE FROM documents"))
+        assert dele.rowcount == 0
+        await session.rollback()
+
+        # The privileged admin still sees the untouched row (no write leaked through).
+        await set_tenant(admin_session, None)
+        rows = (await admin_session.execute(select(Document).where(Document.title == "write-target"))).scalars().all()
+        assert len(rows) == 1
 
     async def test_privileged_role_sees_all_tenants(self, admin_session: AsyncSession, session: AsyncSession) -> None:
         """A privileged (BYPASSRLS/superuser) role can still read across every tenant.
