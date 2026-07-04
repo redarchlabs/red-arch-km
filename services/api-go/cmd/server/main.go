@@ -90,6 +90,7 @@ func run() error {
 	folderHandler := handlers.NewFolderHandler(pool)
 	documentHandler := handlers.NewDocumentHandler(pool, brainClient)
 	tagHandler := handlers.NewTagHandler(pool)
+	internalHandler := handlers.NewInternalHandler(pool)
 
 	// Setup router
 	r := chi.NewRouter()
@@ -124,114 +125,125 @@ func run() error {
 		ClerkAllowedAZP: cfg.ClerkAllowedAZP,
 	})
 
-	// API routes (auth required)
+	// API routes
 	r.Route("/api", func(r chi.Router) {
-		// Apply JWT auth to all /api routes
-		r.Use(jwtMiddleware.Handler)
+		// Internal service-to-service routes: authenticated by a shared
+		// X-Internal-API-Key (trusted worker status callbacks), NOT user
+		// JWTs. Registered as a sibling of the JWT group so it does not
+		// inherit jwtMiddleware. Parity with the Python /api/internal router.
+		r.Route("/internal", func(r chi.Router) {
+			r.Use(middleware.InternalAPIKeyAuth(cfg.InternalAPIKey))
+			r.Post("/documents/{documentID}/status", internalHandler.UpdateDocumentStatus)
+		})
 
-		// User routes
-		r.Route("/users", func(r chi.Router) {
-			r.Get("/me", userHandler.GetMe)
-			r.Patch("/me", userHandler.UpdateMe)
+		// User-facing routes: JWT auth required on every route.
+		r.Group(func(r chi.Router) {
+			r.Use(jwtMiddleware.Handler)
 
-			// Org-scoped user routes
-			r.Group(func(r chi.Router) {
-				r.Use(middleware.RequireOrg)
-				r.Get("/", userHandler.ListUsersInOrg)
-				r.Get("/{userID}", userHandler.GetUser)
+			// User routes
+			r.Route("/users", func(r chi.Router) {
+				r.Get("/me", userHandler.GetMe)
+				r.Patch("/me", userHandler.UpdateMe)
+
+				// Org-scoped user routes
+				r.Group(func(r chi.Router) {
+					r.Use(middleware.RequireOrg)
+					r.Get("/", userHandler.ListUsersInOrg)
+					r.Get("/{userID}", userHandler.GetUser)
+				})
 			})
-		})
 
-		// Org routes (site-admin scoped for write, member for read)
-		r.Route("/orgs", func(r chi.Router) {
-			r.Get("/", orgHandler.ListOrgs)
-			r.Post("/", orgHandler.CreateOrg)
-			r.Get("/{orgID}", orgHandler.GetOrg)
-			r.Patch("/{orgID}", orgHandler.UpdateOrg)
-			r.Delete("/{orgID}", orgHandler.DeleteOrg)
-		})
+			// Org routes (site-admin scoped for write, member for read)
+			r.Route("/orgs", func(r chi.Router) {
+				r.Get("/", orgHandler.ListOrgs)
+				r.Post("/", orgHandler.CreateOrg)
+				r.Get("/{orgID}", orgHandler.GetOrg)
+				r.Patch("/{orgID}", orgHandler.UpdateOrg)
+				r.Delete("/{orgID}", orgHandler.DeleteOrg)
+			})
 
-		// Membership routes (org-scoped, org-admin for write)
-		r.Route("/memberships", func(r chi.Router) {
-			r.Use(middleware.RequireOrg)
-			r.Get("/", membershipHandler.ListMemberships)
-			r.Post("/", membershipHandler.CreateMembership)
-			r.Get("/by-user/{userID}", membershipHandler.GetMembershipByUser)
-			r.Patch("/{membershipID}", membershipHandler.UpdateMembership)
-			r.Delete("/{membershipID}", membershipHandler.DeleteMembership)
-		})
+			// Membership routes (org-scoped, org-admin for write)
+			r.Route("/memberships", func(r chi.Router) {
+				r.Use(middleware.RequireOrg)
+				r.Get("/", membershipHandler.ListMemberships)
+				r.Post("/", membershipHandler.CreateMembership)
+				r.Get("/by-user/{userID}", membershipHandler.GetMembershipByUser)
+				r.Patch("/{membershipID}", membershipHandler.UpdateMembership)
+				r.Delete("/{membershipID}", membershipHandler.DeleteMembership)
+			})
 
-		// Dimension routes (org-scoped)
-		// Regions
-		r.Route("/regions", func(r chi.Router) {
-			r.Use(middleware.RequireOrg)
-			r.Get("/", dimensionHandler.ListRegions)
-			r.Post("/", dimensionHandler.CreateRegion)
-			r.Get("/{dimensionID}", dimensionHandler.GetRegion)
-			r.Patch("/{dimensionID}", dimensionHandler.UpdateRegion)
-			r.Delete("/{dimensionID}", dimensionHandler.DeleteRegion)
-		})
+			// Dimension routes (org-scoped)
+			// Regions
+			r.Route("/regions", func(r chi.Router) {
+				r.Use(middleware.RequireOrg)
+				r.Get("/", dimensionHandler.ListRegions)
+				r.Post("/", dimensionHandler.CreateRegion)
+				r.Get("/{dimensionID}", dimensionHandler.GetRegion)
+				r.Patch("/{dimensionID}", dimensionHandler.UpdateRegion)
+				r.Delete("/{dimensionID}", dimensionHandler.DeleteRegion)
+			})
 
-		// Departments
-		r.Route("/departments", func(r chi.Router) {
-			r.Use(middleware.RequireOrg)
-			r.Get("/", dimensionHandler.ListDepartments)
-			r.Post("/", dimensionHandler.CreateDepartment)
-			r.Get("/{dimensionID}", dimensionHandler.GetDepartment)
-			r.Patch("/{dimensionID}", dimensionHandler.UpdateDepartment)
-			r.Delete("/{dimensionID}", dimensionHandler.DeleteDepartment)
-		})
+			// Departments
+			r.Route("/departments", func(r chi.Router) {
+				r.Use(middleware.RequireOrg)
+				r.Get("/", dimensionHandler.ListDepartments)
+				r.Post("/", dimensionHandler.CreateDepartment)
+				r.Get("/{dimensionID}", dimensionHandler.GetDepartment)
+				r.Patch("/{dimensionID}", dimensionHandler.UpdateDepartment)
+				r.Delete("/{dimensionID}", dimensionHandler.DeleteDepartment)
+			})
 
-		// Roles
-		r.Route("/roles", func(r chi.Router) {
-			r.Use(middleware.RequireOrg)
-			r.Get("/", dimensionHandler.ListRoles)
-			r.Post("/", dimensionHandler.CreateRole)
-			r.Get("/{dimensionID}", dimensionHandler.GetRole)
-			r.Patch("/{dimensionID}", dimensionHandler.UpdateRole)
-			r.Delete("/{dimensionID}", dimensionHandler.DeleteRole)
-		})
+			// Roles
+			r.Route("/roles", func(r chi.Router) {
+				r.Use(middleware.RequireOrg)
+				r.Get("/", dimensionHandler.ListRoles)
+				r.Post("/", dimensionHandler.CreateRole)
+				r.Get("/{dimensionID}", dimensionHandler.GetRole)
+				r.Patch("/{dimensionID}", dimensionHandler.UpdateRole)
+				r.Delete("/{dimensionID}", dimensionHandler.DeleteRole)
+			})
 
-		// Groups
-		r.Route("/groups", func(r chi.Router) {
-			r.Use(middleware.RequireOrg)
-			r.Get("/", dimensionHandler.ListGroups)
-			r.Post("/", dimensionHandler.CreateGroup)
-			r.Get("/{dimensionID}", dimensionHandler.GetGroup)
-			r.Patch("/{dimensionID}", dimensionHandler.UpdateGroup)
-			r.Delete("/{dimensionID}", dimensionHandler.DeleteGroup)
-		})
+			// Groups
+			r.Route("/groups", func(r chi.Router) {
+				r.Use(middleware.RequireOrg)
+				r.Get("/", dimensionHandler.ListGroups)
+				r.Post("/", dimensionHandler.CreateGroup)
+				r.Get("/{dimensionID}", dimensionHandler.GetGroup)
+				r.Patch("/{dimensionID}", dimensionHandler.UpdateGroup)
+				r.Delete("/{dimensionID}", dimensionHandler.DeleteGroup)
+			})
 
-		// Folders (org-scoped, permission-filtered)
-		r.Route("/folders", func(r chi.Router) {
-			r.Use(middleware.RequireOrg)
-			r.Get("/", folderHandler.ListFolders)
-			r.Post("/", folderHandler.CreateFolder)
-			r.Post("/reorder", folderHandler.ReorderFolders)
-			r.Get("/{folderID}", folderHandler.GetFolder)
-			r.Patch("/{folderID}", folderHandler.UpdateFolder)
-			r.Delete("/{folderID}", folderHandler.DeleteFolder)
-		})
+			// Folders (org-scoped, permission-filtered)
+			r.Route("/folders", func(r chi.Router) {
+				r.Use(middleware.RequireOrg)
+				r.Get("/", folderHandler.ListFolders)
+				r.Post("/", folderHandler.CreateFolder)
+				r.Post("/reorder", folderHandler.ReorderFolders)
+				r.Get("/{folderID}", folderHandler.GetFolder)
+				r.Patch("/{folderID}", folderHandler.UpdateFolder)
+				r.Delete("/{folderID}", folderHandler.DeleteFolder)
+			})
 
-		// Documents (org-scoped, permission-filtered via folder)
-		r.Route("/documents", func(r chi.Router) {
-			r.Use(middleware.RequireOrg)
-			r.Get("/", documentHandler.ListDocuments)
-			r.Post("/", documentHandler.CreateDocument)
-			r.Get("/{documentID}", documentHandler.GetDocument)
-			r.Patch("/{documentID}", documentHandler.UpdateDocument)
-			r.Delete("/{documentID}", documentHandler.DeleteDocument)
-			r.Get("/{documentID}/chunks", documentHandler.GetDocumentChunks)
-		})
+			// Documents (org-scoped, permission-filtered via folder)
+			r.Route("/documents", func(r chi.Router) {
+				r.Use(middleware.RequireOrg)
+				r.Get("/", documentHandler.ListDocuments)
+				r.Post("/", documentHandler.CreateDocument)
+				r.Get("/{documentID}", documentHandler.GetDocument)
+				r.Patch("/{documentID}", documentHandler.UpdateDocument)
+				r.Delete("/{documentID}", documentHandler.DeleteDocument)
+				r.Get("/{documentID}/chunks", documentHandler.GetDocumentChunks)
+			})
 
-		// Tags (org-scoped)
-		r.Route("/tags", func(r chi.Router) {
-			r.Use(middleware.RequireOrg)
-			r.Get("/", tagHandler.ListTags)
-			r.Post("/", tagHandler.CreateTag)
-			r.Get("/{tagID}", tagHandler.GetTag)
-			r.Patch("/{tagID}", tagHandler.UpdateTag)
-			r.Delete("/{tagID}", tagHandler.DeleteTag)
+			// Tags (org-scoped)
+			r.Route("/tags", func(r chi.Router) {
+				r.Use(middleware.RequireOrg)
+				r.Get("/", tagHandler.ListTags)
+				r.Post("/", tagHandler.CreateTag)
+				r.Get("/{tagID}", tagHandler.GetTag)
+				r.Patch("/{tagID}", tagHandler.UpdateTag)
+				r.Delete("/{tagID}", tagHandler.DeleteTag)
+			})
 		})
 	})
 
