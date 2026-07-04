@@ -91,7 +91,13 @@ read it; org-scoping via an `X-Org-ID` header is a RED-9 follow-up.)
 
 ## Notes / known gaps
 
-- **⚠ KNOWN T3 BLOCKER — request-based specs target the UI origin, not the API.**
+- **✅ RESOLVED IN T3 (commit `49dd674`) — the blocker below is historical.**
+  T3 repointed every `request.*` call in `auth.spec.ts` and `rbac.spec.ts` from
+  `baseURL` (`:3000`) to `e2eState.apiUrl` (`:8000`), eliminating the 404
+  phantom-route tautology. The specs now genuinely exercise the Python API, so
+  the T3 green result (auth 8/8, rbac 10/10) is a real correctness signal, not a
+  vacuous one. The original note is kept below for history.
+- **⚠ (HISTORICAL) KNOWN T3 BLOCKER — request-based specs target the UI origin, not the API.**
   `auth.spec.ts` and `rbac.spec.ts` make their `request.get/post(...)` calls
   against `baseURL` (`playwright.config.ts` -> `http://localhost:3000`, the UI),
   but `ui/next.config.ts` has **no `/api` rewrite** and there are no

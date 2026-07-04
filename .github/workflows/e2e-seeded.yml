@@ -1,0 +1,134 @@
+# Seeded E2E (auth/RBAC) — on-demand + nightly ONLY.
+#
+# DECISION (RED-11 / T4, human-decided): the seeded `E2E_WITH_BACKEND=1`
+# auth/RBAC suite runs manual (workflow_dispatch) + nightly (schedule) — NOT
+# per-PR. Rationale, scope, and secret strategy: docs/testing/e2e-ci-strategy.md.
+#
+# ⚠️ This is a STUB the human must finish enabling:
+#   1. Add the repo secrets referenced below (Settings → Secrets → Actions):
+#        E2E_CLERK_PUBLISHABLE_KEY, E2E_CLERK_SECRET_KEY, E2E_TEST_SECRET
+#      (Clerk TEST instance "magnetic-albacore-4" pk_test_/sk_test_ + shared secret).
+#   2. Confirm the API / infra bring-up below matches the current compose setup.
+#      Until the secrets exist this workflow will fail fast at the "assert secrets"
+#      step (by design — it is not wired into any PR gate, so it cannot go red on PRs).
+#
+# HARD RULE: triggers are workflow_dispatch + schedule ONLY. Do NOT add
+# `pull_request` or `push` — that would expose the Clerk/test secrets to PR
+# context. See docs/testing/e2e-ci-strategy.md § SECRET MANAGEMENT.
+name: E2E Seeded (auth/RBAC)
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    # Nightly at 07:00 UTC (~midnight US Mountain). Adjust as needed.
+    - cron: "0 7 * * *"
+
+# Prevent overlapping nightly + manual runs from colliding on shared infra.
+concurrency:
+  group: e2e-seeded
+  cancel-in-progress: false
+
+jobs:
+  e2e-seeded:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        # Steps below use bash-only features (`${!v}` indirect expansion,
+        # intended word-splitting of $SPECS). Pin the shell so it stays bash.
+        shell: bash
+    # Scoped to the in-scope specs verified green at T3 (tip 99b1d27):
+    #   auth 8/8, rbac 10/10, smoke 2/2. The other 6 specs (brain-api, chat-rag,
+    #   documents, documents-full, folders-full, journey) are NOT CI-ready —
+    #   they need the brain service (:8020) + browser-level Clerk auth. Follow-up
+    #   T6/infra. Do NOT widen SPECS below until that lands. See the strategy doc.
+    env:
+      SPECS: "smoke.spec.ts auth.spec.ts rbac.spec.ts"
+    steps:
+      - uses: actions/checkout@v4
+
+      # Fail fast (and hide values) if the human has not wired the secrets yet.
+      - name: Assert required secrets are present
+        env:
+          PK: ${{ secrets.E2E_CLERK_PUBLISHABLE_KEY }}
+          SK: ${{ secrets.E2E_CLERK_SECRET_KEY }}
+          TS: ${{ secrets.E2E_TEST_SECRET }}
+        run: |
+          missing=0
+          for v in PK SK TS; do
+            if [ -z "${!v}" ]; then echo "::error::missing required secret ($v)"; missing=1; fi
+          done
+          [ "$missing" = "0" ] || { echo "See docs/testing/e2e-ci-strategy.md § SECRET MANAGEMENT"; exit 1; }
+
+      # --- Backend .env for compose/make (header-bypass mode, no Clerk backend) ---
+      - name: Write backend .env
+        env:
+          E2E_TEST_SECRET: ${{ secrets.E2E_TEST_SECRET }}
+        run: |
+          cp .env.example .env 2>/dev/null || touch .env
+          {
+            echo "API_E2E_TEST_MODE=true"
+            echo "API_E2E_TEST_SECRET=${E2E_TEST_SECRET}"
+          } >> .env
+
+      # --- Infra + API on :8000 (compose pulls in postgres+redis via depends_on).
+      #     The `ui` compose service is intentionally NOT started — Playwright's
+      #     webServer owns :3000 (port collision otherwise; see recipe doc). ---
+      - name: Start infra + API
+        run: docker compose --env-file .env -f docker/docker-compose.yml up -d --build api
+
+      - uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Python deps
+        run: uv sync --all-packages --extra dev --dev
+
+      - name: Migrate + seed
+        run: |
+          make migrate
+          make seed-e2e
+
+      # --- UI Clerk keys from secrets (gitignored ui/.env.local; never committed) ---
+      - name: Write ui/.env.local from secrets
+        env:
+          PK: ${{ secrets.E2E_CLERK_PUBLISHABLE_KEY }}
+          SK: ${{ secrets.E2E_CLERK_SECRET_KEY }}
+        # NOTE: build the file with printf, NOT an indented heredoc — a heredoc
+        # body inside a YAML `run: |` block keeps its leading indentation, which
+        # would corrupt the KEY names (" NEXT_PUBLIC_..."), breaking Clerk init.
+        run: |
+          {
+            printf 'NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=%s\n' "${PK}"
+            printf 'CLERK_SECRET_KEY=%s\n' "${SK}"
+            printf 'NEXT_PUBLIC_CLERK_SIGN_IN_URL=/login\n'
+            printf 'NEXT_PUBLIC_CLERK_SIGN_UP_URL=/sign-up\n'
+            printf 'NEXT_PUBLIC_API_URL=http://localhost:8000/api\n'
+          } > ui/.env.local
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.11"
+      - name: Install UI deps
+        working-directory: ui
+        run: bun install --frozen-lockfile
+      - name: Install Playwright browsers
+        working-directory: ui
+        run: bunx playwright install --with-deps
+
+      - name: Run seeded Playwright suite (in-scope specs)
+        working-directory: ui
+        env:
+          E2E_WITH_BACKEND: "1"
+          E2E_TEST_SECRET: ${{ secrets.E2E_TEST_SECRET }}
+          E2E_API_URL: http://localhost:8000
+        run: bunx playwright test ${SPECS}
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-seeded
+          path: ui/tests/e2e/playwright-report/
+          retention-days: 30
