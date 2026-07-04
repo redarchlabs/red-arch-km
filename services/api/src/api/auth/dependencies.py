@@ -16,7 +16,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from api.auth.clerk import validate_clerk_token
-from api.auth.keycloak import validate_keycloak_token
 from api.config import Settings, get_settings
 from api.dependencies import get_db, get_org_id
 from api.models.user import UserOrgMembership
@@ -89,7 +88,7 @@ async def _resolve_e2e_user(
 
 
 def _token_issuer(token: str) -> str:
-    """Read the `iss` claim WITHOUT verifying the signature, only to route to a
+    """Read the `iss` claim WITHOUT verifying the signature, only to select the
     verifier. The verified decode re-pins the issuer independently, so a forged
     `iss` cannot bypass signature/issuer validation (mirrors the Go verifier)."""
     try:
@@ -101,25 +100,17 @@ def _token_issuer(token: str) -> str:
 
 
 async def _verify_bearer_token(token: str, settings: Settings) -> dict[str, Any]:
-    """Dual-verify a bearer token by issuer (Keycloak or Clerk — D4 coexistence).
+    """Verify a bearer token against the configured Clerk issuer.
 
-    A token is routed to exactly one verifier by its `iss`; each verifier pins
-    its own issuer + JWKS + provider-specific check (Keycloak `aud`, Clerk `azp`).
+    The token's `iss` must match the pinned Clerk Frontend API URL; the verifier
+    then enforces the JWKS signature, issuer, and the Clerk `azp` allowlist.
     """
     issuer = _token_issuer(token)
     clerk_issuer = settings.clerk_jwt_issuer.rstrip("/") if settings.clerk_jwt_issuer else ""
-    keycloak_issuer = f"{settings.keycloak_url}/realms/{settings.keycloak_realm}" if settings.keycloak_url else ""
 
     if clerk_issuer and issuer == clerk_issuer:
         return await validate_clerk_token(token, issuer=clerk_issuer, allowed_azp=settings.clerk_allowed_azp_list)
-    if keycloak_issuer and issuer == keycloak_issuer:
-        return await validate_keycloak_token(
-            token,
-            keycloak_url=settings.keycloak_url,
-            realm=settings.keycloak_realm,
-            client_id=settings.keycloak_client_id,
-        )
-    raise JWTError("Token issuer matches no configured auth provider")
+    raise JWTError("Token issuer does not match the configured auth provider")
 
 
 async def get_current_user(
@@ -151,8 +142,8 @@ async def get_current_user(
         ) from e
 
     sub = claims.get("sub", "")
-    # Clerk exposes `username` (via JWT template); Keycloak exposes
-    # `preferred_username`. Either populates the username (mirrors the Go path).
+    # Clerk exposes `username` via the JWT template; a `preferred_username` claim
+    # is also accepted as a fallback (mirrors the Go path).
     username = claims.get("username") or claims.get("preferred_username") or ""
     email = claims.get("email", "")
 

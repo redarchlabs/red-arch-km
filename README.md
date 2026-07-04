@@ -33,7 +33,7 @@ open http://localhost:3000
 
 **Infrastructure:** PostgreSQL 18 (with RLS), Qdrant, Neo4j, Redis
 
-> Authentication is handled by an external **Keycloak** identity provider
+> Authentication is handled by **Clerk**, a modern cloud SaaS identity provider
 > (OIDC). See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for configuration.
 
 ## Development

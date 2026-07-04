@@ -69,7 +69,7 @@
 
 | ID | Requirement | Priority |
 |----|-------------|----------|
-| FR-6.1 | System shall authenticate users via Keycloak (OIDC) | Must Have |
+| FR-6.1 | System shall authenticate users via Clerk (OIDC) | Must Have |
 | FR-6.2 | System shall auto-provision user profiles on first login | Must Have |
 | FR-6.3 | System shall support JWT token authentication for API access | Must Have |
 | FR-6.4 | System shall allow users to switch between organizations | Should Have |
@@ -150,7 +150,7 @@
 | Redis | 7+ | Caching, task queue |
 | Qdrant | 1.12+ | Vector similarity search |
 | Neo4j | 5.25+ | Knowledge graph |
-| Keycloak | 26+ | Identity provider |
+| Clerk | Latest | Identity provider (SaaS) |
 | OpenAI API | - | Embeddings + completions |
 
 ---
@@ -162,5 +162,5 @@
 | C-1 | Backend must be implemented in Go |
 | C-2 | Frontend is Next.js 15 with React 18 (preserved from rebuild) |
 | C-3 | Must use existing PostgreSQL schema with RLS |
-| C-4 | Must integrate with Keycloak for authentication |
+| C-4 | Must integrate with Clerk for authentication |
 | C-5 | Must preserve API contract for frontend compatibility |

@@ -6,10 +6,10 @@ Red Arch KM exposes two REST APIs: the main API (port 8000) and Brain API (port 
 
 ### User Authentication (Main API)
 
-All main API endpoints require a Keycloak JWT:
+All main API endpoints require a Clerk session JWT:
 
 ```http
-Authorization: Bearer <keycloak_access_token>
+Authorization: Bearer <clerk_session_token>
 ```
 
 ### Service Authentication (Brain API)
@@ -283,7 +283,7 @@ Get the current user along with their accessible orgs.
 
 #### PATCH /users/me
 Update the current user's own profile (description only). Username and
-email are sourced from Keycloak and cannot be changed here.
+email are sourced from Clerk and cannot be changed here.
 
 ### Memberships
 

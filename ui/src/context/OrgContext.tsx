@@ -53,7 +53,7 @@ export function OrgProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     // Wait for AuthContext to finish initialising before hitting /users/me.
-    // Without this gate we would fire the API call before Keycloak has a
+    // Without this gate we would fire the API call before Clerk has issued a
     // token, then immediately get a 401 and bounce to /login.
     if (isInitializing) return;
 

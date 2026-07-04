@@ -42,16 +42,11 @@ class Settings(BaseSettings):
     # Separate from brain_api_key so compromise of one doesn't grant the other.
     internal_api_key: str = Field(default="", validation_alias="INTERNAL_API_KEY")
 
-    # Keycloak (legacy IdP — retained during the Clerk coexistence window, D4)
-    keycloak_url: str = Field(default="", validation_alias="KEYCLOAK_URL")
-    keycloak_realm: str = Field(default="redarch", validation_alias="KEYCLOAK_REALM")
-    keycloak_client_id: str = Field(default="redarch-km", validation_alias="KEYCLOAK_CLIENT_ID")
-
-    # Clerk (target IdP). Backends dual-verify by token `iss`: a token routes to
-    # Keycloak OR Clerk. clerk_jwt_issuer = Clerk Frontend API URL (the `iss`).
-    # CLERK_ALLOWED_AZP is comma-separated to share ONE env format with the Go
-    # verifier; see clerk_allowed_azp_list. clerk_secret_key is reserved for
-    # Backend-API provisioning (not needed for JWKS verify).
+    # Clerk (sole IdP). Backends verify the token by its `iss`, which must match
+    # clerk_jwt_issuer = Clerk Frontend API URL (the `iss`). CLERK_ALLOWED_AZP is
+    # comma-separated to share ONE env format with the Go verifier; see
+    # clerk_allowed_azp_list. clerk_secret_key is reserved for Backend-API
+    # provisioning (not needed for JWKS verify).
     clerk_jwt_issuer: str = Field(default="", validation_alias="CLERK_JWT_ISSUER")
     clerk_allowed_azp: str = Field(default="", validation_alias="CLERK_ALLOWED_AZP")
     clerk_secret_key: SecretStr = Field(default=SecretStr(""), validation_alias="CLERK_SECRET_KEY")
@@ -63,7 +58,7 @@ class Settings(BaseSettings):
     e2e_test_mode: bool = Field(
         default=False,
         description=(
-            "When true, API accepts an X-Test-User header in place of Keycloak JWTs. NEVER enable in production."
+            "When true, API accepts an X-Test-User header in place of a Clerk JWT. NEVER enable in production."
         ),
     )
     e2e_test_secret: SecretStr = Field(

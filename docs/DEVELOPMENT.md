@@ -66,10 +66,14 @@ API_SECRET_KEY=dev-secret-key-change-in-prod
 BRAIN_API_KEY=dev-brain-key
 INTERNAL_API_KEY=dev-internal-key
 
-# Optional: Keycloak (or use mock auth in dev)
-KEYCLOAK_URL=http://localhost:8080
-KEYCLOAK_REALM=redarch
-KEYCLOAK_CLIENT_ID=redarch-km
+# Clerk (dev instance or use X-Test-User header for E2E bypass)
+CLERK_SECRET_KEY=<dev-clerk-key>
+CLERK_JWT_ISSUER=<dev-clerk-issuer>
+CLERK_ALLOWED_AZP=http://localhost:3000
+NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=<dev-clerk-publishable-key>
+NEXT_PUBLIC_CLERK_SIGN_IN_URL=/login
+NEXT_PUBLIC_CLERK_SIGN_UP_URL=/sign-up
+NEXT_PUBLIC_CLERK_JWT_TEMPLATE=redarch-km
 ```
 
 ---
