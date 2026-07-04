@@ -6,6 +6,22 @@ this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+
+- **RED-3 — RLS fail-closed hardening.** Tenant-isolation RLS policies now
+  normalise the tenant GUC with `nullif(current_setting('app.current_tenant_id',
+  true), '')` before the `::uuid` cast. On a pooled connection a set-then-reverted
+  GUC reads back as the empty string `''`; the previous bare `''::uuid` cast raised
+  `invalid input syntax for type uuid` on the next RLS query (fail-closed but a 500
+  instead of an empty result). The empty string now normalises to NULL, so an
+  unset/empty tenant deterministically returns zero rows and blocks all writes —
+  fail-closed and error-free. Applied to both the Python (`api`, Alembic migration
+  `002_harden_rls_nullif`) and Go (`api-go`, migration `003_harden_rls_nullif`)
+  schemas across all 44 `tenant_isolation_*` policies. Added integration regression
+  tests for the empty-string GUC and for privileged (BYPASSRLS) cross-tenant access.
+
 ## [2.0.0] — 2026-06-14
 
 First production release of the rebuilt Knowledge Management Platform. The rebuild

@@ -62,7 +62,13 @@ async def _ensure_app_user_role(engine: AsyncEngine) -> None:
 
 
 async def _enable_rls(engine: AsyncEngine) -> None:
-    """Enable RLS + tenant_isolation policies on tenant-scoped tables."""
+    """Enable RLS + tenant_isolation policies on tenant-scoped tables.
+
+    The policy expression MUST mirror the hardened production policy from Alembic
+    migration 002 (RED-3): the tenant GUC is normalised with ``nullif(..., '')``
+    before the uuid cast so an unset/empty tenant context returns empty (fail
+    closed) instead of raising ``invalid input syntax for type uuid``.
+    """
     async with engine.begin() as conn:
         for tbl in _RLS_TABLES:
             await conn.execute(text(f"ALTER TABLE {tbl} ENABLE ROW LEVEL SECURITY"))
@@ -77,7 +83,7 @@ async def _enable_rls(engine: AsyncEngine) -> None:
                     text(f"""
                     CREATE POLICY tenant_isolation_{action} ON {tbl}
                     FOR {action.upper()}
-                    {clause} (org_id = current_setting('app.current_tenant_id', true)::uuid)
+                    {clause} (org_id = nullif(current_setting('app.current_tenant_id', true), '')::uuid)
                 """)
                 )
 
