@@ -7,7 +7,11 @@ import { expect, test } from "./fixtures";
  * Requires E2E_WITH_BACKEND=1 and a running Qdrant + Brain API service.
  */
 
-test.describe("Brain API / Knowledge Base Integration", () => {
+// Serial: these tests form an ordered chain (create -> ingest -> verify ->
+// clean up) that shares describe-scoped `documentId`/`documentTitle`. The suite
+// runs under `fullyParallel: true`, so without serial mode Playwright would
+// schedule these across workers and race on that shared mutable state.
+test.describe.serial("Brain API / Knowledge Base Integration", () => {
   test.skip(!process.env.E2E_WITH_BACKEND, "requires seeded backend with Brain API");
 
   let documentId: string;

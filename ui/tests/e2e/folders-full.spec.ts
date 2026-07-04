@@ -8,7 +8,12 @@ import { FoldersPage } from "./pages/folders.page";
  * Requires E2E_WITH_BACKEND=1 for full integration with API.
  */
 
-test.describe("Folder Management Flow", () => {
+// Serial: these tests form an ordered chain (create parent -> create child ->
+// nest -> add document -> clean up) that shares describe-scoped
+// `parentFolderId`/`childFolderId`/`documentId`. The suite runs under
+// `fullyParallel: true`, so without serial mode Playwright would schedule these
+// across workers and race on that shared mutable state.
+test.describe.serial("Folder Management Flow", () => {
   test.skip(!process.env.E2E_WITH_BACKEND, "requires seeded backend");
 
   let parentFolderId: string;

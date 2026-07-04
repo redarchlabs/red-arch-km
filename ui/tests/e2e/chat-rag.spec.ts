@@ -8,7 +8,11 @@ import { ChatPage } from "./pages/chat.page";
  * Requires E2E_WITH_BACKEND=1, a running Chat API, and ingested knowledge base documents.
  */
 
-test.describe("Chat / RAG Flow", () => {
+// Serial: these tests form an ordered chain (seed document -> chat against it ->
+// clean up) that shares describe-scoped `documentId`. The suite runs under
+// `fullyParallel: true`, so without serial mode Playwright would schedule these
+// across workers and race on that shared mutable state.
+test.describe.serial("Chat / RAG Flow", () => {
   test.skip(!process.env.E2E_WITH_BACKEND, "requires seeded backend with Chat API");
 
   let documentId: string;
