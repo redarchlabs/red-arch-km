@@ -8,7 +8,11 @@ import { DocumentsPage } from "./pages/documents.page";
  * Requires E2E_WITH_BACKEND=1 for full integration with API.
  */
 
-test.describe("Document Management Flow", () => {
+// Serial: these tests form an ordered CRUD chain (create -> read -> update ->
+// delete) that shares describe-scoped `createdDocId`/`documentTitle`. The suite
+// runs under `fullyParallel: true`, so without serial mode Playwright would
+// schedule these across workers and race on that shared mutable state.
+test.describe.serial("Document Management Flow", () => {
   test.skip(!process.env.E2E_WITH_BACKEND, "requires seeded backend");
 
   let createdDocId: string;

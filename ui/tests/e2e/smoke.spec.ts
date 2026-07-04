@@ -19,7 +19,17 @@ test.describe("app boot", () => {
     // Clerk initializes, so we must wait for the URL to SETTLE — sampling it at
     // "domcontentloaded" catches the transient /documents state mid-hydration.
     await page.waitForURL(/login|clerk|accounts|auth/i, { timeout: 15_000 });
-    expect(page.url()).toMatch(/login|clerk|accounts|auth/i);
+    // Discrimination: this test must FAIL when the auth state is wrong, not
+    // always-pass. Two guards enforce that:
+    //   1. waitForURL fails-closed — if the gate were broken and the visitor was
+    //      NOT redirected, it times out and the test fails (rather than the URL
+    //      simply not matching at an arbitrary sample point).
+    //   2. We explicitly assert we did NOT settle on the protected /documents
+    //      route. Without this, a regression that let an unauthenticated visitor
+    //      reach app content could still slip past a purely positive check.
+    const settledUrl = page.url();
+    expect(settledUrl).toMatch(/login|clerk|accounts|auth/i);
+    expect(settledUrl).not.toMatch(/\/documents(\b|\/|$)/);
   });
 
   test("login page renders", async ({ page }) => {

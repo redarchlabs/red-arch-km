@@ -32,13 +32,14 @@ test.describe("RBAC / Permission Boundaries", () => {
       },
     });
 
-    // Regular user should be able to list documents (200) or have auth failure
-    // If auth is working correctly, 200 means they can access
-    expect([200, 401, 403]).toContain(res.status());
-    if (res.ok()) {
-      const body = (await res.json()) as { items: unknown[] };
-      expect(Array.isArray(body.items)).toBe(true);
-    }
+    // A seeded regular user with org access CAN list documents: the one correct
+    // outcome for this case is 200. Accepting 401/403 here made the assertion a
+    // tautology (it would pass whether access succeeded OR was denied), so the
+    // test could never catch a broken permission grant. Pin to 200 and always
+    // validate the response shape.
+    expect(res.status()).toBe(200);
+    const body = (await res.json()) as { items: unknown[] };
+    expect(Array.isArray(body.items)).toBe(true);
   });
 
   test("admin user can access admin panel", async ({ request, baseURL }) => {
