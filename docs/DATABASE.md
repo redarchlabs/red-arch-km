@@ -219,6 +219,13 @@ USING (org_id = nullif(current_setting('app.current_tenant_id', true), '')::uuid
 > `nullif('', '')` normalises to NULL, so an unset/empty tenant deterministically
 > returns zero rows and blocks all writes — **fail closed and error-free**. The
 > Go `api-go` schema carries the identical hardening in migration `003`.
+>
+> The normalisation is **empty-string-specific by design**: a *non-empty*
+> malformed tenant value (e.g. `'not-a-uuid'`) still raises on the `::uuid` cast
+> (fail-loud). That is acceptable — the tenant id is always a validated `uuid.UUID`
+> sourced from the authenticated request context, never from connection pooling —
+> and a loud failure on a genuinely corrupt value is preferable to silently
+> scoping to no tenant.
 
 ### Tenant Context
 
