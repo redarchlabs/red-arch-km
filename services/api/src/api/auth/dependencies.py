@@ -79,7 +79,7 @@ async def _resolve_e2e_user(
 
     profile = await provision_user_from_claims(session, sub=f"e2e-{username}", username=username, email=email)
     return CurrentUser(
-        sub=profile.keycloak_sub,
+        sub=profile.auth_subject,
         username=profile.username,
         email=profile.email,
         profile_id=profile.id,

@@ -36,7 +36,7 @@ async def org_b(admin_session: AsyncSession) -> Org:
 async def user_a(admin_session: AsyncSession) -> UserProfile:
     """Create user A."""
     user = UserProfile(
-        keycloak_sub=f"user-a-{uuid.uuid4()}",
+        auth_subject=f"user-a-{uuid.uuid4()}",
         username=f"user_a_{uuid.uuid4().hex[:8]}",
         email=f"user_a_{uuid.uuid4().hex[:8]}@test.local",
     )
@@ -49,7 +49,7 @@ async def user_a(admin_session: AsyncSession) -> UserProfile:
 async def user_b(admin_session: AsyncSession) -> UserProfile:
     """Create user B."""
     user = UserProfile(
-        keycloak_sub=f"user-b-{uuid.uuid4()}",
+        auth_subject=f"user-b-{uuid.uuid4()}",
         username=f"user_b_{uuid.uuid4().hex[:8]}",
         email=f"user_b_{uuid.uuid4().hex[:8]}@test.local",
     )

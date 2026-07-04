@@ -68,7 +68,7 @@ async def seed() -> None:
         admin = await _get_or_create(
             session,
             UserProfile,
-            filters={"keycloak_sub": E2E_ADMIN_SUB},
+            filters={"auth_subject": E2E_ADMIN_SUB},
             defaults={
                 "username": E2E_ADMIN_USERNAME,
                 "email": E2E_ADMIN_EMAIL,
@@ -166,7 +166,7 @@ async def seed() -> None:
             m_profile = await _get_or_create(
                 session,
                 UserProfile,
-                filters={"keycloak_sub": f"e2e-{m_username}"},
+                filters={"auth_subject": f"e2e-{m_username}"},
                 defaults={"username": m_username, "email": m_email, "is_site_admin": False},
             )
             m_membership = await _get_or_create(

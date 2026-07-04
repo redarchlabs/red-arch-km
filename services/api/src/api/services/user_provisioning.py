@@ -22,10 +22,10 @@ async def provision_user_from_claims(
     """Find or create a UserProfile for the given Clerk subject.
 
     Called on every authenticated request; the first call creates the record.
-    The ``keycloak_sub`` column now stores the Clerk subject (the column rename
-    to ``auth_subject`` is tracked separately as a deferred DB migration).
+    The ``auth_subject`` column stores the OIDC subject (renamed from
+    ``keycloak_sub`` in migration 003, D3/AC-4.1).
     """
-    result = await session.execute(select(UserProfile).where(UserProfile.keycloak_sub == sub))
+    result = await session.execute(select(UserProfile).where(UserProfile.auth_subject == sub))
     profile = result.scalar_one_or_none()
 
     if profile is not None:
@@ -42,7 +42,7 @@ async def provision_user_from_claims(
         return profile
 
     profile = UserProfile(
-        keycloak_sub=sub,
+        auth_subject=sub,
         username=username,
         email=email,
         is_site_admin=False,
