@@ -193,23 +193,32 @@ Each table has four policies:
 -- SELECT: Can only read rows matching tenant
 CREATE POLICY tenant_isolation_select ON {table}
 FOR SELECT
-USING (org_id = current_setting('app.current_tenant_id', true)::uuid);
+USING (org_id = nullif(current_setting('app.current_tenant_id', true), '')::uuid);
 
 -- INSERT: Can only insert rows matching tenant
 CREATE POLICY tenant_isolation_insert ON {table}
 FOR INSERT
-WITH CHECK (org_id = current_setting('app.current_tenant_id', true)::uuid);
+WITH CHECK (org_id = nullif(current_setting('app.current_tenant_id', true), '')::uuid);
 
 -- UPDATE: Can only update rows matching tenant
 CREATE POLICY tenant_isolation_update ON {table}
 FOR UPDATE
-USING (org_id = current_setting('app.current_tenant_id', true)::uuid);
+USING (org_id = nullif(current_setting('app.current_tenant_id', true), '')::uuid);
 
 -- DELETE: Can only delete rows matching tenant
 CREATE POLICY tenant_isolation_delete ON {table}
 FOR DELETE
-USING (org_id = current_setting('app.current_tenant_id', true)::uuid);
+USING (org_id = nullif(current_setting('app.current_tenant_id', true), '')::uuid);
 ```
+
+> **RED-3 hardening (migration 002):** the tenant GUC is normalised with
+> `nullif(current_setting(...), '')` before the `::uuid` cast. On a pooled
+> connection a set-then-reverted GUC reads back as the empty string `''` (not
+> NULL); a bare `''::uuid` cast raises `invalid input syntax for type uuid`,
+> turning a benign "no tenant context" state into an error on the next RLS query.
+> `nullif('', '')` normalises to NULL, so an unset/empty tenant deterministically
+> returns zero rows and blocks all writes — **fail closed and error-free**. The
+> Go `api-go` schema carries the identical hardening in migration `003`.
 
 ### Tenant Context
 
@@ -249,6 +258,7 @@ alembic downgrade -1
 
 Located in `services/api/alembic/versions/`:
 - `001_initial_schema_with_rls.py` — Core tables and RLS policies
+- `002_harden_rls_nullif.py` — RED-3: fail-closed RLS on empty tenant GUC (`nullif(..., '')`)
 
 ## Indexes
 

@@ -10,10 +10,11 @@ async def set_tenant(session: AsyncSession, tenant_id: str | None) -> None:
     """Set (or clear) the `app.current_tenant_id` session variable.
 
     Passing None clears the setting with RESET so RLS policies see an
-    unset (NULL) value. Using set_config with an empty string would leave
-    a literal '' in the setting, which the policy expression
-    `current_setting(...)::uuid` would then try to cast and raise
-    "invalid input syntax for type uuid" on any subsequent RLS query.
+    unset (NULL) value. Since the RED-3 hardening (migration 002) the policy
+    normalises an empty GUC with `nullif(current_setting(...), '')::uuid`, so a
+    literal '' now fails closed (empty result) rather than raising
+    "invalid input syntax for type uuid"; RESET is still used here as the
+    cleanest way to model a genuinely-absent tenant context.
     """
     if tenant_id is None:
         await session.execute(text("RESET app.current_tenant_id"))
