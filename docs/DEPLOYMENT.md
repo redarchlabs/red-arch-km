@@ -68,6 +68,10 @@ OPENAI_EMBEDDING_MODEL=text-embedding-3-small
 # Clerk
 CLERK_SECRET_KEY=<sk_...>
 CLERK_JWT_ISSUER=https://<your-clerk-instance>.clerk.accounts.com
+# REQUIRED whenever Clerk is enabled: comma-separated allowlist of UI origins.
+# Clerk session tokens carry no `aud`, so the backend enforces `azp` against this
+# list instead; startup FAILS if it is unset. Match the UI Origin byte-for-byte
+# (scheme+host, no trailing slash, include the port only if the origin has one).
 CLERK_ALLOWED_AZP=https://app.yourdomain.com
 NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=<pk_...>
 NEXT_PUBLIC_CLERK_SIGN_IN_URL=/login
@@ -175,10 +179,17 @@ Create a JWT template named `redarch-km` that emits:
 ```json
 {
   "email": "{{user.primary_email_address}}",
-  "email_verified": "{{user.primary_email_address_verified}}",
+  "email_verified": "{{user.email_verified}}",
   "username": "{{user.username}}"
 }
 ```
+
+> **Critical:** the `email_verified` shortcode MUST be exactly `{{user.email_verified}}`
+> (verified live to emit a boolean). `{{user.primary_email_address_verified}}` is **not**
+> a valid Clerk shortcode — it renders as a literal string, so `email_verified` never
+> equals `true` and the backend 403-locks out every migrated user on first Clerk login.
+> The template must emit `email`, `email_verified`, **and** `username`: omitting `email`
+> causes silent membership loss; omitting `email_verified` blocks the verified-email relink.
 
 ### 4. Configure Keys and Secrets
 
