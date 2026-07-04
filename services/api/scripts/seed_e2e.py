@@ -122,9 +122,43 @@ async def seed() -> None:
             filters={"profile_id": admin.id, "org_id": org_id},
             defaults={"is_org_admin": True},
         )
-        # Link admin to first region so permission mask is non-zero for chain tests
+        # Link admin to first region so permission mask is non-zero for chain tests.
+        # Eager-load the m2m collection first — accessing an unloaded relationship
+        # lazily under async SQLAlchemy raises "greenlet_spawn has not been called".
+        await session.refresh(membership, attribute_names=["regions"])
         if not membership.regions:
             membership.regions = [created_regions[0]]
+
+        # Additional non-admin members referenced by the RBAC E2E specs
+        # (regular_user, user_a, user_b). The API auto-provisions these profiles
+        # on first X-Test-User request, but the specs need them to already be
+        # MEMBERS of this org so org-scoped endpoints resolve (a bare provisioned
+        # user with no membership gets 403). Their subs match the API bypass
+        # convention (`e2e-<username>`, see auth/dependencies._resolve_e2e_user),
+        # so the later auto-provision reuses these rows instead of duplicating.
+        # region North vs South gives user_a / user_b disjoint permission masks.
+        south = created_regions[1] if len(created_regions) > 1 else created_regions[0]
+        member_specs = [
+            ("regular_user", "test@example.com", created_regions[0]),
+            ("user_a", "usera@example.com", created_regions[0]),
+            ("user_b", "userb@example.com", south),
+        ]
+        for m_username, m_email, m_region in member_specs:
+            m_profile = await _get_or_create(
+                session,
+                UserProfile,
+                filters={"keycloak_sub": f"e2e-{m_username}"},
+                defaults={"username": m_username, "email": m_email, "is_site_admin": False},
+            )
+            m_membership = await _get_or_create(
+                session,
+                UserOrgMembership,
+                filters={"profile_id": m_profile.id, "org_id": org_id},
+                defaults={"is_org_admin": False},
+            )
+            await session.refresh(m_membership, attribute_names=["regions"])
+            if not m_membership.regions:
+                m_membership.regions = [m_region]
 
         # Folders
         await _get_or_create(

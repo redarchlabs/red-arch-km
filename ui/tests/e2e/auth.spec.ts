@@ -57,9 +57,10 @@ test.describe("Authentication Flow", () => {
     expect(meRes.ok()).toBe(true);
   });
 
-  test("invalid session token is rejected", async ({ request, baseURL }) => {
-    // Try to access API with invalid credentials
-    const res = await request.get(`${baseURL}/api/users/me`, {
+  test("invalid session token is rejected", async ({ request, e2eState }) => {
+    // Try to access API with invalid credentials. Drive the API origin
+    // directly (:8000) — the UI origin has no /api handler and would 404.
+    const res = await request.get(`${e2eState.apiUrl}/api/users/me`, {
       headers: {
         "X-Test-User": "invalid:user@example.com",
         "X-Test-Secret": "invalid-secret-12345",
@@ -70,20 +71,20 @@ test.describe("Authentication Flow", () => {
     expect([401, 403, 404]).toContain(res.status());
   });
 
-  test("missing auth headers results in error", async ({ request, baseURL }) => {
+  test("missing auth headers results in error", async ({ request, e2eState }) => {
     // Try to access protected API without any auth headers
-    const res = await request.get(`${baseURL}/api/users/me`);
+    const res = await request.get(`${e2eState.apiUrl}/api/users/me`);
 
     // Should be rejected
     expect([401, 403, 404]).toContain(res.status());
   });
 
-  test("expired/malformed session token is rejected", async ({ request, baseURL }) => {
+  test("expired/malformed session token is rejected", async ({ request, e2eState }) => {
     // Try various malformed tokens
     const badTokens = ["", "invalid-token", "eyJhbGc...", "null"];
 
     for (const token of badTokens) {
-      const res = await request.get(`${baseURL}/api/users/me`, {
+      const res = await request.get(`${e2eState.apiUrl}/api/users/me`, {
         headers: {
           "X-Test-User": "user@example.com",
           "X-Test-Secret": token,
