@@ -4,8 +4,9 @@ Creates one org, a handful of permission dimensions, a test admin user,
 a couple of folders, and a set of tags. The E2E suite then logs in as
 the test admin via the X-Test-User header (see dependencies.py).
 
-Usage:
-    DATABASE_URL=postgresql+asyncpg://… python -m api.scripts.seed_e2e
+Usage (run from services/api):
+    DATABASE_URL=postgresql+asyncpg://… python -m scripts.seed_e2e
+    # or, from the repo root: make seed-e2e
 
 Idempotent — safe to run multiple times. Records are upserted by name.
 """
