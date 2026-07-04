@@ -15,12 +15,6 @@ func TestLoad(t *testing.T) {
 	if cfg.Port != 8000 {
 		t.Errorf("Port = %d, want 8000", cfg.Port)
 	}
-	if cfg.KeycloakRealm != "redarch" {
-		t.Errorf("KeycloakRealm = %q, want %q", cfg.KeycloakRealm, "redarch")
-	}
-	if cfg.KeycloakClientID != "redarch-km" {
-		t.Errorf("KeycloakClientID = %q, want %q", cfg.KeycloakClientID, "redarch-km")
-	}
 
 	// Test with env vars set
 	os.Setenv("DATABASE_URL", "postgres://test:test@localhost/test")
@@ -56,13 +50,16 @@ func TestValidate(t *testing.T) {
 		t.Error("Validate() should fail in production without required fields")
 	}
 
-	// Set required fields
+	// Set required fields — Clerk is the sole auth provider; its issuer plus a
+	// non-empty azp allowlist are required in production.
 	os.Setenv("DATABASE_URL", "postgres://test:test@localhost/test")
-	os.Setenv("KEYCLOAK_URL", "http://keycloak:8080")
+	os.Setenv("CLERK_JWT_ISSUER", "https://clerk.example.com")
+	os.Setenv("CLERK_ALLOWED_AZP", "http://localhost:3000")
 	os.Setenv("API_SECRET_KEY", "secret")
 	defer func() {
 		os.Unsetenv("DATABASE_URL")
-		os.Unsetenv("KEYCLOAK_URL")
+		os.Unsetenv("CLERK_JWT_ISSUER")
+		os.Unsetenv("CLERK_ALLOWED_AZP")
 		os.Unsetenv("API_SECRET_KEY")
 	}()
 

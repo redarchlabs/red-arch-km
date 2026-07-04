@@ -22,6 +22,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   schemas across all 44 `tenant_isolation_*` policies. Added integration regression
   tests for the empty-string GUC and for privileged (BYPASSRLS) cross-tenant access.
 
+### Changed — Authentication migrated from Keycloak to Clerk
+
+End-user authentication moved from self-hosted **Keycloak** (OIDC) to **Clerk**
+(cloud identity provider). The migration ran as a dual-verify coexistence window
+(backends accepted a Keycloak *or* Clerk token, routed by the token `iss`) during
+a soak period; **Slice 6 completes the cutover by removing Keycloak entirely**.
+Clerk is now the sole identity provider.
+
+- **RBAC/`access_mask` and multi-tenant RLS are unchanged** — identity is
+  orthogonal to authorization; only the token verifier and IdP changed.
+- **Service-to-service auth is unchanged** (`BRAIN_API_KEY` / `X-API-Key`,
+  `INTERNAL_API_KEY` / `X-Internal-API-Key`).
+
+#### Removed (Slice 6)
+
+- `keycloak-js` dependency from the UI (`ui/package.json`).
+- The Keycloak JWT verify path from the Go (`services/api-go`) and Python
+  (`services/api`) backends, and the dual-verify (issuer-routing) branch — the
+  backends now verify Clerk session tokens only.
+- The `KEYCLOAK_URL` environment variable from `docker/docker-compose.go.yml`.
+- **Environment variables removed** (delete these from any `.env`):
+  `KEYCLOAK_URL`, `KEYCLOAK_REALM`, `KEYCLOAK_CLIENT_ID`, and the UI's
+  `NEXT_PUBLIC_KEYCLOAK_URL` / `NEXT_PUBLIC_KEYCLOAK_REALM` /
+  `NEXT_PUBLIC_KEYCLOAK_CLIENT_ID`.
+
+#### Clerk configuration (required)
+
+- Backend: `CLERK_JWT_ISSUER` (Clerk Frontend API URL — the token `iss`),
+  `CLERK_ALLOWED_AZP` (comma-separated allowlist of UI origins; **mandatory** —
+  Clerk tokens carry no `aud`, so `azp` is the security-critical origin check),
+  `CLERK_SECRET_KEY`.
+- UI: `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`, `NEXT_PUBLIC_CLERK_SIGN_IN_URL=/login`,
+  `NEXT_PUBLIC_CLERK_SIGN_UP_URL=/sign-up`, and a Clerk JWT template
+  (`NEXT_PUBLIC_CLERK_JWT_TEMPLATE=redarch-km`) emitting `email`,
+  `email_verified`, and `username`.
+
+#### Rollback note
+
+Rollback during the soak window was a config flip (point the UI back at Keycloak;
+backends still verified the Keycloak `iss`). **After Slice 6, rollback requires
+restoring the Keycloak verify path, `keycloak-js`, the `KEYCLOAK_*` env, and the
+Keycloak service** — this cutover was performed only after the soak was clean and
+the human authorized it.
+
+> Note: the `user_profiles.keycloak_sub` **column** is intentionally retained in
+> the Python stack under its original name (it now stores the Clerk subject); the
+> rename to `auth_subject` is a separate, deferred database migration.
+
 ## [2.0.0] — 2026-06-14
 
 First production release of the rebuilt Knowledge Management Platform. The rebuild

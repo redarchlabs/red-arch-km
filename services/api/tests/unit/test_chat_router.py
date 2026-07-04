@@ -22,9 +22,6 @@ def mock_settings() -> Settings:
         database_url="postgresql+asyncpg://test:test@localhost/test",
         brain_api_url="http://brain-api:8000",
         brain_api_key="test-key",
-        keycloak_url="http://keycloak:8080",
-        keycloak_realm="test",
-        keycloak_client_id="test-client",
     )
 
 

@@ -1,6 +1,6 @@
 """User management routes.
 
-Users are auto-provisioned on first Keycloak login (see
+Users are auto-provisioned on first Clerk login (see
 services/user_provisioning.py). Only the current user may update their
 profile, and user CREATE / DELETE flows through the identity provider.
 """
@@ -60,7 +60,7 @@ async def update_me(
 ) -> UserRead:
     """Update the current user's profile (description only).
 
-    Username and email come from Keycloak and are overwritten on each
+    Username and email come from Clerk and are overwritten on each
     login via `provision_user_from_claims`, so editing them here has no
     durable effect.
     """

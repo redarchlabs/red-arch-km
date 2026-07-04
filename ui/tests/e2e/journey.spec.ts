@@ -46,8 +46,8 @@ test.describe("documents journey", () => {
 
     await page.goto(`${e2eState.uiUrl}/folders`);
 
-    // The UI's Keycloak wrapper will try to redirect us — the test here
-    // verifies the server-side flow works, not the full Keycloak dance.
+    // The Clerk middleware will try to redirect us — the test here verifies
+    // the server-side flow works, not the full Clerk sign-in dance.
     // If we see the folder name in the DOM the chain is working.
     await expect(page.getByText(folderName, { exact: false })).toBeVisible({
       timeout: 15_000,

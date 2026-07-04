@@ -67,9 +67,8 @@ func TestGetUserClaims(t *testing.T) {
 
 func TestJWTMiddleware_Handler_MissingToken(t *testing.T) {
 	mw := NewJWTMiddleware(JWTConfig{
-		KeycloakURL:      "http://keycloak:8080",
-		KeycloakRealm:    "test",
-		KeycloakClientID: "test-client",
+		ClerkIssuer:     "https://clerk.example.com",
+		ClerkAllowedAZP: []string{"http://localhost:3000"},
 	})
 
 	handler := mw.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -94,8 +93,8 @@ type signer struct {
 }
 
 // newMockJWKS starts an httptest server that serves the public JWKS (for the
-// first key only) at ANY path, mirroring both Keycloak's /certs endpoint and
-// Clerk's /.well-known/jwks.json. Returns the server and a signer.
+// first key only) at ANY path, mirroring Clerk's /.well-known/jwks.json.
+// Returns the server and a signer.
 func newMockJWKS(t *testing.T) (*httptest.Server, *signer) {
 	t.Helper()
 
@@ -189,18 +188,6 @@ func clerkClaims(issuer string) map[string]any {
 		"azp":             "http://localhost:3000",
 		"email":           "alice@example.com",
 		"username":        "alice",
-	}
-}
-
-func keycloakClaims(issuer string) map[string]any {
-	return map[string]any{
-		jwt.SubjectKey:       "kc-uuid-123",
-		jwt.IssuerKey:        issuer,
-		jwt.AudienceKey:      []string{"redarch-km"},
-		jwt.ExpirationKey:    time.Now().Add(time.Hour),
-		jwt.IssuedAtKey:      time.Now(),
-		"email":              "bob@example.com",
-		"preferred_username": "bob",
 	}
 }
 
@@ -307,75 +294,9 @@ func TestClerk_RejectsFutureNbf(t *testing.T) {
 	}
 }
 
-// --- Keycloak verify path retained (AC-1.2, AC-1.6) -------------------------
+// --- Issuer pinning: a foreign issuer is rejected (AC-1.2) ------------------
 
-func TestKeycloak_ValidToken_Authenticates(t *testing.T) {
-	srv, s := newMockJWKS(t)
-	mw := NewJWTMiddleware(JWTConfig{
-		KeycloakURL:      srv.URL,
-		KeycloakRealm:    "test",
-		KeycloakClientID: "redarch-km",
-	})
-
-	w, claims := serve(mw, s.sign(t, keycloakClaims(srv.URL+"/realms/test")))
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", w.Code)
-	}
-	if claims == nil || claims.Sub != "kc-uuid-123" {
-		t.Fatalf("claims = %+v, want Sub=kc-uuid-123", claims)
-	}
-	if claims.PreferredUsername != "bob" {
-		t.Errorf("PreferredUsername = %q, want bob", claims.PreferredUsername)
-	}
-}
-
-func TestKeycloak_RejectsWrongAudience(t *testing.T) {
-	srv, s := newMockJWKS(t)
-	mw := NewJWTMiddleware(JWTConfig{
-		KeycloakURL:      srv.URL,
-		KeycloakRealm:    "test",
-		KeycloakClientID: "redarch-km",
-	})
-
-	c := keycloakClaims(srv.URL + "/realms/test")
-	c[jwt.AudienceKey] = []string{"some-other-client"}
-	w, _ := serve(mw, s.sign(t, c))
-	if w.Code != http.StatusUnauthorized {
-		t.Errorf("wrong aud: status = %d, want 401", w.Code)
-	}
-}
-
-// --- Dual-verify routing by issuer (AC-1.2) ---------------------------------
-
-func TestDualVerify_RoutesByIssuer(t *testing.T) {
-	srv, s := newMockJWKS(t)
-	// Both providers configured against the same mock JWKS.
-	mw := NewJWTMiddleware(JWTConfig{
-		KeycloakURL:      srv.URL,
-		KeycloakRealm:    "test",
-		KeycloakClientID: "redarch-km",
-		ClerkIssuer:      srv.URL + "/clerk",
-		ClerkAllowedAZP:  []string{"http://localhost:3000"},
-	})
-
-	// A Clerk-issued token authenticates via the Clerk verifier (azp checked).
-	if w, _ := serve(mw, s.sign(t, clerkClaims(srv.URL+"/clerk"))); w.Code != http.StatusOK {
-		t.Errorf("clerk token via dual-verify: status = %d, want 200", w.Code)
-	}
-	// A Keycloak-issued token still authenticates via the Keycloak verifier.
-	if w, _ := serve(mw, s.sign(t, keycloakClaims(srv.URL+"/realms/test"))); w.Code != http.StatusOK {
-		t.Errorf("keycloak token via dual-verify: status = %d, want 200", w.Code)
-	}
-	// A Clerk token must NOT pass the Keycloak audience path — its azp is still
-	// enforced (route is by issuer, not by trying every verifier).
-	c := clerkClaims(srv.URL + "/clerk")
-	c["azp"] = "http://evil.example.com"
-	if w, _ := serve(mw, s.sign(t, c)); w.Code != http.StatusUnauthorized {
-		t.Errorf("clerk token bad azp via dual-verify: status = %d, want 401", w.Code)
-	}
-}
-
-func TestDualVerify_RejectsUnknownIssuer(t *testing.T) {
+func TestClerk_RejectsUnknownIssuer(t *testing.T) {
 	srv, s := newMockJWKS(t)
 	mw := NewJWTMiddleware(JWTConfig{
 		ClerkIssuer:     srv.URL,
@@ -504,25 +425,22 @@ func TestClerk_RejectsEmptyAZP(t *testing.T) {
 	}
 }
 
-// --- Cross-provider key confusion (QA MEDIUM-2) -----------------------------
-// Two DISTINCT mock JWKS (distinct keys). A token claiming the Clerk issuer but
-// signed by the Keycloak key must 401 — each verifier reads ONLY its own keyset.
-func TestDualVerify_RejectsCrossProviderKey(t *testing.T) {
-	srvKC, sKC := newMockJWKS(t)
+// --- Foreign-key confusion (QA MEDIUM-2) ------------------------------------
+// A token with the correct Clerk issuer but signed by a key NOT in the Clerk
+// JWKS must 401 — the verifier reads ONLY its configured keyset.
+func TestClerk_RejectsForeignKey(t *testing.T) {
+	_, sOther := newMockJWKS(t)   // a distinct key, never published to the verifier
 	srvClerk, sClerk := newMockJWKS(t)
 
 	mw := NewJWTMiddleware(JWTConfig{
-		KeycloakURL:      srvKC.URL,
-		KeycloakRealm:    "test",
-		KeycloakClientID: "redarch-km",
-		ClerkIssuer:      srvClerk.URL,
-		ClerkAllowedAZP:  []string{"http://localhost:3000"},
+		ClerkIssuer:     srvClerk.URL,
+		ClerkAllowedAZP: []string{"http://localhost:3000"},
 	})
 
-	// iss = Clerk, but signed with the Keycloak key → Clerk verifier's keyset
-	// (srvClerk) has no matching key → signature fails → 401.
-	if w, _ := serve(mw, sKC.sign(t, clerkClaims(srvClerk.URL))); w.Code != http.StatusUnauthorized {
-		t.Errorf("cross-provider key: status = %d, want 401", w.Code)
+	// iss = Clerk, but signed with a foreign key → verifier's keyset has no
+	// matching key → signature fails → 401.
+	if w, _ := serve(mw, sOther.sign(t, clerkClaims(srvClerk.URL))); w.Code != http.StatusUnauthorized {
+		t.Errorf("foreign key: status = %d, want 401", w.Code)
 	}
 	// Sanity: a token properly signed by the Clerk key still authenticates.
 	if w, _ := serve(mw, sClerk.sign(t, clerkClaims(srvClerk.URL))); w.Code != http.StatusOK {

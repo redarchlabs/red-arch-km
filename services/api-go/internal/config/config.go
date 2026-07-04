@@ -28,11 +28,6 @@ type Config struct {
 	// Internal API Key (for service-to-service calls)
 	InternalAPIKey string
 
-	// Keycloak (legacy — retained during the Clerk coexistence window, D4).
-	KeycloakURL      string
-	KeycloakRealm    string
-	KeycloakClientID string
-
 	// Clerk
 	//   ClerkIssuer     = Clerk Frontend API URL (token `iss`).
 	//   ClerkAllowedAZP = authorized-party allowlist (UI origins); required
@@ -68,10 +63,6 @@ func Load() Config {
 
 		InternalAPIKey: config.GetEnv("INTERNAL_API_KEY", ""),
 
-		KeycloakURL:      config.GetEnv("KEYCLOAK_URL", ""),
-		KeycloakRealm:    config.GetEnv("KEYCLOAK_REALM", "redarch"),
-		KeycloakClientID: config.GetEnv("KEYCLOAK_CLIENT_ID", "redarch-km"),
-
 		ClerkIssuer:     config.GetEnv("CLERK_JWT_ISSUER", ""),
 		ClerkAllowedAZP: config.GetEnvStringSlice("CLERK_ALLOWED_AZP", nil),
 		ClerkSecretKey:  config.GetEnv("CLERK_SECRET_KEY", ""),
@@ -94,9 +85,8 @@ func (c Config) Validate() error {
 		if c.DatabaseURL == "" {
 			return ErrMissingDatabaseURL
 		}
-		// At least one auth provider must be configured. During the Clerk
-		// coexistence window either (or both) is acceptable.
-		if c.KeycloakURL == "" && c.ClerkIssuer == "" {
+		// Clerk is the sole auth provider; its issuer must be configured.
+		if c.ClerkIssuer == "" {
 			return ErrMissingAuthProvider
 		}
 		if c.SecretKey == "" {
@@ -113,8 +103,7 @@ func (e configError) Error() string { return string(e) }
 
 const (
 	ErrMissingDatabaseURL     configError = "DATABASE_URL is required"
-	ErrMissingKeycloakURL     configError = "KEYCLOAK_URL is required"
-	ErrMissingAuthProvider    configError = "an auth provider is required: set KEYCLOAK_URL and/or CLERK_JWT_ISSUER"
+	ErrMissingAuthProvider    configError = "CLERK_JWT_ISSUER is required"
 	ErrMissingClerkAllowedAZP configError = "CLERK_ALLOWED_AZP is required when CLERK_JWT_ISSUER is set"
 	ErrMissingSecretKey       configError = "API_SECRET_KEY is required in production"
 )

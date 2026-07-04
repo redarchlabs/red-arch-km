@@ -3,14 +3,14 @@ import { expect, test } from "@playwright/test";
 /**
  * Authenticated document flow.
  *
- * These tests require a test Keycloak realm with a seeded user. They
+ * These tests require a real backend with a seeded user. They
  * assume `storageState.json` has been populated by a global setup
  * script (see playwright.config.ts `globalSetup` when implemented).
  * Without a real backend + auth, mark as skipped.
  */
 
 test.describe("documents page", () => {
-  test.skip(!process.env.E2E_WITH_BACKEND, "requires seeded backend and Keycloak");
+  test.skip(!process.env.E2E_WITH_BACKEND, "requires seeded backend");
 
   test("can create and view a document", async ({ page }) => {
     await page.goto("/documents");

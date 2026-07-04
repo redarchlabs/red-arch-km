@@ -9,7 +9,7 @@ This guide covers production deployment of Red Arch Knowledge Management Platfor
 - Redis 7.x
 - Qdrant 1.12+
 - Neo4j 5.25+
-- Keycloak 24+ (or compatible OIDC provider)
+- Clerk account with application configured
 - OpenAI API key
 
 ## Production Architecture
@@ -65,10 +65,14 @@ OPENAI_API_KEY=<your-api-key>
 OPENAI_CHAT_MODEL=gpt-5-mini
 OPENAI_EMBEDDING_MODEL=text-embedding-3-small
 
-# Keycloak
-KEYCLOAK_URL=https://auth.yourdomain.com
-KEYCLOAK_REALM=redarch
-KEYCLOAK_CLIENT_ID=redarch-km
+# Clerk
+CLERK_SECRET_KEY=<sk_...>
+CLERK_JWT_ISSUER=https://<your-clerk-instance>.clerk.accounts.com
+CLERK_ALLOWED_AZP=https://app.yourdomain.com
+NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=<pk_...>
+NEXT_PUBLIC_CLERK_SIGN_IN_URL=/login
+NEXT_PUBLIC_CLERK_SIGN_UP_URL=/sign-up
+NEXT_PUBLIC_CLERK_JWT_TEMPLATE=redarch-km
 
 # API
 API_SECRET_KEY=<random-256-bit-key>
@@ -144,33 +148,48 @@ GRANT ALL PRIVILEGES ON DATABASE redarch_km TO app_admin;
 INSERT INTO user_profiles (id, keycloak_sub, username, email, is_site_admin)
 VALUES (
   gen_random_uuid(),
-  '<keycloak-sub-from-token>',
+  '<clerk-sub-from-token>',
   'admin',
   'admin@yourdomain.com',
   true
 );
 ```
 
-## Keycloak Configuration
+## Clerk Configuration
 
-### 1. Create Realm
+### 1. Create Application in Clerk Dashboard
 
-Import `docker/keycloak-realm.json` or create manually:
+- Sign in to Clerk Dashboard (https://dashboard.clerk.com)
+- Create a new application
+- Choose authentication methods: Email + Password, Google, etc.
 
-- Realm name: `redarch`
-- Frontend URL: Your Keycloak URL
+### 2. Configure Sign-In and Sign-Up URLs
 
-### 2. Configure Client
+In the Clerk Dashboard, set:
+- Sign-in URL: `https://app.yourdomain.com/login`
+- Sign-up URL: `https://app.yourdomain.com/sign-up`
 
-Create client `redarch-km`:
-- Client Protocol: openid-connect
-- Access Type: public
-- Valid Redirect URIs: `https://app.yourdomain.com/*`
-- Web Origins: `https://app.yourdomain.com`
+### 3. Create JWT Template
 
-### 3. User Management
+Create a JWT template named `redarch-km` that emits:
+```json
+{
+  "email": "{{user.primary_email_address}}",
+  "email_verified": "{{user.primary_email_address_verified}}",
+  "username": "{{user.username}}"
+}
+```
 
-Create users in Keycloak. On first API login, profiles are auto-created.
+### 4. Configure Keys and Secrets
+
+Retrieve from Clerk Dashboard:
+- **Publishable Key** (`pk_...`): Used by frontend
+- **Secret Key** (`sk_...`): Used by backend for token validation
+- **JWT Issuer**: Your Clerk Frontend API URL (e.g., `https://your-instance.clerk.accounts.com`)
+
+### 5. User Management
+
+Users sign up/sign in directly via Clerk. On first API login, profiles are auto-created from the Clerk JWT.
 
 ## Scaling
 
@@ -325,7 +344,7 @@ neo4j-admin database dump neo4j --to-path=/backups
 - [ ] RLS enabled on all tenant tables
 - [ ] Rate limiting configured
 - [ ] CORS restricted to allowed origins
-- [ ] Keycloak hardened per OWASP guidelines
+- [ ] Clerk application hardened (sign-in method restrictions)
 - [ ] Regular security updates applied
 
 ## Troubleshooting

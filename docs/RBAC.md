@@ -130,8 +130,8 @@ A user with a mask matching ANY of the folder's masks gains access.
 
 ### Assignment Flow
 
-1. User authenticates via Keycloak
-2. API creates/updates user_profiles with Keycloak sub
+1. User authenticates via Clerk
+2. API creates/updates user_profiles with Clerk sub
 3. Admin creates user_org_memberships linking user to org
 4. Admin assigns dimensions via junction tables:
    - membership_regions
@@ -221,15 +221,19 @@ results = search(
 
 ## API Authentication
 
-### Keycloak JWT
+### Clerk Session JWT
 
-All API requests require a valid Keycloak JWT:
+All API requests require a valid Clerk session JWT:
 
 ```http
 Authorization: Bearer <token>
 ```
 
-The token is validated against Keycloak's JWKS endpoint.
+The token is validated with these checks:
+- Issuer pinned to `CLERK_JWT_ISSUER` (configured from Clerk Dashboard)
+- Signature verified against Clerk's JWKS at `{issuer}/.well-known/jwks.json`
+- `azp` (authorized party) claim checked against allowlist in `CLERK_ALLOWED_AZP` (comma-separated origins)
+- Token lifetime validated (Clerk tokens typically expire in ~60 seconds; SDK auto-refreshes)
 
 ### User Context
 
@@ -238,7 +242,7 @@ After validation, the API builds user context:
 ```python
 @dataclass
 class CurrentUser:
-    keycloak_sub: str
+    keycloak_sub: str  # Clerk subject ID
     username: str
     email: str
     profile_id: uuid.UUID
@@ -276,4 +280,4 @@ X-Internal-API-Key: ${INTERNAL_API_KEY}
 2. **Mask Validation**: All mask values validated within range before encoding
 3. **Key Rotation**: API keys should be rotated regularly via environment variables
 4. **Audit Logging**: Permission changes logged with user context
-5. **Token Expiry**: JWT tokens have limited lifetime; refresh handled by Keycloak
+5. **Token Expiry**: JWT tokens have limited lifetime (~60s); refresh handled automatically by Clerk SDK
