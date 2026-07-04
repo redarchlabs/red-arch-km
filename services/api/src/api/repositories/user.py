@@ -18,8 +18,8 @@ class UserRepository:
     async def get(self, profile_id: uuid.UUID) -> UserProfile | None:
         return await self._session.get(UserProfile, profile_id)
 
-    async def get_by_keycloak_sub(self, sub: str) -> UserProfile | None:
-        result = await self._session.execute(select(UserProfile).where(UserProfile.keycloak_sub == sub))
+    async def get_by_auth_subject(self, sub: str) -> UserProfile | None:
+        result = await self._session.execute(select(UserProfile).where(UserProfile.auth_subject == sub))
         return result.scalar_one_or_none()
 
     async def list_in_org(
