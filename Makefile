@@ -50,7 +50,9 @@ test-cov: ## Run tests with coverage report
 
 # --- Database ---
 
-DATABASE_URL_LOCAL = postgresql+asyncpg://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@localhost:5432/$(POSTGRES_DB)
+# Host port 5433 matches docker/docker-compose.infra.yml (postgres publishes
+# 5433:5432 to avoid clashing with other local postgres stacks on 5432).
+DATABASE_URL_LOCAL = postgresql+asyncpg://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@localhost:5433/$(POSTGRES_DB)
 
 migrate: ## Run Alembic migrations
 	cd services/api && DATABASE_URL=$(DATABASE_URL_LOCAL) uv run alembic upgrade head
