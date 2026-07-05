@@ -53,6 +53,10 @@ class _FakeDocRepo:
             created_at=datetime.now(UTC),
             tags=[],
             metadata_={},
+            # No per-document permissions of its own → entitlement falls back to
+            # the folder's masks on retag (mirrors a freshly-created document).
+            viewer_permissions_config=None,
+            contributor_permissions_config=None,
         )
 
 

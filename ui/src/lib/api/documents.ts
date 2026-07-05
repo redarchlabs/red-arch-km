@@ -1,4 +1,4 @@
-import type { Document, PaginatedResponse } from "@/types";
+import type { Document, PaginatedResponse, PermissionRule } from "@/types";
 
 import apiClient from "./client";
 
@@ -10,6 +10,23 @@ export interface DocumentCreateInput {
   tag_ids?: string[];
   metadata?: Record<string, unknown>;
   use_knowledge_graph?: boolean | null;
+}
+
+export interface DocumentUpdateInput {
+  title?: string;
+  description?: string | null;
+  folder_id?: string | null;
+  tag_ids?: string[] | null;
+  viewer_permissions_config?: PermissionRule[] | null;
+  contributor_permissions_config?: PermissionRule[] | null;
+}
+
+export async function updateDocument(
+  id: string,
+  input: DocumentUpdateInput,
+): Promise<Document> {
+  const response = await apiClient.patch<Document>(`/documents/${id}`, input);
+  return response.data;
 }
 
 export async function listDocuments(

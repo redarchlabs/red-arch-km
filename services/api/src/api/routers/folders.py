@@ -125,6 +125,24 @@ async def update_folder(
         folder.description = body.description
         await session.flush()
 
+    # Recompute permission masks whenever either config is explicitly provided.
+    # Resolve BOTH configs together so masks reflect the folder's current stored
+    # configs even when the caller sends only one of them.
+    if {"viewer_permissions_config", "contributor_permissions_config"} & body.model_fields_set:
+        if "viewer_permissions_config" in body.model_fields_set:
+            folder.viewer_permissions_config = body.viewer_permissions_config
+        if "contributor_permissions_config" in body.model_fields_set:
+            folder.contributor_permissions_config = body.contributor_permissions_config
+        view_masks, contrib_masks = await compute_folder_masks(
+            session,
+            ctx.org_id,
+            folder.viewer_permissions_config,
+            folder.contributor_permissions_config,
+        )
+        folder.view_permission_masks = view_masks
+        folder.contributor_permission_masks = contrib_masks
+        await session.flush()
+
     if "parent_id" in body.model_fields_set:
         try:
             folder = await move_folder(session, folder, body.parent_id)

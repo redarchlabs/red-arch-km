@@ -24,6 +24,7 @@ from api.repositories.folder import FolderRepository
 from api.schemas.common import PaginatedResponse, PaginationParams
 from api.schemas.document import DocumentCreate, DocumentRead, DocumentUpdate
 from api.services.brain_client import BrainAPIClient
+from api.services.folder_service import compute_folder_masks
 from api.services.permission_config import calculate_user_masks_from_membership
 from api.services.storage import StorageClient
 from api.tasks.ingest import dispatch_extract_ingest, dispatch_ingest, dispatch_metadata_update
@@ -136,6 +137,7 @@ async def create_document(
     # clean 400 instead of saving a doc that references nothing resolvable.
     access_keys: list[int] = []
     tag_names: list[str] = []
+    folder = None
     if body.folder_id is not None:
         folder = await folder_repo.get(body.folder_id)
         if folder is None:
@@ -158,6 +160,14 @@ async def create_document(
         metadata=body.metadata,
         tag_ids=body.tag_ids,
     )
+
+    # Seed the document's own permissions from its folder (the per-document
+    # default); an admin can later override them via the document's Properties.
+    if folder is not None:
+        doc.viewer_permissions_config = folder.viewer_permissions_config
+        doc.contributor_permissions_config = folder.contributor_permissions_config
+        doc.view_permission_masks = list(folder.view_permission_masks or [])
+        doc.contributor_permission_masks = list(folder.contributor_permission_masks or [])
 
     # Commit before dispatching so the worker can read the row via the API
     await session.commit()
@@ -252,6 +262,7 @@ async def upload_document(
     folder_uuid: uuid.UUID | None = None
     access_keys: list[int] = []
     tag_names: list[str] = []
+    folder = None
     if folder_id:
         try:
             folder_uuid = uuid.UUID(folder_id)
@@ -280,6 +291,14 @@ async def upload_document(
         folder_id=folder_uuid,
         uploaded_by_id=ctx.user.profile_id,
     )
+
+    # Seed the document's own permissions from its folder (per-document default;
+    # overridable later via the document's Properties dialog).
+    if folder is not None:
+        doc.viewer_permissions_config = folder.viewer_permissions_config
+        doc.contributor_permissions_config = folder.contributor_permissions_config
+        doc.view_permission_masks = list(folder.view_permission_masks or [])
+        doc.contributor_permission_masks = list(folder.contributor_permission_masks or [])
 
     object_key = f"{ctx.org_id}/{doc.document_key}/{filename}"
     content_type = file.content_type or _EXTENSION_CONTENT_TYPES.get(ext, "application/octet-stream")
@@ -387,20 +406,43 @@ async def update_document(
         else:
             doc.tags = []
 
+    # Per-document permissions: setting either config recomputes this document's
+    # own masks (resolved together so masks reflect the current stored configs).
+    perms_changed = bool(
+        {"viewer_permissions_config", "contributor_permissions_config"} & fields_set
+    )
+    if "viewer_permissions_config" in fields_set:
+        doc.viewer_permissions_config = body.viewer_permissions_config
+    if "contributor_permissions_config" in fields_set:
+        doc.contributor_permissions_config = body.contributor_permissions_config
+    if perms_changed:
+        view_masks, contrib_masks = await compute_folder_masks(
+            session,
+            ctx.org_id,
+            doc.viewer_permissions_config,
+            doc.contributor_permissions_config,
+        )
+        doc.view_permission_masks = view_masks
+        doc.contributor_permission_masks = contrib_masks
+
     await session.flush()
 
     # If anything that shapes the vector-store payload changed, recompute the
-    # derived tags + access_keys from the *current* folder and push them to
-    # brain-api so retrieval scoping/entitlement isn't stale after a move.
-    retag = bool({"folder_id", "tag_ids"} & fields_set) or body.title is not None
+    # derived tags + access_keys and push them to brain-api so retrieval scoping
+    # and entitlement filtering aren't stale after a move or permission change.
+    retag = bool({"folder_id", "tag_ids"} & fields_set) or body.title is not None or perms_changed
     if retag:
         access_keys: list[int] = []
         tag_names = [t.name for t in doc.tags]
-        if doc.folder_id is not None:
-            folder = await folder_repo.get(doc.folder_id)
-            if folder is not None:
-                access_keys = list(folder.view_permission_masks or [])
-                tag_names.append(f"folder:{doc.folder_id}")
+        folder = await folder_repo.get(doc.folder_id) if doc.folder_id is not None else None
+        if folder is not None:
+            tag_names.append(f"folder:{doc.folder_id}")
+        # The document's OWN viewer permissions take precedence for entitlement;
+        # fall back to the folder's only when the document has none of its own.
+        if doc.viewer_permissions_config is not None:
+            access_keys = list(doc.view_permission_masks or [])
+        elif folder is not None:
+            access_keys = list(folder.view_permission_masks or [])
         await session.commit()
         try:
             dispatch_metadata_update(

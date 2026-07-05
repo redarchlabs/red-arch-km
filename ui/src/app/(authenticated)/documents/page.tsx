@@ -1,28 +1,22 @@
 "use client";
 
 import { Plus } from "lucide-react";
-import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
+import { DocumentRow } from "@/components/documents/DocumentRow";
 import { DocumentUpload } from "@/components/documents/DocumentUpload";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useOrg } from "@/context/OrgContext";
 import { listDocuments } from "@/lib/api/documents";
-import { formatDate } from "@/lib/format";
-import type { Document, PaginatedResponse } from "@/types";
-
-function statusVariant(status: Document["processing_status"]) {
-  if (status === "SUCCESS") return "default";
-  if (status === "FAILED") return "destructive";
-  return "secondary";
-}
+import { listFolders } from "@/lib/api/folders";
+import type { Document, Folder, PaginatedResponse } from "@/types";
 
 export default function DocumentsPage() {
   const { currentOrgId, isLoading: orgLoading } = useOrg();
   const [data, setData] = useState<PaginatedResponse<Document> | null>(null);
+  const [folders, setFolders] = useState<Folder[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [uploadOpen, setUploadOpen] = useState(false);
@@ -32,7 +26,12 @@ export default function DocumentsPage() {
     setIsLoading(true);
     setError(null);
     try {
-      setData(await listDocuments());
+      // Folders power the Properties dialog's folder picker; a folder-list
+      // failure shouldn't block the document list.
+      const [docs, folderList] = await Promise.allSettled([listDocuments(), listFolders()]);
+      if (docs.status === "fulfilled") setData(docs.value);
+      else throw docs.reason;
+      if (folderList.status === "fulfilled") setFolders(folderList.value);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to load documents");
     } finally {
@@ -97,24 +96,7 @@ export default function DocumentsPage() {
       ) : data && data.items.length > 0 ? (
         <div className="space-y-2">
           {data.items.map((doc) => (
-            <Link key={doc.id} href={`/documents/${doc.id}`} className="block">
-              <Card className="transition-colors hover:bg-accent/30">
-                <CardContent className="flex items-center justify-between py-4">
-                  <div>
-                    <h3 className="font-medium">{doc.title}</h3>
-                    {doc.description ? (
-                      <p className="mt-0.5 text-sm text-muted-foreground">{doc.description}</p>
-                    ) : null}
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      {formatDate(doc.created_at)}
-                    </p>
-                  </div>
-                  <Badge variant={statusVariant(doc.processing_status)}>
-                    {doc.processing_status}
-                  </Badge>
-                </CardContent>
-              </Card>
-            </Link>
+            <DocumentRow key={doc.id} doc={doc} folders={folders} onChanged={load} />
           ))}
         </div>
       ) : (
