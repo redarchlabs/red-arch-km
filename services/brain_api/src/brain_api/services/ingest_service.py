@@ -155,7 +155,7 @@ class IngestService:
                 self._stores.vector.upsert_vectors(tenant_id, chunk_records, collection_type="chunks")
 
             with _tracer.start_as_current_span("document_summary"):
-                doc_summary = self._safe_document_summary(chunk_summaries)
+                doc_summary, summary_tree = self._safe_document_summary(chunk_summaries)
                 doc_vector = self._choose_document_vector(doc_summary, chunk_embeddings)
 
             doc_record = VectorRecord(
@@ -166,6 +166,10 @@ class IngestService:
                     "document_key": document_key,
                     "document_title": title,
                     "summary": doc_summary,
+                    # Persist the hierarchical summary tree (nested {summary,
+                    # children}) so the UI can render an expandable view rather
+                    # than only the final rolled-up string.
+                    "summary_tree": summary_tree,
                     "tenant_id": tenant_id,
                     "tags": tags,
                     "access_keys": access_keys or [0],
@@ -208,14 +212,33 @@ class IngestService:
                 "triplets": triplet_count,
             }
 
-    def _safe_document_summary(self, chunk_summaries: list[str]) -> str:
-        """Hierarchical summary with a safe fallback if the LLM pipeline fails."""
+    def _safe_document_summary(self, chunk_summaries: list[str]) -> tuple[str, dict[str, Any] | None]:
+        """Hierarchical summary + tree, with a safe fallback if the pipeline fails.
+
+        Returns ``(summary, tree)`` where ``tree`` is the nested
+        ``{"summary", "children"}`` structure the summariser produced. On
+        failure we still return a usable flat summary plus a synthesised
+        two-level tree so the doc-level record always has something to show.
+        """
         try:
-            return self._stores.summarizer.summarize_document(chunk_summaries)
+            return self._stores.summarizer.summarize_document_hierarchy(chunk_summaries)
         except Exception as e:
             logger.error("Document summarisation failed: %s", e)
             # Cheap fallback so the doc-level record still has text to display.
-            return " ".join(s for s in chunk_summaries if s)[:2000]
+            flat = " ".join(s for s in chunk_summaries if s)[:2000]
+            return flat, self._synthesize_tree(flat, chunk_summaries)
+
+    @staticmethod
+    def _synthesize_tree(root_summary: str, chunk_summaries: list[str]) -> dict[str, Any] | None:
+        """Build a minimal two-level tree (root + one leaf per chunk summary).
+
+        Used only on the fallback path where the hierarchical summariser did
+        not return a tree, so the UI still renders structure.
+        """
+        leaves = [{"summary": s, "children": []} for s in chunk_summaries if s]
+        if not leaves:
+            return None
+        return {"summary": root_summary, "children": leaves}
 
     def _choose_document_vector(self, summary: str, chunk_embeddings: list[list[float]]) -> list[float]:
         """Embed the doc summary, or fall back to centroid of chunk embeddings.

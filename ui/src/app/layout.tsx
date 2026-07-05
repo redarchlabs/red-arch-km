@@ -1,8 +1,10 @@
 import { ClerkProvider } from "@clerk/nextjs";
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
+import { Toaster } from "sonner";
 
 import { OrgProvider } from "@/context/OrgContext";
+import { ThemeProvider } from "@/context/ThemeContext";
 
 import "./globals.css";
 
@@ -11,6 +13,11 @@ export const metadata: Metadata = {
   description: "AI-powered enterprise knowledge management platform",
 };
 
+// Stamps data-theme on <html> BEFORE first paint so a stored dark/redarch
+// preference doesn't flash the light default. Must stay in sync with
+// src/lib/theme.ts (THEMES / storage key).
+const THEME_INIT_SCRIPT = `(function(){try{var t=localStorage.getItem("redarch:theme");if(t!=="light"&&t!=="dark"&&t!=="redarch"){t=window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";}document.documentElement.dataset.theme=t;}catch(e){}})();`;
+
 interface RootLayoutProps {
   children: ReactNode;
 }
@@ -18,10 +25,19 @@ interface RootLayoutProps {
 export default function RootLayout({ children }: RootLayoutProps) {
   return (
     <ClerkProvider signInUrl="/login" signUpUrl="/sign-up" afterSignOutUrl="/login">
-      <html lang="en">
+      {/* suppressHydrationWarning: the inline script sets data-theme before
+          hydration, so the server-rendered <html> attributes never match. */}
+      <html lang="en" suppressHydrationWarning>
+        <head>
+          <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
+        </head>
         <body>
-          {/* OrgProvider reads Clerk auth via useAuth(), so it must nest inside ClerkProvider. */}
-          <OrgProvider>{children}</OrgProvider>
+          <ThemeProvider>
+            {/* OrgProvider reads Clerk auth via useAuth(), so it must nest inside ClerkProvider. */}
+            <OrgProvider>{children}</OrgProvider>
+            {/* Global toast portal. richColors gives success/error their own hues. */}
+            <Toaster richColors position="top-right" />
+          </ThemeProvider>
         </body>
       </html>
     </ClerkProvider>

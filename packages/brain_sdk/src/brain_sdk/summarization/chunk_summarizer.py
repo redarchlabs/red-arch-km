@@ -14,10 +14,23 @@ from __future__ import annotations
 
 import concurrent.futures
 import logging
+from typing import Any, TypedDict
 
 from openai import OpenAI
 
 logger = logging.getLogger(__name__)
+
+
+class SummaryNode(TypedDict):
+    """One node in the hierarchical document-summary tree.
+
+    ``summary`` is the text for this level; ``children`` holds the nodes that
+    were condensed into it. Leaves are the per-chunk summaries (empty
+    ``children``); the root is the final document summary.
+    """
+
+    summary: str
+    children: list[Any]
 
 _SUMMARIZE_PROMPT = (
     "Summarize the following text concisely, preserving key facts and entities. Output only the summary, no preamble."
@@ -89,16 +102,30 @@ class ChunkSummarizer:
     def summarize_document(self, chunk_summaries: list[str]) -> str:
         """Recursively condense chunk summaries into one document summary.
 
-        Each level groups the current list in fixed-size groups, summarises
+        Thin wrapper over :meth:`summarize_document_hierarchy` that returns
+        only the final rolled-up string, preserving the historical contract
+        for callers that don't need the intermediate tree.
+        """
+        return self.summarize_document_hierarchy(chunk_summaries)[0]
+
+    def summarize_document_hierarchy(self, chunk_summaries: list[str]) -> tuple[str, SummaryNode | None]:
+        """Condense chunk summaries and also return the full hierarchy tree.
+
+        Each level groups the current nodes in fixed-size groups, summarises
         each group in parallel, and becomes the next level. Terminates when
-        the list is of length 1 or after `max_depth` levels.
+        one node remains or after ``max_depth`` levels. Returns
+        ``(final_summary, root_node)`` where ``root_node`` mirrors the exact
+        levels that produced ``final_summary`` (leaves = chunk summaries).
+        Returns ``("", None)`` for empty input.
         """
         if not chunk_summaries:
-            return ""
-        if len(chunk_summaries) == 1:
-            return chunk_summaries[0]
+            return "", None
 
-        level = chunk_summaries
+        leaves: list[SummaryNode] = [{"summary": s, "children": []} for s in chunk_summaries]
+        if len(chunk_summaries) == 1:
+            return chunk_summaries[0], leaves[0]
+
+        level: list[SummaryNode] = leaves
         for depth in range(self._max_depth):
             groups = [level[i : i + self._group_size] for i in range(0, len(level), self._group_size)]
             logger.debug(
@@ -108,10 +135,16 @@ class ChunkSummarizer:
                 len(groups),
             )
             with concurrent.futures.ThreadPoolExecutor(max_workers=self._max_workers) as exe:
-                level = list(exe.map(self._summarize_group, groups))
+                group_summaries = list(exe.map(self._summarize_group, [[n["summary"] for n in g] for g in groups]))
+            level = [
+                {"summary": summary, "children": list(group)}
+                for summary, group in zip(group_summaries, groups, strict=True)
+            ]
             if len(level) <= 1:
                 break
-        return level[0] if level else ""
+
+        root = level[0] if level else {"summary": "", "children": []}
+        return root["summary"], root
 
     def _summarize_group(self, summaries: list[str]) -> str:
         """Summarise one group of summaries into a single summary.

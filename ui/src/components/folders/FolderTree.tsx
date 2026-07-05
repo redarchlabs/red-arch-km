@@ -1,6 +1,7 @@
 "use client";
 
 import { ChevronDown, ChevronRight, Folder as FolderIcon } from "lucide-react";
+import Link from "next/link";
 import { useMemo, useState } from "react";
 
 import { cn } from "@/lib/utils";
@@ -200,7 +201,16 @@ function TreeRow({
           <span className="inline-block h-5 w-5" aria-hidden />
         )}
         <FolderIcon className="h-4 w-4 text-muted-foreground" />
-        <span className="font-medium">{folder.name}</span>
+        {/* Click the name to browse the folder's documents; the row itself
+            stays draggable for reparenting. */}
+        <Link
+          href={`/folders/${folder.id}`}
+          draggable={false}
+          onClick={(e) => e.stopPropagation()}
+          className="font-medium hover:underline"
+        >
+          {folder.name}
+        </Link>
         <span className="truncate font-mono text-xs text-muted-foreground">{folder.dot_path}</span>
       </div>
 

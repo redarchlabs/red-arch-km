@@ -22,6 +22,13 @@ pip install uv
 
 ## Quick Start
 
+> **Hybrid dev stack (one command):** `./run-stack.sh` starts everything —
+> infra containers, brain-api, the celery worker, the host uvicorn API
+> (`.env.host`), and the Next.js dev server. `./run-stack.sh restart`
+> force-restarts the host processes; `./run-stack.sh stop` stops the app.
+> Requires a `.env.host` (copy of `.env` with localhost URLs + Clerk issuer).
+> The fully dockerized alternative below (`make dev`) still works.
+
 ```bash
 # 1. Clone and enter repository
 git clone https://github.com/redarchlabs/red-arch-km-2.git
@@ -65,6 +72,9 @@ OPENAI_API_KEY=sk-...
 API_SECRET_KEY=dev-secret-key-change-in-prod
 BRAIN_API_KEY=dev-brain-key
 INTERNAL_API_KEY=dev-internal-key
+
+# Optional: first-run setup token validity (seconds, default 86400 = 24h)
+# API_SETUP_TOKEN_TTL_SECONDS=86400
 
 # Clerk (dev instance or use X-Test-User header for E2E bypass)
 CLERK_SECRET_KEY=<dev-clerk-key>

@@ -56,6 +56,7 @@ export async function* streamChat(
   options: {
     chat_history?: Array<{ role: string; content: string }>;
     tags?: string[];
+    folder_ids?: string[];
     use_knowledge_graph?: boolean;
     signal?: AbortSignal;
   } = {},
@@ -77,6 +78,7 @@ export async function* streamChat(
       query,
       chat_history: options.chat_history ?? [],
       tags: options.tags ?? [],
+      folder_ids: options.folder_ids ?? [],
       use_knowledge_graph: options.use_knowledge_graph ?? true,
     }),
     signal: options.signal,

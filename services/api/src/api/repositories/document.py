@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -28,13 +28,27 @@ class DocumentRepository:
         self,
         folder_ids: list[uuid.UUID] | None = None,
         *,
+        include_unfiled: bool = False,
         offset: int = 0,
         limit: int = 20,
     ) -> tuple[list[Document], int]:
+        """List documents, optionally scoped to a set of folders.
+
+        ``folder_ids=None`` means "no folder restriction" (return everything
+        the current RLS tenant scope allows). When ``folder_ids`` is a concrete
+        list, only documents in those folders match — but note that a document
+        with ``folder_id IS NULL`` (an "unfiled" doc) never satisfies an
+        ``IN (...)`` predicate. ``include_unfiled=True`` additively surfaces
+        those unfiled documents so they are not silently invisible; without it,
+        docs created without a folder would never appear in any list.
+        """
         query = select(Document).options(selectinload(Document.tags))
 
         if folder_ids is not None:
-            query = query.where(Document.folder_id.in_(folder_ids))
+            folder_filter = Document.folder_id.in_(folder_ids)
+            if include_unfiled:
+                folder_filter = or_(folder_filter, Document.folder_id.is_(None))
+            query = query.where(folder_filter)
 
         count_query = select(func.count()).select_from(query.subquery())
         total = (await self._session.execute(count_query)).scalar_one()

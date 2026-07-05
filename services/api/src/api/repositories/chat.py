@@ -57,6 +57,10 @@ class ChatRepository:
             return None
         chat.chat_data = chat_data
         await self._session.flush()
+        # updated_at is computed server-side (onupdate=func.now()) and expired
+        # by the flush; without an explicit refresh, serializing the row later
+        # lazy-loads it OUTSIDE the async greenlet → MissingGreenlet → 500.
+        await self._session.refresh(chat)
         return chat
 
     async def soft_delete(self, session_id: uuid.UUID) -> bool:
@@ -73,12 +77,18 @@ class ChatRepository:
         if chat is None:
             return None
 
-        current_data = chat.chat_data or {}
-        current_messages = current_data.get("messages", [])
+        # Copy before mutating: reassigning the SAME (in-place mutated) dict
+        # does not mark the JSONB attribute dirty — SQLAlchemy's change check
+        # compares against the loaded value, which is that very object — so
+        # the UPDATE was silently never emitted. A fresh dict/list is required.
+        current_data = dict(chat.chat_data or {})
+        current_messages = list(current_data.get("messages", []))
         current_messages.extend(messages)
         current_data["messages"] = current_messages
 
-        # SQLAlchemy won't detect in-place JSONB mutation, so reassign
         chat.chat_data = current_data
         await self._session.flush()
+        # Same server-side updated_at expiry as update_data — refresh so the
+        # returned object is safely serializable.
+        await self._session.refresh(chat)
         return chat

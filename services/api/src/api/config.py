@@ -42,6 +42,19 @@ class Settings(BaseSettings):
     # Separate from brain_api_key so compromise of one doesn't grant the other.
     internal_api_key: str = Field(default="", validation_alias="INTERNAL_API_KEY")
 
+    # Object storage (MinIO / S3-compatible) for uploaded originals. Shared
+    # infrastructure, so the env vars are unprefixed (STORAGE_*) and read by
+    # both the API and the worker — mirrors the DATABASE_URL/REDIS_URL pattern.
+    storage_endpoint: str = Field(default="http://localhost:9000", validation_alias="STORAGE_ENDPOINT")
+    storage_access_key: str = Field(default="", validation_alias="STORAGE_ACCESS_KEY")
+    storage_secret_key: SecretStr = Field(default=SecretStr(""), validation_alias="STORAGE_SECRET_KEY")
+    storage_bucket: str = Field(default="km-documents", validation_alias="STORAGE_BUCKET")
+    storage_region: str = Field(default="us-east-1", validation_alias="STORAGE_REGION")
+
+    # Upload size cap; shared with the worker's MAX_FILE_SIZE_MB so both sides
+    # agree on the limit (API rejects at the boundary, worker as defense).
+    max_file_size_mb: int = Field(default=50, validation_alias="MAX_FILE_SIZE_MB")
+
     # Clerk (sole IdP). Backends verify the token by its `iss`, which must match
     # clerk_jwt_issuer = Clerk Frontend API URL (the `iss`). CLERK_ALLOWED_AZP is
     # comma-separated to share ONE env format with the Go verifier; see
@@ -50,6 +63,10 @@ class Settings(BaseSettings):
     clerk_jwt_issuer: str = Field(default="", validation_alias="CLERK_JWT_ISSUER")
     clerk_allowed_azp: str = Field(default="", validation_alias="CLERK_ALLOWED_AZP")
     clerk_secret_key: SecretStr = Field(default=SecretStr(""), validation_alias="CLERK_SECRET_KEY")
+
+    # First-run setup token TTL (site-admin bootstrap wizard). Expired token
+    # simply means "restart the API to reissue".
+    setup_token_ttl_seconds: int = Field(default=86400)
 
     # Observability (shared)
     log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")

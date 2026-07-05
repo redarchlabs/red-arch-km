@@ -60,6 +60,36 @@ async def create_membership(
     return MembershipRead.model_validate(reloaded)
 
 
+@router.delete("/{membership_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_membership(
+    membership_id: uuid.UUID,
+    ctx: Annotated[OrgContext, Depends(require_org_admin)],
+    session: Annotated[AsyncSession, Depends(get_tenant_db)],
+) -> None:
+    """Remove a user from the current org (dimension assignments cascade).
+
+    Mirrors the lockout guards of the site-admin console: org admins cannot
+    remove themselves, and the last org admin cannot be removed (site admins
+    are exempt from the self-guard — they retain synthetic org access).
+    """
+    repo = MembershipRepository(session)
+    membership = await repo.get(membership_id)
+    if membership is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    if membership.profile_id == ctx.user.profile_id and not ctx.user.is_site_admin:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You cannot remove your own membership",
+        )
+    if membership.is_org_admin and await repo.count_org_admins(ctx.org_id) <= 1:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Cannot remove the organization's last admin",
+        )
+    if not await repo.delete(membership_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+
+
 @router.patch("/{membership_id}", response_model=MembershipRead)
 async def update_membership(
     membership_id: uuid.UUID,

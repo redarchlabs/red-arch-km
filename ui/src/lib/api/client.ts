@@ -24,8 +24,11 @@ apiClient.interceptors.request.use(async (config) => {
     config.headers.Authorization = `Bearer ${token}`;
   }
 
-  // Attach org scope for endpoints that require it
-  if (typeof window !== "undefined") {
+  // Attach org scope for endpoints that require it. A per-request X-Org-ID
+  // (set by the site-admin console to operate on a specific org) wins over
+  // the ambient org from localStorage. `has()` is case-insensitive, so any
+  // caller-supplied casing of the header is respected.
+  if (typeof window !== "undefined" && !config.headers.has("X-Org-ID")) {
     const orgId = localStorage.getItem(STORAGE_KEY);
     if (orgId) {
       config.headers["X-Org-ID"] = orgId;

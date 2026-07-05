@@ -25,6 +25,13 @@ async def provision_user_from_claims(
     The ``auth_subject`` column stores the OIDC subject (renamed from
     ``keycloak_sub`` in migration 003, D3/AC-4.1).
     """
+    # Without a Clerk JWT template the default session token carries no
+    # username/email claims. Fall back to sub-derived values — they are unique,
+    # so two claimless users can't collide on the empty string, and they are
+    # resynced to the real values once a template is configured.
+    username = username or sub
+    email = email or f"{sub}@placeholder.invalid"
+
     result = await session.execute(select(UserProfile).where(UserProfile.auth_subject == sub))
     profile = result.scalar_one_or_none()
 

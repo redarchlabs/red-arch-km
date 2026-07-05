@@ -45,7 +45,25 @@ export function OrgProvider({ children }: { children: ReactNode }) {
       // Hydrate current org from localStorage, fall back to first accessible org
       const stored = typeof window !== "undefined" ? localStorage.getItem(STORAGE_KEY) : null;
       const valid = stored && me.orgs.some((o: OrgSummary) => o.id === stored);
-      setCurrentOrgIdState(valid ? stored : me.orgs[0]?.id ?? null);
+      const resolved = valid ? stored : (me.orgs[0]?.id ?? null);
+      setCurrentOrgIdState(resolved);
+
+      // Persist the resolved org too: the axios interceptor reads ONLY
+      // localStorage, so leaving the fallback in React state alone means a
+      // fresh session sends no X-Org-ID and every org-scoped request 400s
+      // until the user manually picks an org.
+      if (typeof window !== "undefined") {
+        try {
+          if (resolved) {
+            localStorage.setItem(STORAGE_KEY, resolved);
+          } else {
+            localStorage.removeItem(STORAGE_KEY);
+          }
+        } catch {
+          // Storage unavailable (private mode/quota) — in-memory state still
+          // drives the UI; org-scoped calls may 400 until storage works.
+        }
+      }
     } finally {
       setIsLoading(false);
     }

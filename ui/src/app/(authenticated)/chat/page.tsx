@@ -14,8 +14,9 @@ import {
   listSessions,
   updateSession,
 } from "@/lib/api/chat";
+import { listFolders } from "@/lib/api/folders";
 import { streamChat } from "@/lib/api/search";
-import type { ChatSession } from "@/types";
+import type { ChatSession, Folder } from "@/types";
 
 export default function ChatPage() {
   const { currentOrgId } = useOrg();
@@ -25,8 +26,26 @@ export default function ChatPage() {
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [folders, setFolders] = useState<Folder[]>([]);
+  const [scopeFolderId, setScopeFolderId] = useState<string>("");
   const scrollRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+
+  // Load folders so the user can scope the chat to one (context switching).
+  useEffect(() => {
+    if (!currentOrgId) return;
+    let active = true;
+    listFolders()
+      .then((f) => {
+        if (active) setFolders(f);
+      })
+      .catch(() => {
+        // Non-fatal: the scope selector just stays at "All documents".
+      });
+    return () => {
+      active = false;
+    };
+  }, [currentOrgId]);
 
   const loadSessions = useCallback(async () => {
     if (!currentOrgId) return;
@@ -122,6 +141,7 @@ export default function ChatPage() {
     try {
       for await (const event of streamChat(query, {
         chat_history: history,
+        folder_ids: scopeFolderId ? [scopeFolderId] : [],
         signal: controller.signal,
       })) {
         if (event.type === "sources" && event.sources) {
@@ -219,11 +239,32 @@ export default function ChatPage() {
       />
 
       <div className="flex flex-1 flex-col pl-4">
-        <div className="mb-4">
-          <h1 className="text-2xl font-semibold">Chat</h1>
-          <p className="text-sm text-muted-foreground">
-            Ask questions about documents in your organization.
-          </p>
+        <div className="mb-4 flex items-start justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-semibold">Chat</h1>
+            <p className="text-sm text-muted-foreground">
+              Ask questions about documents in your organization.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <label htmlFor="chat-scope" className="text-sm text-muted-foreground">
+              Scope
+            </label>
+            <select
+              id="chat-scope"
+              value={scopeFolderId}
+              onChange={(e) => setScopeFolderId(e.target.value)}
+              disabled={streaming}
+              className="h-9 rounded-md border border-input bg-transparent px-2 py-1 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"
+            >
+              <option value="">All documents</option>
+              {folders.map((f) => (
+                <option key={f.id} value={f.id}>
+                  {f.dot_path || f.name}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
 
         <div

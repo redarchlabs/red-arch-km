@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import logging
+import os
 import uuid
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+import httpx
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,10 +23,35 @@ from api.schemas.common import PaginatedResponse, PaginationParams
 from api.schemas.document import DocumentCreate, DocumentRead, DocumentUpdate
 from api.services.brain_client import BrainAPIClient
 from api.services.permission_config import calculate_user_masks_from_membership
-from api.tasks.ingest import dispatch_ingest
+from api.services.storage import StorageClient
+from api.tasks.ingest import dispatch_extract_ingest, dispatch_ingest
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+# Extension allowlist for uploads. Extension is authoritative (a mislabelled
+# Content-Type must not smuggle in an unsupported type). Kept in sync with the
+# worker's extraction dispatcher.
+_ALLOWED_UPLOAD_EXTENSIONS: frozenset[str] = frozenset(
+    {".pdf", ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".gif", ".webp", ".txt", ".md"}
+)
+
+# Best-effort Content-Type per extension when the client omits/mislabels it.
+_EXTENSION_CONTENT_TYPES: dict[str, str] = {
+    ".pdf": "application/pdf",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".tif": "image/tiff",
+    ".tiff": "image/tiff",
+    ".bmp": "image/bmp",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".txt": "text/plain",
+    ".md": "text/markdown",
+}
+
+_VALID_TRANSLATION_METHODS: frozenset[str] = frozenset({"ocr", "ai"})
 
 
 @router.get("/", response_model=PaginatedResponse[DocumentRead])
@@ -32,8 +59,19 @@ async def list_documents(
     ctx: Annotated[OrgContext, Depends(require_org_access)],
     session: Annotated[AsyncSession, Depends(get_tenant_db)],
     pagination: Annotated[PaginationParams, Depends()],
+    folder_id: Annotated[uuid.UUID | None, Query(description="Scope to a single folder's contents")] = None,
 ) -> PaginatedResponse[DocumentRead]:
-    """List documents the user can view through folder permissions."""
+    """List documents the user can view through folder permissions.
+
+    Without ``folder_id`` this returns every document in a folder the user can
+    see. Unfiled documents (``folder_id IS NULL``) bypass the folder permission
+    system, so they are surfaced only to org admins — this both fixes the bug
+    where pasted/unfiled docs were invisible to everyone AND avoids exposing an
+    unfiled doc to every member. (Matches the Go handler's ``isAdmin`` param.)
+    Regular members should file documents into a folder via the picker. With
+    ``folder_id`` the list is scoped to exactly that folder's contents (the
+    caller must be able to see the folder).
+    """
     folder_repo = FolderRepository(session)
     doc_repo = DocumentRepository(session)
 
@@ -46,12 +84,29 @@ async def list_documents(
         user_masks = calculate_user_masks_from_membership(ctx.membership, org.permission_number)
         visible_folders, _ = await folder_repo.list_visible_to_masks(user_masks=user_masks)
 
-    folder_ids = [f.id for f in visible_folders]
-    documents, total = await doc_repo.list_for_folders(
-        folder_ids=folder_ids,
-        offset=pagination.offset,
-        limit=pagination.page_size,
-    )
+    visible_ids = [f.id for f in visible_folders]
+
+    if folder_id is not None:
+        # Scoped browse: only that folder, and only if the caller can see it.
+        if folder_id not in visible_ids:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Folder not found or not visible",
+            )
+        documents, total = await doc_repo.list_for_folders(
+            folder_ids=[folder_id],
+            include_unfiled=False,
+            offset=pagination.offset,
+            limit=pagination.page_size,
+        )
+    else:
+        # Unfiled docs bypass folder permissions → only admins see them.
+        documents, total = await doc_repo.list_for_folders(
+            folder_ids=visible_ids,
+            include_unfiled=ctx.is_org_admin,
+            offset=pagination.offset,
+            limit=pagination.page_size,
+        )
 
     pages = (total + pagination.page_size - 1) // pagination.page_size
     return PaginatedResponse[DocumentRead](
@@ -105,22 +160,156 @@ async def create_document(
     await session.commit()
 
     if doc.text:
-        task_id = dispatch_ingest(
+        # The document row is already committed. Enqueueing talks to the Celery
+        # broker synchronously, so a broker outage must not turn a successful
+        # create into a 500 that tells the user creation failed (it didn't —
+        # the row exists). Swallow the enqueue error, leave the doc PENDING so a
+        # future reconciliation sweep can re-dispatch it, and still return 201.
+        try:
+            task_id = dispatch_ingest(
+                {
+                    "document_id": str(doc.id),
+                    "tenant_id": str(ctx.org_id),
+                    "document_key": doc.document_key,
+                    "title": doc.title,
+                    "text": doc.text,
+                    "tags": tag_names,
+                    "access_keys": access_keys,
+                    "use_knowledge_graph": doc.use_knowledge_graph if doc.use_knowledge_graph is not None else True,
+                    "metadata": doc.metadata_ or {},
+                }
+            )
+            logger.info("Document %s queued for ingestion (task %s)", doc.id, task_id)
+        except Exception:
+            logger.exception(
+                "Document %s created but ingestion enqueue failed; left PENDING for retry",
+                doc.id,
+            )
+    else:
+        logger.info("Document %s created without text; skipping ingestion", doc.id)
+
+    return DocumentRead.model_validate(doc)
+
+
+@router.post("/upload", response_model=DocumentRead, status_code=status.HTTP_201_CREATED)
+async def upload_document(
+    ctx: Annotated[OrgContext, Depends(require_org_access)],
+    session: Annotated[AsyncSession, Depends(get_tenant_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
+    file: Annotated[UploadFile, File(description="The file to ingest (pdf/image/text).")],
+    title: Annotated[str, Form()],
+    description: Annotated[str | None, Form()] = None,
+    folder_id: Annotated[str | None, Form()] = None,
+    translation_method: Annotated[str, Form()] = "ocr",
+) -> DocumentRead:
+    """Upload a file, store the original, and enqueue extraction + ingestion.
+
+    Text is extracted in the worker (OCR via Tesseract, or OpenAI vision when
+    ``translation_method="ai"``) BEFORE calling brain-api — the brain contract
+    stays text-only. The stored object key lives in ``document_url``.
+    """
+    # --- Boundary validation FIRST (before any storage/DB work) ---
+    if translation_method not in _VALID_TRANSLATION_METHODS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"translation_method must be one of {sorted(_VALID_TRANSLATION_METHODS)}",
+        )
+
+    filename = os.path.basename(file.filename or "")
+    if not filename:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="A filename is required")
+
+    ext = os.path.splitext(filename)[1].lower()
+    if ext not in _ALLOWED_UPLOAD_EXTENSIONS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported file type '{ext or filename}'. Allowed: {sorted(_ALLOWED_UPLOAD_EXTENSIONS)}",
+        )
+
+    content = await file.read()
+    max_bytes = settings.max_file_size_mb * 1024 * 1024
+    if len(content) > max_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            detail=f"File exceeds the {settings.max_file_size_mb} MB limit",
+        )
+    if not content:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="File is empty")
+
+    # --- Folder validation + permission masks (mirrors create_document) ---
+    folder_uuid: uuid.UUID | None = None
+    access_keys: list[int] = []
+    tag_names: list[str] = []
+    if folder_id:
+        try:
+            folder_uuid = uuid.UUID(folder_id)
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="folder_id is not a valid UUID",
+            ) from e
+        folder_repo = FolderRepository(session)
+        folder = await folder_repo.get(folder_uuid)
+        if folder is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="folder_id does not exist in this organization",
+            )
+        access_keys = list(folder.view_permission_masks or [])
+        tag_names.append(f"folder:{folder.id}")
+
+    # --- Persist the row (text=None; extraction fills it later) ---
+    doc_repo = DocumentRepository(session)
+    doc = await doc_repo.create(
+        title=title,
+        org_id=ctx.org_id,
+        text=None,
+        description=description,
+        folder_id=folder_uuid,
+        uploaded_by_id=ctx.user.profile_id,
+    )
+
+    object_key = f"{ctx.org_id}/{doc.document_key}/{filename}"
+    content_type = file.content_type or _EXTENSION_CONTENT_TYPES.get(ext, "application/octet-stream")
+
+    # Store the original BEFORE commit so a storage outage rolls back the row
+    # (no dangling PENDING doc pointing at a missing object).
+    try:
+        StorageClient(settings).put_object(object_key, content, content_type)
+    except Exception as e:
+        logger.exception("Failed to store upload for org %s (%s)", ctx.org_id, filename)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to store the uploaded file",
+        ) from e
+
+    doc.document_url = object_key
+    await session.commit()
+
+    # Enqueue extraction. Mirror create_document: a broker outage must not turn
+    # a successful upload into a 500 — the row + object exist, leave it PENDING.
+    try:
+        task_id = dispatch_extract_ingest(
             {
                 "document_id": str(doc.id),
                 "tenant_id": str(ctx.org_id),
                 "document_key": doc.document_key,
+                "document_url": object_key,
+                "filename": filename,
                 "title": doc.title,
-                "text": doc.text,
+                "translation_method": translation_method,
                 "tags": tag_names,
                 "access_keys": access_keys,
                 "use_knowledge_graph": doc.use_knowledge_graph if doc.use_knowledge_graph is not None else True,
                 "metadata": doc.metadata_ or {},
             }
         )
-        logger.info("Document %s queued for ingestion (task %s)", doc.id, task_id)
-    else:
-        logger.info("Document %s created without text; skipping ingestion", doc.id)
+        logger.info("Upload %s queued for extraction+ingestion (task %s)", doc.id, task_id)
+    except Exception:
+        logger.exception(
+            "Upload %s stored but extraction enqueue failed; left PENDING for retry",
+            doc.id,
+        )
 
     return DocumentRead.model_validate(doc)
 
@@ -199,9 +388,24 @@ async def delete_document(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
 
     document_key = doc.document_key
+    document_url = doc.document_url
     deleted = await repo.delete(document_id)
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
+
+    # Best-effort cleanup of the stored original ("keep originals" must not leak
+    # on delete). A storage outage logs but never blocks the PostgreSQL delete.
+    if document_url:
+        try:
+            StorageClient(settings).delete_object(document_url)
+        except Exception as e:
+            logger.error(
+                "Storage cleanup failed for deleted document %s (key %s) in org %s: %s — manual cleanup needed",
+                document_id,
+                document_url,
+                ctx.org_id,
+                e,
+            )
 
     # Best-effort cascade to brain-api. The PostgreSQL delete commits in
     # get_tenant_db on successful return regardless of brain-api outcome.
@@ -241,4 +445,45 @@ async def get_document_chunks(
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Failed to fetch chunks from brain-api",
+        ) from e
+
+
+@router.get("/{document_id}/summary")
+async def get_document_summary(
+    document_id: uuid.UUID,
+    ctx: Annotated[OrgContext, Depends(require_org_access)],
+    session: Annotated[AsyncSession, Depends(get_tenant_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> dict[str, Any]:
+    """Return the hierarchical summary tree for a document by proxying brain-api.
+
+    Mirrors the chunks endpoint's RLS-scoped resolution and auth. A 404 from
+    brain-api (the doc-level record isn't written yet because ingestion is
+    still running) is surfaced as a 404 so the UI can show a "not available
+    yet" state rather than a hard error.
+    """
+    repo = DocumentRepository(session)
+    doc = await repo.get(document_id)
+    if doc is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
+
+    client = BrainAPIClient(settings)
+    try:
+        return await client.get_document_summary(str(ctx.org_id), doc.document_key)
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == status.HTTP_404_NOT_FOUND:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Summary not available yet",
+            ) from e
+        logger.error("Failed to fetch summary for %s: %s", doc.document_key, e)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to fetch summary from brain-api",
+        ) from e
+    except Exception as e:
+        logger.error("Failed to fetch summary for %s: %s", doc.document_key, e)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to fetch summary from brain-api",
         ) from e

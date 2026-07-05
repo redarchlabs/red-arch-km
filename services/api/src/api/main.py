@@ -2,18 +2,23 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.config import get_settings
-from api.db import dispose_engine, get_engine
+from api.db import dispose_engine, get_engine, get_session_factory
+from api.dependencies import close_redis_client, get_redis_client
 from api.middleware.request_logging import RequestLoggingMiddleware
 from api.observability import setup_observability
 from api.routers import (
+    admin,
     attributes,
     auth,
     chat,
@@ -25,20 +30,72 @@ from api.routers import (
     memberships,
     orgs,
     search,
+    setup,
     tags,
     users,
 )
+from api.services.setup_token import ensure_setup_token
 
 logger = logging.getLogger(__name__)
+
+
+async def _announce_setup_token_if_needed() -> None:
+    """On boot with no active site admin, generate the one-time setup token and
+    print it to the logs. Failure here (e.g. Redis or DB down/hung) must never
+    prevent startup — setup is simply retried on the next boot."""
+    settings = get_settings()
+    try:
+        async with asyncio.timeout(10):
+            factory = get_session_factory(settings)
+            async with factory() as session:
+                token = await ensure_setup_token(
+                    session,
+                    get_redis_client(settings),
+                    ttl_seconds=settings.setup_token_ttl_seconds,
+                )
+                populated = token is not None and await _instance_has_orgs(session)
+        if token:
+            if populated:
+                # Adminless-recovery on an instance that already has data is a
+                # distinct, alarming event — not a routine fresh install.
+                logger.error(
+                    "RECOVERY MODE: this instance has existing organizations but no "
+                    "active site admin. A new setup token was issued — if you did not "
+                    "expect this, treat it as a security incident."
+                )
+            ttl = settings.setup_token_ttl_seconds
+            validity = f"{ttl // 3600}h" if ttl >= 3600 else f"{max(1, ttl // 60)}m"
+            border = "=" * 72
+            logger.warning(
+                "\n%s\n"
+                "  FIRST-RUN SETUP: no site admin exists yet.\n"
+                "  One-time setup token (valid %s, single use):\n\n"
+                "      %s\n\n"
+                "  Sign in at the UI and open /setup to claim global admin.\n"
+                "%s",
+                border,
+                validity,
+                token,
+                border,
+            )
+    except Exception:
+        logger.exception("Setup-token bootstrap check failed (continuing startup)")
+
+
+async def _instance_has_orgs(session: AsyncSession) -> bool:
+    result = await session.execute(text("SELECT EXISTS (SELECT 1 FROM orgs)"))
+    return bool(result.scalar_one())
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     logger.info("Starting Red Arch KM API")
+    await _announce_setup_token_if_needed()
 
     yield
 
     logger.info("Shutting down Red Arch KM API")
+    await close_redis_client()
     await dispose_engine()
 
 
@@ -86,6 +143,8 @@ def create_app() -> FastAPI:
     app.include_router(memberships.router, prefix="/api/memberships", tags=["memberships"])
     app.include_router(attributes.router, prefix="/api/attributes", tags=["attributes"])
     app.include_router(internal.router, prefix="/api/internal", tags=["internal"])
+    app.include_router(setup.router, prefix="/api/setup", tags=["setup"])
+    app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
 
     return app
 

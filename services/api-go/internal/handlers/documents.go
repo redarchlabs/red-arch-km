@@ -192,11 +192,36 @@ func (h *DocumentHandler) ListDocuments(w http.ResponseWriter, r *http.Request) 
 		folderIDArray[i] = ToPgUUID(id)
 	}
 
+	// Optional ?folder_id=<uuid> scopes the list to a single folder's contents
+	// (folder-browse view). The caller must be able to see the folder. When
+	// scoped, unfiled docs are excluded (includeUnfiled=false).
+	includeUnfiled := isAdmin
+	if raw := r.URL.Query().Get("folder_id"); raw != "" {
+		fid, err := uuid.Parse(raw)
+		if err != nil {
+			httputil.BadRequest(w, "Invalid folder_id")
+			return
+		}
+		visible := false
+		for _, id := range visibleFolderIDs {
+			if id == fid {
+				visible = true
+				break
+			}
+		}
+		if !visible {
+			httputil.NotFound(w, "Folder not found or not visible")
+			return
+		}
+		folderIDArray = []pgtype.UUID{ToPgUUID(fid)}
+		includeUnfiled = false
+	}
+
 	// List documents in visible folders (including null folder_id documents for admins)
 	documents, err := queries.ListDocumentsForFolders(ctx, repository.ListDocumentsForFoldersParams{
 		OrgID:   ToPgUUID(orgID),
 		Column2: folderIDArray,
-		Column3: isAdmin, // Include null folder_id docs only for admins
+		Column3: includeUnfiled, // Include null folder_id docs only for admins (never in folder-scoped view)
 		Limit:   pagination.Limit(),
 		Offset:  pagination.Offset(),
 	})
@@ -209,7 +234,7 @@ func (h *DocumentHandler) ListDocuments(w http.ResponseWriter, r *http.Request) 
 	total, err := queries.CountDocumentsForFolders(ctx, repository.CountDocumentsForFoldersParams{
 		OrgID:   ToPgUUID(orgID),
 		Column2: folderIDArray,
-		Column3: isAdmin,
+		Column3: includeUnfiled,
 	})
 	if err != nil {
 		slog.Error("count documents", "error", err)

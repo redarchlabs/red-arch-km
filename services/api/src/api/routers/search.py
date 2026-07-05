@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from collections.abc import AsyncIterator
 from typing import Annotated
 
@@ -36,6 +37,15 @@ async def _get_user_access_keys(session: AsyncSession, ctx: OrgContext) -> list[
     if org is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Org not found")
     return calculate_user_masks_from_membership(ctx.membership, org.permission_number)
+
+
+def _folder_tags(folder_ids: list[uuid.UUID]) -> list[str] | None:
+    """Translate folder ids into the synthetic `folder:<id>` tags used at ingest.
+
+    Returned as an OR-filter (any of these) so a chat/search can be scoped to a
+    set of folders. None when no folder scope was requested.
+    """
+    return [f"folder:{fid}" for fid in folder_ids] or None
 
 
 @router.post("/", response_model=SearchResponse)
@@ -89,6 +99,7 @@ async def chat(
         chat_history=body.chat_history,
         access_keys=access_keys,
         tags=body.tags,
+        folder_tags=_folder_tags(body.folder_ids),
         use_knowledge_graph=body.use_knowledge_graph,
     )
 
@@ -123,6 +134,7 @@ async def chat_stream(
                 chat_history=body.chat_history,
                 access_keys=access_keys,
                 tags=body.tags,
+                folder_tags=_folder_tags(body.folder_ids),
                 use_knowledge_graph=body.use_knowledge_graph,
             ):
                 yield chunk

@@ -27,7 +27,14 @@ Red Arch KM implements a fine-grained permission system using 32-bit access mask
 - `is_site_admin = true` on user_profiles
 - Can CRUD all organizations
 - Bypasses org-level permission checks
-- Cannot be set via API (manual DB operation)
+- Bootstrapped via the first-run setup wizard (`/setup` + one-time token from
+  the API logs, see [DEPLOYMENT.md](DEPLOYMENT.md)); afterwards existing site
+  admins promote/demote others in the Site Admin console
+  (`PATCH /api/admin/users/{id}`)
+- The last active site admin cannot be demoted or deactivated (409), and
+  admins cannot demote/deactivate themselves (400)
+- Accounts can be deactivated (`is_active = false`): authentication is refused
+  with 403 even when the Clerk JWT is valid
 
 ### Org Admin
 - `is_org_admin = true` on user_org_memberships

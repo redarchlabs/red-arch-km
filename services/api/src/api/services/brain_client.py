@@ -55,6 +55,7 @@ class BrainAPIClient:
         chat_history: list[dict[str, str]] | None = None,
         access_keys: list[int] | None = None,
         tags: list[str] | None = None,
+        folder_tags: list[str] | None = None,
         use_knowledge_graph: bool = True,
     ) -> dict[str, Any]:
         async with httpx.AsyncClient(timeout=120) as client:
@@ -66,10 +67,18 @@ class BrainAPIClient:
                     "chat_history": chat_history or [],
                     "access_keys": access_keys or [],
                     "tags": tags or [],
+                    "folder_tags": folder_tags or [],
                     "use_knowledge_graph": use_knowledge_graph,
                 },
                 headers=self._headers(),
             )
+            response.raise_for_status()
+            return cast("dict[str, Any]", response.json())
+
+    async def healthz(self) -> dict[str, Any]:
+        """Liveness probe for the admin console's System tab (no auth needed)."""
+        async with httpx.AsyncClient(timeout=3) as client:
+            response = await client.get(f"{self._base_url}/healthz")
             response.raise_for_status()
             return cast("dict[str, Any]", response.json())
 
@@ -83,6 +92,16 @@ class BrainAPIClient:
             response.raise_for_status()
             return cast("dict[str, Any]", response.json())
 
+    async def get_document_summary(self, tenant_id: str, document_key: str) -> dict[str, Any]:
+        """Fetch the doc-level summary + hierarchical summary tree from brain-api."""
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.get(
+                f"{self._base_url}/api/documents/{tenant_id}/{document_key}/summary",
+                headers=self._headers(),
+            )
+            response.raise_for_status()
+            return cast("dict[str, Any]", response.json())
+
     async def vector_chat_stream(
         self,
         *,
@@ -91,6 +110,7 @@ class BrainAPIClient:
         chat_history: list[dict[str, str]] | None = None,
         access_keys: list[int] | None = None,
         tags: list[str] | None = None,
+        folder_tags: list[str] | None = None,
         use_knowledge_graph: bool = True,
     ) -> AsyncIterator[bytes]:
         """Stream raw SSE bytes from the brain-api's /api/v1/ask/stream endpoint.
@@ -110,6 +130,7 @@ class BrainAPIClient:
                     "chat_history": chat_history or [],
                     "access_keys": access_keys or [],
                     "tags": tags or [],
+                    "folder_tags": folder_tags or [],
                     "use_knowledge_graph": use_knowledge_graph,
                 },
                 headers=self._headers(),

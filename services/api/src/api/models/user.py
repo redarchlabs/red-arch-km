@@ -6,6 +6,7 @@ import uuid
 
 # Association tables for M2M relationships on UserOrgMembership
 from sqlalchemy import Boolean, Column, ForeignKey, String, Table, Text, UniqueConstraint
+from sqlalchemy import true as sa_true
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -51,6 +52,9 @@ class UserProfile(Base, UUIDMixin, TimestampMixin):
     email: Mapped[str] = mapped_column(String(254), unique=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_site_admin: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Deactivated accounts are rejected at auth time (see auth/dependencies.py);
+    # deactivation beats deleting because memberships/documents keep their author.
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=sa_true())
 
     memberships: Mapped[list[UserOrgMembership]] = relationship(back_populates="profile", cascade="all, delete-orphan")
 

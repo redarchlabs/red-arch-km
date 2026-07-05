@@ -19,9 +19,14 @@ logger = logging.getLogger(__name__)
 _tracer = get_tracer("brain_api.search")
 
 _RAG_SYSTEM_PROMPT = """\
-You are a knowledgeable assistant answering questions using the provided context.
+You are the organization's knowledge-base assistant. Answer questions ONLY \
+from the provided context (document excerpts and knowledge-graph facts).
 Cite sources by referencing document titles when possible.
-If the context does not contain the answer, say so clearly rather than guessing.
+Your general world knowledge must NOT be used to answer questions: when the \
+context is empty or does not contain the answer, tell the user that the \
+organization's knowledge base has no relevant documents for their question, \
+and suggest uploading or pointing you at relevant documents. You may still \
+respond naturally to greetings and questions about how to use this assistant.
 """
 
 
@@ -41,8 +46,14 @@ class SearchService:
         limit: int = 5,
         access_keys: list[int] | None = None,
         tags: list[str] | None = None,
+        folder_tags: list[str] | None = None,
     ) -> dict[str, Any]:
-        """Semantic search over chunk vectors."""
+        """Semantic search over chunk vectors.
+
+        ``tags`` are ANDed (every one required). ``folder_tags`` are ORed among
+        themselves (the doc must carry at least one) — used to scope retrieval
+        to a set of folders without excluding docs that only match one of them.
+        """
         metrics = get_metrics()
         start = time.perf_counter()
         status = "success"
@@ -59,6 +70,7 @@ class SearchService:
                     limit=limit,
                     access_keys=access_keys,
                     required_tags=tags,
+                    any_tags=folder_tags,
                 )
         except Exception:
             status = "error"
@@ -83,6 +95,7 @@ class SearchService:
         chat_history: list[dict[str, str]] | None = None,
         access_keys: list[int] | None = None,
         tags: list[str] | None = None,
+        folder_tags: list[str] | None = None,
         use_knowledge_graph: bool = True,
         chunk_limit: int = 5,
     ) -> dict[str, Any]:
@@ -94,6 +107,7 @@ class SearchService:
             limit=chunk_limit,
             access_keys=access_keys,
             tags=tags,
+            folder_tags=folder_tags,
         )
         hits = vector_result["hits"]
 
@@ -153,6 +167,7 @@ class SearchService:
         chat_history: list[dict[str, str]] | None = None,
         access_keys: list[int] | None = None,
         tags: list[str] | None = None,
+        folder_tags: list[str] | None = None,
         use_knowledge_graph: bool = True,
         chunk_limit: int = 5,
     ) -> Iterator[dict[str, Any]]:
@@ -169,6 +184,7 @@ class SearchService:
                 limit=chunk_limit,
                 access_keys=access_keys,
                 tags=tags,
+                folder_tags=folder_tags,
             )
             hits = vector_result["hits"]
         except Exception as e:
@@ -266,6 +282,9 @@ class SearchService:
             if role in ("user", "assistant") and content:
                 messages.append({"role": role, "content": content})
 
-        user_content = f"Context:\n{context}\n\nQuestion: {query}" if context else query
+        # Always present an explicit context block — omitting it on empty
+        # retrieval invites the model to answer from general knowledge.
+        effective_context = context if context else "(no relevant documents were found in the knowledge base)"
+        user_content = f"Context:\n{effective_context}\n\nQuestion: {query}"
         messages.append({"role": "user", "content": user_content})
         return messages

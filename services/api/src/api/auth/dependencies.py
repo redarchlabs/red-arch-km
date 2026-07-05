@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import logging
 import uuid
 from dataclasses import dataclass
@@ -49,6 +50,16 @@ class OrgContext:
     is_org_admin: bool
 
 
+def _ensure_active(profile: Any) -> None:
+    """Reject deactivated accounts at auth time — a valid Clerk JWT must not
+    grant access once a site admin has deactivated the profile."""
+    if not profile.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Account is deactivated",
+        )
+
+
 async def _resolve_e2e_user(
     test_user: str,
     test_secret: str,
@@ -78,6 +89,7 @@ async def _resolve_e2e_user(
     email = email or f"{username}@e2e.local"
 
     profile = await provision_user_from_claims(session, sub=f"e2e-{username}", username=username, email=email)
+    _ensure_active(profile)
     return CurrentUser(
         sub=profile.auth_subject,
         username=profile.username,
@@ -154,6 +166,7 @@ async def get_current_user(
         )
 
     profile = await provision_user_from_claims(session, sub=sub, username=username, email=email)
+    _ensure_active(profile)
 
     return CurrentUser(
         sub=sub,
@@ -251,7 +264,10 @@ async def require_internal_api_key(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Internal API disabled (no key configured)",
         )
-    if not x_internal_api_key or x_internal_api_key != expected:
+    # Constant-time comparison so a timing side-channel can't be used to
+    # recover the key byte-by-byte. hmac.compare_digest requires a non-None
+    # left operand, hence the explicit presence check first.
+    if not x_internal_api_key or not hmac.compare_digest(x_internal_api_key, expected):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid internal API credentials",
