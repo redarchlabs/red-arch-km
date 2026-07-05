@@ -22,6 +22,8 @@ export interface ChatSource {
   document_key: string;
   document_title: string;
   score: number;
+  /** 1-based citation number; inline [n] markers in the answer map to this. */
+  number?: number;
 }
 
 export interface StreamEvent {
