@@ -12,8 +12,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { RichTextEditor } from "@/components/documents/RichTextEditor";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import { type AttributeDefinition, listAttributes } from "@/lib/api/attributes";
 import {
   createDocument,
@@ -22,6 +22,7 @@ import {
 } from "@/lib/api/documents";
 import { listFolders } from "@/lib/api/folders";
 import { listTags } from "@/lib/api/tags";
+import { htmlToMarkdown } from "@/lib/markdown";
 import type { Folder, Tag } from "@/types";
 
 type Mode = "text" | "file";
@@ -55,6 +56,8 @@ export function DocumentUpload({ open, onClose, onCreated, defaultFolderId }: Do
   const [attrs, setAttrs] = useState<AttributeDefinition[]>([]);
   const [attrValues, setAttrValues] = useState<Record<string, string>>({});
   const [useKg, setUseKg] = useState<KgChoice>("default");
+  // Bumped to remount the rich-text editor (clearing it) on reset.
+  const [editorKey, setEditorKey] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -93,6 +96,7 @@ export function DocumentUpload({ open, onClose, onCreated, defaultFolderId }: Do
     setTagIds([]);
     setAttrValues({});
     setUseKg("default");
+    setEditorKey((k) => k + 1);
     setError(null);
   };
 
@@ -271,16 +275,13 @@ export function DocumentUpload({ open, onClose, onCreated, defaultFolderId }: Do
           {mode === "text" ? (
             <>
               <div>
-                <label htmlFor="text" className="mb-1.5 block text-sm font-medium">
-                  Content
-                </label>
-                <Textarea
-                  id="text"
-                  value={text}
-                  onChange={(e) => setText(e.target.value)}
-                  placeholder="Paste document content here…"
-                  className="min-h-[240px]"
+                <span className="mb-1.5 block text-sm font-medium">Content</span>
+                {/* Rich-text authoring; the HTML is converted to Markdown on
+                    change so the ingest pipeline receives clean Markdown. */}
+                <RichTextEditor
+                  key={editorKey}
                   disabled={submitting}
+                  onChange={(html) => setText(htmlToMarkdown(html))}
                 />
               </div>
 
