@@ -1,9 +1,11 @@
 FROM python:3.12-slim AS base
 
 # OCR deps: pytesseract needs the tesseract binary; pdf2image needs poppler-utils.
+# antiword extracts text from legacy .doc (Word 97-2003) files.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     tesseract-ocr \
     poppler-utils \
+    antiword \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip install --no-cache-dir uv

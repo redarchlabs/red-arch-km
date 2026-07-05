@@ -36,7 +36,10 @@ router = APIRouter()
 # Content-Type must not smuggle in an unsupported type). Kept in sync with the
 # worker's extraction dispatcher.
 _ALLOWED_UPLOAD_EXTENSIONS: frozenset[str] = frozenset(
-    {".pdf", ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".gif", ".webp", ".txt", ".md", ".docx"}
+    {
+        ".pdf", ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".gif", ".webp",
+        ".txt", ".md", ".docx", ".doc",
+    }
 )
 
 # Best-effort Content-Type per extension when the client omits/mislabels it.
@@ -53,6 +56,7 @@ _EXTENSION_CONTENT_TYPES: dict[str, str] = {
     ".txt": "text/plain",
     ".md": "text/markdown",
     ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".doc": "application/msword",
 }
 
 _VALID_TRANSLATION_METHODS: frozenset[str] = frozenset({"ocr", "ai"})
@@ -602,6 +606,21 @@ async def get_document_content(
             }
         except Exception:
             logger.exception("Failed to read original for %s", doc.document_key)
+            return empty
+
+    # Legacy .doc — the worker stored a text sidecar at ingest (antiword only
+    # runs there); serve that as plain text.
+    if ext == ".doc":
+        try:
+            raw = StorageClient(settings).get_object(f"{doc.document_url}.extracted.txt")
+            return {
+                "content": raw.decode("utf-8", errors="replace"),
+                "format": "text",
+                "kind": "text",
+                "original_url": None,
+            }
+        except Exception:
+            logger.info("No .doc text sidecar for %s (may still be processing)", doc.document_key)
             return empty
 
     # Word documents — convert to Markdown so they render with their structure.

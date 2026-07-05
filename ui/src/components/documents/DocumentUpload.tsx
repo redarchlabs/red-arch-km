@@ -375,7 +375,7 @@ export function DocumentUpload({ open, onClose, onCreated, defaultFolderId }: Do
                 <input
                   id="file"
                   type="file"
-                  accept=".pdf,.png,.jpg,.jpeg,.tif,.tiff,.bmp,.gif,.webp,.txt,.md"
+                  accept=".pdf,.png,.jpg,.jpeg,.tif,.tiff,.bmp,.gif,.webp,.txt,.md,.docx,.doc"
                   onChange={(e) => {
                     const f = e.target.files?.[0] ?? null;
                     setFile(f);
@@ -386,8 +386,8 @@ export function DocumentUpload({ open, onClose, onCreated, defaultFolderId }: Do
                   className="block w-full text-sm file:mr-3 file:rounded-md file:border file:border-input file:bg-transparent file:px-3 file:py-1.5 file:text-sm file:font-medium hover:file:bg-accent"
                 />
                 <p className="mt-1 text-xs text-muted-foreground">
-                  PDF, images (PNG/JPG/TIFF/…), or text. The original is stored, then
-                  chunked, embedded, and indexed.
+                  PDF, images (PNG/JPG/TIFF/…), Word (.docx/.doc), or text. The original is
+                  stored, then chunked, embedded, and indexed.
                 </p>
               </div>
 
