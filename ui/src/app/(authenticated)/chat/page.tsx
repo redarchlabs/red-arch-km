@@ -32,8 +32,14 @@ export default function ChatPage() {
   const abortRef = useRef<AbortController | null>(null);
 
   // Load folders so the user can scope the chat to one (context switching).
+  // Reset the selected scope on org change — a folder UUID from the previous
+  // org must never ride along under the new org's X-Org-ID.
   useEffect(() => {
-    if (!currentOrgId) return;
+    setScopeFolderId("");
+    if (!currentOrgId) {
+      setFolders([]);
+      return;
+    }
     let active = true;
     listFolders()
       .then((f) => {

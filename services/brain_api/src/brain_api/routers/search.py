@@ -28,6 +28,7 @@ class VectorSearchRequest(BaseModel):
     limit: int = Field(default=5, ge=1, le=50)
     access_keys: list[int] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
+    folder_tags: list[str] = Field(default_factory=list)
 
 
 class VectorChatRequest(BaseModel):
@@ -36,6 +37,7 @@ class VectorChatRequest(BaseModel):
     chat_history: list[dict[str, str]] = Field(default_factory=list)
     access_keys: list[int] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
+    folder_tags: list[str] = Field(default_factory=list)
     use_knowledge_graph: bool = True
     chunk_limit: int = Field(default=5, ge=1, le=20)
 
@@ -58,6 +60,7 @@ async def vector_search(
             limit=body.limit,
             access_keys=body.access_keys or None,
             tags=body.tags,
+            folder_tags=body.folder_tags or None,
         )
     except Exception:
         logger.exception("Vector search failed")
@@ -81,6 +84,7 @@ async def vector_chat(
             chat_history=body.chat_history,
             access_keys=body.access_keys or None,
             tags=body.tags,
+            folder_tags=body.folder_tags or None,
             use_knowledge_graph=body.use_knowledge_graph,
             chunk_limit=body.chunk_limit,
         )

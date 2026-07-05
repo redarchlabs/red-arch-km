@@ -46,15 +46,18 @@ export default function DocumentsPage() {
 
   // Ingestion is async (worker → status callback). Poll while any document is
   // still PENDING/PROCESSING so the status badge flips to SUCCESS/FAILED
-  // without a manual refresh. Stops once everything has settled.
-  useEffect(() => {
-    const inFlight = data?.items.some(
+  // without a manual refresh. Depend on a stable boolean (not `data`) so the
+  // interval isn't torn down and rebuilt on every tick — it stays put until
+  // nothing is in flight.
+  const hasInFlight =
+    data?.items.some(
       (d) => d.processing_status === "PENDING" || d.processing_status === "PROCESSING",
-    );
-    if (!inFlight) return;
+    ) ?? false;
+  useEffect(() => {
+    if (!hasInFlight) return;
     const timer = setInterval(() => void load(), 5000);
     return () => clearInterval(timer);
-  }, [data, load]);
+  }, [hasInFlight, load]);
 
   if (orgLoading) {
     return <Skeleton className="h-32 w-full" />;

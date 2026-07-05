@@ -44,7 +44,16 @@ def report_status(
     swallow errors and log. A stale processing_status is less bad than losing
     successful work.
     """
-    if not document_id or not settings.internal_api_key:
+    if not document_id:
+        return
+    if not settings.internal_api_key:
+        # Misconfiguration: without the key the worker can't report status, so
+        # documents would sit at PENDING forever with no signal. Make it loud.
+        logger.warning(
+            "INTERNAL_API_KEY not set — cannot report '%s' for document %s; it will appear stuck",
+            status,
+            document_id,
+        )
         return
     try:
         response = httpx.post(

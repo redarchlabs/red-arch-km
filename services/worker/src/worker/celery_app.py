@@ -34,6 +34,13 @@ app.conf.update(
     worker_prefetch_multiplier=1,
     task_default_retry_delay=30,
     task_max_retries=3,
+    # Backstop so a runaway extraction (e.g. a pathological PDF) can't hang a
+    # worker slot forever. The soft limit raises SoftTimeLimitExceeded inside the
+    # task (caught by task_extract_and_ingest to report FAILED); the hard limit
+    # SIGKILLs the child as a last resort. Generous enough not to trip a
+    # legitimately slow brain-api ingest + its bounded in-process retries.
+    task_soft_time_limit=int(os.environ.get("TASK_SOFT_TIME_LIMIT", "1740")),
+    task_time_limit=int(os.environ.get("TASK_TIME_LIMIT", "1800")),
 )
 
 app.autodiscover_tasks(["worker.tasks"])

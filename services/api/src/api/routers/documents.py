@@ -226,15 +226,24 @@ async def upload_document(
             detail=f"Unsupported file type '{ext or filename}'. Allowed: {sorted(_ALLOWED_UPLOAD_EXTENSIONS)}",
         )
 
-    content = await file.read()
+    # Read in bounded chunks and abort the moment we exceed the cap, so a
+    # malicious/huge upload can't spool gigabytes to disk/memory before being
+    # rejected. `await file.read()` (unbounded) would defeat the limit — Starlette
+    # does not cap file parts by size.
     max_bytes = settings.max_file_size_mb * 1024 * 1024
-    if len(content) > max_bytes:
-        raise HTTPException(
-            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
-            detail=f"File exceeds the {settings.max_file_size_mb} MB limit",
-        )
-    if not content:
+    chunks: list[bytes] = []
+    total = 0
+    while chunk := await file.read(1 << 20):  # 1 MiB at a time
+        total += len(chunk)
+        if total > max_bytes:
+            raise HTTPException(
+                status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                detail=f"File exceeds the {settings.max_file_size_mb} MB limit",
+            )
+        chunks.append(chunk)
+    if total == 0:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="File is empty")
+    content = b"".join(chunks)
 
     # --- Folder validation + permission masks (mirrors create_document) ---
     folder_uuid: uuid.UUID | None = None
@@ -336,10 +345,17 @@ async def update_document(
 ) -> DocumentRead:
     """Update metadata on a document. Does not re-trigger ingestion.
 
-    Callers that change tags or folder_id should be aware: the vector-store
-    access_keys are inherited from the folder at ingest time and are NOT
-    automatically re-propagated here. A dedicated metadata update task
-    should be dispatched separately (see worker.tasks.metadata).
+    Callers that change tags or folder_id should be aware of two staleness
+    limitations, both because the vector store is only written at ingest time:
+      1. ``access_keys`` are inherited from the folder at ingest and are NOT
+         re-propagated here.
+      2. The synthetic ``folder:<id>`` tag that folder-scoped chat/search filter
+         on is likewise fixed at ingest. Moving a document to another folder
+         does NOT re-tag its vectors, so folder-scoped retrieval will still
+         match the OLD folder (and miss the new one) until the document is
+         re-ingested. Documents ingested before this feature have no such tag.
+    A dedicated metadata/re-tag update task should be dispatched separately
+    (see worker.tasks.metadata) to close both gaps. Tracked as a follow-up.
     """
     repo = DocumentRepository(session)
     doc = await repo.get(document_id)

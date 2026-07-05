@@ -4,8 +4,11 @@ Flow: report PROCESSING → download the stored original → resolve the OpenAI 
 (only for the ``ai`` method) → extract text (OCR or vision) → POST the extracted
 text to brain-api via the shared ingest helper.
 
-Extraction runs exactly once. The brain POST retries in-process (see
+Extraction runs once per task *delivery*: the brain POST retries in-process (see
 ``_ingest_common``) so a downstream brain-api 5xx never re-runs the paid OCR.
+Note that ``acks_late=True`` means a worker crash/redelivery (OOM, deploy) can
+still re-run the whole task, including extraction — the page cap + task time
+limit bound that cost, but it is not exactly-once across process restarts.
 """
 
 from __future__ import annotations
@@ -87,7 +90,19 @@ def task_extract_and_ingest(self: Any, data: dict[str, Any]) -> dict[str, Any]:
         return {"status": "failed", "document_key": document_key, "error": str(e)}
 
     if not text.strip():
+        # A blank/illegible scan yields empty (or whitespace-only) text.
+        # brain-api's IngestRequest only rejects zero-length text, so "\n" would
+        # sneak through and be reported SUCCESS for a doc with no content.
+        # Treat it as a terminal extraction failure instead.
         logger.warning("Extraction produced empty text for %s (%s)", document_key, filename)
+        report_status(
+            settings,
+            document_id,
+            tenant_id,
+            "FAILED",
+            {"stage": "extraction", "method": method, "reason": "empty_text"},
+        )
+        return {"status": "failed", "document_key": document_key, "error": "empty extraction"}
 
     # --- Brain ingest (text-only payload; brain contract unchanged) ---
     brain_payload = {

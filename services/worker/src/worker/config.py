@@ -28,6 +28,12 @@ class WorkerSettings(BaseSettings):
     # dedicated timeout separate from the brain-api POST timeout.
     extraction_timeout_seconds: int = Field(default=600, validation_alias="EXTRACTION_TIMEOUT_SECONDS")
 
+    # Hard cap on PDF pages rendered/OCR'd per document. Bounds memory + cost
+    # (and, for the AI path, per-page billing) so a pathological many-page PDF
+    # can't OOM a worker or run up a huge bill. Pages beyond the cap are skipped
+    # with a warning (never silently).
+    max_ocr_pages: int = Field(default=100, validation_alias="MAX_OCR_PAGES")
+
     # Object storage (MinIO / S3-compatible) for uploaded originals. Same
     # unprefixed STORAGE_* env vars the API reads, so both point at one bucket.
     storage_endpoint: str = Field(default="http://localhost:9000", validation_alias="STORAGE_ENDPOINT")
