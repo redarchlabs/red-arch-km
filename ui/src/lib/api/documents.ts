@@ -54,9 +54,12 @@ export async function uploadDocument(input: DocumentUploadInput): Promise<Docume
   if (input.folder_id) form.append("folder_id", input.folder_id);
   form.append("translation_method", input.translation_method ?? "ocr");
 
-  // Let the browser set the multipart boundary; override the client's JSON default.
+  // Must let the browser/axios compute the multipart Content-Type *with its
+  // boundary* — setting it manually (even to "multipart/form-data") omits the
+  // boundary and the server can't parse the body. Passing undefined suppresses
+  // the client's JSON default so the FormData branch sets it correctly.
   const response = await apiClient.post<Document>("/documents/upload", form, {
-    headers: { "Content-Type": "multipart/form-data" },
+    headers: { "Content-Type": undefined },
   });
   return response.data;
 }

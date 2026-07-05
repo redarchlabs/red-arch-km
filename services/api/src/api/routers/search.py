@@ -65,6 +65,7 @@ async def search(
         limit=body.limit,
         access_keys=access_keys,
         tags=body.tags,
+        folder_tags=_folder_tags(body.folder_ids),
     )
 
     hits = [

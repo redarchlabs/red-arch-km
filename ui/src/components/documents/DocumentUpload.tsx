@@ -165,7 +165,13 @@ export function DocumentUpload({ open, onClose, onCreated, defaultFolderId }: Do
           <div className="inline-flex rounded-md border p-0.5 text-sm">
             <button
               type="button"
-              onClick={() => setMode("text")}
+              onClick={() => {
+                // Clear the other mode's input so a hidden, previously-entered
+                // value can't be silently submitted after toggling back.
+                setMode("text");
+                setFile(null);
+                setError(null);
+              }}
               disabled={submitting}
               className={`rounded px-3 py-1 ${mode === "text" ? "bg-accent font-medium" : "text-muted-foreground"}`}
             >
@@ -173,7 +179,11 @@ export function DocumentUpload({ open, onClose, onCreated, defaultFolderId }: Do
             </button>
             <button
               type="button"
-              onClick={() => setMode("file")}
+              onClick={() => {
+                setMode("file");
+                setText("");
+                setError(null);
+              }}
               disabled={submitting}
               className={`rounded px-3 py-1 ${mode === "file" ? "bg-accent font-medium" : "text-muted-foreground"}`}
             >

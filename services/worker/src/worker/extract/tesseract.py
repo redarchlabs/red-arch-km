@@ -14,12 +14,19 @@ import pytesseract
 from pdf2image import convert_from_bytes
 from PIL import Image
 
+from worker.config import WorkerSettings
+
 logger = logging.getLogger(__name__)
 
 
 def extract_pdf(data: bytes) -> str:
-    """OCR every page of a PDF and return the concatenated text."""
-    images = convert_from_bytes(data)
+    """OCR up to ``max_ocr_pages`` pages of a PDF and return concatenated text."""
+    max_pages = WorkerSettings().max_ocr_pages
+    # `last_page` caps rendering at poppler level so we never rasterize the whole
+    # document into memory just to throw pages away.
+    images = convert_from_bytes(data, last_page=max_pages)
+    if len(images) >= max_pages:
+        logger.warning("PDF exceeds max_ocr_pages=%d; OCR'ing only the first %d pages", max_pages, max_pages)
     pages: list[str] = []
     for i, image in enumerate(images, start=1):
         pages.append(pytesseract.image_to_string(image))

@@ -31,6 +31,7 @@ class BrainAPIClient:
         limit: int = 5,
         access_keys: list[int] | None = None,
         tags: list[str] | None = None,
+        folder_tags: list[str] | None = None,
     ) -> dict[str, Any]:
         async with httpx.AsyncClient(timeout=30) as client:
             response = await client.post(
@@ -41,6 +42,7 @@ class BrainAPIClient:
                     "limit": limit,
                     "access_keys": access_keys or [],
                     "tags": tags or [],
+                    "folder_tags": folder_tags or [],
                 },
                 headers=self._headers(),
             )

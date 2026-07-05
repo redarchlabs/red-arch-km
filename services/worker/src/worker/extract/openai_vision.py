@@ -72,11 +72,17 @@ def extract(data: bytes, filename: str, api_key: str, *, model: str | None = Non
     # and in unit tests that monkeypatch this function.
     from openai import OpenAI
 
-    resolved_model = model or WorkerSettings().openai_ocr_model
+    settings = WorkerSettings()
+    resolved_model = model or settings.openai_ocr_model
     client = OpenAI(api_key=api_key)
 
     if filename.lower().endswith(".pdf"):
-        images = convert_from_bytes(data)
+        # Cap pages so a many-page PDF can't OOM the worker or run up unbounded
+        # per-page vision billing. Pages past the cap are skipped with a warning.
+        max_pages = settings.max_ocr_pages
+        images = convert_from_bytes(data, last_page=max_pages)
+        if len(images) >= max_pages:
+            logger.warning("PDF exceeds max_ocr_pages=%d; transcribing only the first %d pages", max_pages, max_pages)
         pages: list[str] = []
         for i, image in enumerate(images, start=1):
             buffer = io.BytesIO()

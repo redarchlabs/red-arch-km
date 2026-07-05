@@ -1,8 +1,8 @@
 import { ClerkProvider } from "@clerk/nextjs";
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
-import { Toaster } from "sonner";
 
+import { ThemedToaster } from "@/components/ThemedToaster";
 import { OrgProvider } from "@/context/OrgContext";
 import { ThemeProvider } from "@/context/ThemeContext";
 
@@ -35,8 +35,8 @@ export default function RootLayout({ children }: RootLayoutProps) {
           <ThemeProvider>
             {/* OrgProvider reads Clerk auth via useAuth(), so it must nest inside ClerkProvider. */}
             <OrgProvider>{children}</OrgProvider>
-            {/* Global toast portal. richColors gives success/error their own hues. */}
-            <Toaster richColors position="top-right" />
+            {/* Global toast portal, theme-aware (see ThemedToaster). */}
+            <ThemedToaster />
           </ThemeProvider>
         </body>
       </html>
