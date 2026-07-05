@@ -3,9 +3,11 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, type ReactNode } from "react";
 
+import { HelpDock } from "@/components/help/HelpDock";
 import { Header } from "@/components/nav/Header";
 import { Sidebar } from "@/components/nav/Sidebar";
 import { useAuth } from "@/context/AuthContext";
+import { HelpProvider } from "@/context/HelpContext";
 import { useOrg } from "@/context/OrgContext";
 import { fetchSetupStatus } from "@/lib/api/setup";
 
@@ -59,12 +61,15 @@ export default function AuthenticatedLayout({ children }: Props) {
   }
 
   return (
-    <div className="flex h-screen">
-      <Sidebar />
-      <div className="flex flex-1 flex-col overflow-hidden">
-        <Header />
-        <main className="flex-1 overflow-auto p-6">{children}</main>
+    <HelpProvider>
+      <div className="flex h-screen">
+        <Sidebar />
+        <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+          <Header />
+          <main className="flex-1 overflow-auto p-6">{children}</main>
+        </div>
+        <HelpDock />
       </div>
-    </div>
+    </HelpProvider>
   );
 }
