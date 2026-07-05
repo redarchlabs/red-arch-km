@@ -1,7 +1,7 @@
 "use client";
 
 import DOMPurify from "dompurify";
-import { Columns2, Loader2, Rows3 } from "lucide-react";
+import { Columns2, ExternalLink, Loader2, Rows3 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Markdown } from "@/components/common/Markdown";
@@ -165,6 +165,19 @@ export function DocumentReader({
         <h2 className="min-w-0 flex-1 truncate text-lg font-semibold" title={documentTitle}>
           {documentTitle}
         </h2>
+        {original?.original_url ? (
+          // The extracted text is scroll-synced with the summaries; this opens
+          // the untouched original (PDF/image) in a new tab for pixel fidelity.
+          <a
+            href={original.original_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-sm text-muted-foreground hover:text-foreground"
+          >
+            <ExternalLink className="h-4 w-4" />
+            Original
+          </a>
+        ) : null}
         <div className="flex rounded-md border p-0.5">
           <ModeButton
             active={mode === "side-by-side"}
@@ -215,18 +228,10 @@ export function DocumentReader({
               <p className="text-sm text-muted-foreground">No summary available.</p>
             )}
           </aside>
-          {original?.kind === "pdf" && original.original_url ? (
-            // Native PDF rendering — perfect formatting, no chunk fallback.
-            <iframe
-              title="Original document"
-              src={original.original_url}
-              className="min-h-0 flex-1"
-            />
-          ) : (
-            <div ref={rightScrollRef} className="min-h-0 flex-1 overflow-y-auto p-5">
-              <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                Full text
-              </div>
+          <div ref={rightScrollRef} className="min-h-0 flex-1 overflow-y-auto p-5">
+            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              Full text
+            </div>
               {original?.content ? (
                 // The document's original formatting, rendered readably. No chunk
                 // pagination here — the source is served whole.
@@ -259,7 +264,6 @@ export function DocumentReader({
                 </>
               )}
             </div>
-          )}
         </div>
       ) : (
         <div className="min-h-0 flex-1 overflow-y-auto p-5">
