@@ -1,6 +1,6 @@
 "use client";
 
-import { FileText, FolderTree, Globe, MessageCircle, Shield } from "lucide-react";
+import { FileText, FolderTree, Globe, MessageCircle, Search, Shield } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -18,6 +18,7 @@ interface NavItem {
 
 const NAV_ITEMS: NavItem[] = [
   { href: "/documents", label: "Documents", icon: FileText },
+  { href: "/documents/search", label: "Search", icon: Search },
   { href: "/folders", label: "Folders", icon: FolderTree },
   { href: "/chat", label: "Chat", icon: MessageCircle },
   { href: "/admin", label: "Admin", icon: Shield, requiresSiteAdmin: true },
@@ -49,9 +50,15 @@ export function Sidebar() {
         <span className="font-semibold">Red Arch KM</span>
       </div>
       <nav className="flex-1 space-y-1 p-2">
-        {NAV_ITEMS.filter((i) => !i.requiresSiteAdmin || isSiteAdmin).map(
-          ({ href, label, icon: Icon }) => {
-            const active = pathname?.startsWith(href) ?? false;
+        {(() => {
+          const items = NAV_ITEMS.filter((i) => !i.requiresSiteAdmin || isSiteAdmin);
+          // Highlight only the most specific matching route so that, e.g.,
+          // /documents/search lights up "Search" and not also "Documents".
+          const activeHref = items
+            .filter((i) => pathname === i.href || pathname?.startsWith(`${i.href}/`))
+            .sort((a, b) => b.href.length - a.href.length)[0]?.href;
+          return items.map(({ href, label, icon: Icon }) => {
+            const active = href === activeHref;
             return (
               <Link
                 key={href}
@@ -67,8 +74,8 @@ export function Sidebar() {
                 {label}
               </Link>
             );
-          },
-        )}
+          });
+        })()}
       </nav>
     </aside>
   );
