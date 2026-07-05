@@ -84,11 +84,13 @@ class BrainAPIClient:
             response.raise_for_status()
             return cast("dict[str, Any]", response.json())
 
-    async def get_document_chunks(self, tenant_id: str, document_key: str, *, limit: int = 500) -> dict[str, Any]:
+    async def get_document_chunks(
+        self, tenant_id: str, document_key: str, *, offset: int = 0, limit: int = 50
+    ) -> dict[str, Any]:
         async with httpx.AsyncClient(timeout=30) as client:
             response = await client.get(
                 f"{self._base_url}/api/documents/{tenant_id}/{document_key}/chunks",
-                params={"limit": limit},
+                params={"offset": offset, "limit": limit},
                 headers=self._headers(),
             )
             response.raise_for_status()

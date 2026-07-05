@@ -75,14 +75,19 @@ class VectorStore(Protocol):
         """Update tags, access keys, and title for all vectors of a document."""
         ...
 
+    def count_document_chunks(self, tenant_id: str, document_key: str) -> int:
+        """Total number of chunks for a document (for pagination)."""
+        ...
+
     def get_document_chunks(
         self,
         tenant_id: str,
         document_key: str,
         *,
-        limit: int = 500,
+        offset: int = 0,
+        limit: int = 50,
     ) -> list[SearchResult]:
-        """Return all chunks for a document ordered by chunk_order."""
+        """Return one page of chunks ([offset, offset+limit) by chunk_order)."""
         ...
 
     def get_document_record(self, tenant_id: str, document_key: str) -> SearchResult | None:

@@ -151,3 +151,29 @@ class TestQdrantStoreIntegration:
         assert all(c.payload.get("tags") == ["updated"] for c in chunks)
         assert all(c.payload.get("access_keys") == [42] for c in chunks)
         assert all(c.payload.get("document_title") == "New Title" for c in chunks)
+
+    def test_chunk_pagination_and_count(self, vector_store: QdrantVectorStore) -> None:
+        """Chunks page by chunk_order window so large docs load incrementally."""
+        tenant = f"t-{uuid.uuid4().hex[:8]}"
+        doc_key = f"doc-{uuid.uuid4().hex[:8]}"
+        vector_store.ensure_collections(tenant)
+        vector_store.upsert_vectors(tenant, _make_records(tenant, doc_key, 5))
+
+        # Total is independent of any page window.
+        assert vector_store.count_document_chunks(tenant, doc_key) == 5
+
+        page1 = vector_store.get_document_chunks(tenant, doc_key, offset=0, limit=2)
+        page2 = vector_store.get_document_chunks(tenant, doc_key, offset=2, limit=2)
+        page3 = vector_store.get_document_chunks(tenant, doc_key, offset=4, limit=2)
+
+        assert [int(c.payload["chunk_order"]) for c in page1] == [0, 1]
+        assert [int(c.payload["chunk_order"]) for c in page2] == [2, 3]
+        assert [int(c.payload["chunk_order"]) for c in page3] == [4]  # last, partial page
+
+        # An offset past the end yields nothing (loop terminator for the reader).
+        assert vector_store.get_document_chunks(tenant, doc_key, offset=10, limit=2) == []
+
+    def test_count_missing_collection_is_zero(self, vector_store: QdrantVectorStore) -> None:
+        """Counting a document whose collection doesn't exist yet returns 0."""
+        tenant = f"ghost-{uuid.uuid4().hex[:8]}"
+        assert vector_store.count_document_chunks(tenant, "nope") == 0

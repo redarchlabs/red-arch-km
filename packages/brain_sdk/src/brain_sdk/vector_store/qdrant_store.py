@@ -263,40 +263,57 @@ class QdrantVectorStore:
             if next_offset is None:
                 break
 
+    def _chunk_base_conditions(self, tenant_id: str, document_key: str) -> list[rest.Condition]:
+        return [
+            rest.FieldCondition(key="document_key", match=rest.MatchValue(value=document_key)),
+            rest.FieldCondition(key="tenant_id", match=rest.MatchValue(value=tenant_id)),
+        ]
+
+    def count_document_chunks(self, tenant_id: str, document_key: str) -> int:
+        """Total number of chunks for a document (for lazy-loading pagination)."""
+        collection = self._chunk_collection(tenant_id)
+        query_filter = rest.Filter(must=self._chunk_base_conditions(tenant_id, document_key))
+        try:
+            return self._client.count(collection_name=collection, count_filter=query_filter, exact=True).count
+        except Exception:
+            # Missing collection (ingestion in flight) → zero chunks, not an error.
+            return 0
+
     def get_document_chunks(
         self,
         tenant_id: str,
         document_key: str,
         *,
-        limit: int = 500,
+        offset: int = 0,
+        limit: int = 50,
     ) -> list[SearchResult]:
-        """Return all chunks for a document, ordered by chunk_order."""
+        """Return one page of chunks ordered by chunk_order.
+
+        Pages by a ``chunk_order`` RANGE filter rather than scrolling the whole
+        collection: chunk_order is a contiguous 0-indexed sequence (assigned by
+        ``enumerate`` at ingest), so page N is exactly chunk_order in
+        ``[offset, offset+limit)``. This keeps a Bible-sized document (thousands
+        of chunks) cheap to read a screen at a time instead of loading it all.
+        """
         collection = self._chunk_collection(tenant_id)
-        conditions: list[rest.Condition] = [
-            rest.FieldCondition(key="document_key", match=rest.MatchValue(value=document_key)),
-            rest.FieldCondition(key="tenant_id", match=rest.MatchValue(value=tenant_id)),
-        ]
+        conditions = self._chunk_base_conditions(tenant_id, document_key)
+        conditions.append(
+            rest.FieldCondition(key="chunk_order", range=rest.Range(gte=offset, lt=offset + limit)),
+        )
         query_filter = rest.Filter(must=conditions)
 
-        all_results: list[SearchResult] = []
-        next_offset = None
-        while True:
-            points, next_offset = self._client.scroll(
-                collection_name=collection,
-                scroll_filter=query_filter,
-                limit=min(500, limit - len(all_results)),
-                offset=next_offset,
-                with_payload=True,
-                with_vectors=False,
-            )
-            if not points:
-                break
-            all_results.extend(SearchResult(id=str(p.id), score=0.0, payload=p.payload or {}) for p in points)
-            if next_offset is None or len(all_results) >= limit:
-                break
-
-        all_results.sort(key=lambda r: int(r.payload.get("chunk_order", 0)))
-        return all_results
+        # A single scroll page suffices: the range window holds at most `limit`
+        # points, so there is never a second cursor page to fetch.
+        points, _ = self._client.scroll(
+            collection_name=collection,
+            scroll_filter=query_filter,
+            limit=limit,
+            with_payload=True,
+            with_vectors=False,
+        )
+        results = [SearchResult(id=str(p.id), score=0.0, payload=p.payload or {}) for p in points]
+        results.sort(key=lambda r: int(r.payload.get("chunk_order", 0)))
+        return results
 
     def get_document_record(self, tenant_id: str, document_key: str) -> SearchResult | None:
         """Return the doc-level record (summary + summary_tree) or None.

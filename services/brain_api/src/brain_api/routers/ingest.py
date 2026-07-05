@@ -150,11 +150,26 @@ async def get_document_chunks(
     document_key: str,
     stores: Annotated[Stores, Depends(get_stores)],
     _api_key: Annotated[str, Depends(require_api_key)],
-    limit: int = 500,
+    offset: int = 0,
+    limit: int = 50,
 ) -> dict[str, Any]:
-    """Return all chunks for a document, ordered by chunk_order."""
+    """Return one page of chunks (ordered by chunk_order) plus the total count.
+
+    Paginated so a very large document (e.g. a whole book) can be read a page
+    at a time instead of loading every chunk at once. ``total`` lets the client
+    know when to stop lazy-loading.
+    """
+    # Clamp to a sane page size so a client can't request the entire book in one
+    # call and defeat the point of pagination.
+    limit = max(1, min(limit, 200))
+    offset = max(0, offset)
     try:
-        chunks = await asyncio.to_thread(stores.vector.get_document_chunks, tenant_id, document_key, limit=limit)
+        chunks, total = await asyncio.gather(
+            asyncio.to_thread(
+                stores.vector.get_document_chunks, tenant_id, document_key, offset=offset, limit=limit
+            ),
+            asyncio.to_thread(stores.vector.count_document_chunks, tenant_id, document_key),
+        )
     except Exception:
         logger.exception("Failed to fetch chunks for %s", document_key)
         raise HTTPException(
@@ -164,10 +179,14 @@ async def get_document_chunks(
 
     return {
         "document_key": document_key,
+        "total": total,
+        "offset": offset,
+        "limit": limit,
         "chunks": [
             {
                 "id": c.id,
                 "text": c.payload.get("text", ""),
+                "summary": c.payload.get("summary", ""),
                 "chunk_order": c.payload.get("chunk_order", 0),
             }
             for c in chunks
