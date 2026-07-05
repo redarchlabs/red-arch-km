@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import io
 import logging
 import os
 import uuid
 from typing import Annotated, Any
 
 import httpx
+import mammoth
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -33,7 +35,7 @@ router = APIRouter()
 # Content-Type must not smuggle in an unsupported type). Kept in sync with the
 # worker's extraction dispatcher.
 _ALLOWED_UPLOAD_EXTENSIONS: frozenset[str] = frozenset(
-    {".pdf", ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".gif", ".webp", ".txt", ".md"}
+    {".pdf", ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".gif", ".webp", ".txt", ".md", ".docx"}
 )
 
 # Best-effort Content-Type per extension when the client omits/mislabels it.
@@ -49,6 +51,7 @@ _EXTENSION_CONTENT_TYPES: dict[str, str] = {
     ".webp": "image/webp",
     ".txt": "text/plain",
     ".md": "text/markdown",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 }
 
 _VALID_TRANSLATION_METHODS: frozenset[str] = frozenset({"ocr", "ai"})
@@ -473,14 +476,107 @@ async def delete_document(
     logger.info("Deleted document %s in org %s", document_id, ctx.org_id)
 
 
+# Text-based originals we can return verbatim for formatted reading.
+_TEXT_ORIGINAL_EXTENSIONS: dict[str, str] = {
+    ".md": "markdown",
+    ".markdown": "markdown",
+    ".txt": "text",
+}
+# Binary originals the browser renders natively — served via a signed URL and
+# embedded in the reader beside the summary tree.
+_IMAGE_EXTENSIONS: frozenset[str] = frozenset(
+    {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tif", ".tiff"}
+)
+
+
+@router.get("/{document_id}/content")
+async def get_document_content(
+    document_id: uuid.UUID,
+    ctx: Annotated[OrgContext, Depends(require_org_access)],
+    session: Annotated[AsyncSession, Depends(get_tenant_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> dict[str, Any]:
+    """Describe how to display a document readably (original, not index chunks).
+
+    The indexed chunks are whitespace-flattened for embedding quality, so they
+    read as a wall of text. Here we return the source instead. The response tells
+    the reader which strategy to use via ``kind``:
+      - "markdown"/"text": ``content`` holds the original text to render.
+      - "pdf"/"image": ``original_url`` is a short-lived signed URL to the
+        original file, embedded natively (perfect formatting).
+      - "other": nothing readable here → the reader falls back to chunks.
+    """
+    repo = DocumentRepository(session)
+    doc = await repo.get(document_id)
+    if doc is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
+
+    empty = {"content": None, "format": None, "kind": "other", "original_url": None}
+
+    # Pasted/authored text (kept verbatim; the editor emits Markdown).
+    if doc.text:
+        return {"content": doc.text, "format": "markdown", "kind": "markdown", "original_url": None}
+
+    if not doc.document_url:
+        return empty
+
+    ext = os.path.splitext(doc.document_url)[1].lower()
+
+    # Text originals (.md/.txt) — read back and render as text.
+    fmt = _TEXT_ORIGINAL_EXTENSIONS.get(ext)
+    if fmt is not None:
+        try:
+            raw = StorageClient(settings).get_object(doc.document_url)
+            return {
+                "content": raw.decode("utf-8", errors="replace"),
+                "format": fmt,
+                "kind": fmt,
+                "original_url": None,
+            }
+        except Exception:
+            logger.exception("Failed to read original for %s", doc.document_key)
+            return empty
+
+    # Word documents — convert to Markdown so they render with their structure.
+    if ext == ".docx":
+        try:
+            raw = StorageClient(settings).get_object(doc.document_url)
+            markdown = mammoth.convert_to_markdown(io.BytesIO(raw)).value
+            return {"content": markdown, "format": "markdown", "kind": "markdown", "original_url": None}
+        except Exception:
+            logger.exception("Failed to convert docx original for %s", doc.document_key)
+            return empty
+
+    # Binary originals the browser renders natively — hand back a signed URL.
+    if ext == ".pdf" or ext in _IMAGE_EXTENSIONS:
+        kind = "pdf" if ext == ".pdf" else "image"
+        content_type = _EXTENSION_CONTENT_TYPES.get(ext, "application/octet-stream")
+        try:
+            url = StorageClient(settings).presigned_get_url(
+                doc.document_url, content_type=content_type
+            )
+            return {"content": None, "format": None, "kind": kind, "original_url": url}
+        except Exception:
+            logger.exception("Failed to sign original URL for %s", doc.document_key)
+            return empty
+
+    return empty
+
+
 @router.get("/{document_id}/chunks")
 async def get_document_chunks(
     document_id: uuid.UUID,
     ctx: Annotated[OrgContext, Depends(require_org_access)],
     session: Annotated[AsyncSession, Depends(get_tenant_db)],
     settings: Annotated[Settings, Depends(get_settings)],
+    offset: int = 0,
+    limit: int = 50,
 ) -> dict[str, Any]:
-    """Return indexed chunks for a document by proxying to brain-api."""
+    """Return one page of indexed chunks for a document by proxying to brain-api.
+
+    Paginated (offset/limit) so a large document can be lazy-loaded a page at a
+    time by the reader rather than fetching every chunk up front.
+    """
     repo = DocumentRepository(session)
     doc = await repo.get(document_id)
     if doc is None:
@@ -488,7 +584,7 @@ async def get_document_chunks(
 
     client = BrainAPIClient(settings)
     try:
-        return await client.get_document_chunks(str(ctx.org_id), doc.document_key)
+        return await client.get_document_chunks(str(ctx.org_id), doc.document_key, offset=offset, limit=limit)
     except Exception as e:
         logger.error("Failed to fetch chunks for %s: %s", doc.document_key, e)
         raise HTTPException(

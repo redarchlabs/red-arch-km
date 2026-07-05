@@ -71,16 +71,31 @@ export async function deleteDocument(id: string): Promise<void> {
 export interface DocumentChunk {
   id: string;
   text: string;
+  /** Per-chunk summary (used by the reader's embedded/side-by-side views). */
+  summary: string;
   chunk_order: number;
 }
 
 export interface DocumentChunksResponse {
   document_key: string;
+  /** Total chunks in the document — lets the reader know when to stop paging. */
+  total: number;
+  offset: number;
+  limit: number;
   chunks: DocumentChunk[];
 }
 
-export async function getDocumentChunks(id: string): Promise<DocumentChunksResponse> {
-  const response = await apiClient.get<DocumentChunksResponse>(`/documents/${id}/chunks`);
+/**
+ * Fetch one page of a document's chunks. Paginated (offset/limit) so a very
+ * large document can be lazy-loaded a page at a time instead of all at once.
+ */
+export async function getDocumentChunks(
+  id: string,
+  { offset = 0, limit = 50 }: { offset?: number; limit?: number } = {},
+): Promise<DocumentChunksResponse> {
+  const response = await apiClient.get<DocumentChunksResponse>(`/documents/${id}/chunks`, {
+    params: { offset, limit },
+  });
   return response.data;
 }
 
@@ -98,5 +113,21 @@ export interface DocumentSummaryResponse {
 
 export async function getDocumentSummary(id: string): Promise<DocumentSummaryResponse> {
   const response = await apiClient.get<DocumentSummaryResponse>(`/documents/${id}/summary`);
+  return response.data;
+}
+
+export interface DocumentContentResponse {
+  /** Original text for markdown/text kinds; null for binary originals. */
+  content: string | null;
+  format: "markdown" | "text" | null;
+  /** How the reader should display this document. */
+  kind: "markdown" | "text" | "pdf" | "image" | "other";
+  /** Short-lived signed URL to the original file (for pdf/image kinds). */
+  original_url: string | null;
+}
+
+/** Fetch a document's original formatted text (for readable display). */
+export async function getDocumentContent(id: string): Promise<DocumentContentResponse> {
+  const response = await apiClient.get<DocumentContentResponse>(`/documents/${id}/content`);
   return response.data;
 }

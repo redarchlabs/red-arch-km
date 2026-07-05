@@ -1,11 +1,13 @@
 "use client";
 
 import DOMPurify from "dompurify";
-import { ArrowLeft, Trash2 } from "lucide-react";
+import { ArrowLeft, BookOpen, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 
+import { Markdown } from "@/components/common/Markdown";
+import { DocumentReader } from "@/components/documents/DocumentReader";
 import { SummaryTree } from "@/components/documents/SummaryTree";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -13,10 +15,12 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   type DocumentChunk,
+  type DocumentContentResponse,
   type SummaryTreeNode,
   deleteDocument,
   getDocument,
   getDocumentChunks,
+  getDocumentContent,
   getDocumentSummary,
 } from "@/lib/api/documents";
 import { formatDate } from "@/lib/format";
@@ -34,26 +38,33 @@ export default function DocumentDetailPage() {
 
   const [doc, setDoc] = useState<Document | null>(null);
   const [chunks, setChunks] = useState<DocumentChunk[]>([]);
+  const [content, setContent] = useState<DocumentContentResponse | null>(null);
   const [summaryTree, setSummaryTree] = useState<SummaryTreeNode | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [readerOpen, setReaderOpen] = useState(false);
 
   const load = useCallback(async () => {
     if (!id) return;
     setIsLoading(true);
     setError(null);
     try {
-      const [docResult, chunksResult, summaryResult] = await Promise.allSettled([
+      const [docResult, chunksResult, summaryResult, contentResult] = await Promise.allSettled([
         getDocument(id),
         getDocumentChunks(id),
         getDocumentSummary(id),
+        getDocumentContent(id),
       ]);
       if (docResult.status === "fulfilled") setDoc(docResult.value);
       else throw docResult.reason;
       // Chunks may fail if ingestion is still in progress — that's non-fatal
       if (chunksResult.status === "fulfilled") {
         setChunks(chunksResult.value.chunks);
+      }
+      // Original formatted text (null for PDFs/images) — non-fatal if missing.
+      if (contentResult.status === "fulfilled") {
+        setContent(contentResult.value);
       }
       // Summary tree isn't written until the doc-level record is upserted at
       // the end of ingestion — a 404/failure here just means "not ready yet".
@@ -131,11 +142,40 @@ export default function DocumentDetailPage() {
             <span className="text-xs text-muted-foreground">{formatDate(doc.created_at)}</span>
           </div>
         </div>
-        <Button variant="destructive" onClick={handleDelete} disabled={deleting}>
-          <Trash2 className="h-4 w-4" />
-          {deleting ? "Deleting…" : "Delete"}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" onClick={() => setReaderOpen(true)}>
+            <BookOpen className="h-4 w-4" />
+            Read document
+          </Button>
+          <Button variant="destructive" onClick={handleDelete} disabled={deleting}>
+            <Trash2 className="h-4 w-4" />
+            {deleting ? "Deleting…" : "Delete"}
+          </Button>
+        </div>
       </div>
+
+      <DocumentReader
+        documentId={id}
+        documentTitle={doc.title}
+        summaryTree={summaryTree}
+        open={readerOpen}
+        onClose={() => setReaderOpen(false)}
+      />
+
+      {content?.content ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Document</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {content.format === "markdown" ? (
+              <Markdown content={content.content} />
+            ) : (
+              <div className="whitespace-pre-wrap text-sm leading-relaxed">{content.content}</div>
+            )}
+          </CardContent>
+        </Card>
+      ) : null}
 
       <Card>
         <CardHeader>
@@ -154,10 +194,10 @@ export default function DocumentDetailPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>
-            Indexed Chunks
-            <span className="ml-2 text-sm font-normal text-muted-foreground">
-              ({chunks.length})
+          <CardTitle className="text-base font-medium text-muted-foreground">
+            Indexed chunks
+            <span className="ml-2 text-sm font-normal">
+              ({chunks.length}) — how retrieval sees this document
             </span>
           </CardTitle>
         </CardHeader>
