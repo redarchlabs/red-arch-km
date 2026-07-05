@@ -55,6 +55,7 @@ class DocumentRead(BaseModel):
     folder_id: uuid.UUID | None
     org_id: uuid.UUID
     created_at: Any
+    size_bytes: int | None = None
     viewer_permissions_config: list[dict[str, Any]] | None = None
     contributor_permissions_config: list[dict[str, Any]] | None = None
 
@@ -102,6 +103,7 @@ class FolderRead(BaseModel):
     dot_path: str
     order: int
     org_id: uuid.UUID
+    created_at: Any = None
     viewer_permissions_config: list[dict[str, Any]] | None = None
     contributor_permissions_config: list[dict[str, Any]] | None = None
 

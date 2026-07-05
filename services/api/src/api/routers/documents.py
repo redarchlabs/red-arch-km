@@ -161,6 +161,9 @@ async def create_document(
         tag_ids=body.tag_ids,
     )
 
+    # Byte-length of pasted text (uploaded files set this from the file size).
+    doc.size_bytes = len(body.text.encode("utf-8")) if body.text else None
+
     # Seed the document's own permissions from its folder (the per-document
     # default); an admin can later override them via the document's Properties.
     if folder is not None:
@@ -291,6 +294,8 @@ async def upload_document(
         folder_id=folder_uuid,
         uploaded_by_id=ctx.user.profile_id,
     )
+
+    doc.size_bytes = total  # original file size, for the explorer's size column
 
     # Seed the document's own permissions from its folder (per-document default;
     # overridable later via the document's Properties dialog).

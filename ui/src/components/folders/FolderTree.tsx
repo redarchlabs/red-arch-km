@@ -27,6 +27,10 @@ interface FolderTreeProps {
   onMove: (folderId: string, newParentId: string | null) => void | Promise<void>;
   /** Reload after a rename / permission change / delete / create / upload. */
   onChanged: () => void;
+  /** Currently-selected folder (highlighted). */
+  selectedId?: string | null;
+  /** Called when a folder name is clicked — selects it (no navigation). */
+  onSelect?: (id: string) => void;
 }
 
 /** A folder flattened into the visible (expanded) list, with its tree depth. */
@@ -78,7 +82,7 @@ type DialogState =
   | { type: "upload"; folder: Folder }
   | null;
 
-export function FolderTree({ folders, onMove, onChanged }: FolderTreeProps) {
+export function FolderTree({ folders, onMove, onChanged, selectedId, onSelect }: FolderTreeProps) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [dragOverId, setDragOverId] = useState<string | "__root__" | null>(null);
   // Dialogs are hoisted here (not per-row) so they survive rows unmounting as
@@ -137,6 +141,8 @@ export function FolderTree({ folders, onMove, onChanged }: FolderTreeProps) {
           rowProps={{
             visible,
             dragOverId,
+            selectedId: selectedId ?? null,
+            onSelect: onSelect ?? null,
             onToggle: toggle,
             onDragOverRow: setDragOverId,
             onDropRow: handleDrop,
@@ -183,6 +189,8 @@ export function FolderTree({ folders, onMove, onChanged }: FolderTreeProps) {
 interface FolderRowProps {
   visible: FlatNode[];
   dragOverId: string | "__root__" | null;
+  selectedId: string | null;
+  onSelect: ((id: string) => void) | null;
   onToggle: (id: string) => void;
   onDragOverRow: (id: string | null) => void;
   onDropRow: (draggedId: string, targetId: string | null) => void;
@@ -195,6 +203,8 @@ function FolderRowComponent({
   style,
   visible,
   dragOverId,
+  selectedId,
+  onSelect,
   onToggle,
   onDragOverRow,
   onDropRow,
@@ -204,6 +214,7 @@ function FolderRowComponent({
   const node = visible[index]!;
   const { folder, depth, hasChildren, expanded } = node;
   const isDragTarget = dragOverId === folder.id;
+  const isSelected = selectedId === folder.id;
 
   const items: MenuItem[] = [
     {
@@ -253,7 +264,11 @@ function FolderRowComponent({
         style={{ paddingLeft: `${depth * 1.25 + 0.5}rem` }}
         className={cn(
           "group flex h-8 cursor-grab items-center gap-1.5 rounded-md pr-2 text-sm transition-colors",
-          isDragTarget ? "bg-accent ring-2 ring-primary" : "hover:bg-accent/60",
+          isDragTarget
+            ? "bg-accent ring-2 ring-primary"
+            : isSelected
+              ? "bg-accent"
+              : "hover:bg-accent/60",
         )}
       >
         {hasChildren ? (
@@ -273,14 +288,28 @@ function FolderRowComponent({
           <span className="inline-block h-5 w-5 shrink-0" aria-hidden />
         )}
         <FolderIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
-        <Link
-          href={`/folders/${folder.id}`}
-          draggable={false}
-          onClick={(e) => e.stopPropagation()}
-          className="truncate font-medium hover:underline"
-        >
-          {folder.name}
-        </Link>
+        {onSelect ? (
+          <button
+            type="button"
+            draggable={false}
+            onClick={(e) => {
+              e.stopPropagation();
+              onSelect(folder.id);
+            }}
+            className="truncate text-left font-medium hover:underline"
+          >
+            {folder.name}
+          </button>
+        ) : (
+          <Link
+            href={`/folders/${folder.id}`}
+            draggable={false}
+            onClick={(e) => e.stopPropagation()}
+            className="truncate font-medium hover:underline"
+          >
+            {folder.name}
+          </Link>
+        )}
         <button
           type="button"
           aria-label="Folder actions"

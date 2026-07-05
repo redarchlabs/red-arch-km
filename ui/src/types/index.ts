@@ -33,6 +33,7 @@ export interface Folder {
   dot_path: string;
   order: number;
   org_id: string;
+  created_at: string | null;
   viewer_permissions_config: PermissionRule[] | null;
   contributor_permissions_config: PermissionRule[] | null;
 }
@@ -47,6 +48,7 @@ export interface Document {
   processing_status: "PENDING" | "PROCESSING" | "SUCCESS" | "FAILED";
   folder_id: string | null;
   org_id: string;
+  size_bytes: number | null;
   viewer_permissions_config: PermissionRule[] | null;
   contributor_permissions_config: PermissionRule[] | null;
   created_at: string;
