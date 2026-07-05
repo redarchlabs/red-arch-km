@@ -19,6 +19,7 @@ import {
   type SummaryTreeNode,
   deleteDocument,
   getDocument,
+  getDocumentByKey,
   getDocumentChunks,
   getDocumentContent,
   getDocumentSummary,
@@ -50,14 +51,22 @@ export default function DocumentDetailPage() {
     setIsLoading(true);
     setError(null);
     try {
-      const [docResult, chunksResult, summaryResult, contentResult] = await Promise.allSettled([
-        getDocument(id),
-        getDocumentChunks(id),
-        getDocumentSummary(id),
-        getDocumentContent(id),
+      // The URL param is usually a Postgres id, but chat/search links reference
+      // documents by their vector-store key — resolve that on a 404.
+      let document: Document;
+      try {
+        document = await getDocument(id);
+      } catch {
+        document = await getDocumentByKey(id);
+      }
+      setDoc(document);
+      // Load sub-resources by the RESOLVED id (the URL param may be a key).
+      const docId = document.id;
+      const [chunksResult, summaryResult, contentResult] = await Promise.allSettled([
+        getDocumentChunks(docId),
+        getDocumentSummary(docId),
+        getDocumentContent(docId),
       ]);
-      if (docResult.status === "fulfilled") setDoc(docResult.value);
-      else throw docResult.reason;
       // Chunks may fail if ingestion is still in progress — that's non-fatal
       if (chunksResult.status === "fulfilled") {
         setChunks(chunksResult.value.chunks);
@@ -83,10 +92,10 @@ export default function DocumentDetailPage() {
   }, [load]);
 
   const handleDelete = async () => {
-    if (!confirm("Delete this document permanently?")) return;
+    if (!doc || !confirm("Delete this document permanently?")) return;
     setDeleting(true);
     try {
-      await deleteDocument(id);
+      await deleteDocument(doc.id);
       router.push("/documents");
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Delete failed");
@@ -155,7 +164,7 @@ export default function DocumentDetailPage() {
       </div>
 
       <DocumentReader
-        documentId={id}
+        documentId={doc.id}
         documentTitle={doc.title}
         summaryTree={summaryTree}
         open={readerOpen}

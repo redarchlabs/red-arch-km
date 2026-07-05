@@ -47,6 +47,15 @@ export async function getDocument(id: string): Promise<Document> {
   return response.data;
 }
 
+/**
+ * Resolve a document by its `document_key` (the id shared with the vector
+ * store). Chat/search sources reference documents by key, not the Postgres id.
+ */
+export async function getDocumentByKey(documentKey: string): Promise<Document> {
+  const response = await apiClient.get<Document>(`/documents/by-key/${documentKey}`);
+  return response.data;
+}
+
 export async function createDocument(input: DocumentCreateInput): Promise<Document> {
   const response = await apiClient.post<Document>("/documents/", input);
   return response.data;

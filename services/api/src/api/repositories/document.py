@@ -24,6 +24,17 @@ class DocumentRepository:
         )
         return result.scalar_one_or_none()
 
+    async def get_by_key(self, document_key: str) -> Document | None:
+        """Resolve a document by its ``document_key`` (the id shared with the
+        vector store). Chat/search sources reference documents by key, so this
+        maps a key back to the canonical Postgres row. RLS scopes to the org."""
+        result = await self._session.execute(
+            select(Document)
+            .where(Document.document_key == document_key)
+            .options(selectinload(Document.tags), selectinload(Document.folder))
+        )
+        return result.scalar_one_or_none()
+
     async def list_for_folders(
         self,
         folder_ids: list[uuid.UUID] | None = None,

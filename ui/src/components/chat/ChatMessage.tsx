@@ -68,7 +68,7 @@ function renderWithCitations(text: string, sources: ChatSource[]): React.ReactNo
       nodes.push(
         <Link
           key={`c${k}`}
-          href={`/documents/${src.document_id}`}
+          href={`/documents/${src.document_key}`}
           title={src.document_title || src.document_key}
           className="mx-0.5 rounded bg-primary/10 px-1 text-xs font-medium text-primary no-underline hover:bg-primary/20"
         >
@@ -116,7 +116,7 @@ export function ChatMessage({ message }: ChatMessageProps) {
               {sources.map((src) => (
                 <li key={src.document_id || src.document_key} className="text-xs">
                   <Link
-                    href={`/documents/${src.document_id}`}
+                    href={`/documents/${src.document_key}`}
                     className="inline-flex items-center gap-1.5 text-muted-foreground hover:text-foreground hover:underline"
                   >
                     <span className="font-medium text-primary">[{src.number}]</span>
