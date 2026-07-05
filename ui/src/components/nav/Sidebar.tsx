@@ -17,9 +17,8 @@ interface NavItem {
 }
 
 const NAV_ITEMS: NavItem[] = [
-  { href: "/documents", label: "Documents", icon: FileText },
+  { href: "/folders", label: "Resources", icon: FolderTree },
   { href: "/documents/search", label: "Search", icon: Search },
-  { href: "/folders", label: "Folders", icon: FolderTree },
   { href: "/chat", label: "Chat", icon: MessageCircle },
   { href: "/admin", label: "Admin", icon: Shield, requiresSiteAdmin: true },
   { href: "/site-admin", label: "Site Admin", icon: Globe, requiresSiteAdmin: true },

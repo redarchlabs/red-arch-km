@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { z } from "zod";
 
 import { ParentFolderSelect } from "@/components/folders/ParentFolderSelect";
@@ -35,21 +35,34 @@ interface FolderCreateProps {
   onClose: () => void;
   onCreated: () => void;
   folders: Folder[];
+  /** Pre-select a parent (e.g. "New subfolder" from a folder's context menu). */
+  initialParentId?: string | null;
 }
 
-export function FolderCreate({ open, onClose, onCreated, folders }: FolderCreateProps) {
+export function FolderCreate({
+  open,
+  onClose,
+  onCreated,
+  folders,
+  initialParentId = null,
+}: FolderCreateProps) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const [parentId, setParentId] = useState<string | null>(null);
+  const [parentId, setParentId] = useState<string | null>(initialParentId);
   const [viewers, setViewers] = useState<PermissionEntry[]>([]);
   const [contributors, setContributors] = useState<PermissionEntry[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // When opened (e.g. "New subfolder" from a folder), seed the parent select.
+  useEffect(() => {
+    if (open) setParentId(initialParentId);
+  }, [open, initialParentId]);
+
   const reset = () => {
     setName("");
     setDescription("");
-    setParentId(null);
+    setParentId(initialParentId);
     setViewers([]);
     setContributors([]);
     setError(null);
