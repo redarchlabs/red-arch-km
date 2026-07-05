@@ -38,6 +38,10 @@ class DocumentUpdate(BaseModel):
     folder_id: uuid.UUID | None = None
     tag_ids: list[uuid.UUID] | None = None
     metadata: dict[str, Any] | None = None
+    # Per-document permissions (independent of the folder; default from folder
+    # at creation). Providing either recomputes that document's masks.
+    viewer_permissions_config: list[dict[str, Any]] | None = None
+    contributor_permissions_config: list[dict[str, Any]] | None = None
 
 
 class DocumentRead(BaseModel):
@@ -51,6 +55,8 @@ class DocumentRead(BaseModel):
     folder_id: uuid.UUID | None
     org_id: uuid.UUID
     created_at: Any
+    viewer_permissions_config: list[dict[str, Any]] | None = None
+    contributor_permissions_config: list[dict[str, Any]] | None = None
 
 
 class FolderCreate(BaseModel):
@@ -77,6 +83,8 @@ class FolderUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
     description: str | None = None
     parent_id: uuid.UUID | None = None
+    viewer_permissions_config: list[dict[str, Any]] | None = None
+    contributor_permissions_config: list[dict[str, Any]] | None = None
 
     @field_validator("name")
     @classmethod
@@ -94,6 +102,8 @@ class FolderRead(BaseModel):
     dot_path: str
     order: int
     org_id: uuid.UUID
+    viewer_permissions_config: list[dict[str, Any]] | None = None
+    contributor_permissions_config: list[dict[str, Any]] | None = None
 
 
 class TagCreate(BaseModel):

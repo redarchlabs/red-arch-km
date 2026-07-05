@@ -78,7 +78,7 @@ export default function FoldersPage() {
         <Skeleton className="h-40 w-full" />
       ) : folders.length > 0 ? (
         <Card>
-          <FolderTree folders={folders} onMove={handleMove} />
+          <FolderTree folders={folders} onMove={handleMove} onChanged={load} />
         </Card>
       ) : (
         <Card>

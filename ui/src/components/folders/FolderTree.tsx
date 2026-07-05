@@ -1,15 +1,27 @@
 "use client";
 
-import { ChevronDown, ChevronRight, Folder as FolderIcon } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronRight,
+  Folder as FolderIcon,
+  MoreVertical,
+  Settings2,
+  Trash2,
+} from "lucide-react";
 import Link from "next/link";
 import { useMemo, useState } from "react";
 
+import { type MenuItem, useRowMenu } from "@/components/common/ActionMenu";
+import { FolderProperties } from "@/components/folders/FolderProperties";
+import { deleteFolder } from "@/lib/api/folders";
 import { cn } from "@/lib/utils";
 import type { Folder } from "@/types";
 
 interface FolderTreeProps {
   folders: Folder[];
   onMove: (folderId: string, newParentId: string | null) => void | Promise<void>;
+  /** Reload folders after a rename / permission change / delete. */
+  onChanged: () => void;
 }
 
 interface TreeNode {
@@ -47,7 +59,7 @@ function buildTree(folders: Folder[]): TreeNode[] {
     .map((f) => nodes[f.id]!);
 }
 
-export function FolderTree({ folders, onMove }: FolderTreeProps) {
+export function FolderTree({ folders, onMove, onChanged }: FolderTreeProps) {
   const tree = useMemo(() => buildTree(folders), [folders]);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [dragOverId, setDragOverId] = useState<string | "__root__" | null>(null);
@@ -120,9 +132,11 @@ export function FolderTree({ folders, onMove }: FolderTreeProps) {
             key={node.folder.id}
             node={node}
             depth={0}
+            folders={folders}
             expanded={expanded}
             dragOverId={dragOverId}
             onToggle={toggle}
+            onChanged={onChanged}
             onDragStart={handleDragStart}
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
@@ -137,9 +151,11 @@ export function FolderTree({ folders, onMove }: FolderTreeProps) {
 interface TreeRowProps {
   node: TreeNode;
   depth: number;
+  folders: Folder[];
   expanded: Set<string>;
   dragOverId: string | "__root__" | null;
   onToggle: (id: string) => void;
+  onChanged: () => void;
   onDragStart: (e: React.DragEvent, folderId: string) => void;
   onDragOver: (e: React.DragEvent, targetId: string | "__root__") => void;
   onDragLeave: () => void;
@@ -149,9 +165,11 @@ interface TreeRowProps {
 function TreeRow({
   node,
   depth,
+  folders,
   expanded,
   dragOverId,
   onToggle,
+  onChanged,
   onDragStart,
   onDragOver,
   onDragLeave,
@@ -161,11 +179,32 @@ function TreeRow({
   const isExpanded = expanded.has(folder.id);
   const hasChildren = children.length > 0;
   const isDragTarget = dragOverId === folder.id;
+  const [propsOpen, setPropsOpen] = useState(false);
+
+  const items: MenuItem[] = [
+    {
+      label: "Properties",
+      icon: <Settings2 className="h-4 w-4" />,
+      onSelect: () => setPropsOpen(true),
+    },
+    {
+      label: "Delete",
+      icon: <Trash2 className="h-4 w-4" />,
+      destructive: true,
+      onSelect: async () => {
+        if (!confirm(`Delete folder "${folder.name}"? Documents inside are not deleted.`)) return;
+        await deleteFolder(folder.id);
+        onChanged();
+      },
+    },
+  ];
+  const { open, menu } = useRowMenu(items);
 
   return (
     <li>
       <div
         draggable
+        onContextMenu={open}
         onDragStart={(e) => onDragStart(e, folder.id)}
         onDragOver={(e) => {
           e.stopPropagation();
@@ -178,7 +217,7 @@ function TreeRow({
         }}
         style={{ paddingLeft: `${depth * 1.5 + 0.5}rem` }}
         className={cn(
-          "flex cursor-grab items-center gap-2 rounded-md py-1.5 pr-2 text-sm transition-colors",
+          "group flex cursor-grab items-center gap-2 rounded-md py-1.5 pr-2 text-sm transition-colors",
           isDragTarget
             ? "bg-accent ring-2 ring-primary"
             : "hover:bg-accent/60",
@@ -212,7 +251,22 @@ function TreeRow({
           {folder.name}
         </Link>
         <span className="truncate font-mono text-xs text-muted-foreground">{folder.dot_path}</span>
+        <button
+          type="button"
+          aria-label="Folder actions"
+          onClick={open}
+          className="ml-auto rounded p-1 text-muted-foreground opacity-0 hover:bg-accent hover:text-foreground focus:opacity-100 group-hover:opacity-100"
+        >
+          <MoreVertical className="h-4 w-4" />
+        </button>
       </div>
+      {menu}
+      <FolderProperties
+        folder={folder}
+        open={propsOpen}
+        onClose={() => setPropsOpen(false)}
+        onSaved={onChanged}
+      />
 
       {isExpanded && hasChildren ? (
         <ul className="space-y-0.5">
@@ -221,9 +275,11 @@ function TreeRow({
               key={child.folder.id}
               node={child}
               depth={depth + 1}
+              folders={folders}
               expanded={expanded}
               dragOverId={dragOverId}
               onToggle={onToggle}
+              onChanged={onChanged}
               onDragStart={onDragStart}
               onDragOver={onDragOver}
               onDragLeave={onDragLeave}
