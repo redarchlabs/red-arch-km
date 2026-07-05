@@ -91,6 +91,9 @@ class Document(Base, UUIDMixin, TimestampMixin):
     text: Mapped[str | None] = mapped_column(Text, nullable=True)
     document_key: Mapped[str] = mapped_column(String(255), default=lambda: str(uuid.uuid4()))
     document_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    # Size of the original in bytes (uploaded file size, or byte-length of
+    # pasted text). Nullable for rows created before this was tracked.
+    size_bytes: Mapped[int | None] = mapped_column(BIGINT, nullable=True)
     processing_status: Mapped[str] = mapped_column(String(20), default="PENDING")
     processing_details: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True, default=dict)
     metadata_: Mapped[dict[str, Any] | None] = mapped_column("metadata", JSONB, nullable=True, default=dict)
