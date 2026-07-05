@@ -73,7 +73,7 @@ docker compose --env-file .env -f docker/docker-compose.infra.yml up -d
 # Service-name DNS aliases: the app containers reach these as redis/qdrant/
 # postgres/neo4j. Compose-created containers can lack the aliases when stacks
 # were mixed, so re-assert them idempotently.
-for pair in "km2_redis redis" "km2_qdrant qdrant" "km2_postgres postgres" "km2_neo4j neo4j"; do
+for pair in "km2_redis redis" "km2_qdrant qdrant" "km2_postgres postgres" "km2_neo4j neo4j" "km2_minio minio"; do
   set -- $pair
   cname=$1; alias=$2
   if ! docker inspect -f '{{json .NetworkSettings.Networks.km2_network.Aliases}}' "$cname" 2>/dev/null | grep -q "\"$alias\""; then
