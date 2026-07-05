@@ -29,6 +29,30 @@ class MembershipRepository:
         )
         return result.scalar_one_or_none()
 
+    async def count_org_admins(self, org_id: uuid.UUID) -> int:
+        """Number of org-admin memberships in the given org."""
+        from sqlalchemy import func
+
+        result = await self._session.execute(
+            select(func.count())
+            .select_from(UserOrgMembership)
+            .where(
+                UserOrgMembership.org_id == org_id,
+                UserOrgMembership.is_org_admin.is_(True),
+            )
+        )
+        return int(result.scalar_one())
+
+    async def delete(self, membership_id: uuid.UUID) -> bool:
+        """Delete a membership; returns False when it doesn't exist (or is not
+        visible under the current RLS tenant scope)."""
+        membership = await self._session.get(UserOrgMembership, membership_id)
+        if membership is None:
+            return False
+        await self._session.delete(membership)
+        await self._session.flush()
+        return True
+
     async def upsert(
         self,
         *,

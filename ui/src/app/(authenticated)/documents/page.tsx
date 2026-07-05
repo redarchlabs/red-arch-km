@@ -15,8 +15,8 @@ import { formatDate } from "@/lib/format";
 import type { Document, PaginatedResponse } from "@/types";
 
 function statusVariant(status: Document["processing_status"]) {
-  if (status === "COMPLETE") return "default";
-  if (status === "ERROR") return "destructive";
+  if (status === "SUCCESS") return "default";
+  if (status === "FAILED") return "destructive";
   return "secondary";
 }
 
@@ -43,6 +43,18 @@ export default function DocumentsPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Ingestion is async (worker → status callback). Poll while any document is
+  // still PENDING/PROCESSING so the status badge flips to SUCCESS/FAILED
+  // without a manual refresh. Stops once everything has settled.
+  useEffect(() => {
+    const inFlight = data?.items.some(
+      (d) => d.processing_status === "PENDING" || d.processing_status === "PROCESSING",
+    );
+    if (!inFlight) return;
+    const timer = setInterval(() => void load(), 5000);
+    return () => clearInterval(timer);
+  }, [data, load]);
 
   if (orgLoading) {
     return <Skeleton className="h-32 w-full" />;

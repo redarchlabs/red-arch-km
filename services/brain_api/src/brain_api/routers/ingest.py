@@ -173,3 +173,33 @@ async def get_document_chunks(
             for c in chunks
         ],
     }
+
+
+@router.get("/documents/{tenant_id}/{document_key}/summary")
+async def get_document_summary(
+    tenant_id: str,
+    document_key: str,
+    stores: Annotated[Stores, Depends(get_stores)],
+    _api_key: Annotated[str, Depends(require_api_key)],
+) -> dict[str, Any]:
+    """Return the document-level summary and its hierarchical summary tree."""
+    try:
+        record = await asyncio.to_thread(stores.vector.get_document_record, tenant_id, document_key)
+    except Exception:
+        logger.exception("Failed to fetch summary for %s", document_key)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to fetch document summary",
+        ) from None
+
+    if record is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document summary not found",
+        )
+
+    return {
+        "document_key": document_key,
+        "summary": record.payload.get("summary", ""),
+        "summary_tree": record.payload.get("summary_tree"),
+    }

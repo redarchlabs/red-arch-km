@@ -1,5 +1,12 @@
 @import "tailwindcss";
 
+/*
+ * Theme tokens. The @theme block registers the variables with Tailwind v4
+ * (utility classes reference them via var(...) at use-site), with LIGHT as
+ * the default palette. The [data-theme] blocks below override the variables
+ * at runtime; ThemeContext stamps data-theme on <html> (an inline script in
+ * the root layout does it pre-paint to avoid a flash).
+ */
 @theme {
   --color-background: #ffffff;
   --color-foreground: #0a0a0a;
@@ -22,22 +29,48 @@
   --radius-lg: 0.5rem;
 }
 
-@media (prefers-color-scheme: dark) {
-  @theme {
-    --color-background: #0a0a0a;
-    --color-foreground: #fafafa;
-    --color-muted: #27272a;
-    --color-muted-foreground: #a1a1aa;
-    --color-border: #27272a;
-    --color-input: #27272a;
-    --color-primary: #fafafa;
-    --color-primary-foreground: #18181b;
-    --color-secondary: #27272a;
-    --color-secondary-foreground: #fafafa;
-    --color-accent: #27272a;
-    --color-accent-foreground: #fafafa;
-    --color-ring: #d4d4d8;
-  }
+[data-theme="dark"] {
+  --color-background: #0a0a0a;
+  --color-foreground: #fafafa;
+  --color-muted: #27272a;
+  --color-muted-foreground: #a1a1aa;
+  --color-border: #27272a;
+  --color-input: #27272a;
+  --color-primary: #fafafa;
+  --color-primary-foreground: #18181b;
+  --color-secondary: #27272a;
+  --color-secondary-foreground: #fafafa;
+  --color-accent: #27272a;
+  --color-accent-foreground: #fafafa;
+  --color-ring: #d4d4d8;
+}
+
+/*
+ * "Red Arch" brand theme — palette lifted from the original Knowledge
+ * Manager (v1) logo and UI: warm cream canvas, desert-arch orange primary
+ * (#f57c00, v1's button color), rust-brown text.
+ */
+[data-theme="redarch"] {
+  --color-background: #fdf6ec;
+  --color-foreground: #3f2a16;
+  --color-muted: #f7e9d4;
+  /* ≥5:1 on the cream background — keep headroom above the AA 4.5:1 floor. */
+  --color-muted-foreground: #7d5c3f;
+  --color-border: #ecd9bd;
+  --color-input: #ecd9bd;
+  /* v1's brand orange #f57c00 fails AA against light text (2.6:1); the
+     deepened #c2410c keeps the brand hue at ~5.4:1 on the button foreground
+     and ~4.9:1 as link/ring color on the cream background. The bright
+     orange lives on in the accent surfaces below. */
+  --color-primary: #c2410c;
+  --color-primary-foreground: #fffaf3;
+  --color-secondary: #fdebd8;
+  --color-secondary-foreground: #7c3f0d;
+  --color-destructive: #b91c1c;
+  --color-destructive-foreground: #fffaf3;
+  --color-accent: #fbe3c4;
+  --color-accent-foreground: #7c3f0d;
+  --color-ring: #c2410c;
 }
 
 html, body {

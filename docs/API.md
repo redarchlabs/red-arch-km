@@ -308,6 +308,57 @@ Create membership (org admin only).
 #### PATCH /memberships/{membership_id}
 Update membership.
 
+#### DELETE /memberships/{membership_id}
+Remove a user from the current org (org admin only). Returns `204`. Guards:
+an org admin cannot remove their own membership (`400`, site admins exempt),
+and the org's last admin membership cannot be removed (`409`).
+
+### Setup (first-run bootstrap)
+
+#### GET /setup/status
+Public (no auth). Returns `{"needs_setup": true}` while no active site admin
+exists.
+
+#### POST /setup/claim
+Authenticated. Exchanges the one-time setup token from the API server logs
+for global admin on the calling account.
+
+**Request:** `{"token": "<token from logs>"}` — **Response:** `{"claimed": true}`
+
+Errors: `403` invalid/used token, `409` a site admin already exists.
+
+### Admin (site admin only)
+
+All routes require `is_site_admin`.
+
+#### GET /admin/users
+Paginated list of all users across the instance. Query params: `page`,
+`page_size`, `q` (case-insensitive substring match on username/email).
+
+#### PATCH /admin/users/{profile_id}
+Update global flags: `{"is_site_admin"?: bool, "is_active"?: bool}`.
+Guards: self-demotion/self-deactivation → `400`; removing the last active
+site admin → `409`; unknown user → `404`.
+
+#### GET /admin/users/{profile_id}/memberships
+All org memberships of one user across every org:
+`[{"membership_id", "org_id", "org_name", "is_org_admin"}]`.
+
+#### GET /admin/system
+Platform health for the console's System tab:
+
+```json
+{
+  "version": "2.0.0",
+  "components": {
+    "database":     {"status": "ok", "latency_ms": 0.8,  "detail": null},
+    "redis":        {"status": "ok", "latency_ms": 0.3,  "detail": null},
+    "brain_api":    {"status": "ok", "latency_ms": 53.2, "detail": null},
+    "worker_queue": {"status": "ok", "latency_ms": null, "detail": "depth=3"}
+  }
+}
+```
+
 ### Tags
 
 #### GET /tags

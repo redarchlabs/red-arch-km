@@ -23,6 +23,7 @@ ENV/
 .env
 .env.local
 .env.production
+.env.host
 secrets/
 *.pem
 *.key
@@ -59,3 +60,7 @@ models/
 !services/api/src/api/models/
 !services/brain-api-go/internal/models/
 ui/tsconfig.tsbuildinfo
+
+# Local tool/test artifacts
+.playwright-mcp/
+ui/test-results/

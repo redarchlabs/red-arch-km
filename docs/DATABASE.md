@@ -55,13 +55,22 @@ User identities synchronized from Clerk.
 | Column | Type | Description |
 |--------|------|-------------|
 | id | UUID | Primary key |
-| keycloak_sub | VARCHAR(255) | Clerk subject ID (unique) |
+| auth_subject | VARCHAR(255) | Clerk subject ID (unique; renamed from keycloak_sub in migration 003) |
 | username | VARCHAR(150) | Unique username |
 | email | VARCHAR(254) | Unique email |
 | description | TEXT | Profile description |
 | is_site_admin | BOOLEAN | Platform-wide admin flag |
+| is_active | BOOLEAN | Default true; deactivated users are rejected at auth time (403) even with a valid Clerk JWT (migration 004) |
 | created_at | TIMESTAMPTZ | Creation timestamp |
 | updated_at | TIMESTAMPTZ | Last update timestamp |
+
+> **RLS role assumption for cross-org admin reads:** `user_org_memberships`
+> has FORCE ROW LEVEL SECURITY. The site-admin console's cross-org queries
+> (`GET /api/admin/users/{id}/memberships`, like the existing `/users/me`)
+> run on a session with no tenant context and therefore only return rows when
+> the API's runtime DB role bypasses RLS (superuser or BYPASSRLS, as in the
+> shipped compose files). Under a restricted `app_user`-style role they fail
+> closed to empty results.
 
 #### user_org_memberships
 Links users to organizations with role assignments.

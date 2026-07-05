@@ -1,10 +1,12 @@
 "use client";
 
-import { FileText, FolderTree, MessageCircle, Shield } from "lucide-react";
+import { FileText, FolderTree, Globe, MessageCircle, Shield } from "lucide-react";
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 import { useOrg } from "@/context/OrgContext";
+import { useTheme } from "@/context/ThemeContext";
 import { cn } from "@/lib/utils";
 
 interface NavItem {
@@ -19,15 +21,31 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/folders", label: "Folders", icon: FolderTree },
   { href: "/chat", label: "Chat", icon: MessageCircle },
   { href: "/admin", label: "Admin", icon: Shield, requiresSiteAdmin: true },
+  { href: "/site-admin", label: "Site Admin", icon: Globe, requiresSiteAdmin: true },
 ];
 
 export function Sidebar() {
   const pathname = usePathname();
   const { isSiteAdmin } = useOrg();
+  const { theme } = useTheme();
 
   return (
     <aside className="flex h-full w-56 flex-col border-r bg-muted/30">
-      <div className="flex h-14 items-center border-b px-4">
+      <div className="flex h-14 items-center gap-2 border-b px-4">
+        {/* Original Knowledge Manager arch logo (see ui/LOGO-LICENSE.md).
+            Shown only in the Red Arch theme: the asset has a baked-in cream
+            background that clashes with the light/dark palettes. Pre-resized
+            96px asset + unoptimized: no sharp/image-optimizer dependency. */}
+        {theme === "redarch" ? (
+          <Image
+            src="/images/redarch-logo-small.png"
+            alt="Red Arch logo"
+            width={32}
+            height={24}
+            unoptimized
+            className="h-6 w-8 rounded-sm object-cover"
+          />
+        ) : null}
         <span className="font-semibold">Red Arch KM</span>
       </div>
       <nav className="flex-1 space-y-1 p-2">

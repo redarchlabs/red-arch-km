@@ -114,6 +114,7 @@ class QdrantVectorStore:
         limit: int = 5,
         access_keys: list[int] | None = None,
         required_tags: list[str] | None = None,
+        any_tags: list[str] | None = None,
         filters: list[dict[str, Any]] | None = None,
     ) -> list[SearchResult]:
         collection = self._chunk_collection(tenant_id)
@@ -126,7 +127,15 @@ class QdrantVectorStore:
                     must.append(rest.FieldCondition(key=field_name, match=rest.MatchValue(value=value)))
 
         if required_tags:
+            # AND semantics: every required tag must be present.
             must.extend(rest.FieldCondition(key="tags", match=rest.MatchValue(value=tag)) for tag in required_tags)
+
+        if any_tags:
+            # OR semantics within the set: the doc must carry at least one of
+            # these tags. Used for folder scoping — a doc lives in exactly one
+            # folder, so "in folder A or folder B" is `tags MatchAny [folder:A,
+            # folder:B]`. Still ANDs with required_tags / access_keys.
+            must.append(rest.FieldCondition(key="tags", match=rest.MatchAny(any=any_tags)))
 
         if access_keys:
             must.append(rest.FieldCondition(key="access_keys", match=rest.MatchAny(any=access_keys)))
@@ -288,6 +297,39 @@ class QdrantVectorStore:
 
         all_results.sort(key=lambda r: int(r.payload.get("chunk_order", 0)))
         return all_results
+
+    def get_document_record(self, tenant_id: str, document_key: str) -> SearchResult | None:
+        """Return the doc-level record (summary + summary_tree) or None.
+
+        Reads from the documents collection where the single per-document
+        vector lives. A missing collection is treated as "not found" so the
+        caller can 404 cleanly while ingestion is still in flight.
+        """
+        collection = self._doc_collection(tenant_id)
+        conditions: list[rest.Condition] = [
+            rest.FieldCondition(key="document_key", match=rest.MatchValue(value=document_key)),
+            rest.FieldCondition(key="tenant_id", match=rest.MatchValue(value=tenant_id)),
+        ]
+        query_filter = rest.Filter(must=conditions)
+
+        try:
+            points, _ = self._client.scroll(
+                collection_name=collection,
+                scroll_filter=query_filter,
+                limit=1,
+                with_payload=True,
+                with_vectors=False,
+            )
+        except Exception as e:  # noqa: BLE001 — Qdrant raises generic on missing collection
+            msg = str(e).lower()
+            if "doesn't exist" in msg or "not found" in msg:
+                return None
+            raise
+
+        if not points:
+            return None
+        p = points[0]
+        return SearchResult(id=str(p.id), score=0.0, payload=p.payload or {})
 
     def _wait_collection_ready(self, collection: str, *, timeout: int = 60) -> None:
         deadline = time.time() + timeout

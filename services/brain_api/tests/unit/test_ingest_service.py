@@ -27,6 +27,11 @@ def mock_stores() -> MagicMock:
     stores.summarizer = MagicMock()
     stores.summarizer.summarize_chunks.side_effect = lambda chunks: [f"summary-{i}" for i, _ in enumerate(chunks)]
     stores.summarizer.summarize_document.return_value = "final doc summary"
+    # ingest now consumes the hierarchical variant, which returns (summary, tree).
+    stores.summarizer.summarize_document_hierarchy.return_value = (
+        "final doc summary",
+        {"summary": "final doc summary", "children": [{"summary": "summary-0", "children": []}]},
+    )
     stores.extractor = MagicMock()
     stores.extractor.extract.return_value = [("subject", "predicate", "object")]
     return stores
@@ -90,7 +95,7 @@ class TestIngestService:
         assert all(r.payload["summary"].startswith("summary-") for r in records)
 
     def test_document_summary_uses_hierarchical(self, mock_stores: MagicMock) -> None:
-        """The service should call summarize_document, not the old joined-text path."""
+        """The service should call the hierarchical variant that also yields a tree."""
         service = IngestService(mock_stores)
         service.ingest_document(
             tenant_id="t1",
@@ -101,11 +106,52 @@ class TestIngestService:
             access_keys=[],
             use_knowledge_graph=False,
         )
-        mock_stores.summarizer.summarize_document.assert_called_once()
+        mock_stores.summarizer.summarize_document_hierarchy.assert_called_once()
+
+    def test_summary_tree_stored_in_doc_payload(self, mock_stores: MagicMock) -> None:
+        """The hierarchical tree must be persisted on the doc-level record."""
+        service = IngestService(mock_stores)
+        service.ingest_document(
+            tenant_id="t1",
+            document_key="dk1",
+            title="Doc",
+            text="Hello world. This is a test.",
+            tags=[],
+            access_keys=[],
+            use_knowledge_graph=False,
+        )
+        doc_call = mock_stores.vector.upsert_vectors.call_args_list[1]
+        doc_record = doc_call.args[1][0]
+        assert doc_record.payload["summary"] == "final doc summary"
+        tree = doc_record.payload["summary_tree"]
+        assert tree is not None
+        assert tree["summary"] == "final doc summary"
+        assert tree["children"][0]["summary"] == "summary-0"
+
+    def test_summary_failure_synthesizes_fallback_tree(self, mock_stores: MagicMock) -> None:
+        """If the hierarchical summariser raises, a flat summary + 2-level tree is stored."""
+        mock_stores.summarizer.summarize_document_hierarchy.side_effect = RuntimeError("LLM down")
+        service = IngestService(mock_stores)
+        service.ingest_document(
+            tenant_id="t1",
+            document_key="dk1",
+            title="Doc",
+            text="Hello world. This is a test.",
+            tags=[],
+            access_keys=[],
+            use_knowledge_graph=False,
+        )
+        doc_call = mock_stores.vector.upsert_vectors.call_args_list[1]
+        doc_record = doc_call.args[1][0]
+        tree = doc_record.payload["summary_tree"]
+        assert tree is not None
+        # Root is the flat summary; every leaf is a chunk summary with no children.
+        assert all(child["children"] == [] for child in tree["children"])
+        assert doc_record.payload["summary"] == tree["summary"]
 
     def test_doc_summary_failure_falls_back_to_centroid(self, mock_stores: MagicMock) -> None:
         """Empty doc summary → doc vector is the centroid of chunk embeddings."""
-        mock_stores.summarizer.summarize_document.return_value = ""
+        mock_stores.summarizer.summarize_document_hierarchy.return_value = ("", None)
         service = IngestService(mock_stores)
         # Text long enough to span multiple chunks (chunk_size is 500 tokens), so the
         # centroid is a genuine mean of differing chunk embeddings rather than a single

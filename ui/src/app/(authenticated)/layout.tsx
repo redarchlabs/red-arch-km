@@ -1,11 +1,13 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 
 import { Header } from "@/components/nav/Header";
 import { Sidebar } from "@/components/nav/Sidebar";
 import { useAuth } from "@/context/AuthContext";
+import { useOrg } from "@/context/OrgContext";
+import { fetchSetupStatus } from "@/lib/api/setup";
 
 interface Props {
   children: ReactNode;
@@ -14,12 +16,35 @@ interface Props {
 export default function AuthenticatedLayout({ children }: Props) {
   const router = useRouter();
   const { isAuthenticated, isInitializing } = useAuth();
+  const { orgs, isLoading: orgLoading } = useOrg();
+  const setupCheckedRef = useRef(false);
 
   useEffect(() => {
     if (!isInitializing && !isAuthenticated) {
       router.replace("/login");
     }
   }, [isAuthenticated, isInitializing, router]);
+
+  // First-run funnel: on an uninitialized instance (no site admin yet) any
+  // signed-in orgless user is routed to the token wizard. An already-set-up
+  // instance never force-redirects — an orgless site admin gets a "create
+  // one" link in the org switcher instead of being trapped in /setup on
+  // every navigation. Checked once per mount to avoid hammering the API.
+  useEffect(() => {
+    if (isInitializing || !isAuthenticated || orgLoading) return;
+    if (orgs.length > 0 || setupCheckedRef.current) return;
+    setupCheckedRef.current = true;
+    void (async () => {
+      try {
+        const status = await fetchSetupStatus();
+        if (status.needs_setup) {
+          router.replace("/setup");
+        }
+      } catch {
+        // Status check is best-effort; the app shell still renders.
+      }
+    })();
+  }, [isInitializing, isAuthenticated, orgLoading, orgs.length, router]);
 
   if (isInitializing) {
     return (

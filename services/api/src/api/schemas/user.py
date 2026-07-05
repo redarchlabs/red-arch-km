@@ -15,6 +15,7 @@ class UserRead(BaseModel):
     email: str
     description: str | None
     is_site_admin: bool
+    is_active: bool
 
 
 class CurrentUserRead(BaseModel):

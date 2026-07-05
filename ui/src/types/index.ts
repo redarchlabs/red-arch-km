@@ -31,7 +31,9 @@ export interface Document {
   title: string;
   description: string | null;
   document_key: string;
-  processing_status: "PENDING" | "PROCESSING" | "COMPLETE" | "ERROR" | "STOPPED" | "DELETED";
+  // Canonical values written by the worker status callback. Must match
+  // api ProcessingStatus enum (services/api/src/api/models/document.py).
+  processing_status: "PENDING" | "PROCESSING" | "SUCCESS" | "FAILED";
   folder_id: string | null;
   org_id: string;
   created_at: string;

@@ -6,15 +6,18 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 
+import { SummaryTree } from "@/components/documents/SummaryTree";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   type DocumentChunk,
+  type SummaryTreeNode,
   deleteDocument,
   getDocument,
   getDocumentChunks,
+  getDocumentSummary,
 } from "@/lib/api/documents";
 import { formatDate } from "@/lib/format";
 import type { Document } from "@/types";
@@ -31,6 +34,7 @@ export default function DocumentDetailPage() {
 
   const [doc, setDoc] = useState<Document | null>(null);
   const [chunks, setChunks] = useState<DocumentChunk[]>([]);
+  const [summaryTree, setSummaryTree] = useState<SummaryTreeNode | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -40,15 +44,21 @@ export default function DocumentDetailPage() {
     setIsLoading(true);
     setError(null);
     try {
-      const [docResult, chunksResult] = await Promise.allSettled([
+      const [docResult, chunksResult, summaryResult] = await Promise.allSettled([
         getDocument(id),
         getDocumentChunks(id),
+        getDocumentSummary(id),
       ]);
       if (docResult.status === "fulfilled") setDoc(docResult.value);
       else throw docResult.reason;
       // Chunks may fail if ingestion is still in progress — that's non-fatal
       if (chunksResult.status === "fulfilled") {
         setChunks(chunksResult.value.chunks);
+      }
+      // Summary tree isn't written until the doc-level record is upserted at
+      // the end of ingestion — a 404/failure here just means "not ready yet".
+      if (summaryResult.status === "fulfilled") {
+        setSummaryTree(summaryResult.value.summary_tree);
       }
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to load document");
@@ -107,7 +117,15 @@ export default function DocumentDetailPage() {
             <p className="mt-1 text-muted-foreground">{doc.description}</p>
           ) : null}
           <div className="mt-2 flex items-center gap-2">
-            <Badge variant={doc.processing_status === "COMPLETE" ? "default" : "secondary"}>
+            <Badge
+              variant={
+                doc.processing_status === "SUCCESS"
+                  ? "default"
+                  : doc.processing_status === "FAILED"
+                    ? "destructive"
+                    : "secondary"
+              }
+            >
               {doc.processing_status}
             </Badge>
             <span className="text-xs text-muted-foreground">{formatDate(doc.created_at)}</span>
@@ -118,6 +136,21 @@ export default function DocumentDetailPage() {
           {deleting ? "Deleting…" : "Delete"}
         </Button>
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Document Summary Tree</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {summaryTree ? (
+            <SummaryTree root={summaryTree} />
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              No summary yet. The document may still be processing.
+            </p>
+          )}
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>

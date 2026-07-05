@@ -8,6 +8,7 @@ from collections.abc import AsyncGenerator
 from typing import Annotated
 
 from fastapi import Depends, Header, HTTPException, status
+from redis.asyncio import Redis
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,6 +16,31 @@ from api.config import Settings, get_settings
 from api.db import get_session_factory
 
 logger = logging.getLogger(__name__)
+
+_redis_client: Redis | None = None
+
+
+def get_redis_client(settings: Settings) -> Redis:
+    """Process-wide async Redis client (connection pool under the hood)."""
+    global _redis_client  # noqa: PLW0603
+    if _redis_client is None:
+        _redis_client = Redis.from_url(settings.redis_url, decode_responses=True)
+    return _redis_client
+
+
+async def close_redis_client() -> None:
+    """Dispose the shared Redis pool on shutdown (mirrors db.dispose_engine)."""
+    global _redis_client  # noqa: PLW0603
+    if _redis_client is not None:
+        await _redis_client.aclose()
+        _redis_client = None
+
+
+async def get_redis(
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> Redis:
+    """FastAPI dependency for the shared Redis client."""
+    return get_redis_client(settings)
 
 
 async def get_db(
@@ -24,6 +50,11 @@ async def get_db(
 
     Use this for endpoints that don't need org scoping (e.g. /api/auth/me,
     /healthz, site-admin operations that span orgs).
+
+    NOTE: cross-org reads of RLS-forced tables (user_org_memberships) on this
+    session assume the runtime DB role bypasses RLS (superuser/BYPASSRLS, as
+    in the shipped compose files). Under a restricted role they fail closed
+    to empty results. See docs/DATABASE.md.
     """
     factory = get_session_factory(settings)
     async with factory() as session:

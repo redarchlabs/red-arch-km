@@ -31,12 +31,19 @@ document_tags = Table(
 
 
 class ProcessingStatus(StrEnum):
+    """Canonical document ingestion states.
+
+    These are the exact string values the worker writes back via the status
+    callback (`api/routers/internal.py`) and that the UI renders. Keep this in
+    lockstep with the worker constants and the UI's status types — a mismatch
+    (the historical `COMPLETE`/`ERROR` values here vs the worker's
+    `SUCCESS`/`FAILED`) silently breaks status badges end to end.
+    """
+
     PENDING = "PENDING"
     PROCESSING = "PROCESSING"
-    COMPLETE = "COMPLETE"
-    ERROR = "ERROR"
-    STOPPED = "STOPPED"
-    DELETED = "DELETED"
+    SUCCESS = "SUCCESS"
+    FAILED = "FAILED"
 
 
 class Folder(Base, UUIDMixin, TimestampMixin):

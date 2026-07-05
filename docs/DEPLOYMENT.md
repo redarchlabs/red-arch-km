@@ -146,17 +146,48 @@ GRANT CONNECT ON DATABASE redarch_km TO app_user;
 GRANT ALL PRIVILEGES ON DATABASE redarch_km TO app_admin;
 ```
 
-### 3. Create Initial Admin
+### 3. Create Initial Admin (first-run setup wizard)
+
+The first site admin is claimed through the built-in setup wizard — no manual
+SQL needed:
+
+1. Start the API with no site admin in the database. It prints a one-time
+   **setup token** to its logs (`docker logs km2_api` or the uvicorn console):
+
+   ```
+   ========================================================================
+     FIRST-RUN SETUP: no site admin exists yet.
+     One-time setup token (valid 24h, single use):
+
+         <token>
+
+     Sign in at the UI and open /setup to claim global admin.
+   ========================================================================
+   ```
+
+2. Sign in to the UI with the Clerk account that should become the global
+   administrator; you are redirected to `/setup`.
+3. Paste the token. Your account gets `is_site_admin = true` and the wizard
+   walks you through creating the first organization.
+
+The token is stored only as a SHA-256 hash in Redis, is single-use, and
+expires after `API_SETUP_TOKEN_TTL_SECONDS` (default 86400). An unclaimed
+token survives API restarts (so a copied token stays valid); to force a
+reissue, delete the `setup:token:hash` Redis key (or wait out the TTL) and
+restart the API. Once a site admin exists the wizard is disabled
+(`POST /api/setup/claim` returns 409).
+
+> **Log-shipping caveat:** the plaintext token is printed to the API's
+> stdout logs. If your logs ship to a centralized aggregator, everyone with
+> read access there can see it for up to the TTL — shorten
+> `API_SETUP_TOKEN_TTL_SECONDS` for production bootstraps or redact this
+> WARNING line in the shipping pipeline.
+
+Fallback (broken Redis, air-gapped debugging) — flip the flag directly:
 
 ```sql
-INSERT INTO user_profiles (id, keycloak_sub, username, email, is_site_admin)
-VALUES (
-  gen_random_uuid(),
-  '<clerk-sub-from-token>',
-  'admin',
-  'admin@yourdomain.com',
-  true
-);
+UPDATE user_profiles SET is_site_admin = true
+WHERE auth_subject = '<clerk-sub-from-token>';
 ```
 
 ## Clerk Configuration

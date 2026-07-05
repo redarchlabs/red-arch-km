@@ -17,6 +17,18 @@ def dispatch_ingest(data: dict[str, Any]) -> str:
     return str(result.id)
 
 
+def dispatch_extract_ingest(data: dict[str, Any]) -> str:
+    """Enqueue an upload for extraction (OCR / AI vision) then ingestion.
+
+    The worker downloads the stored original, extracts text, and only then
+    POSTs to brain-api — the brain contract stays text-only. Secrets (the
+    per-org OpenAI key) are NEVER put in this payload; the worker resolves
+    them via the internal API. Returns the Celery task ID.
+    """
+    result = celery_app.send_task("worker.tasks.extract.task_extract_and_ingest", args=[data])
+    return str(result.id)
+
+
 def dispatch_metadata_update(data: dict[str, Any]) -> str:
     result = celery_app.send_task("worker.tasks.metadata.task_update_document_metadata", args=[data])
     return str(result.id)

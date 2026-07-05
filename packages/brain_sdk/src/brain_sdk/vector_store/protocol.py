@@ -49,6 +49,7 @@ class VectorStore(Protocol):
         limit: int = 5,
         access_keys: list[int] | None = None,
         required_tags: list[str] | None = None,
+        any_tags: list[str] | None = None,
         filters: list[dict[str, Any]] | None = None,
     ) -> list[SearchResult]:
         """Semantic search over chunk vectors."""
@@ -82,6 +83,10 @@ class VectorStore(Protocol):
         limit: int = 500,
     ) -> list[SearchResult]:
         """Return all chunks for a document ordered by chunk_order."""
+        ...
+
+    def get_document_record(self, tenant_id: str, document_key: str) -> SearchResult | None:
+        """Return the doc-level record (summary + summary_tree) or None if absent."""
         ...
 
     def delete_tenant(self, tenant_id: str) -> None:

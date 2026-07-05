@@ -21,19 +21,29 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.auth.dependencies import require_internal_api_key
 from api.config import Settings, get_settings
 from api.db import get_session_factory
+from api.models.document import ProcessingStatus
+from api.models.org import Org
 from api.repositories.document import DocumentRepository
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+class OrgOpenAIKey(BaseModel):
+    """Per-org OpenAI key lookup result for the worker."""
+
+    openai_api_key: str | None = Field(
+        default=None,
+        description="The org's OpenAI key, or null to fall back to the central key.",
+    )
+
+
 class DocumentStatusUpdate(BaseModel):
     """Worker-reported processing status for a document."""
 
     tenant_id: uuid.UUID = Field(description="Org ID, used to set RLS scope.")
-    status: str = Field(
+    status: ProcessingStatus = Field(
         description="One of PENDING, PROCESSING, SUCCESS, FAILED.",
-        pattern=r"^(PENDING|PROCESSING|SUCCESS|FAILED)$",
     )
     details: dict[str, Any] | None = Field(
         default=None,
@@ -85,6 +95,35 @@ async def update_document_status(
             await session.rollback()
             logger.exception("Failed to update status for document %s", document_id)
             raise
+
+
+@router.get(
+    "/orgs/{org_id}/openai-key",
+    dependencies=[Depends(require_internal_api_key)],
+    response_model=OrgOpenAIKey,
+)
+async def get_org_openai_key(
+    org_id: uuid.UUID,
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> OrgOpenAIKey:
+    """Return the per-org OpenAI key so the worker can use it for AI OCR.
+
+    The worker calls this (not the Celery payload) so the secret never rides
+    the broker. A null key tells the worker to fall back to the central
+    OPENAI_API_KEY. Uses a dedicated RLS-scoped session, mirroring the status
+    callback — the worker has no user JWT.
+    """
+    factory = get_session_factory(settings)
+    async with factory() as session:
+        await _set_tenant(session, org_id)
+        org = await session.get(Org, org_id)
+        # RLS should already scope to this org; the id check is belt-and-braces.
+        if org is None or org.id != org_id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Org not found",
+            )
+        return OrgOpenAIKey(openai_api_key=org.openai_api_key)
 
 
 async def _set_tenant(session: AsyncSession, tenant_id: uuid.UUID) -> None:

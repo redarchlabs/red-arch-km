@@ -23,6 +23,7 @@ export interface UserProfile {
   email: string;
   description: string | null;
   is_site_admin: boolean;
+  is_active: boolean;
 }
 
 export async function updateMe(input: ProfileUpdateInput): Promise<UserProfile> {

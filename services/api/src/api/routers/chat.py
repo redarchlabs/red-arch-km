@@ -145,11 +145,20 @@ async def ask(
 
     # Resolve tag names if tag_ids provided (for brain-api filter)
     tags: list[str] = []
+    folder_tags: list[str] = []
     if body.context_filters and body.context_filters.tag_ids:
         from api.models.document import Tag
 
         tag_result = await session.execute(select(Tag.name).where(Tag.id.in_(body.context_filters.tag_ids)))
         tags = [row[0] for row in tag_result.all()]
+
+    # Folder scoping: documents encode folder membership as a synthetic
+    # `folder:<id>` tag at ingest time (see create_document). Translate the
+    # requested folder_ids into those tags and pass them as an OR filter so a
+    # chat can be scoped to one or more folders. Previously folder_ids was
+    # accepted in the schema but silently ignored.
+    if body.context_filters and body.context_filters.folder_ids:
+        folder_tags = [f"folder:{fid}" for fid in body.context_filters.folder_ids]
 
     # Create brain API client
     client = BrainAPIClient(settings)
@@ -171,6 +180,7 @@ async def ask(
                 chat_history=chat_history,
                 access_keys=access_keys,
                 tags=tags if tags else None,
+                folder_tags=folder_tags if folder_tags else None,
                 use_knowledge_graph=True,
             ):
                 # Forward raw bytes to client

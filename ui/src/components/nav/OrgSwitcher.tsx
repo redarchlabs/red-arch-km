@@ -1,17 +1,24 @@
 "use client";
 
 import { ChevronDown } from "lucide-react";
+import Link from "next/link";
 import { useState } from "react";
 
 import { useOrg } from "@/context/OrgContext";
 import { cn } from "@/lib/utils";
 
 export function OrgSwitcher() {
-  const { orgs, currentOrg, setCurrentOrgId } = useOrg();
+  const { orgs, currentOrg, setCurrentOrgId, isSiteAdmin } = useOrg();
   const [open, setOpen] = useState(false);
 
   if (orgs.length === 0) {
-    return <div className="text-sm text-muted-foreground">No organizations</div>;
+    return isSiteAdmin ? (
+      <Link href="/setup" className="text-sm font-medium text-primary hover:underline">
+        No organizations — create one
+      </Link>
+    ) : (
+      <div className="text-sm text-muted-foreground">No organizations</div>
+    );
   }
 
   if (orgs.length === 1) {
@@ -35,7 +42,10 @@ export function OrgSwitcher() {
       {open ? (
         <>
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} aria-hidden />
-          <div className="absolute right-0 z-20 mt-1 w-56 overflow-hidden rounded-md border bg-background shadow-md">
+          {/* left-0: the switcher sits at the left edge of the header; a
+              right-anchored panel would extend under the sidebar and get
+              clipped by the content column's overflow-hidden. */}
+          <div className="absolute left-0 z-20 mt-1 w-56 overflow-hidden rounded-md border bg-background shadow-md">
             {orgs.map((org) => (
               <button
                 key={org.id}

@@ -15,6 +15,8 @@ dependencies = [
     "celery[redis]>=5.4",
     "redis>=5.0",
     "alembic>=1.13",
+    "boto3>=1.35",
+    "python-multipart>=0.0.9",
     "access-mask",
     "shared-config",
     "opentelemetry-instrumentation-fastapi>=0.48",
@@ -51,3 +53,8 @@ asyncio_mode = "auto"
 # "Future attached to a different loop"). Test-config only; no product behavior change.
 asyncio_default_fixture_loop_scope = "session"
 asyncio_default_test_loop_scope = "session"
+
+[dependency-groups]
+dev = [
+    "fakeredis>=2.23",
+]
