@@ -2,6 +2,7 @@
 
 import { LogOut } from "lucide-react";
 
+import { HelpButton } from "@/components/help/HelpButton";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/context/AuthContext";
 
@@ -15,6 +16,7 @@ export function Header() {
     <header className="flex h-14 items-center justify-between border-b px-6">
       <OrgSwitcher />
       <div className="flex items-center gap-4">
+        <HelpButton />
         <ThemeSwitcher />
         <span className="text-sm text-muted-foreground">{username}</span>
         <Button variant="ghost" size="icon" onClick={logout} aria-label="Sign out">
