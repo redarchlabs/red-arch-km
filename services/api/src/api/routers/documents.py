@@ -345,6 +345,26 @@ async def upload_document(
     return DocumentRead.model_validate(doc)
 
 
+@router.get("/by-key/{document_key}", response_model=DocumentRead)
+async def get_document_by_key(
+    document_key: str,
+    ctx: Annotated[OrgContext, Depends(require_org_access)],
+    session: Annotated[AsyncSession, Depends(get_tenant_db)],
+) -> DocumentRead:
+    """Resolve a document by its ``document_key``.
+
+    Chat/search sources reference documents by the vector-store key (not the
+    Postgres id), so the UI resolves that key here to the canonical document
+    before navigating. Declared BEFORE ``/{document_id}`` so the literal
+    ``by-key`` prefix isn't swallowed by the id path.
+    """
+    repo = DocumentRepository(session)
+    doc = await repo.get_by_key(document_key)
+    if doc is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
+    return DocumentRead.model_validate(doc)
+
+
 @router.get("/{document_id}", response_model=DocumentRead)
 async def get_document(
     document_id: uuid.UUID,

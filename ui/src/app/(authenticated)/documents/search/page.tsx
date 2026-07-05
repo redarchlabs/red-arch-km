@@ -85,7 +85,7 @@ export default function DocumentSearchPage() {
       <ol className="space-y-3">
         {hits.map((hit, index) => (
           <li key={hit.id}>
-            <Link href={`/documents/${hit.document_id}`} className="block">
+            <Link href={`/documents/${hit.document_key}`} className="block">
               <Card className="transition-colors hover:border-primary/50">
                 <CardContent className="space-y-1.5 py-4">
                   <div className="flex items-center justify-between gap-3">
