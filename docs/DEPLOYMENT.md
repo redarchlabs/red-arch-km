@@ -93,7 +93,36 @@ API_URL=http://api:8000
 # Celery
 CELERY_BROKER_URL=redis://redis:6379/0
 CELERY_RESULT_BACKEND=redis://redis:6379/1
+
+# Object storage (MinIO / S3-compatible) — stores uploaded document originals
+STORAGE_ENDPOINT=http://minio:9000        # S3 API URL. NEVER use a host with an
+                                          # underscore (e.g. "km2_minio") — botocore
+                                          # rejects it as an invalid endpoint.
+STORAGE_ACCESS_KEY=<access-key>
+STORAGE_SECRET_KEY=<strong-secret>
+STORAGE_BUCKET=km-documents               # Auto-created by the createbuckets init container
+STORAGE_REGION=us-east-1
+MAX_FILE_SIZE_MB=50
 ```
+
+### Object Storage (MinIO / S3)
+
+Uploaded document originals (PDF, images, `.docx`, `.md`, `.txt`) are kept in an
+S3-compatible bucket: the API writes the original on upload, the worker downloads
+it for OCR/extraction, and the reader serves it back (text inline, PDFs/images via
+a short-lived presigned URL).
+
+- **Bucket creation is automatic.** `docker/docker-compose.infra.yml` includes a
+  one-shot `createbuckets` container that creates `STORAGE_BUCKET` once MinIO is
+  healthy. It is idempotent and safe to re-run on every `up`. In production
+  against managed S3, create the bucket via your provider instead.
+- **Endpoint hostname:** containers reach storage at `http://minio:9000`; host
+  processes (the hybrid dev layout) use `http://localhost:9000`. Do **not** use a
+  hostname containing an underscore — botocore raises `Invalid endpoint`.
+- **Binaries for extraction** live in the worker image: `tesseract-ocr` +
+  `poppler-utils` (PDF/image OCR) and `mammoth` (`.docx` → Markdown).
+- **Backup:** the bucket holds the only copy of uploaded originals — include it
+  in backups (`mc mirror` or your provider's replication).
 
 ## Docker Compose Production
 
