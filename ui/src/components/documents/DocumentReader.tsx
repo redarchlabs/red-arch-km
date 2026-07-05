@@ -66,6 +66,10 @@ export function DocumentReader({
   const totalRef = useRef(0);
   const loadingRef = useRef(false);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
+  // Side-by-side panes are scroll-synced so a summary stays aligned with the
+  // text it summarizes.
+  const leftScrollRef = useRef<HTMLDivElement | null>(null);
+  const rightScrollRef = useRef<HTMLDivElement | null>(null);
 
   chunksLenRef.current = chunks.length;
   totalRef.current = total;
@@ -125,6 +129,34 @@ export function DocumentReader({
     return () => observer.disconnect();
   }, [open, mode, loadNextPage]);
 
+  // Proportionally sync the two side-by-side panes so scrolling the text moves
+  // the summaries to the matching position (and vice versa).
+  useEffect(() => {
+    if (!open || mode !== "side-by-side") return;
+    const left = leftScrollRef.current;
+    const right = rightScrollRef.current;
+    if (!left || !right) return; // right is absent for the PDF iframe — no sync
+    let lock = false;
+    const sync = (from: HTMLDivElement, to: HTMLDivElement) => {
+      if (lock) return;
+      lock = true;
+      const fromMax = from.scrollHeight - from.clientHeight;
+      const toMax = to.scrollHeight - to.clientHeight;
+      to.scrollTop = fromMax > 0 ? (from.scrollTop / fromMax) * toMax : 0;
+      requestAnimationFrame(() => {
+        lock = false;
+      });
+    };
+    const onLeft = () => sync(left, right);
+    const onRight = () => sync(right, left);
+    left.addEventListener("scroll", onLeft, { passive: true });
+    right.addEventListener("scroll", onRight, { passive: true });
+    return () => {
+      left.removeEventListener("scroll", onLeft);
+      right.removeEventListener("scroll", onRight);
+    };
+  }, [open, mode, chunks.length, original]);
+
   const hasMore = total === 0 || chunks.length < total;
 
   return (
@@ -155,11 +187,29 @@ export function DocumentReader({
 
       {mode === "side-by-side" ? (
         <div className="flex min-h-0 flex-1">
-          <aside className="hidden w-2/5 min-w-0 overflow-y-auto border-r p-4 md:block">
+          <aside
+            ref={leftScrollRef}
+            className="hidden w-2/5 min-w-0 overflow-y-auto border-r p-4 md:block"
+          >
             <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              Summary
+              Section summaries
             </div>
-            {summaryTree ? (
+            {chunks.length > 0 ? (
+              // Per-section summaries in document order; scroll-synced with the
+              // text on the right so each stays aligned with what it summarizes.
+              <ol className="space-y-2">
+                {chunks.map((chunk) => (
+                  <li key={chunk.id} className="rounded-md border bg-muted/20 p-2">
+                    <div className="mb-0.5 text-xs font-medium text-muted-foreground">
+                      Section {chunk.chunk_order + 1}
+                    </div>
+                    <div className="text-sm text-muted-foreground">
+                      {chunk.summary ? sanitize(chunk.summary) : "—"}
+                    </div>
+                  </li>
+                ))}
+              </ol>
+            ) : summaryTree ? (
               <SummaryTree root={summaryTree} />
             ) : (
               <p className="text-sm text-muted-foreground">No summary available.</p>
@@ -173,7 +223,7 @@ export function DocumentReader({
               className="min-h-0 flex-1"
             />
           ) : (
-            <div className="min-h-0 flex-1 overflow-y-auto p-5">
+            <div ref={rightScrollRef} className="min-h-0 flex-1 overflow-y-auto p-5">
               <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                 Full text
               </div>
