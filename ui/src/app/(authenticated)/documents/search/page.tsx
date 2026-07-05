@@ -5,6 +5,7 @@ import { Loader2, Search } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
 
+import { Highlight } from "@/components/common/Highlight";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -25,6 +26,9 @@ export default function DocumentSearchPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [searched, setSearched] = useState(false);
+  // The query the current results are for — highlight against this, not the
+  // live input (which may change before the next search).
+  const [activeQuery, setActiveQuery] = useState("");
 
   const runSearch = async () => {
     const q = query.trim();
@@ -34,6 +38,7 @@ export default function DocumentSearchPage() {
     try {
       const res = await searchDocuments(q, RESULT_LIMIT);
       setHits(res.hits);
+      setActiveQuery(q);
       setSearched(true);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Search failed");
@@ -97,7 +102,7 @@ export default function DocumentSearchPage() {
                     </span>
                   </div>
                   <p className="line-clamp-3 text-sm text-muted-foreground">
-                    {sanitize(hit.text)}
+                    <Highlight text={sanitize(hit.text)} query={activeQuery} />
                   </p>
                   <span className="text-xs text-muted-foreground">Section #{hit.chunk_order}</span>
                 </CardContent>
