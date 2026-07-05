@@ -14,15 +14,18 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { type AttributeDefinition, listAttributes } from "@/lib/api/attributes";
 import {
   createDocument,
   type TranslationMethod,
   uploadDocument,
 } from "@/lib/api/documents";
 import { listFolders } from "@/lib/api/folders";
-import type { Folder } from "@/types";
+import { listTags } from "@/lib/api/tags";
+import type { Folder, Tag } from "@/types";
 
 type Mode = "text" | "file";
+type KgChoice = "default" | "true" | "false";
 
 const documentSchema = z.object({
   title: z.string().min(1, "Title is required").max(255),
@@ -47,20 +50,29 @@ export function DocumentUpload({ open, onClose, onCreated, defaultFolderId }: Do
   const [translationMethod, setTranslationMethod] = useState<TranslationMethod>("ocr");
   const [folderId, setFolderId] = useState<string>(defaultFolderId ?? "");
   const [folders, setFolders] = useState<Folder[]>([]);
+  const [tags, setTags] = useState<Tag[]>([]);
+  const [tagIds, setTagIds] = useState<string[]>([]);
+  const [attrs, setAttrs] = useState<AttributeDefinition[]>([]);
+  const [attrValues, setAttrValues] = useState<Record<string, string>>({});
+  const [useKg, setUseKg] = useState<KgChoice>("default");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  // Load the folder list once the dialog opens so the user can file the doc.
+  // Load folders, tags, and attribute definitions once the dialog opens so the
+  // user can file, tag, and attribute the document (authoring parity). All are
+  // non-fatal — a failure just hides that optional control.
   useEffect(() => {
     if (!open) return;
     let active = true;
     listFolders()
-      .then((f) => {
-        if (active) setFolders(f);
-      })
-      .catch(() => {
-        // Non-fatal: folder picker just stays empty ("No folder").
-      });
+      .then((f) => active && setFolders(f))
+      .catch(() => {});
+    listTags()
+      .then((t) => active && setTags(t.items))
+      .catch(() => {});
+    listAttributes()
+      .then((a) => active && setAttrs(a.items.slice().sort((x, y) => x.order - y.order)))
+      .catch(() => {});
     return () => {
       active = false;
     };
@@ -78,6 +90,9 @@ export function DocumentUpload({ open, onClose, onCreated, defaultFolderId }: Do
     setFile(null);
     setTranslationMethod("ocr");
     setFolderId(defaultFolderId ?? "");
+    setTagIds([]);
+    setAttrValues({});
+    setUseKg("default");
     setError(null);
   };
 
@@ -108,7 +123,19 @@ export function DocumentUpload({ open, onClose, onCreated, defaultFolderId }: Do
         setError(parsed.error.issues[0]?.message ?? "Invalid input");
         return;
       }
+      // Enforce required document attributes.
+      const missing = attrs.find((a) => a.required && !attrValues[a.slug]?.trim());
+      if (missing) {
+        setError(`"${missing.name}" is required`);
+        return;
+      }
     }
+
+    // Only send attributes that have a value; store under a `attributes` key in
+    // the document metadata JSON.
+    const filledAttrs = Object.fromEntries(
+      Object.entries(attrValues).filter(([, v]) => v.trim() !== ""),
+    );
 
     setSubmitting(true);
     try {
@@ -132,6 +159,9 @@ export function DocumentUpload({ open, onClose, onCreated, defaultFolderId }: Do
           description: description || null,
           text,
           folder_id: folderId || null,
+          tag_ids: tagIds,
+          use_knowledge_graph: useKg === "default" ? null : useKg === "true",
+          metadata: Object.keys(filledAttrs).length > 0 ? { attributes: filledAttrs } : {},
         });
         toast.success("Document created", {
           description: "It's queued for chunking, embedding, and indexing.",
@@ -239,19 +269,102 @@ export function DocumentUpload({ open, onClose, onCreated, defaultFolderId }: Do
           </div>
 
           {mode === "text" ? (
-            <div>
-              <label htmlFor="text" className="mb-1.5 block text-sm font-medium">
-                Content
-              </label>
-              <Textarea
-                id="text"
-                value={text}
-                onChange={(e) => setText(e.target.value)}
-                placeholder="Paste document content here…"
-                className="min-h-[240px]"
-                disabled={submitting}
-              />
-            </div>
+            <>
+              <div>
+                <label htmlFor="text" className="mb-1.5 block text-sm font-medium">
+                  Content
+                </label>
+                <Textarea
+                  id="text"
+                  value={text}
+                  onChange={(e) => setText(e.target.value)}
+                  placeholder="Paste document content here…"
+                  className="min-h-[240px]"
+                  disabled={submitting}
+                />
+              </div>
+
+              {tags.length > 0 ? (
+                <div>
+                  <span className="mb-1.5 block text-sm font-medium">
+                    Tags <span className="text-muted-foreground">(optional)</span>
+                  </span>
+                  <div className="flex flex-wrap gap-1.5">
+                    {tags.map((t) => {
+                      const on = tagIds.includes(t.id);
+                      return (
+                        <button
+                          key={t.id}
+                          type="button"
+                          disabled={submitting}
+                          onClick={() =>
+                            setTagIds((prev) =>
+                              on ? prev.filter((id) => id !== t.id) : [...prev, t.id],
+                            )
+                          }
+                          className={`rounded-full border px-2.5 py-0.5 text-xs ${on ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent"}`}
+                        >
+                          {t.name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : null}
+
+              {attrs.map((a) => (
+                <div key={a.id}>
+                  <label htmlFor={`attr-${a.slug}`} className="mb-1.5 block text-sm font-medium">
+                    {a.name}
+                    {a.required ? <span className="text-destructive"> *</span> : null}
+                  </label>
+                  {a.attribute_type === "picklist" ? (
+                    <select
+                      id={`attr-${a.slug}`}
+                      value={attrValues[a.slug] ?? ""}
+                      onChange={(e) =>
+                        setAttrValues((prev) => ({ ...prev, [a.slug]: e.target.value }))
+                      }
+                      disabled={submitting}
+                      className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"
+                    >
+                      <option value="">—</option>
+                      {a.picklist_options.map((opt) => (
+                        <option key={opt} value={opt}>
+                          {opt}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <Input
+                      id={`attr-${a.slug}`}
+                      value={attrValues[a.slug] ?? ""}
+                      onChange={(e) =>
+                        setAttrValues((prev) => ({ ...prev, [a.slug]: e.target.value }))
+                      }
+                      disabled={submitting}
+                    />
+                  )}
+                </div>
+              ))}
+
+              <div>
+                <label htmlFor="use-kg" className="mb-1.5 block text-sm font-medium">
+                  Knowledge graph
+                </label>
+                <select
+                  id="use-kg"
+                  value={useKg}
+                  onChange={(e) => setUseKg(e.target.value as KgChoice)}
+                  disabled={submitting}
+                  className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"
+                >
+                  <option value="default">Organization default</option>
+                  <option value="true">Extract knowledge graph</option>
+                  <option value="false">Skip knowledge graph</option>
+                </select>
+              </div>
+            </>
           ) : (
             <>
               <div>

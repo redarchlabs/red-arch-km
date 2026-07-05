@@ -24,7 +24,7 @@ from api.schemas.document import DocumentCreate, DocumentRead, DocumentUpdate
 from api.services.brain_client import BrainAPIClient
 from api.services.permission_config import calculate_user_masks_from_membership
 from api.services.storage import StorageClient
-from api.tasks.ingest import dispatch_extract_ingest, dispatch_ingest
+from api.tasks.ingest import dispatch_extract_ingest, dispatch_ingest, dispatch_metadata_update
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -343,21 +343,18 @@ async def update_document(
     ctx: Annotated[OrgContext, Depends(require_org_access)],
     session: Annotated[AsyncSession, Depends(get_tenant_db)],
 ) -> DocumentRead:
-    """Update metadata on a document. Does not re-trigger ingestion.
+    """Update metadata on a document. Does not re-chunk/re-embed.
 
-    Callers that change tags or folder_id should be aware of two staleness
-    limitations, both because the vector store is only written at ingest time:
-      1. ``access_keys`` are inherited from the folder at ingest and are NOT
-         re-propagated here.
-      2. The synthetic ``folder:<id>`` tag that folder-scoped chat/search filter
-         on is likewise fixed at ingest. Moving a document to another folder
-         does NOT re-tag its vectors, so folder-scoped retrieval will still
-         match the OLD folder (and miss the new one) until the document is
-         re-ingested. Documents ingested before this feature have no such tag.
-    A dedicated metadata/re-tag update task should be dispatched separately
-    (see worker.tasks.metadata) to close both gaps. Tracked as a follow-up.
+    Changing ``folder_id``, ``tag_ids``, or ``title`` re-propagates the derived
+    vector-store metadata (the synthetic ``folder:<id>`` tag + the folder's
+    ``access_keys`` + the title) to the document's existing vectors via a
+    metadata-update task — so folder-scoped chat/search and entitlement
+    filtering stay correct after a move, without a full re-ingest. (Documents
+    ingested before the folder-tag feature only gain the tag once touched here
+    or re-ingested.)
     """
     repo = DocumentRepository(session)
+    folder_repo = FolderRepository(session)
     doc = await repo.get(document_id)
     if doc is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
@@ -369,6 +366,13 @@ async def update_document(
     if "description" in fields_set:
         doc.description = body.description
     if "folder_id" in fields_set:
+        # Validate the target folder so a bad id is rejected cleanly (mirrors
+        # create_document) rather than silently detaching the document.
+        if body.folder_id is not None and await folder_repo.get(body.folder_id) is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="folder_id does not exist in this organization",
+            )
         doc.folder_id = body.folder_id
     if "metadata" in fields_set:
         doc.metadata_ = body.metadata or {}
@@ -381,6 +385,35 @@ async def update_document(
             doc.tags = []
 
     await session.flush()
+
+    # If anything that shapes the vector-store payload changed, recompute the
+    # derived tags + access_keys from the *current* folder and push them to
+    # brain-api so retrieval scoping/entitlement isn't stale after a move.
+    retag = bool({"folder_id", "tag_ids"} & fields_set) or body.title is not None
+    if retag:
+        access_keys: list[int] = []
+        tag_names = [t.name for t in doc.tags]
+        if doc.folder_id is not None:
+            folder = await folder_repo.get(doc.folder_id)
+            if folder is not None:
+                access_keys = list(folder.view_permission_masks or [])
+                tag_names.append(f"folder:{doc.folder_id}")
+        await session.commit()
+        try:
+            dispatch_metadata_update(
+                {
+                    "tenant_id": str(ctx.org_id),
+                    "document_key": doc.document_key,
+                    "new_tags": tag_names,
+                    "new_access_keys": access_keys,
+                    "title": doc.title,
+                }
+            )
+        except Exception:
+            # A broker outage must not fail the (already-committed) update; the
+            # vector payload is just briefly stale until the next touch.
+            logger.exception("Metadata re-tag enqueue failed for document %s", doc.id)
+
     logger.info("Updated document %s in org %s", document_id, ctx.org_id)
     return DocumentRead.model_validate(doc)
 
