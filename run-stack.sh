@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 # run-stack.sh — start (or stop) the full KM2 development stack.
 #
-#   ./run-stack.sh          start everything (idempotent — skips what's running)
-#   ./run-stack.sh restart  force-restart the host API and UI processes
+#   ./run-stack.sh          start everything (always restarts host API+UI; infra idempotent)
+#   ./run-stack.sh restart  alias for start (host API+UI are always killed and relaunched)
 #   ./run-stack.sh stop     stop host processes + app containers (infra keeps running)
+#
+# Start ALWAYS kills any existing host API/UI first, so a stale dev server
+# (e.g. one still serving an out-of-date .next build after a rebuild) can never
+# linger on :8000/:3000 and shadow the fresh one.
 #
 # The dev stack is a hybrid:
 #   docker : postgres(5433) redis qdrant neo4j | brain-api(8020) | celery worker
@@ -24,9 +28,30 @@ say() { printf '\033[1;36m[stack]\033[0m %s\n' "$*"; }
 api_up() { curl -sf -m 2 http://localhost:8000/healthz >/dev/null 2>&1; }
 ui_up()  { curl -sf -m 2 -o /dev/null http://localhost:3000/login 2>/dev/null; }
 
+# Free the given TCP port by killing whatever LISTENs on it (this stack owns
+# :8000 and :3000). TERM first, then KILL if it clings.
+free_port() {
+  local port="$1" pids
+  pids="$(lsof -ti "tcp:${port}" -sTCP:LISTEN 2>/dev/null || true)"
+  [ -z "$pids" ] && return 0
+  kill $pids 2>/dev/null || true
+  sleep 1
+  pids="$(lsof -ti "tcp:${port}" -sTCP:LISTEN 2>/dev/null || true)"
+  [ -n "$pids" ] && kill -9 $pids 2>/dev/null || true
+  return 0
+}
+
 stop_host() {
-  pkill -f 'uvicorn api\.main:app' 2>/dev/null && say "stopped api" || true
-  pkill -f 'next dev' 2>/dev/null && say "stopped ui" || true
+  # API: match the uvicorn cmdline, then make sure :8000 is actually free.
+  pkill -f 'uvicorn api\.main:app' 2>/dev/null || true
+  free_port 8000 && say "stopped api" || true
+
+  # UI: kill THIS repo's Next dev launcher (repo-scoped path, so we never touch
+  # another project's dev server), then free :3000 — the detached 'next-server'
+  # child that actually holds the port does NOT contain 'next dev' in its
+  # cmdline, which is why 'pkill -f "next dev"' left stale servers behind.
+  pkill -f "$PWD/ui/node_modules/.bin/next" 2>/dev/null || true
+  free_port 3000 && say "stopped ui" || true
 }
 
 if [ "$MODE" = "stop" ]; then
@@ -79,26 +104,22 @@ if ! docker ps --format '{{.Names}}' | grep -q '^km2_worker_fixed$'; then
   }
 fi
 
-# --- 4. host API (uvicorn) ----------------------------------------------------
-if [ "$MODE" = "restart" ]; then stop_host; sleep 1; fi
-if api_up; then
-  say "api already running on :8000"
-else
-  say "api…"
-  # 0.0.0.0 so the worker container can reach status callbacks via the docker
-  # gateway. Dev-only trade-off: the API is reachable on your LAN.
-  setsid nohup .venv/bin/uvicorn api.main:app \
-    --env-file "$ENV_HOST" --host 0.0.0.0 --port 8000 \
-    --app-dir services/api/src >"$API_LOG" 2>&1 </dev/null &
-fi
+# --- 4. host processes (uvicorn API + next dev UI) ----------------------------
+# Always kill any existing host API/UI first so a stale process can't linger.
+say "stopping any existing host api/ui…"
+stop_host
+sleep 1
+
+say "api…"
+# 0.0.0.0 so the worker container can reach status callbacks via the docker
+# gateway. Dev-only trade-off: the API is reachable on your LAN.
+setsid nohup .venv/bin/uvicorn api.main:app \
+  --env-file "$ENV_HOST" --host 0.0.0.0 --port 8000 \
+  --app-dir services/api/src >"$API_LOG" 2>&1 </dev/null &
 
 # --- 5. UI (next dev) ----------------------------------------------------------
-if ui_up; then
-  say "ui already running on :3000"
-else
-  say "ui…"
-  (cd ui && setsid nohup npm run dev >"$UI_LOG" 2>&1 </dev/null &)
-fi
+say "ui…"
+(cd ui && setsid nohup npm run dev >"$UI_LOG" 2>&1 </dev/null &)
 
 # --- 6. wait + report -----------------------------------------------------------
 say "waiting for health…"
