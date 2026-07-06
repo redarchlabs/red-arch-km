@@ -15,15 +15,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.config import get_settings
 from api.db import dispose_engine, get_engine, get_session_factory
 from api.dependencies import close_redis_client, get_redis_client
+from api.exception_handlers import make_unhandled_exception_handler
 from api.middleware.request_logging import RequestLoggingMiddleware
 from api.observability import setup_observability
 from api.routers import (
     admin,
+    agent,
     attributes,
     auth,
     chat,
     dimensions,
     documents,
+    entity_definitions,
+    entity_records,
     folders,
     health,
     internal,
@@ -33,6 +37,7 @@ from api.routers import (
     setup,
     tags,
     users,
+    workflows,
 )
 from api.services.setup_token import ensure_setup_token
 
@@ -120,6 +125,13 @@ def create_app() -> FastAPI:
     )
     app.add_middleware(RequestLoggingMiddleware)
 
+    # ServerErrorMiddleware sits above CORSMiddleware, so an unhandled 500 would
+    # otherwise reach the browser without CORS headers (surfacing as a bare
+    # "Network Error"). Re-attach them here so cross-origin callers see the 500.
+    app.add_exception_handler(
+        Exception, make_unhandled_exception_handler(settings.cors_origins)
+    )
+
     # Observability must be wired here (before startup). Starlette forbids
     # adding middleware once the app enters the lifespan context, and the
     # Prometheus instrumentator installs middleware under the hood.
@@ -142,6 +154,12 @@ def create_app() -> FastAPI:
     app.include_router(dimensions.router, prefix="/api/dimensions", tags=["dimensions"])
     app.include_router(memberships.router, prefix="/api/memberships", tags=["memberships"])
     app.include_router(attributes.router, prefix="/api/attributes", tags=["attributes"])
+    app.include_router(
+        entity_definitions.router, prefix="/api/entity-definitions", tags=["custom-entities"]
+    )
+    app.include_router(entity_records.router, prefix="/api/entities", tags=["custom-entities"])
+    app.include_router(workflows.router, prefix="/api/workflows", tags=["workflows"])
+    app.include_router(agent.router, prefix="/api/agent", tags=["agent"])
     app.include_router(internal.router, prefix="/api/internal", tags=["internal"])
     app.include_router(setup.router, prefix="/api/setup", tags=["setup"])
     app.include_router(admin.router, prefix="/api/admin", tags=["admin"])

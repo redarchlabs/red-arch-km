@@ -1,6 +1,6 @@
 "use client";
 
-import { FileText, FolderTree, Globe, MessageCircle, Search, Shield } from "lucide-react";
+import { Database, FileText, FolderTree, Globe, MessageCircle, Search, Shield, Workflow } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -19,6 +19,8 @@ interface NavItem {
 const NAV_ITEMS: NavItem[] = [
   { href: "/folders", label: "Resources", icon: FolderTree },
   { href: "/documents/search", label: "Search", icon: Search },
+  { href: "/entities", label: "Entities", icon: Database },
+  { href: "/workflows", label: "Workflows", icon: Workflow },
   { href: "/chat", label: "Chat", icon: MessageCircle },
   { href: "/admin", label: "Admin", icon: Shield, requiresSiteAdmin: true },
   { href: "/site-admin", label: "Site Admin", icon: Globe, requiresSiteAdmin: true },
