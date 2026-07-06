@@ -1,13 +1,14 @@
 "use client";
 
 import DOMPurify from "dompurify";
-import { ArrowLeft, BookOpen, Trash2 } from "lucide-react";
+import { ArrowLeft, BookOpen, Pencil, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 
 import { Markdown } from "@/components/common/Markdown";
 import { DocumentReader } from "@/components/documents/DocumentReader";
+import { MarkdownEditor } from "@/components/documents/MarkdownEditor";
 import { SummaryTree } from "@/components/documents/SummaryTree";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -45,6 +46,7 @@ export default function DocumentDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [readerOpen, setReaderOpen] = useState(false);
+  const [editorOpen, setEditorOpen] = useState(false);
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -156,6 +158,12 @@ export default function DocumentDetailPage() {
             <BookOpen className="h-4 w-4" />
             Read document
           </Button>
+          {content?.kind === "markdown" || content?.kind === "text" ? (
+            <Button variant="outline" onClick={() => setEditorOpen(true)}>
+              <Pencil className="h-4 w-4" />
+              Edit
+            </Button>
+          ) : null}
           <Button variant="destructive" onClick={handleDelete} disabled={deleting}>
             <Trash2 className="h-4 w-4" />
             {deleting ? "Deleting…" : "Delete"}
@@ -170,6 +178,16 @@ export default function DocumentDetailPage() {
         open={readerOpen}
         onClose={() => setReaderOpen(false)}
       />
+
+      {editorOpen ? (
+        <MarkdownEditor
+          open
+          documentId={doc.id}
+          initialTitle={doc.title}
+          onClose={() => setEditorOpen(false)}
+          onSaved={() => void load()}
+        />
+      ) : null}
 
       {content?.content ? (
         <Card>
