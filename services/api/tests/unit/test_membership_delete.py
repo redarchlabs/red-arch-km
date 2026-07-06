@@ -62,7 +62,7 @@ def _patch_repo(
     async def _get(self: Any, membership_id: uuid.UUID) -> Any:
         return membership
 
-    async def _count(self: Any, org_id: uuid.UUID) -> int:
+    async def _count(self: Any) -> int:
         return org_admin_count
 
     async def _delete(self: Any, membership_id: uuid.UUID) -> bool:

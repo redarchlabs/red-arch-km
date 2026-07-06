@@ -104,6 +104,16 @@ def task_extract_and_ingest(self: Any, data: dict[str, Any]) -> dict[str, Any]:
         )
         return {"status": "failed", "document_key": document_key, "error": "empty extraction"}
 
+    # Legacy .doc can't be re-parsed on demand by the API (antiword lives only
+    # in the worker), so persist the extracted text as a sidecar for the reader.
+    if filename.lower().endswith(".doc"):
+        try:
+            StorageClient(settings).put_object(
+                f"{object_key}.extracted.txt", text.encode("utf-8"), "text/plain"
+            )
+        except Exception:
+            logger.warning("Failed to store .doc text sidecar for %s", document_key)
+
     # --- Brain ingest (text-only payload; brain contract unchanged) ---
     brain_payload = {
         "document_id": document_id,

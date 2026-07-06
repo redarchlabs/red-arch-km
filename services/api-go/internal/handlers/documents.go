@@ -156,8 +156,10 @@ func (h *DocumentHandler) ListDocuments(w http.ResponseWriter, r *http.Request) 
 
 	queries := repository.New(tenantConn)
 
-	// Get visible folders based on permissions
-	folders, err := queries.ListFolders(ctx, repository.ListFoldersParams{
+	// Get visible folders based on permissions. Filtered by org_id explicitly
+	// (defense in depth) rather than relying solely on RLS.
+	folders, err := queries.ListFoldersForOrg(ctx, repository.ListFoldersForOrgParams{
+		OrgID:  ToPgUUID(orgID),
 		Limit:  int32(10000),
 		Offset: 0,
 	})

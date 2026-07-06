@@ -51,10 +51,13 @@ async def get_db(
     Use this for endpoints that don't need org scoping (e.g. /api/auth/me,
     /healthz, site-admin operations that span orgs).
 
-    NOTE: cross-org reads of RLS-forced tables (user_org_memberships) on this
-    session assume the runtime DB role bypasses RLS (superuser/BYPASSRLS, as
-    in the shipped compose files). Under a restricted role they fail closed
-    to empty results. See docs/DATABASE.md.
+    Unlike get_tenant_db, this session stays on the privileged connection role
+    (superuser/BYPASSRLS, as in the shipped compose files) and does NOT drop to
+    app_user. That is intentional: cross-org reads of RLS-forced tables
+    (e.g. user_org_memberships in require_org_access) must bypass RLS. Under a
+    restricted role those reads would fail closed to empty results. Tenant-scoped
+    requests go through get_tenant_db instead, which drops to app_user so RLS is
+    enforced. See docs/DATABASE.md.
     """
     factory = get_session_factory(settings)
     async with factory() as session:
@@ -100,12 +103,28 @@ async def get_tenant_db(
 ) -> AsyncGenerator[AsyncSession]:
     """Provide an async session with RLS tenant context set.
 
-    Sets `app.current_tenant_id` on the session so PostgreSQL RLS policies
-    automatically scope all queries to the current org.
+    Two things happen inside the session's transaction:
+
+    1. `SET LOCAL ROLE app_user` drops off the privileged connection role
+       (superuser/BYPASSRLS) down to the non-superuser, non-BYPASSRLS `app_user`
+       role. RLS is bypassed for superusers/BYPASSRLS roles even under FORCE ROW
+       LEVEL SECURITY, so without this the tenant policies never enforce. This
+       mirrors the `SET ROLE app_user` used by the integration RLS harness
+       (tests/integration/conftest.py).
+    2. `set_config('app.current_tenant_id', ...)` sets the GUC the RLS policies
+       compare `org_id` against, scoping every query to the current org.
+
+    Both use transaction-local scope (`SET LOCAL` / is_local=true) so the pooled
+    connection is reset — role restored, GUC cleared — when the transaction ends.
+    The role requires migration 007 to have created `app_user` with grants.
     """
     factory = get_session_factory(settings)
     async with factory() as session:
         try:
+            # Drop to app_user first so RLS is enforced for everything that
+            # follows. SET LOCAL is transaction-scoped and auto-resets on
+            # commit/rollback, keeping pooled connections clean.
+            await session.execute(text("SET LOCAL ROLE app_user"))
             # set_config(name, value, is_local=true) supports bind parameters
             # where SET LOCAL does not. The transaction-local scope ensures
             # the setting is cleared when the session's transaction ends.

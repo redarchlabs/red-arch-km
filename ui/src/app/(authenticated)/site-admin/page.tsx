@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 
+import { CeleryMonitor } from "@/components/site-admin/CeleryMonitor";
 import { GlobalMembershipManager } from "@/components/site-admin/GlobalMembershipManager";
 import { OrgManager } from "@/components/site-admin/OrgManager";
 import { SystemStatus } from "@/components/site-admin/SystemStatus";
@@ -10,13 +11,14 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useOrg } from "@/context/OrgContext";
 import { cn } from "@/lib/utils";
 
-type SiteAdminTab = "orgs" | "users" | "memberships" | "system";
+type SiteAdminTab = "orgs" | "users" | "memberships" | "system" | "celery";
 
 const TABS: ReadonlyArray<{ key: SiteAdminTab; label: string }> = [
   { key: "orgs", label: "Organizations" },
   { key: "users", label: "Users" },
   { key: "memberships", label: "Memberships" },
   { key: "system", label: "System" },
+  { key: "celery", label: "Celery" },
 ];
 
 export default function SiteAdminPage() {
@@ -69,6 +71,7 @@ export default function SiteAdminPage() {
       {active === "users" ? <UserManager /> : null}
       {active === "memberships" ? <GlobalMembershipManager /> : null}
       {active === "system" ? <SystemStatus /> : null}
+      {active === "celery" ? <CeleryMonitor /> : null}
     </div>
   );
 }

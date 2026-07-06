@@ -34,6 +34,8 @@ def mock_stores() -> MagicMock:
     )
     stores.extractor = MagicMock()
     stores.extractor.extract.return_value = [("subject", "predicate", "object")]
+    # Default: fact engine off → the legacy triplet path is exercised here.
+    stores.settings.use_fact_engine = False
     return stores
 
 

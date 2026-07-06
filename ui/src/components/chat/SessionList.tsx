@@ -1,6 +1,6 @@
 "use client";
 
-import { MessageCircle, Plus } from "lucide-react";
+import { MessageCircle, Plus, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { formatDate } from "@/lib/format";
@@ -12,6 +12,9 @@ interface SessionListProps {
   activeId: string | null;
   onSelect: (id: string | null) => void;
   onNew: () => void;
+  onDelete: (id: string) => void;
+  /** Root className override so the list can render docked or inside a drawer. */
+  className?: string;
 }
 
 function previewFromSession(session: ChatSession): string {
@@ -20,9 +23,16 @@ function previewFromSession(session: ChatSession): string {
   return first?.content?.slice(0, 60) ?? "New conversation";
 }
 
-export function SessionList({ sessions, activeId, onSelect, onNew }: SessionListProps) {
+export function SessionList({
+  sessions,
+  activeId,
+  onSelect,
+  onNew,
+  onDelete,
+  className,
+}: SessionListProps) {
   return (
-    <aside className="flex w-64 flex-col border-r">
+    <aside className={cn("flex w-64 flex-col border-r", className)}>
       <div className="p-3">
         <Button onClick={onNew} className="w-full justify-start" variant="outline">
           <Plus className="h-4 w-4" />
@@ -36,28 +46,42 @@ export function SessionList({ sessions, activeId, onSelect, onNew }: SessionList
           <ul className="space-y-1">
             {sessions.map((session) => {
               const active = session.id === activeId;
+              const preview = previewFromSession(session);
               return (
                 <li key={session.id}>
-                  <button
-                    type="button"
-                    onClick={() => onSelect(session.id)}
+                  {/* Row is a container (not a <button>) so the delete control
+                      can be a sibling button — nesting buttons is invalid. */}
+                  <div
                     className={cn(
-                      "flex w-full items-start gap-2 rounded-md px-2 py-2 text-left text-sm transition-colors",
+                      "group flex items-start gap-2 rounded-md px-2 py-2 text-sm transition-colors",
                       active
                         ? "bg-accent text-accent-foreground"
                         : "hover:bg-accent/50 text-muted-foreground",
                     )}
                   >
-                    <MessageCircle className="mt-0.5 h-4 w-4 shrink-0" />
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate font-medium text-foreground">
-                        {previewFromSession(session)}
-                      </p>
-                      <p className="truncate text-xs text-muted-foreground">
-                        {formatDate(session.updated_at)}
-                      </p>
-                    </div>
-                  </button>
+                    <button
+                      type="button"
+                      onClick={() => onSelect(session.id)}
+                      className="flex min-w-0 flex-1 items-start gap-2 text-left"
+                    >
+                      <MessageCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate font-medium text-foreground">{preview}</p>
+                        <p className="truncate text-xs text-muted-foreground">
+                          {formatDate(session.updated_at)}
+                        </p>
+                      </div>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onDelete(session.id)}
+                      aria-label={`Delete conversation: ${preview}`}
+                      title="Delete conversation"
+                      className="mt-0.5 shrink-0 rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring group-hover:opacity-100"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
                 </li>
               );
             })}

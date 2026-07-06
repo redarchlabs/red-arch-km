@@ -31,6 +31,14 @@ _RLS_TABLES = [
     "document_attribute_definitions",
     "chat_sessions",
     "user_org_memberships",
+    "entity_definitions",
+    "entity_fields",
+    "entity_relationships",
+    "workflows",
+    "workflow_versions",
+    "workflow_outbox",
+    "workflow_runs",
+    "workflow_run_steps",
 ]
 
 
@@ -111,6 +119,10 @@ async def engine(database_url: str) -> AsyncGenerator[AsyncEngine]:
     await _ensure_app_user_role(engine)
 
     async with engine.begin() as conn:
+        # Migration 010 enables this in real deployments; the test schema is
+        # built with create_all (no migrations), so provision it here too. It
+        # backs the trigram indexes SchemaManager creates for record search.
+        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
         await conn.run_sync(Base.metadata.create_all)
 
     await _enable_rls(engine)
@@ -141,8 +153,17 @@ async def session(engine: AsyncEngine) -> AsyncGenerator[AsyncSession]:
 
 @pytest_asyncio.fixture
 async def admin_session(engine: AsyncEngine) -> AsyncGenerator[AsyncSession]:
-    """A second session used for seeding, independent of the test session."""
+    """A privileged seeding session, independent of the enforcement session.
+
+    ``RESET ROLE`` guarantees this session runs as the superuser login role even
+    if a pooled connection was left as ``app_user`` by a prior enforcement
+    ``session`` (``SET ROLE app_user`` is not undone by rollback). Without this,
+    a leaked role turns admin_session into an RLS-enforced session with no tenant
+    context — reads silently return empty, ordering-dependent. This mirrors the
+    privileged ``get_db`` connection used in production for DDL/cross-org work.
+    """
     factory = async_sessionmaker(engine, expire_on_commit=False)
     async with factory() as session:
+        await session.execute(text("RESET ROLE"))
         yield session
         await session.rollback()

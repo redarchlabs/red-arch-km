@@ -48,3 +48,25 @@ class ChatResponse(BaseModel):
     answer: str
     sources: list[dict[str, Any]]
     graph_context: list[dict[str, Any]] = []
+
+
+class AgentChatRequest(BaseModel):
+    """Request for the agentic (fact-engine) chat path."""
+
+    query: str = Field(min_length=1, max_length=5000)
+    chat_history: list[dict[str, str]] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+    folder_ids: list[uuid.UUID] = Field(
+        default_factory=list,
+        description="Scope the query to these folders (ORed). Translated to folder:<id> tags.",
+    )
+
+
+class AgentChatResponse(BaseModel):
+    """Non-streaming agentic answer with grounding metadata."""
+
+    answer: str
+    citations: list[str] = []
+    unsupported_citations: list[str] = []
+    evidence: list[dict[str, Any]] = []
+    iterations: int = 0

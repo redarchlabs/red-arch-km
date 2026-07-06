@@ -8,6 +8,93 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Knowledge engine, custom entities, workflow automation, intake forms, and tenant hardening (Slices 1, 5–7)
+
+Marks the completion of **5 major slices** adding enterprise automation and knowledge-extraction capabilities:
+
+#### Knowledge Engine (Slice 1): Neo4j-backed fact store
+- **Reified-claim architecture** (`packages/brain_sdk/facts/`): tenant-scoped fact extraction and query via Neo4j
+  triplet store (design: [`docs/KNOWLEDGE_ENGINE.md`](docs/KNOWLEDGE_ENGINE.md)).
+- Extractors: `pipeline.py` (doc → triplets), `predicates.py` (filtering), `resolution.py` (dedup+merge).
+- Tenant labels on all nodes/rels so queries are org-isolated.
+
+#### Custom Entities (Slice 5): Dynamic, schema-driven records
+- **Entity definitions + DDL**: org admins define entities (name, fields, relationships) via
+  `POST /api/entity-definitions`; the API runs physical Postgres DDL to create `ce_<slug>` tables
+  matching the schema on the fly. Catalog: `entity_definitions`, `entity_fields`, `entity_relationships`.
+- **Entity records CRUD**: `GET/POST /api/entities/{slug}/records` with **keyset (cursor) pagination** for scalability.
+  Cursor is an opaque, URL-safe token encoding `(created_at, id)` position; no OFFSET. Search via `?q=text`.
+- **Identifier safety**: `services/identifiers.py` validates slugs for SQL injection & Postgres reserved words.
+- **RLS enforcement**: record access scoped by org via RLS + explicit `org_id` filtering; any org member can CRUD.
+- **Schema DDL service**: `services/schema_manager.py` safely runs CREATE TABLE with type coercion, FK validation.
+
+#### Workflow Automation (Slices 5–6): Visual workflow engine with polling-based dispatch
+- **Workflow authoring**: `POST /api/workflows/{id}` create, `/versions` save drafts, `/versions/{vid}/publish` go live.
+  Versions are immutable once published (DB trigger). Workflows are tied to an entity definition.
+- **Triggers**: `on_record_change` (create/update/delete events from entity operations); `on_form_submission` (intake-form
+  link completed). Conditions evaluated against record snapshots.
+- **Actions**: `update_record_field`, `create_record`, `send_email` (HTML template, recipient validated),
+  `send_webhook` (allowlisted hosts), `send_form` (mint intake-form link).
+- **Execution model**: 
+  - **Outbox**: entity record changes written to `workflow_outbox` in the same transaction (at-least-once semantics).
+  - **Dispatch**: Celery beat sweeps `workflow_outbox` for pending events (`/api/internal/workflows/dispatch-batch`);
+    dispatcher claims with `FOR UPDATE SKIP LOCKED` (exactly-once per event); per-event RLS role downgrade so actions
+    write as `app_user` scoped to the event's org.
+  - **Timers**: `POST /api/internal/workflows/run-timers` resumes delayed runs and fires due scheduled workflows.
+- **Manual run**: `POST /api/workflows/{id}/run` executes the published version against provided inputs, gated by
+  `run_permission` (org_admin only by default; widened to any_member or roles/groups).
+  - Security: **record ownership validated**; **side-effecting actions rejected on free-form data** (email/webhook
+    require a real record).
+- **Partitioned tables**: `workflow_runs` + `workflow_run_steps` are RANGE-partitioned by `created_at` with
+  month boundaries; `workflow_ensure_partitions(months_ahead)` pre-creates upcoming partitions (idempotent PL/pgSQL fn).
+  Default partition catches any off-schedule inserts.
+- **Monitoring**: `GET /api/workflows/{id}/runs` + `GET /workflows/runs/{run_id}/steps` list executions and steps.
+
+#### Intake Forms (Slice 6): Public, token-linked forms
+- **Form definition**: `POST /api/forms` create, `PATCH` update, `DELETE` remove. Tied to an entity. Config (JSON) defines
+  field mappings and behavior.
+- **Link generation**: `POST /api/forms/{id}/links` with optional recipient email + expiry. Returns an opaque **SHA-256-hashed
+  token** + a public URL (Mailpit for dev, real SMTP in production).
+- **Public submission**: `GET /api/public/forms/{token}` render (resolves org from token on privileged session before any RLS),
+  `POST /api/public/forms/{token}` submit (single-use, checks expiry + status). On success, **triggers a workflow** (if
+  `on_form_submission` rule exists) or updates the target entity record directly.
+- **Email delivery**: SMTP configurable; template HTML-escaped for safety.
+- **Token security**: hashed for lookup (public path resolves org from hash, then RLS-scoped); single-use (status transitions
+  `pending → submitted` or `expired`/`revoked`).
+
+#### In-API Tool-Calling Agent (Slice 7 enhancement)
+- `POST /api/agent/chat/stream` — org-admin-gated SSE endpoint running OpenAI function calling in-process.
+- Tools: `create_entity`, `update_entity_field`, etc. (mutates entity definitions).
+- Org's per-stored OpenAI key decrypted on each request; falls back to central key if not set.
+- Short-lived sessions per tool call (no connection pool saturation); tool commits are atomic.
+
+#### Tenant Isolation Hardening
+- **RLS + explicit org_id filtering** (defense in depth): repositories filter every query by `org_id` AND RLS policies
+  on the tenant role (`app_user`). Privileged (BYPASSRLS) sessions used only for cross-org operations (site-admin,
+  setup token, token hash → org resolution).
+- **Per-org OpenAI key encryption at rest** (migration 016): `Org.openai_api_key` stored encrypted with Fernet
+  (symmetric, `ORG_ENCRYPTION_KEY` config); decrypted only for worker consumption via internal endpoint.
+- **Workflow dispatcher exactly-once**: claim via `FOR UPDATE SKIP LOCKED` on resume; pg_advisory_lock on scheduled workflows.
+
+#### Per-Document Permissions (Slice 7 prerequisite)
+- **Columns added** (migration 015): `documents.view_permission_masks`, `documents.contributor_permission_masks`,
+  `documents.viewer_permissions_config`, `documents.contributor_permissions_config`.
+- **Precedence**: per-document config + masks override folder config if set; NULL = inherit from folder (existing behavior).
+- Feed access-key resolution in `brain-api` so retrieval filters by document permissions.
+
+#### New Migrations (011–016)
+- **011**: `forms` + `form_links` tables (intake-form catalog + token history).
+- **012**: `workflows.run_permission` JSONB column (mode + roles/groups allowlist).
+- **013**: `workflow_outbox.source` column (trigger source: `record_change` or `form_submission`).
+- **014**: `workflow_runs.delay_until` + resumption logic (scheduled/delayed runs).
+- **015**: Per-document permission columns (precedence over folder).
+- **016**: Encrypt existing `orgs.openai_api_key` rows at rest; add `ORG_ENCRYPTION_KEY` env var.
+
+#### Security: OpenAI Key Encryption + HTTPS Validation
+- Per-org OpenAI keys are encrypted at rest (Fernet symmetric); decrypted only when needed (worker consumption).
+- Workflow webhooks: allowlist validation (SSRF guard); recipient email + form link expiry validated.
+- Internal API key comparison: constant-time (`hmac.compare_digest`).
+
 ### Added — File upload + OCR ingestion, folder browsing, document feedback (v1 parity)
 
 Closes a set of gaps between Knowledge Manager v1 and v2 where the ingest,

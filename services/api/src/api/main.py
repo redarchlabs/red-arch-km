@@ -15,16 +15,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.config import get_settings
 from api.db import dispose_engine, get_engine, get_session_factory
 from api.dependencies import close_redis_client, get_redis_client
+from api.exception_handlers import make_unhandled_exception_handler
 from api.middleware.request_logging import RequestLoggingMiddleware
 from api.observability import setup_observability
 from api.routers import (
     admin,
+    agent,
     attributes,
     auth,
     chat,
     dimensions,
     documents,
+    entity_definitions,
+    entity_records,
     folders,
+    forms,
     health,
     internal,
     memberships,
@@ -33,6 +38,7 @@ from api.routers import (
     setup,
     tags,
     users,
+    workflows,
 )
 from api.services.setup_token import ensure_setup_token
 
@@ -89,12 +95,12 @@ async def _instance_has_orgs(session: AsyncSession) -> bool:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
-    logger.info("Starting Red Arch KM API")
+    logger.info("Starting Red Arch Knowledge Manager API")
     await _announce_setup_token_if_needed()
 
     yield
 
-    logger.info("Shutting down Red Arch KM API")
+    logger.info("Shutting down Red Arch Knowledge Manager API")
     await close_redis_client()
     await dispose_engine()
 
@@ -111,14 +117,38 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
+    # CORS: we send credentials (cookies / Authorization), so the browser
+    # forbids a wildcard origin in that mode and Starlette silently drops the
+    # ACAO header — fail loud instead. Also enumerate the methods/headers the API
+    # actually uses rather than "*", so a credentialed wildcard can never slip in.
+    if "*" in settings.cors_origins:
+        raise ValueError(
+            "cors_origins must be an explicit allow-list, never '*', because "
+            "allow_credentials=True is incompatible with a wildcard origin."
+        )
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
         allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
+        allow_headers=[
+            "Authorization",
+            "Content-Type",
+            "X-Org-ID",
+            "X-Request-ID",
+            "X-Test-User",
+            "X-Test-Secret",
+            "X-Internal-API-Key",
+        ],
     )
     app.add_middleware(RequestLoggingMiddleware)
+
+    # ServerErrorMiddleware sits above CORSMiddleware, so an unhandled 500 would
+    # otherwise reach the browser without CORS headers (surfacing as a bare
+    # "Network Error"). Re-attach them here so cross-origin callers see the 500.
+    app.add_exception_handler(
+        Exception, make_unhandled_exception_handler(settings.cors_origins)
+    )
 
     # Observability must be wired here (before startup). Starlette forbids
     # adding middleware once the app enters the lifespan context, and the
@@ -142,6 +172,15 @@ def create_app() -> FastAPI:
     app.include_router(dimensions.router, prefix="/api/dimensions", tags=["dimensions"])
     app.include_router(memberships.router, prefix="/api/memberships", tags=["memberships"])
     app.include_router(attributes.router, prefix="/api/attributes", tags=["attributes"])
+    app.include_router(
+        entity_definitions.router, prefix="/api/entity-definitions", tags=["custom-entities"]
+    )
+    app.include_router(entity_records.router, prefix="/api/entities", tags=["custom-entities"])
+    app.include_router(workflows.router, prefix="/api/workflows", tags=["workflows"])
+    app.include_router(forms.router, prefix="/api/forms", tags=["forms"])
+    # Public, unauthenticated form rendering + submission (org resolved from token).
+    app.include_router(forms.public_router, prefix="/api/public/forms", tags=["forms-public"])
+    app.include_router(agent.router, prefix="/api/agent", tags=["agent"])
     app.include_router(internal.router, prefix="/api/internal", tags=["internal"])
     app.include_router(setup.router, prefix="/api/setup", tags=["setup"])
     app.include_router(admin.router, prefix="/api/admin", tags=["admin"])

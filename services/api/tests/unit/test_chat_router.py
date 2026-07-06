@@ -12,7 +12,6 @@ from api.auth.dependencies import CurrentUser, OrgContext
 from api.config import Settings
 from api.models.chat import ChatSession
 from api.models.user import UserOrgMembership
-from api.schemas.chat import AskRequest
 
 
 @pytest.fixture
@@ -59,45 +58,8 @@ def mock_org_context(mock_user: CurrentUser, mock_membership: UserOrgMembership)
     )
 
 
-class TestAskEndpointValidation:
-    """Tests for Ask endpoint request validation."""
-
-    def test_ask_request_validates_query_min_length(self) -> None:
-        """Empty query should be rejected."""
-        with pytest.raises(ValueError):
-            AskRequest(query="")
-
-    def test_ask_request_validates_query_max_length(self) -> None:
-        """Query exceeding 5000 chars should be rejected."""
-        with pytest.raises(ValueError):
-            AskRequest(query="x" * 5001)
-
-    def test_ask_request_accepts_valid_query(self) -> None:
-        """Valid query should pass validation."""
-        request = AskRequest(query="What is the company policy?")
-        assert request.query == "What is the company policy?"
-        assert request.context_filters is None
-
-    def test_ask_request_with_context_filters(self) -> None:
-        """Request with context filters should be accepted."""
-        folder_id = uuid.uuid4()
-        tag_id = uuid.uuid4()
-        request = AskRequest(
-            query="Tell me about budgets",
-            context_filters={
-                "folder_ids": [folder_id],
-                "tag_ids": [tag_id],
-                "document_keys": ["doc-1"],
-            },
-        )
-        assert request.context_filters is not None
-        assert request.context_filters.folder_ids == [folder_id]
-        assert request.context_filters.tag_ids == [tag_id]
-        assert request.context_filters.document_keys == ["doc-1"]
-
-
-class TestAskEndpointSSEStreaming:
-    """Tests for SSE streaming behavior in Ask endpoint."""
+class TestSSEStreamFormat:
+    """Tests for the SSE event format used by the RAG chat stream."""
 
     def test_sse_event_parsing(self) -> None:
         """SSE events should be parseable from the stream format."""
@@ -166,8 +128,8 @@ class TestChatSessionOwnership:
         assert mock_chat is None or (mock_chat and mock_chat.user_id != user_id)
 
 
-class TestAskEndpointMessagePersistence:
-    """Tests for message persistence after streaming."""
+class TestMessagePersistenceFormat:
+    """Tests for the persisted user/assistant message structure."""
 
     def test_user_message_format(self) -> None:
         """User message should have correct structure."""

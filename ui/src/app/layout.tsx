@@ -1,5 +1,5 @@
 import { ClerkProvider } from "@clerk/nextjs";
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
 
 import { ThemedToaster } from "@/components/ThemedToaster";
@@ -11,6 +11,13 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "Red Arch Knowledge Management",
   description: "AI-powered enterprise knowledge management platform",
+};
+
+// Explicit viewport so mobile intent is self-documented. Never disables zoom
+// (no maximumScale/userScalable) — that would be an accessibility regression.
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
 };
 
 // Stamps data-theme on <html> BEFORE first paint so a stored dark/redarch

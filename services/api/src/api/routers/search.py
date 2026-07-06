@@ -16,6 +16,8 @@ from api.config import Settings, get_settings
 from api.dependencies import get_tenant_db
 from api.models.org import Org
 from api.schemas.search import (
+    AgentChatRequest,
+    AgentChatResponse,
     ChatRequest,
     ChatResponse,
     SearchRequest,
@@ -108,6 +110,69 @@ async def chat(
         answer=result.get("answer", ""),
         sources=result.get("sources", []),
         graph_context=result.get("graph_context", []),
+    )
+
+
+@router.post("/chat/agent", response_model=AgentChatResponse)
+async def agent_chat(
+    body: AgentChatRequest,
+    ctx: Annotated[OrgContext, Depends(require_org_access)],
+    session: Annotated[AsyncSession, Depends(get_tenant_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> AgentChatResponse:
+    """Agentic (fact-engine) chat — iterative tool loop, scoped to the user's access."""
+    access_keys = await _get_user_access_keys(session, ctx)
+
+    client = BrainAPIClient(settings)
+    result = await client.agent_ask(
+        tenant_id=str(ctx.org_id),
+        query=body.query,
+        chat_history=body.chat_history,
+        access_keys=access_keys,
+        tags=body.tags,
+    )
+    return AgentChatResponse(
+        answer=result.get("answer", ""),
+        citations=result.get("citations", []),
+        unsupported_citations=result.get("unsupported_citations", []),
+        evidence=result.get("evidence", []),
+        iterations=result.get("iterations", 0),
+    )
+
+
+@router.post("/chat/agent/stream")
+async def agent_chat_stream(
+    body: AgentChatRequest,
+    ctx: Annotated[OrgContext, Depends(require_org_access)],
+    session: Annotated[AsyncSession, Depends(get_tenant_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> StreamingResponse:
+    """Streaming agentic chat — proxies brain-api's agent SSE trace to the UI."""
+    access_keys = await _get_user_access_keys(session, ctx)
+    client = BrainAPIClient(settings)
+
+    async def iterator() -> AsyncIterator[bytes]:
+        try:
+            async for chunk in client.agent_ask_stream(
+                tenant_id=str(ctx.org_id),
+                query=body.query,
+                chat_history=body.chat_history,
+                access_keys=access_keys,
+                tags=body.tags,
+            ):
+                yield chunk
+        except Exception:
+            logger.exception("Agent chat stream failed")
+            yield b'data: {"type": "error", "message": "Stream failed"}\n\n'
+
+    return StreamingResponse(
+        iterator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 

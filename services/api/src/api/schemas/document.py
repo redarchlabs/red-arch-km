@@ -38,6 +38,21 @@ class DocumentUpdate(BaseModel):
     folder_id: uuid.UUID | None = None
     tag_ids: list[uuid.UUID] | None = None
     metadata: dict[str, Any] | None = None
+    # Per-document permissions (independent of the folder; default from folder
+    # at creation). Providing either recomputes that document's masks.
+    viewer_permissions_config: list[dict[str, Any]] | None = None
+    contributor_permissions_config: list[dict[str, Any]] | None = None
+
+
+class DocumentContentUpdate(BaseModel):
+    """Full-body replacement for a document's text (the Markdown editor).
+
+    Distinct from ``DocumentUpdate`` (metadata only): persisting new text
+    re-chunks and re-embeds the document, so it lives on its own endpoint. An
+    empty string clears the body (and skips re-ingestion).
+    """
+
+    text: str
 
 
 class DocumentRead(BaseModel):
@@ -51,6 +66,22 @@ class DocumentRead(BaseModel):
     folder_id: uuid.UUID | None
     org_id: uuid.UUID
     created_at: Any
+    size_bytes: int | None = None
+    viewer_permissions_config: list[dict[str, Any]] | None = None
+    contributor_permissions_config: list[dict[str, Any]] | None = None
+
+
+class UploadBatchRead(BaseModel):
+    """Result of expanding an uploaded ``.zip`` into per-file documents.
+
+    Distinguished from a single ``DocumentRead`` by the ``batch`` flag so the
+    client can tell the two upload outcomes apart.
+    """
+
+    batch: bool = True
+    created: int
+    skipped: list[str]
+    documents: list[DocumentRead]
 
 
 class FolderCreate(BaseModel):
@@ -77,6 +108,8 @@ class FolderUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
     description: str | None = None
     parent_id: uuid.UUID | None = None
+    viewer_permissions_config: list[dict[str, Any]] | None = None
+    contributor_permissions_config: list[dict[str, Any]] | None = None
 
     @field_validator("name")
     @classmethod
@@ -94,6 +127,9 @@ class FolderRead(BaseModel):
     dot_path: str
     order: int
     org_id: uuid.UUID
+    created_at: Any = None
+    viewer_permissions_config: list[dict[str, Any]] | None = None
+    contributor_permissions_config: list[dict[str, Any]] | None = None
 
 
 class TagCreate(BaseModel):

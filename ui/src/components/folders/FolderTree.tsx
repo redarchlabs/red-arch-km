@@ -1,73 +1,96 @@
 "use client";
 
-import { ChevronDown, ChevronRight, Folder as FolderIcon } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronRight,
+  Folder as FolderIcon,
+  FolderPlus,
+  MoreVertical,
+  Settings2,
+  Trash2,
+  Upload,
+} from "lucide-react";
 import Link from "next/link";
 import { useMemo, useState } from "react";
+import { List, type RowComponentProps } from "react-window";
 
+import { type MenuItem, useRowMenu } from "@/components/common/ActionMenu";
+import { DocumentUpload } from "@/components/documents/DocumentUpload";
+import { FolderCreate } from "@/components/folders/FolderCreate";
+import { FolderProperties } from "@/components/folders/FolderProperties";
 import { cn } from "@/lib/utils";
 import type { Folder } from "@/types";
+
+import { deleteEntry } from "./entryActions";
 
 interface FolderTreeProps {
   folders: Folder[];
   onMove: (folderId: string, newParentId: string | null) => void | Promise<void>;
+  /** Reload after a rename / permission change / delete / create / upload. */
+  onChanged: () => void;
+  /** Currently-selected folder (highlighted). */
+  selectedId?: string | null;
+  /** Called when a folder name is clicked — selects it (no navigation). */
+  onSelect?: (id: string) => void;
 }
 
-interface TreeNode {
+/** A folder flattened into the visible (expanded) list, with its tree depth. */
+interface FlatNode {
   folder: Folder;
-  children: TreeNode[];
+  depth: number;
+  hasChildren: boolean;
+  expanded: boolean;
 }
 
-function buildTree(folders: Folder[]): TreeNode[] {
-  const byParent = new Map<string | null, TreeNode[]>();
-  const nodes: Record<string, TreeNode> = {};
+const ROW_HEIGHT = 34;
+const MAX_LIST_HEIGHT = 640;
 
-  for (const folder of folders) {
-    nodes[folder.id] = { folder, children: [] };
-  }
-
-  for (const folder of folders) {
-    const key = folder.parent_id ?? null;
-    const bucket = byParent.get(key) ?? [];
-    bucket.push(nodes[folder.id]!);
-    byParent.set(key, bucket);
-  }
-
-  for (const node of Object.values(nodes)) {
-    node.children = (byParent.get(node.folder.id) ?? []).sort((a, b) =>
-      a.folder.name.localeCompare(b.folder.name),
-    );
-  }
-
-  // Root = folders whose parent is null OR whose parent isn't in the visible set
-  // (fallback handles the case where a user can see a folder but not its ancestor).
+/**
+ * Build the ordered list of currently-visible nodes (root → expanded children),
+ * so the virtualizer renders only what's on screen — this scales to thousands
+ * of folders without mounting them all.
+ */
+function flatten(folders: Folder[], expanded: Set<string>): FlatNode[] {
+  const childrenOf = new Map<string | null, Folder[]>();
   const visibleIds = new Set(folders.map((f) => f.id));
-  return folders
-    .filter((f) => f.parent_id === null || !visibleIds.has(f.parent_id))
-    .sort((a, b) => a.name.localeCompare(b.name))
-    .map((f) => nodes[f.id]!);
+  for (const f of folders) {
+    // Treat a folder whose parent isn't visible as a root (permission gaps).
+    const key = f.parent_id && visibleIds.has(f.parent_id) ? f.parent_id : null;
+    const bucket = childrenOf.get(key) ?? [];
+    bucket.push(f);
+    childrenOf.set(key, bucket);
+  }
+  for (const bucket of childrenOf.values()) {
+    bucket.sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  const out: FlatNode[] = [];
+  const walk = (parentKey: string | null, depth: number) => {
+    for (const folder of childrenOf.get(parentKey) ?? []) {
+      const hasChildren = (childrenOf.get(folder.id) ?? []).length > 0;
+      const isExpanded = expanded.has(folder.id);
+      out.push({ folder, depth, hasChildren, expanded: isExpanded });
+      if (hasChildren && isExpanded) walk(folder.id, depth + 1);
+    }
+  };
+  walk(null, 0);
+  return out;
 }
 
-export function FolderTree({ folders, onMove }: FolderTreeProps) {
-  const tree = useMemo(() => buildTree(folders), [folders]);
+type DialogState =
+  | { type: "properties"; folder: Folder }
+  | { type: "subfolder"; folder: Folder }
+  | { type: "upload"; folder: Folder }
+  | null;
+
+export function FolderTree({ folders, onMove, onChanged, selectedId, onSelect }: FolderTreeProps) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [dragOverId, setDragOverId] = useState<string | "__root__" | null>(null);
+  // Dialogs are hoisted here (not per-row) so they survive rows unmounting as
+  // the virtualized list scrolls.
+  const [dialog, setDialog] = useState<DialogState>(null);
 
-  /**
-   * Fast descendant check using the server-maintained dot_path prefix.
-   * Moving folder A under any node whose dot_path is "A" or starts with
-   * "A." would create a cycle; the server rejects this, but we also
-   * short-circuit here so the user gets immediate feedback instead of
-   * a round-trip failure.
-   */
-  const isDescendantOf = (candidateId: string, ancestorId: string): boolean => {
-    const ancestor = folders.find((f) => f.id === ancestorId);
-    const candidate = folders.find((f) => f.id === candidateId);
-    if (!ancestor || !candidate) return false;
-    const prefix = ancestor.dot_path;
-    return (
-      candidate.dot_path === prefix || candidate.dot_path.startsWith(`${prefix}.`)
-    );
-  };
+  const visible = useMemo(() => flatten(folders, expanded), [folders, expanded]);
 
   const toggle = (id: string) =>
     setExpanded((prev) => {
@@ -77,161 +100,230 @@ export function FolderTree({ folders, onMove }: FolderTreeProps) {
       return next;
     });
 
-  const handleDragStart = (e: React.DragEvent, folderId: string) => {
-    e.dataTransfer.setData("application/x-folder-id", folderId);
-    e.dataTransfer.effectAllowed = "move";
+  const isDescendantOf = (candidateId: string, ancestorId: string): boolean => {
+    const ancestor = folders.find((f) => f.id === ancestorId);
+    const candidate = folders.find((f) => f.id === candidateId);
+    if (!ancestor || !candidate) return false;
+    const prefix = ancestor.dot_path;
+    return candidate.dot_path === prefix || candidate.dot_path.startsWith(`${prefix}.`);
   };
 
-  const handleDragOver = (e: React.DragEvent, targetId: string | "__root__") => {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = "move";
-    setDragOverId(targetId);
-  };
-
-  const handleDragLeave = () => setDragOverId(null);
-
-  const handleDrop = async (e: React.DragEvent, targetId: string | null) => {
-    e.preventDefault();
-    setDragOverId(null);
-    const draggedId = e.dataTransfer.getData("application/x-folder-id");
+  const handleDrop = async (draggedId: string, targetId: string | null) => {
     if (!draggedId || draggedId === targetId) return;
-    // Short-circuit cycle attempts client-side. The server also rejects.
     if (targetId !== null && isDescendantOf(targetId, draggedId)) return;
     await onMove(draggedId, targetId);
   };
 
-  if (tree.length === 0) {
+  // DOM onDrop can't await, so run the (async) move fire-and-forget with a
+  // defensive .catch — onMove already try/catches, this guards against any
+  // future throw becoming an unhandled rejection.
+  const handleDropSafe = (draggedId: string, targetId: string | null) => {
+    void handleDrop(draggedId, targetId).catch(() => {});
+  };
+
+  if (visible.length === 0) {
     return <p className="p-4 text-sm text-muted-foreground">No folders yet.</p>;
   }
 
+  const listHeight = Math.min(visible.length * ROW_HEIGHT, MAX_LIST_HEIGHT) + 8;
+
   return (
-    <div
-      onDragOver={(e) => handleDragOver(e, "__root__")}
-      onDragLeave={handleDragLeave}
-      onDrop={(e) => handleDrop(e, null)}
-      className={cn(
-        "rounded-md",
-        dragOverId === "__root__" && "ring-2 ring-primary ring-offset-2",
-      )}
-    >
-      <ul className="space-y-0.5 p-2">
-        {tree.map((node) => (
-          <TreeRow
-            key={node.folder.id}
-            node={node}
-            depth={0}
-            expanded={expanded}
-            dragOverId={dragOverId}
-            onToggle={toggle}
-            onDragStart={handleDragStart}
-            onDragOver={handleDragOver}
-            onDragLeave={handleDragLeave}
-            onDrop={handleDrop}
-          />
-        ))}
-      </ul>
-    </div>
+    <>
+      <div
+        onDragOver={(e) => {
+          e.preventDefault();
+          setDragOverId("__root__");
+        }}
+        onDragLeave={() => setDragOverId(null)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragOverId(null);
+          handleDropSafe(e.dataTransfer.getData("application/x-folder-id"), null);
+        }}
+        className={cn("rounded-md p-1", dragOverId === "__root__" && "ring-2 ring-primary ring-inset")}
+      >
+        <List
+          rowComponent={FolderRowComponent}
+          rowCount={visible.length}
+          rowHeight={ROW_HEIGHT}
+          rowProps={{
+            visible,
+            dragOverId,
+            selectedId: selectedId ?? null,
+            onSelect: onSelect ?? null,
+            onToggle: toggle,
+            onDragOverRow: setDragOverId,
+            onDropRow: handleDropSafe,
+            onAction: setDialog,
+            onDelete: (folder: Folder) => void deleteEntry("folder", folder.id, folder.name, onChanged),
+          }}
+          style={{ height: listHeight, width: "100%" }}
+        />
+      </div>
+
+      {dialog?.type === "properties" ? (
+        <FolderProperties
+          folder={dialog.folder}
+          open
+          onClose={() => setDialog(null)}
+          onSaved={onChanged}
+        />
+      ) : null}
+      {dialog?.type === "subfolder" ? (
+        <FolderCreate
+          open
+          folders={folders}
+          initialParentId={dialog.folder.id}
+          onClose={() => setDialog(null)}
+          onCreated={onChanged}
+        />
+      ) : null}
+      {dialog?.type === "upload" ? (
+        <DocumentUpload
+          open
+          defaultFolderId={dialog.folder.id}
+          onClose={() => setDialog(null)}
+          onCreated={onChanged}
+        />
+      ) : null}
+    </>
   );
 }
 
-interface TreeRowProps {
-  node: TreeNode;
-  depth: number;
-  expanded: Set<string>;
+interface FolderRowProps {
+  visible: FlatNode[];
   dragOverId: string | "__root__" | null;
+  selectedId: string | null;
+  onSelect: ((id: string) => void) | null;
   onToggle: (id: string) => void;
-  onDragStart: (e: React.DragEvent, folderId: string) => void;
-  onDragOver: (e: React.DragEvent, targetId: string | "__root__") => void;
-  onDragLeave: () => void;
-  onDrop: (e: React.DragEvent, targetId: string | null) => void;
+  onDragOverRow: (id: string | null) => void;
+  onDropRow: (draggedId: string, targetId: string | null) => void;
+  onAction: (d: DialogState) => void;
+  onDelete: (folder: Folder) => void;
 }
 
-function TreeRow({
-  node,
-  depth,
-  expanded,
+function FolderRowComponent({
+  index,
+  style,
+  visible,
   dragOverId,
+  selectedId,
+  onSelect,
   onToggle,
-  onDragStart,
-  onDragOver,
-  onDragLeave,
-  onDrop,
-}: TreeRowProps) {
-  const { folder, children } = node;
-  const isExpanded = expanded.has(folder.id);
-  const hasChildren = children.length > 0;
+  onDragOverRow,
+  onDropRow,
+  onAction,
+  onDelete,
+}: RowComponentProps<FolderRowProps>) {
+  const node = visible[index]!;
+  const { folder, depth, hasChildren, expanded } = node;
   const isDragTarget = dragOverId === folder.id;
+  const isSelected = selectedId === folder.id;
+
+  const items: MenuItem[] = [
+    {
+      label: "New subfolder",
+      icon: <FolderPlus className="h-4 w-4" />,
+      onSelect: () => onAction({ type: "subfolder", folder }),
+    },
+    {
+      label: "Upload document here",
+      icon: <Upload className="h-4 w-4" />,
+      onSelect: () => onAction({ type: "upload", folder }),
+    },
+    {
+      label: "Properties",
+      icon: <Settings2 className="h-4 w-4" />,
+      onSelect: () => onAction({ type: "properties", folder }),
+    },
+    {
+      label: "Delete",
+      icon: <Trash2 className="h-4 w-4" />,
+      destructive: true,
+      onSelect: () => onDelete(folder),
+    },
+  ];
+  const { open, menu } = useRowMenu(items);
 
   return (
-    <li>
+    <div style={style}>
       <div
         draggable
-        onDragStart={(e) => onDragStart(e, folder.id)}
+        onContextMenu={open}
+        onDragStart={(e) => {
+          e.dataTransfer.setData("application/x-folder-id", folder.id);
+          e.dataTransfer.effectAllowed = "move";
+        }}
         onDragOver={(e) => {
+          e.preventDefault();
           e.stopPropagation();
-          onDragOver(e, folder.id);
+          e.dataTransfer.dropEffect = "move";
+          onDragOverRow(folder.id);
         }}
-        onDragLeave={onDragLeave}
         onDrop={(e) => {
+          e.preventDefault();
           e.stopPropagation();
-          onDrop(e, folder.id);
+          onDropRow(e.dataTransfer.getData("application/x-folder-id"), folder.id);
         }}
-        style={{ paddingLeft: `${depth * 1.5 + 0.5}rem` }}
+        style={{ paddingLeft: `${depth * 1.25 + 0.5}rem` }}
         className={cn(
-          "flex cursor-grab items-center gap-2 rounded-md py-1.5 pr-2 text-sm transition-colors",
+          "group flex h-8 cursor-grab items-center gap-1.5 rounded-md pr-2 text-sm transition-colors",
           isDragTarget
             ? "bg-accent ring-2 ring-primary"
-            : "hover:bg-accent/60",
+            : isSelected
+              ? "bg-accent"
+              : "hover:bg-accent/60",
         )}
       >
         {hasChildren ? (
           <button
             type="button"
             onClick={() => onToggle(folder.id)}
-            aria-label={isExpanded ? "Collapse" : "Expand"}
-            className="flex h-5 w-5 items-center justify-center rounded hover:bg-accent"
+            aria-label={expanded ? "Collapse" : "Expand"}
+            className="flex h-5 w-5 shrink-0 items-center justify-center rounded hover:bg-accent"
           >
-            {isExpanded ? (
+            {expanded ? (
               <ChevronDown className="h-3.5 w-3.5" />
             ) : (
               <ChevronRight className="h-3.5 w-3.5" />
             )}
           </button>
         ) : (
-          <span className="inline-block h-5 w-5" aria-hidden />
+          <span className="inline-block h-5 w-5 shrink-0" aria-hidden />
         )}
-        <FolderIcon className="h-4 w-4 text-muted-foreground" />
-        {/* Click the name to browse the folder's documents; the row itself
-            stays draggable for reparenting. */}
-        <Link
-          href={`/folders/${folder.id}`}
-          draggable={false}
-          onClick={(e) => e.stopPropagation()}
-          className="font-medium hover:underline"
+        <FolderIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
+        {onSelect ? (
+          <button
+            type="button"
+            draggable={false}
+            onClick={(e) => {
+              e.stopPropagation();
+              onSelect(folder.id);
+            }}
+            className="truncate text-left font-medium hover:underline"
+          >
+            {folder.name}
+          </button>
+        ) : (
+          <Link
+            href={`/folders/${folder.id}`}
+            draggable={false}
+            onClick={(e) => e.stopPropagation()}
+            className="truncate font-medium hover:underline"
+          >
+            {folder.name}
+          </Link>
+        )}
+        <button
+          type="button"
+          aria-label="Folder actions"
+          onClick={open}
+          className="ml-auto shrink-0 rounded p-1 text-muted-foreground opacity-0 hover:bg-accent hover:text-foreground focus:opacity-100 group-hover:opacity-100"
         >
-          {folder.name}
-        </Link>
-        <span className="truncate font-mono text-xs text-muted-foreground">{folder.dot_path}</span>
+          <MoreVertical className="h-4 w-4" />
+        </button>
       </div>
-
-      {isExpanded && hasChildren ? (
-        <ul className="space-y-0.5">
-          {children.map((child) => (
-            <TreeRow
-              key={child.folder.id}
-              node={child}
-              depth={depth + 1}
-              expanded={expanded}
-              dragOverId={dragOverId}
-              onToggle={onToggle}
-              onDragStart={onDragStart}
-              onDragOver={onDragOver}
-              onDragLeave={onDragLeave}
-              onDrop={onDrop}
-            />
-          ))}
-        </ul>
-      ) : null}
-    </li>
+      {menu}
+    </div>
   );
 }

@@ -21,8 +21,12 @@ class ChatSession(Base, UUIDMixin, TimestampMixin):
 
     # Foreign keys
     org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True)
-    user_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("user_profiles.id", ondelete="SET NULL"), nullable=True
+    # A chat session is always owned by its creating user; there is no valid
+    # user-less session (list_for_user filters by user_id, so a NULL owner is
+    # unreachable). CASCADE removes a user's private conversations when their
+    # profile is deleted rather than orphaning them.
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("user_profiles.id", ondelete="CASCADE"), nullable=False
     )
 
     org: Mapped[Org] = relationship()

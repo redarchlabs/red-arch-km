@@ -10,7 +10,7 @@ from fastapi import FastAPI
 
 from brain_api.config import BrainAPISettings
 from brain_api.observability import setup_observability
-from brain_api.routers import health, ingest, rag, search
+from brain_api.routers import agent, health, ingest, rag, search
 from brain_api.stores import close_stores, get_stores
 
 logger = logging.getLogger(__name__)
@@ -28,6 +28,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         _ = stores.embedder
         _ = stores.vector
         _ = stores.graph
+        if stores.settings.use_fact_engine:
+            # Ensure the reified-claim schema (constraints + vector/fulltext
+            # indexes) so the agentic path is ready on first request.
+            stores.ensure_fact_schema()
+            logger.info("Fact engine enabled; schema ensured")
         logger.info("Brain API stores initialized")
     except Exception as e:
         logger.error("Failed to initialize brain-api stores: %s", e)
@@ -58,6 +63,7 @@ def create_app() -> FastAPI:
     app.include_router(ingest.router, prefix="/api", tags=["ingest"])
     app.include_router(search.router, prefix="/api", tags=["search"])
     app.include_router(rag.router, prefix="/api/v1", tags=["rag"])
+    app.include_router(agent.router, prefix="/api/v1", tags=["agent"])
 
     return app
 

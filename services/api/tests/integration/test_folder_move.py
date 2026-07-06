@@ -50,7 +50,7 @@ class TestFolderMove:
         await admin_session.commit()
 
         # Move a under x → expect "x.a", "x.a.b", "x.a.b.c"
-        await move_folder(admin_session, a, x.id)
+        await move_folder(admin_session, org.id, a, x.id)
         await admin_session.commit()
 
         # The subtree rewrite runs as raw SQL (bypassing the ORM), so cached
@@ -82,7 +82,7 @@ class TestFolderMove:
         await admin_session.commit()
 
         # Move b to root → new dot_path = "b"
-        await move_folder(admin_session, b, None)
+        await move_folder(admin_session, org.id, b, None)
         await admin_session.commit()
 
         refreshed = await admin_session.execute(
@@ -105,7 +105,7 @@ class TestFolderMove:
 
         # Attempt to move a under b — would create a cycle
         with pytest.raises(FolderCycleError):
-            await move_folder(admin_session, a, b.id)
+            await move_folder(admin_session, org.id, a, b.id)
 
     async def test_prefix_similar_names_not_affected(self, admin_session: AsyncSession) -> None:
         """Moving 'alpha' should not rewrite 'alpha2' (prefix match bug guard)."""
@@ -120,7 +120,7 @@ class TestFolderMove:
         target = await _make_folder(admin_session, name="target", org_id=org.id, dot_path="target")
         await admin_session.commit()
 
-        await move_folder(admin_session, alpha, target.id)
+        await move_folder(admin_session, org.id, alpha, target.id)
         await admin_session.commit()
 
         result = await admin_session.execute(

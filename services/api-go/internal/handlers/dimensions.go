@@ -186,7 +186,10 @@ func (h *DimensionHandler) ListRegions(w http.ResponseWriter, r *http.Request) {
 
 	queries := repository.New(tenantConn)
 
-	regions, err := queries.ListRegions(ctx, repository.ListRegionsParams{
+	// Filtered by org_id explicitly (defense in depth) rather than relying
+	// solely on RLS to scope the result set.
+	regions, err := queries.ListRegionsForOrg(ctx, repository.ListRegionsForOrgParams{
+		OrgID:  ToPgUUID(orgID),
 		Limit:  pagination.Limit(),
 		Offset: pagination.Offset(),
 	})
@@ -196,7 +199,7 @@ func (h *DimensionHandler) ListRegions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	total, err := queries.CountRegions(ctx)
+	total, err := queries.CountRegionsForOrg(ctx, ToPgUUID(orgID))
 	if err != nil {
 		slog.Error("count regions", "error", err)
 		httputil.InternalError(w, "")
@@ -464,7 +467,10 @@ func (h *DimensionHandler) ListDepartments(w http.ResponseWriter, r *http.Reques
 
 	queries := repository.New(tenantConn)
 
-	departments, err := queries.ListDepartments(ctx, repository.ListDepartmentsParams{
+	// Filtered by org_id explicitly (defense in depth) rather than relying
+	// solely on RLS to scope the result set.
+	departments, err := queries.ListDepartmentsForOrg(ctx, repository.ListDepartmentsForOrgParams{
+		OrgID:  ToPgUUID(orgID),
 		Limit:  pagination.Limit(),
 		Offset: pagination.Offset(),
 	})
@@ -474,7 +480,7 @@ func (h *DimensionHandler) ListDepartments(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	total, err := queries.CountDepartments(ctx)
+	total, err := queries.CountDepartmentsForOrg(ctx, ToPgUUID(orgID))
 	if err != nil {
 		slog.Error("count departments", "error", err)
 		httputil.InternalError(w, "")
@@ -742,7 +748,10 @@ func (h *DimensionHandler) ListRoles(w http.ResponseWriter, r *http.Request) {
 
 	queries := repository.New(tenantConn)
 
-	roles, err := queries.ListRoles(ctx, repository.ListRolesParams{
+	// Filtered by org_id explicitly (defense in depth) rather than relying
+	// solely on RLS to scope the result set.
+	roles, err := queries.ListRolesForOrg(ctx, repository.ListRolesForOrgParams{
+		OrgID:  ToPgUUID(orgID),
 		Limit:  pagination.Limit(),
 		Offset: pagination.Offset(),
 	})
@@ -752,7 +761,7 @@ func (h *DimensionHandler) ListRoles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	total, err := queries.CountRoles(ctx)
+	total, err := queries.CountRolesForOrg(ctx, ToPgUUID(orgID))
 	if err != nil {
 		slog.Error("count roles", "error", err)
 		httputil.InternalError(w, "")
@@ -1020,7 +1029,10 @@ func (h *DimensionHandler) ListGroups(w http.ResponseWriter, r *http.Request) {
 
 	queries := repository.New(tenantConn)
 
-	groups, err := queries.ListGroups(ctx, repository.ListGroupsParams{
+	// Filtered by org_id explicitly (defense in depth) rather than relying
+	// solely on RLS to scope the result set.
+	groups, err := queries.ListGroupsForOrg(ctx, repository.ListGroupsForOrgParams{
+		OrgID:  ToPgUUID(orgID),
 		Limit:  pagination.Limit(),
 		Offset: pagination.Offset(),
 	})
@@ -1030,7 +1042,7 @@ func (h *DimensionHandler) ListGroups(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	total, err := queries.CountGroups(ctx)
+	total, err := queries.CountGroupsForOrg(ctx, ToPgUUID(orgID))
 	if err != nil {
 		slog.Error("count groups", "error", err)
 		httputil.InternalError(w, "")

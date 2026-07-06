@@ -1,6 +1,6 @@
 # RBAC (Role-Based Access Control)
 
-Red Arch KM implements a fine-grained permission system using 32-bit access masks for efficient folder and document access control.
+Red Arch Knowledge Manager implements a fine-grained permission system using 32-bit access masks for efficient folder and document access control.
 
 ## Permission Hierarchy
 
@@ -204,12 +204,33 @@ folder.contributor_permission_masks = compile_permissions(
 
 ## Document Access
 
+### Per-Document Permission Overrides
+
+Documents can override their folder's permissions:
+
+1. **Folder permissions (default):** If a document has `viewer_permissions_config = null`, its access falls back to its folder's masks
+2. **Per-document override:** If a document has a non-null `viewer_permissions_config`, those masks are used instead of the folder's
+
+```json
+{
+  "viewer_permissions_config": {
+    "regions": ["North America"],
+    "departments": ["Engineering"],
+    "roles": [],
+    "groups": []
+  },
+  "view_permission_masks": [...]
+}
+```
+
+This allows fine-tuning access on a per-document basis without moving the document or creating nested folders.
+
 ### Inheritance
 
-Documents inherit access from their parent folder:
+Documents inherit access from their parent folder AT CREATION:
 
 1. Document created in folder
-2. Folder's view_permission_masks copied to document's access keys
+2. Folder's view_permission_masks copied to document's access keys (if no per-document override)
 3. Access keys passed to brain-api during ingestion
 4. Qdrant stores access keys in point payload
 
@@ -225,6 +246,76 @@ results = search(
 )
 # Only chunks with matching access keys returned
 ```
+
+## Workflow Run Permissions
+
+Workflows can be manually executed by users with specified permissions:
+
+### Run Permission Model
+
+The `workflows.run_permission` JSONB column defines who may manually run a workflow via `POST /api/workflows/{id}/run`:
+
+```json
+{
+  "mode": "org_admin"
+}
+```
+
+### Run Permission Modes
+
+| Mode | Description |
+|------|-------------|
+| `org_admin` | Only org admins (default) |
+| `any_member` | Any org member |
+| `specific_roles` | Only members with specified role_ids; includes `role_ids` list |
+| `specific_groups` | Only members of specified group_ids; includes `group_ids` list |
+
+### Examples
+
+```json
+{
+  "mode": "org_admin"
+}
+```
+
+```json
+{
+  "mode": "any_member"
+}
+```
+
+```json
+{
+  "mode": "specific_roles",
+  "role_ids": ["uuid-1", "uuid-2"]
+}
+```
+
+```json
+{
+  "mode": "specific_groups",
+  "group_ids": ["uuid-1", "uuid-2"]
+}
+```
+
+### Enforcement
+
+The `can_run(ctx, run_permission)` function checks membership:
+
+```python
+# User must be an org member
+# If mode = org_admin: user.is_org_admin must be True
+# If mode = any_member: any member passes
+# If mode = specific_roles: user's membership must include at least one role_id
+# If mode = specific_groups: user's membership must include at least one group_id
+```
+
+Org admins **always** have permission to run workflows, regardless of `run_permission` mode.
+
+### Custom Entity Access
+
+Users can CRUD records of custom entities if they have org access (any org member). Workflow automation triggers
+on record changes (create/update/delete) regardless of which user changed the record.
 
 ## API Authentication
 
@@ -288,3 +379,9 @@ X-Internal-API-Key: ${INTERNAL_API_KEY}
 3. **Key Rotation**: API keys should be rotated regularly via environment variables
 4. **Audit Logging**: Permission changes logged with user context
 5. **Token Expiry**: JWT tokens have limited lifetime (~60s); refresh handled automatically by Clerk SDK
+6. **Per-org Secret Encryption**: Per-org OpenAI API keys are encrypted at rest (Fernet symmetric encryption) using the `ORG_ENCRYPTION_KEY` configured in the environment. Decryption happens only when the secret is needed (e.g., worker consumption via internal API), and the decrypted value is **never** logged or cached beyond its immediate use.
+7. **Workflow Security**:
+   - Manual run execution: record ownership validated if `record_id` provided; side-effecting actions (email/webhook/form) rejected on free-form data
+   - Webhook delivery: targets validated against `WORKFLOW_WEBHOOK_ALLOWLIST` (SSRF guard)
+   - Dispatch: exactly-once claiming via `FOR UPDATE SKIP LOCKED`; pg_advisory_lock for scheduled workflows
+8. **Intake Form Security**: Links are single-use (token hashed, status transitions `pending → submitted`); optional expiry; email templating HTML-escaped

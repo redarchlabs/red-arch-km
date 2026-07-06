@@ -47,7 +47,7 @@ async def list_dimensions(
     pagination: Annotated[PaginationParams, Depends()],
 ) -> PaginatedResponse[DimensionRead]:
     model = _resolve_model(dimension)
-    repo = DimensionRepository(session, model)
+    repo = DimensionRepository(session, model, ctx.org_id)
     items, total = await repo.list_all(offset=pagination.offset, limit=pagination.page_size)
     return make_page([DimensionRead.model_validate(item) for item in items], total, pagination)
 
@@ -60,7 +60,7 @@ async def get_dimension(
     session: Annotated[AsyncSession, Depends(get_tenant_db)],
 ) -> DimensionRead:
     model = _resolve_model(dimension)
-    repo = DimensionRepository(session, model)
+    repo = DimensionRepository(session, model, ctx.org_id)
     instance = await repo.get(dimension_id)
     if instance is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
@@ -75,8 +75,8 @@ async def create_dimension(
     session: Annotated[AsyncSession, Depends(get_tenant_db)],
 ) -> DimensionRead:
     model = _resolve_model(dimension)
-    repo = DimensionRepository(session, model)
-    instance = await repo.create(name=body.name, description=body.description, org_id=ctx.org_id)
+    repo = DimensionRepository(session, model, ctx.org_id)
+    instance = await repo.create(name=body.name, description=body.description)
     return DimensionRead.model_validate(instance)
 
 
@@ -89,7 +89,7 @@ async def update_dimension(
     session: Annotated[AsyncSession, Depends(get_tenant_db)],
 ) -> DimensionRead:
     model = _resolve_model(dimension)
-    repo = DimensionRepository(session, model)
+    repo = DimensionRepository(session, model, ctx.org_id)
     instance = await repo.update(dimension_id, name=body.name, description=body.description)
     if instance is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
@@ -104,7 +104,7 @@ async def delete_dimension(
     session: Annotated[AsyncSession, Depends(get_tenant_db)],
 ) -> None:
     model = _resolve_model(dimension)
-    repo = DimensionRepository(session, model)
+    repo = DimensionRepository(session, model, ctx.org_id)
     deleted = await repo.delete(dimension_id)
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")

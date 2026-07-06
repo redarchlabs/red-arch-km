@@ -13,7 +13,7 @@ import logging
 import uuid
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,6 +24,7 @@ from api.db import get_session_factory
 from api.models.document import ProcessingStatus
 from api.models.org import Org
 from api.repositories.document import DocumentRepository
+from api.services.crypto import decrypt_secret
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -72,7 +73,7 @@ async def update_document_status(
     async with factory() as session:
         try:
             await _set_tenant(session, body.tenant_id)
-            repo = DocumentRepository(session)
+            repo = DocumentRepository(session, body.tenant_id)
             doc = await repo.update_status(document_id, status=body.status, details=body.details)
             if doc is None:
                 # RLS filtered it out, or it was deleted while processing.
@@ -108,10 +109,12 @@ async def get_org_openai_key(
 ) -> OrgOpenAIKey:
     """Return the per-org OpenAI key so the worker can use it for AI OCR.
 
-    The worker calls this (not the Celery payload) so the secret never rides
-    the broker. A null key tells the worker to fall back to the central
-    OPENAI_API_KEY. Uses a dedicated RLS-scoped session, mirroring the status
-    callback — the worker has no user JWT.
+    The worker (the only cross-service consumer) calls this — not the Celery
+    payload — so the secret never rides the broker. The key is stored encrypted
+    at rest (see services/crypto.py); we decrypt it here before returning. A null
+    key tells the worker to fall back to the central OPENAI_API_KEY. Uses a
+    dedicated RLS-scoped session, mirroring the status callback — the worker has
+    no user JWT. Never log the decrypted value.
     """
     factory = get_session_factory(settings)
     async with factory() as session:
@@ -123,11 +126,134 @@ async def get_org_openai_key(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Org not found",
             )
-        return OrgOpenAIKey(openai_api_key=org.openai_api_key)
+        stored = org.openai_api_key
+        plaintext = (
+            decrypt_secret(stored, settings.org_encryption_key.get_secret_value())
+            if stored
+            else None
+        )
+        return OrgOpenAIKey(openai_api_key=plaintext)
+
+
+class DispatchResult(BaseModel):
+    """Counters returned by a workflow dispatch sweep."""
+
+    events: int = 0
+    runs: int = 0
+    actions: int = 0
+    skipped: int = 0
+
+
+@router.post(
+    "/workflows/dispatch-batch",
+    dependencies=[Depends(require_internal_api_key)],
+    response_model=DispatchResult,
+)
+async def dispatch_workflows(
+    settings: Annotated[Settings, Depends(get_settings)],
+    limit: int = 100,
+) -> DispatchResult:
+    """Claim and process a batch of pending workflow-outbox events.
+
+    Runs on the privileged session (no tenant context) so the cross-org claim
+    (``FOR UPDATE SKIP LOCKED``) sees every tenant. The dispatcher then downgrades
+    to ``app_user`` + sets ``app.current_tenant_id`` PER EVENT (see
+    ``WorkflowDispatchService._enter_tenant``), so every action write is a real
+    RLS-enforced write scoped to that event's org — a privileged session is used
+    only for the cross-org claim, never for the per-tenant action writes.
+    """
+    from api.services.email import EmailSender
+    from api.services.workflow.dispatcher import WorkflowDispatchService
+
+    allowlist = tuple(getattr(settings, "workflow_webhook_allowlist", ()) or ())
+    factory = get_session_factory(settings)
+    async with factory() as session:
+        try:
+            service = WorkflowDispatchService(
+                session,
+                webhook_allowlist=allowlist,
+                public_base_url=settings.public_base_url,
+                email_sender=EmailSender(settings),
+            )
+            counters = await service.process_pending(limit=limit)
+            await session.commit()
+            return DispatchResult(**{k: counters.get(k, 0) for k in ("events", "runs", "actions", "skipped")})
+        except Exception:
+            await session.rollback()
+            logger.exception("workflow dispatch batch failed")
+            raise
+
+
+class TimerResult(BaseModel):
+    """Counters returned by a workflow run-timers sweep."""
+
+    resumed: int = 0
+    scheduled: int = 0
+    actions: int = 0
+
+
+@router.post(
+    "/workflows/run-timers",
+    dependencies=[Depends(require_internal_api_key)],
+    response_model=TimerResult,
+)
+async def run_workflow_timers(
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> TimerResult:
+    """Resume delayed runs that are due + fire due scheduled workflows.
+
+    Time-based work (unlike the change-driven outbox sweep): runs on the
+    privileged session so the cross-org scan/claim sees every tenant. As with
+    dispatch-batch, the dispatcher downgrades to ``app_user`` + the tenant GUC
+    per resumed run / per scheduled workflow, so each unit's writes are RLS-
+    enforced for that org rather than running privileged.
+    """
+    from api.services.email import EmailSender
+    from api.services.workflow.dispatcher import WorkflowDispatchService
+
+    allowlist = tuple(settings.workflow_webhook_allowlist or ())
+    factory = get_session_factory(settings)
+    async with factory() as session:
+        try:
+            service = WorkflowDispatchService(
+                session,
+                webhook_allowlist=allowlist,
+                public_base_url=settings.public_base_url,
+                email_sender=EmailSender(settings),
+            )
+            counters = await service.process_timers()
+            await session.commit()
+            return TimerResult(**{k: counters.get(k, 0) for k in ("resumed", "scheduled", "actions")})
+        except Exception:
+            await session.rollback()
+            logger.exception("workflow run-timers sweep failed")
+            raise
+
+
+@router.post(
+    "/workflows/maintain-partitions",
+    dependencies=[Depends(require_internal_api_key)],
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def maintain_partitions(
+    settings: Annotated[Settings, Depends(get_settings)],
+    months_ahead: Annotated[int, Query(ge=0, le=24)] = 2,
+) -> None:
+    """Pre-create upcoming month partitions for the workflow tables."""
+    factory = get_session_factory(settings)
+    async with factory() as session:
+        await session.execute(text("SELECT workflow_ensure_partitions(:m)"), {"m": months_ahead})
+        await session.commit()
 
 
 async def _set_tenant(session: AsyncSession, tenant_id: uuid.UUID) -> None:
-    """Scope the session to the given tenant for RLS enforcement."""
+    """Scope the session to the given tenant for RLS enforcement.
+
+    Mirrors get_tenant_db: drop to the non-superuser app_user role so RLS is
+    actually enforced (the connection role bypasses it otherwise), then set the
+    tenant GUC the policies compare against. Both are transaction-local.
+    """
+    await session.execute(text("SET LOCAL ROLE app_user"))
     await session.execute(
         text("SELECT set_config('app.current_tenant_id', :tid, true)"),
         {"tid": str(tenant_id)},

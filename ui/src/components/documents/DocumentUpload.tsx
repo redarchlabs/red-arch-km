@@ -144,19 +144,34 @@ export function DocumentUpload({ open, onClose, onCreated, defaultFolderId }: Do
     setSubmitting(true);
     try {
       if (mode === "file" && file) {
-        await uploadDocument({
+        const result = await uploadDocument({
           file,
           title: title.trim(),
           description: description || null,
           folder_id: folderId || null,
           translation_method: translationMethod,
         });
-        toast.success("File uploaded", {
-          description:
-            translationMethod === "ai"
-              ? "Extracting text with AI vision, then indexing…"
-              : "Running OCR, then indexing…",
-        });
+        if (/\.zip$/i.test(file.name)) {
+          // A .zip is expanded into one document per supported member.
+          const n = result.documents.length;
+          const skipped = result.skipped.length
+            ? ` ${result.skipped.length} unsupported file${result.skipped.length === 1 ? "" : "s"} skipped.`
+            : "";
+          toast.success(`Extracted ${n} file${n === 1 ? "" : "s"} from archive`, {
+            description: `Processing ${n} file${n === 1 ? "" : "s"}…${skipped}`,
+          });
+        } else {
+          // Text files (.md/.txt) are read directly — they never go through OCR
+          // or AI vision — so don't imply extraction is running for them.
+          const isPlainText = /\.(md|txt)$/i.test(file.name);
+          toast.success("File uploaded", {
+            description: isPlainText
+              ? "Indexing… it will show as processing until ready."
+              : translationMethod === "ai"
+                ? "Extracting text with AI vision, then indexing…"
+                : "Running OCR, then indexing…",
+          });
+        }
       } else {
         await createDocument({
           title: title.trim(),
@@ -375,7 +390,7 @@ export function DocumentUpload({ open, onClose, onCreated, defaultFolderId }: Do
                 <input
                   id="file"
                   type="file"
-                  accept=".pdf,.png,.jpg,.jpeg,.tif,.tiff,.bmp,.gif,.webp,.txt,.md"
+                  accept=".pdf,.png,.jpg,.jpeg,.tif,.tiff,.bmp,.gif,.webp,.txt,.md,.docx,.doc,.zip"
                   onChange={(e) => {
                     const f = e.target.files?.[0] ?? null;
                     setFile(f);
@@ -386,8 +401,9 @@ export function DocumentUpload({ open, onClose, onCreated, defaultFolderId }: Do
                   className="block w-full text-sm file:mr-3 file:rounded-md file:border file:border-input file:bg-transparent file:px-3 file:py-1.5 file:text-sm file:font-medium hover:file:bg-accent"
                 />
                 <p className="mt-1 text-xs text-muted-foreground">
-                  PDF, images (PNG/JPG/TIFF/…), or text. The original is stored, then
-                  chunked, embedded, and indexed.
+                  PDF, images (PNG/JPG/TIFF/…), Word (.docx/.doc), or text. The original is
+                  stored, then chunked, embedded, and indexed. A .zip is unpacked and each
+                  supported file inside is processed.
                 </p>
               </div>
 
