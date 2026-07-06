@@ -228,6 +228,13 @@ class Stores:
             for r in results
         ]
 
+    def search_passages(
+        self, query: str, *, limit: int, tenant_id: str, access_keys: tuple[int, ...] = ()
+    ) -> list[dict[str, Any]]:
+        """Public passage search (embed + Qdrant) — used to suggest documents to
+        re-extract for a knowledge gap."""
+        return self._search_passages(query, limit, tenant_id, access_keys)
+
     def make_digest_builder(self) -> DigestBuilder:
         """Construct a DigestBuilder for (re)building community summaries."""
         return DigestBuilder(self.fact_store, self.llm)

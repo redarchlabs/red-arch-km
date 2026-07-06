@@ -22,6 +22,7 @@ from typing import Any
 
 from neo4j import Driver, GraphDatabase, ManagedTransaction
 
+from brain_sdk.facts.gaps import GapStatus, KnowledgeGap
 from brain_sdk.facts.models import Claim, ClaimStatus, Entity, ObjectType, now_iso
 from brain_sdk.facts.predicates import PredicateNormalizer, PredicateRegistry
 from brain_sdk.facts.reconciliation import ReconcileAction, reconcile
@@ -30,6 +31,24 @@ from brain_sdk.facts.schema import SCHEMA_STATEMENTS, vector_index_statement
 logger = logging.getLogger(__name__)
 
 _LABEL_RE = re.compile(r"[^A-Za-z0-9_]")
+
+
+def _gap_props(gap: KnowledgeGap) -> dict[str, Any]:
+    """Flatten a KnowledgeGap to Neo4j-storable primitive properties."""
+    return {
+        "gap_id": gap.gap_id,
+        "tenant_id": gap.tenant_id,
+        "question": gap.question,
+        "dedup_key": gap.dedup_key,
+        "answer": gap.answer,
+        "tools_used": list(gap.tools_used),
+        "fact_rows": gap.fact_rows,
+        "occurrences": gap.occurrences,
+        "status": str(gap.status),
+        "created_at": gap.created_at,
+        "last_seen_at": gap.last_seen_at,
+        "resolved_at": gap.resolved_at,
+    }
 
 
 class Neo4jFactStore:
@@ -603,6 +622,96 @@ class Neo4jFactStore:
         if n:
             self._run(f"MATCH (n:{label}) DETACH DELETE n")
         logger.info("Deleted %d fact-store nodes for tenant %s", n, tenant_id)
+
+    # ---- knowledge gaps -------------------------------------------------
+
+    def record_gap(self, gap: KnowledgeGap) -> KnowledgeGap:
+        """Persist a gap, folding into an existing OPEN one with the same key.
+
+        Returns the stored gap (occurrences incremented + last_seen refreshed
+        when folded). Storage-agnostic dedup logic mirrors ``InMemoryGapLog``.
+        """
+        label = self._tenant_label(gap.tenant_id)
+        existing = self._run(
+            f"""
+            MATCH (g:KnowledgeGap:{label} {{dedup_key: $dedup_key, status: 'open'}})
+            RETURN g ORDER BY g.created_at ASC LIMIT 1
+            """,
+            dedup_key=gap.dedup_key,
+        )
+        if existing:
+            row = existing[0]["g"]
+            self._run(
+                f"""
+                MATCH (g:KnowledgeGap:{label} {{gap_id: $gap_id}})
+                SET g.occurrences = coalesce(g.occurrences, 1) + 1,
+                    g.last_seen_at = $last_seen_at,
+                    g.answer = $answer
+                """,
+                gap_id=row["gap_id"],
+                last_seen_at=gap.last_seen_at,
+                answer=gap.answer,
+            )
+            return self.get_gap(gap.tenant_id, row["gap_id"]) or gap
+        self._run(
+            f"""
+            MERGE (g:KnowledgeGap {{gap_id: $props.gap_id}})
+            ON CREATE SET g = $props, g:{label}
+            """,
+            props=_gap_props(gap),
+        )
+        return gap
+
+    def list_open_gaps(self, tenant_id: str, *, limit: int = 100) -> list[KnowledgeGap]:
+        label = self._tenant_label(tenant_id)
+        rows = self._run(
+            f"""
+            MATCH (g:KnowledgeGap:{label} {{status: 'open'}})
+            RETURN g ORDER BY g.occurrences DESC, g.last_seen_at DESC LIMIT $limit
+            """,
+            limit=limit,
+        )
+        return [self._row_gap(r["g"]) for r in rows]
+
+    def set_gap_status(
+        self, tenant_id: str, gap_id: str, status: GapStatus, *, resolved_at: str | None = None
+    ) -> bool:
+        label = self._tenant_label(tenant_id)
+        rows = self._run(
+            f"""
+            MATCH (g:KnowledgeGap:{label} {{gap_id: $gap_id}})
+            SET g.status = $status, g.resolved_at = $resolved_at
+            RETURN g.gap_id AS gap_id
+            """,
+            gap_id=gap_id,
+            status=str(status),
+            resolved_at=resolved_at,
+        )
+        return bool(rows)
+
+    def get_gap(self, tenant_id: str, gap_id: str) -> KnowledgeGap | None:
+        label = self._tenant_label(tenant_id)
+        rows = self._run(
+            f"MATCH (g:KnowledgeGap:{label} {{gap_id: $gap_id}}) RETURN g LIMIT 1", gap_id=gap_id
+        )
+        return self._row_gap(rows[0]["g"]) if rows else None
+
+    @staticmethod
+    def _row_gap(g: dict[str, Any]) -> KnowledgeGap:
+        return KnowledgeGap(
+            gap_id=g["gap_id"],
+            tenant_id=g["tenant_id"],
+            question=g.get("question", ""),
+            dedup_key=g.get("dedup_key", ""),
+            answer=g.get("answer", ""),
+            tools_used=tuple(g.get("tools_used") or ()),
+            fact_rows=int(g.get("fact_rows", 0)),
+            occurrences=int(g.get("occurrences", 1)),
+            status=GapStatus(g.get("status", "open")),
+            created_at=g.get("created_at", ""),
+            last_seen_at=g.get("last_seen_at", ""),
+            resolved_at=g.get("resolved_at"),
+        )
 
     def close(self) -> None:
         self._driver.close()
