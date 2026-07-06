@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from brain_sdk.facts.doc_profiles import DocumentProfile
 from brain_sdk.facts.extraction import ClaimCandidate, ClaimExtractor
 from brain_sdk.facts.models import Claim, ObjectType, Provenance
+from brain_sdk.facts.structure import extract_structured
 from brain_sdk.facts.predicates import PredicateNormalizer, PredicateRegistry
 from brain_sdk.facts.protocol import FactStore
 from brain_sdk.facts.resolution import EntityResolver
@@ -56,6 +57,7 @@ class FactIngestPipeline:
         registry: PredicateRegistry | None = None,
         predicate_normalizer: PredicateNormalizer | None = None,
         model_name: str = "claim-extractor",
+        structure_aware: bool = True,
     ) -> None:
         self._extractor = extractor
         self._resolver = resolver
@@ -65,6 +67,9 @@ class FactIngestPipeline:
         # inject an embedding-based PredicateResolver for semantic matching.
         self._normalizer: PredicateNormalizer = predicate_normalizer or self._registry
         self._model_name = model_name
+        # Deterministic table/key-value extraction runs alongside the LLM pass;
+        # disable only for tests that isolate the LLM path.
+        self._structure_aware = structure_aware
 
     def ingest_document(
         self,
@@ -89,11 +94,16 @@ class FactIngestPipeline:
         claims: list[Claim] = []
         chunks_failed = 0
         claims_failed = 0
+        structured_claims = 0
         for chunk in chunks:
             candidates, extract_failed = self._safe_extract(chunk, profile)
             if extract_failed:
                 chunks_failed += 1
-            for candidate in candidates:
+            structured = self._safe_structured(chunk, profile)
+            structured_claims += len(structured)
+            # Structured (deterministic, high-confidence) candidates first; the
+            # store's dedup collapses any that the LLM pass also produced.
+            for candidate in (*structured, *candidates):
                 claim = self._to_claim(tenant_id, document_key, chunk.chunk_id, candidate, tags, access_keys)
                 if claim is not None:
                     claims.append(claim)
@@ -120,6 +130,7 @@ class FactIngestPipeline:
         counts["claims_extracted"] = len(claims)
         counts["chunks_failed"] = chunks_failed
         counts["claims_failed"] = claims_failed
+        counts["structured_claims"] = structured_claims
         log = logger.error if (chunks_failed or claims_failed) else logger.info
         log("Fact ingest for %s (tenant %s): %s", document_key, tenant_id, counts)
         return counts
@@ -135,6 +146,21 @@ class FactIngestPipeline:
         except Exception as exc:  # noqa: BLE001 - one bad chunk must not abort the doc
             logger.warning("Extraction failed for chunk %s: %s", chunk.chunk_id, exc)
             return [], True
+
+    def _safe_structured(
+        self, chunk: Chunk, profile: DocumentProfile | None
+    ) -> list[ClaimCandidate]:
+        """Deterministic table/key-value candidates for a chunk (never raises).
+
+        Cheap and additive to the LLM pass; a parse failure yields no structured
+        claims rather than aborting the chunk."""
+        if not self._structure_aware:
+            return []
+        try:
+            return extract_structured(chunk.text, profile)
+        except Exception as exc:  # noqa: BLE001 - structural parse is best-effort
+            logger.warning("Structured extraction failed for chunk %s: %s", chunk.chunk_id, exc)
+            return []
 
     def _to_claim(
         self,
