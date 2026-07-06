@@ -31,26 +31,69 @@ router = APIRouter()
 
 
 def _perm_propagation_payloads(
-    org_id: uuid.UUID, folder: Folder, docs: list[Document]
+    org_id: uuid.UUID, folder: Folder, docs: list[Document], access_keys: list[int]
 ) -> list[dict[str, Any]]:
     """Build brain-api metadata-update payloads for a folder's inheriting docs.
 
     Each non-overridden document's vector-store ``access_keys`` are refreshed to
-    the folder's (new) view masks, keeping its retrieval entitlement in sync
-    with the folder after a permission change.
+    ``access_keys`` (the changed folder's new effective masks), keeping its
+    retrieval entitlement in sync after a permission change. The ``folder:<id>``
+    tag reflects the document's OWN folder, not the folder that changed.
     """
-    new_access_keys = list(folder.view_permission_masks or [])
     folder_tag = f"folder:{folder.id}"
     return [
         {
             "tenant_id": str(org_id),
             "document_key": doc.document_key,
             "new_tags": [t.name for t in doc.tags] + [folder_tag],
-            "new_access_keys": new_access_keys,
+            "new_access_keys": access_keys,
             "title": doc.title,
         }
         for doc in docs
     ]
+
+
+def _is_under_boundary(folder: Folder, boundaries: list[Folder]) -> bool:
+    """True if ``folder`` lies within any boundary folder's subtree (inclusive).
+
+    A boundary is a descendant that defines its OWN viewer config, so it (and
+    everything beneath it) inherits itself rather than the folder that changed.
+    """
+    return any(
+        folder.dot_path == b.dot_path or folder.dot_path.startswith(f"{b.dot_path}.")
+        for b in boundaries
+    )
+
+
+async def _collect_subtree_propagation(
+    session: AsyncSession, org_id: uuid.UUID, changed: Folder
+) -> list[dict[str, Any]]:
+    """Payloads to re-scope every document that inherits ``changed`` recursively.
+
+    Walks ``changed``'s subtree. Descendant folders that define their own viewer
+    config are inheritance boundaries: they and their subtrees keep their own
+    entitlement and are skipped. Every other folder in the subtree inherits
+    ``changed``'s new effective masks, so its non-overridden documents (NULL
+    viewer config) are re-scoped to them. Using ``effective_view_masks`` for the
+    masks means clearing ``changed``'s config correctly falls back to ITS
+    nearest configured ancestor.
+    """
+    folder_repo = FolderRepository(session, org_id)
+    doc_repo = DocumentRepository(session, org_id)
+
+    subtree = await folder_repo.descendants(changed)  # includes `changed` itself
+    new_masks = await folder_repo.effective_view_masks(changed)
+    boundaries = [
+        f for f in subtree if f.id != changed.id and f.viewer_permissions_config is not None
+    ]
+
+    payloads: list[dict[str, Any]] = []
+    for folder in subtree:
+        if _is_under_boundary(folder, boundaries):
+            continue
+        docs = await doc_repo.list_inheriting_in_folder(folder.id)
+        payloads.extend(_perm_propagation_payloads(org_id, folder, docs, new_masks))
+    return payloads
 
 
 @router.get("/", response_model=PaginatedResponse[FolderRead])
@@ -169,16 +212,16 @@ async def update_folder(
         folder.contributor_permission_masks = contrib_masks
         await session.flush()
 
-        # A viewer-permission change must propagate to documents that inherit
-        # this folder (NULL viewer config): their brain-api ``access_keys`` were
-        # baked in at ingest and would otherwise go stale. Documents with their
-        # OWN viewer permissions are overrides and are left untouched. Only the
-        # viewer config affects retrieval entitlement, so contributor-only
-        # changes don't propagate. Gather the payloads now, while the RLS tenant
-        # context is active; dispatch after the commit below.
+        # A viewer-permission change must propagate to every document that
+        # inherits this folder — recursively through the subtree, stopping at
+        # subfolders that define their OWN viewer config (they're their own
+        # inheritance boundary). Overridden documents (NULL-config check inside)
+        # are left untouched. Their brain-api ``access_keys`` were baked in at
+        # ingest and would otherwise go stale. Only the viewer config affects
+        # retrieval entitlement, so contributor-only changes don't propagate.
+        # Gather now, while the RLS tenant context is active; dispatch after commit.
         if "viewer_permissions_config" in body.model_fields_set:
-            inheriting = await DocumentRepository(session, ctx.org_id).list_inheriting_in_folder(folder.id)
-            propagation_payloads = _perm_propagation_payloads(ctx.org_id, folder, inheriting)
+            propagation_payloads = await _collect_subtree_propagation(session, ctx.org_id, folder)
 
     if "parent_id" in body.model_fields_set:
         try:
