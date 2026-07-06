@@ -174,3 +174,34 @@ class TestAgentLoop:
         result = agent.run("q", AgentContext(tenant_id="t-vs"))
         assert captured["tenant_id"] == "t-vs"  # tenant injected server-side
         assert result.evidence[0]["result"][0]["document_title"] == "Doc"
+
+    def test_falls_back_to_passages_after_empty_fact_query(self) -> None:
+        # The loop-policy fix: a fact-tool miss must lead to a passage search that
+        # can still rescue the answer, not an immediate "no information".
+        store, _ = _acme_store()
+
+        def fake_vs(query: str, limit: int, tenant_id: str, access_keys: tuple[int, ...]) -> list[dict[str, Any]]:
+            return [{"document_title": "Directory", "text": "Shawn is the CMO."}]
+
+        llm = ScriptedLLM(
+            [
+                json.dumps({"thought": "try facts", "action": {"tool": "claim_query", "args": {"subject": "CMO"}}}),
+                json.dumps(
+                    {"thought": "empty; search text", "action": {"tool": "search_passages", "args": {"query": "who is the CMO"}}}
+                ),
+                json.dumps({"thought": "found", "final": {"answer": "Shawn is the CMO [E2]", "citations": ["E2"]}}),
+            ]
+        )
+        agent = FactAgent(llm, store, vector_search=fake_vs)  # type: ignore[arg-type]
+        result = agent.run("who is the CMO", AgentContext(tenant_id="t1"))
+        tools = [e["tool"] for e in result.evidence]
+        assert "claim_query" in tools and "search_passages" in tools
+        assert "Shawn" in result.answer
+
+    def test_system_prompt_mandates_passage_fallback(self) -> None:
+        from brain_sdk.facts.agent import _SYSTEM_PROMPT
+
+        prompt = _SYSTEM_PROMPT.lower()
+        assert "search_passages" in prompt
+        # The rule must tie an empty fact-tool result to trying passages.
+        assert "no results" in prompt and "search_passages before" in prompt
