@@ -16,6 +16,7 @@ import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+from brain_sdk.facts.doc_profiles import DocumentProfile
 from brain_sdk.facts.extraction import ClaimCandidate, ClaimExtractor
 from brain_sdk.facts.models import Claim, ObjectType, Provenance
 from brain_sdk.facts.predicates import PredicateNormalizer, PredicateRegistry
@@ -74,11 +75,13 @@ class FactIngestPipeline:
         tags: tuple[str, ...] = (),
         access_keys: tuple[int, ...] = (),
         replace: bool = True,
+        profile: DocumentProfile | None = None,
     ) -> dict[str, int]:
         """Extract, resolve, and store all claims for one document.
 
         ``replace=True`` purges the document's existing claims first (idempotent
-        re-ingest).
+        re-ingest). ``profile`` conditions extraction on the document's type and
+        brief (see :mod:`brain_sdk.facts.doc_profiles`); ``None`` = generic.
         """
         if replace:
             self._store.delete_by_document_key(tenant_id, document_key)
@@ -87,7 +90,7 @@ class FactIngestPipeline:
         chunks_failed = 0
         claims_failed = 0
         for chunk in chunks:
-            candidates, extract_failed = self._safe_extract(chunk)
+            candidates, extract_failed = self._safe_extract(chunk, profile)
             if extract_failed:
                 chunks_failed += 1
             for candidate in candidates:
@@ -121,12 +124,14 @@ class FactIngestPipeline:
         log("Fact ingest for %s (tenant %s): %s", document_key, tenant_id, counts)
         return counts
 
-    def _safe_extract(self, chunk: Chunk) -> tuple[list[ClaimCandidate], bool]:
+    def _safe_extract(
+        self, chunk: Chunk, profile: DocumentProfile | None = None
+    ) -> tuple[list[ClaimCandidate], bool]:
         """Extract candidates for one chunk. Returns ``(candidates, failed)`` —
         a raised extractor error is swallowed (one bad chunk must not abort the
         doc) but reported via the flag so the caller can track the failure rate."""
         try:
-            return self._extractor.extract(chunk.text), False
+            return self._extractor.extract(chunk.text, profile), False
         except Exception as exc:  # noqa: BLE001 - one bad chunk must not abort the doc
             logger.warning("Extraction failed for chunk %s: %s", chunk.chunk_id, exc)
             return [], True

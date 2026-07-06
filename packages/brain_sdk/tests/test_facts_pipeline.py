@@ -12,7 +12,7 @@ class FakeExtractor:
     def __init__(self, by_text: dict[str, list[ClaimCandidate]]) -> None:
         self._by_text = by_text
 
-    def extract(self, text: str) -> list[ClaimCandidate]:
+    def extract(self, text: str, profile=None) -> list[ClaimCandidate]:  # type: ignore[no-untyped-def]
         return self._by_text.get(text, [])
 
 
@@ -103,7 +103,7 @@ class _BoomExtractor:
     def __init__(self, boom_texts: set[str]) -> None:
         self._boom = boom_texts
 
-    def extract(self, text: str) -> list[ClaimCandidate]:
+    def extract(self, text: str, profile=None) -> list[ClaimCandidate]:  # type: ignore[no-untyped-def]
         if text in self._boom:
             raise RuntimeError("LLM extraction blew up")
         return []

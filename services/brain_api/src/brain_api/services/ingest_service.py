@@ -27,6 +27,7 @@ import uuid
 from typing import Any
 
 from brain_sdk.chunking.chunker import chunk_text
+from brain_sdk.facts.doc_profiles import GENERIC, PROFILE_REGISTRY, DocumentProfile
 from brain_sdk.facts.pipeline import Chunk
 from brain_sdk.summarization.chunk_summarizer import SummaryNode
 from brain_sdk.vector_store.protocol import VectorRecord
@@ -201,9 +202,11 @@ class IngestService:
                     facts = self._extract_and_store_facts(
                         tenant_id=tenant_id,
                         document_key=document_key,
+                        title=title,
                         chunks=chunks,
                         tags=tags,
                         access_keys=access_keys,
+                        metadata=metadata,
                     )
                     triplet_count = facts.get("claims_extracted", 0)
                     span.set_attribute("claim_count", triplet_count)
@@ -316,13 +319,22 @@ class IngestService:
         *,
         tenant_id: str,
         document_key: str,
+        title: str = "",
         chunks: list[str],
         tags: list[str],
         access_keys: list[int],
+        metadata: dict[str, Any] | None = None,
     ) -> dict[str, int]:
-        """Run the reified-claim fact pipeline over a document's chunks."""
+        """Run the reified-claim fact pipeline over a document's chunks.
+
+        Extraction is conditioned on a document *profile* (type-aware +
+        per-document brief) so structured, high-value docs (directories,
+        contracts, policies) yield the claims that make them queryable rather
+        than being treated as undifferentiated prose.
+        """
         self._stores.ensure_fact_schema()
         fact_chunks = [Chunk(chunk_id=f"{document_key}#{idx}", text=text) for idx, text in enumerate(chunks)]
+        profile = self._build_document_profile(title=title, tags=tags, chunks=chunks, metadata=metadata)
         try:
             return self._stores.fact_pipeline.ingest_document(
                 tenant_id,
@@ -330,10 +342,39 @@ class IngestService:
                 fact_chunks,
                 tags=tuple(tags),
                 access_keys=tuple(access_keys),
+                profile=profile,
             )
         except Exception as e:
             logger.error("Fact ingest failed for %s: %s", document_key, e)
             return {"claims_extracted": 0}
+
+    def _build_document_profile(
+        self,
+        *,
+        title: str,
+        tags: list[str],
+        chunks: list[str],
+        metadata: dict[str, Any] | None,
+    ) -> DocumentProfile:
+        """Classify the document and build its extraction brief (best-effort).
+
+        A profiling failure must never abort ingest — fall back to the generic
+        profile so extraction still runs unconditioned.
+        """
+        meta = metadata or {}
+        folder_path = str(meta.get("folder_path") or meta.get("folder") or meta.get("folder_name") or "")
+        # The brief only needs the head of the document to classify + orient.
+        sample_text = "\n\n".join(chunks[:3])
+        try:
+            return self._stores.document_profiler.profile(
+                title=title,
+                folder_path=folder_path,
+                tags=tuple(tags),
+                sample_text=sample_text,
+            )
+        except Exception as e:  # noqa: BLE001 - profiling is advisory; never block ingest
+            logger.warning("Document profiling failed; using generic profile: %s", e)
+            return PROFILE_REGISTRY[GENERIC]
 
     def remove_document(self, tenant_id: str, document_key: str) -> None:
         """Remove a document from both vector and graph stores."""
