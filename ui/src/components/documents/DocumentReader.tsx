@@ -1,6 +1,5 @@
 "use client";
 
-import DOMPurify from "dompurify";
 import { Columns2, ExternalLink, Loader2, Rows3 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -17,11 +16,6 @@ import {
 
 /** How many chunks to pull per lazy-load page. */
 const PAGE_SIZE = 50;
-
-/** Strip any HTML — source docs may contain accidental markup. */
-function sanitize(text: string): string {
-  return DOMPurify.sanitize(text, { ALLOWED_TAGS: [], ALLOWED_ATTR: [] });
-}
 
 type ViewMode = "side-by-side" | "embedded";
 
@@ -66,6 +60,10 @@ export function DocumentReader({
   const totalRef = useRef(0);
   const loadingRef = useRef(false);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
+  // The summaries rail paginates independently of the full text: when a readable
+  // original is shown the right pane has no chunk sentinel, so the summaries
+  // need their own trigger or they'd stay stuck at the first page.
+  const summarySentinelRef = useRef<HTMLDivElement | null>(null);
   // Side-by-side panes are scroll-synced so a summary stays aligned with the
   // text it summarizes.
   const leftScrollRef = useRef<HTMLDivElement | null>(null);
@@ -114,20 +112,24 @@ export function DocumentReader({
     void loadNextPage();
   }, [open, documentId, loadNextPage]);
 
-  // Lazy-load the next page as the sentinel scrolls into view.
+  // Lazy-load the next page as either sentinel scrolls into view. Both the
+  // full-text sentinel (fallback/embedded views) and the summaries-rail sentinel
+  // feed the same paginated chunk list, so we observe whichever are mounted.
+  const hasChunks = chunks.length > 0;
   useEffect(() => {
     if (!open) return;
-    const el = sentinelRef.current;
-    if (!el) return;
     const observer = new IntersectionObserver(
       (entries) => {
-        if (entries[0]?.isIntersecting) void loadNextPage();
+        if (entries.some((e) => e.isIntersecting)) void loadNextPage();
       },
       { rootMargin: "300px" },
     );
-    observer.observe(el);
+    const targets = [sentinelRef.current, summarySentinelRef.current].filter(
+      (el): el is HTMLDivElement => el !== null,
+    );
+    for (const el of targets) observer.observe(el);
     return () => observer.disconnect();
-  }, [open, mode, loadNextPage]);
+  }, [open, mode, loadNextPage, hasChunks, original]);
 
   // Proportionally sync the two side-by-side panes so scrolling the text moves
   // the summaries to the matching position (and vice versa).
@@ -210,18 +212,27 @@ export function DocumentReader({
             {chunks.length > 0 ? (
               // Per-section summaries in document order; scroll-synced with the
               // text on the right so each stays aligned with what it summarizes.
-              <ol className="space-y-2">
-                {chunks.map((chunk) => (
-                  <li key={chunk.id} className="rounded-md border bg-muted/20 p-2">
-                    <div className="mb-0.5 text-xs font-medium text-muted-foreground">
-                      Section {chunk.chunk_order + 1}
-                    </div>
-                    <div className="text-sm text-muted-foreground">
-                      {chunk.summary ? sanitize(chunk.summary) : "—"}
-                    </div>
-                  </li>
-                ))}
-              </ol>
+              // Paginates via its own sentinel, independent of the full text.
+              <>
+                <ol className="space-y-2">
+                  {chunks.map((chunk) => (
+                    <li key={chunk.id} className="rounded-md border bg-muted/20 p-2">
+                      <div className="mb-0.5 text-xs font-medium text-muted-foreground">
+                        Section {chunk.chunk_order + 1}
+                      </div>
+                      <div className="text-sm text-muted-foreground">{chunk.summary || "—"}</div>
+                    </li>
+                  ))}
+                </ol>
+                <div ref={summarySentinelRef}>
+                  <LoadSentinel
+                    loading={loading}
+                    hasMore={hasMore}
+                    loaded={chunks.length}
+                    total={total}
+                  />
+                </div>
+              </>
             ) : summaryTree ? (
               <SummaryTree root={summaryTree} />
             ) : (
@@ -272,12 +283,10 @@ export function DocumentReader({
               <li key={chunk.id}>
                 {chunk.summary ? (
                   <div className="mb-1.5 rounded-md border-l-2 border-primary/60 bg-muted/40 px-3 py-1.5 text-sm italic text-muted-foreground">
-                    {sanitize(chunk.summary)}
+                    {chunk.summary}
                   </div>
                 ) : null}
-                <div className="whitespace-pre-wrap text-sm leading-relaxed">
-                  {sanitize(chunk.text)}
-                </div>
+                <div className="whitespace-pre-wrap text-sm leading-relaxed">{chunk.text}</div>
               </li>
             ))}
           </ol>
@@ -319,7 +328,7 @@ function FullText({ chunks }: { chunks: DocumentChunk[] }) {
     <div className="space-y-3">
       {chunks.map((chunk) => (
         <p key={chunk.id} className="whitespace-pre-wrap text-sm leading-relaxed">
-          {sanitize(chunk.text)}
+          {chunk.text}
         </p>
       ))}
     </div>

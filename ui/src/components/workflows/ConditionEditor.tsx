@@ -14,7 +14,7 @@ import {
   type ConditionRow,
 } from "@/components/workflows/conditionExpr";
 import { FieldValueInput } from "@/components/workflows/FieldValueInput";
-import { fieldMap } from "@/components/workflows/recordFields";
+import { fieldMap, isNumericField } from "@/components/workflows/recordFields";
 import type { EntityField } from "@/lib/api/entities";
 
 interface ConditionEditorProps {
@@ -41,7 +41,10 @@ export function ConditionEditor({ expr, fields, onChange }: ConditionEditorProps
 
   const rows: ConditionRow[] = parsed ?? [];
 
-  const setRows = (next: ConditionRow[]) => onChange(compileRows(next));
+  // Thread each row's field type through so numeric fields coerce numbers while
+  // text fields keep look-alike strings ("01234", order codes) intact.
+  const setRows = (next: ConditionRow[]) =>
+    onChange(compileRows(next, (path) => isNumericField(fieldForPath(map, path))));
 
   const updateRow = (index: number, patch: Partial<ConditionRow>) => {
     const next = rows.map((r, i) => (i === index ? { ...r, ...patch } : r));

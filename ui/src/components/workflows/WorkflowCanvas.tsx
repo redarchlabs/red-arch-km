@@ -13,13 +13,17 @@ import {
   type OnNodesChange,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { GitBranch, Bolt } from "lucide-react";
+import { GitBranch, Bolt, Clock, Split } from "lucide-react";
 import { useMemo } from "react";
 
 import { Button } from "@/components/ui/button";
 import { ActionNode } from "@/components/workflows/nodes/ActionNode";
 import { ConditionNode } from "@/components/workflows/nodes/ConditionNode";
+import { DelayNode } from "@/components/workflows/nodes/DelayNode";
+import { SwitchNode } from "@/components/workflows/nodes/SwitchNode";
 import { TriggerNode } from "@/components/workflows/nodes/TriggerNode";
+
+export type AddableNodeType = "condition" | "action" | "switch" | "delay";
 
 interface WorkflowCanvasProps {
   nodes: Node[];
@@ -28,7 +32,7 @@ interface WorkflowCanvasProps {
   onEdgesChange?: OnEdgesChange;
   onConnect?: OnConnect;
   onNodeClick?: (node: Node) => void;
-  onAddNode?: (type: "condition" | "action") => void;
+  onAddNode?: (type: AddableNodeType) => void;
   readOnly?: boolean;
 }
 
@@ -43,7 +47,13 @@ export function WorkflowCanvas({
   readOnly = false,
 }: WorkflowCanvasProps) {
   const nodeTypes = useMemo(
-    () => ({ trigger: TriggerNode, condition: ConditionNode, action: ActionNode }),
+    () => ({
+      trigger: TriggerNode,
+      condition: ConditionNode,
+      action: ActionNode,
+      switch: SwitchNode,
+      delay: DelayNode,
+    }),
     [],
   );
 
@@ -65,12 +75,21 @@ export function WorkflowCanvas({
       >
         <Background gap={16} />
         <Controls showInteractive={false} />
-        <MiniMap pannable zoomable className="!bg-background" />
+        {/* MiniMap crowds a small touch canvas — desktop only. */}
+        <MiniMap pannable zoomable className="!bg-background hidden lg:block" />
         {onAddNode && !readOnly ? (
-          <Panel position="top-left" className="flex gap-2">
+          <Panel position="top-left" className="flex max-w-[calc(100%-1rem)] flex-wrap gap-2">
             <Button size="sm" variant="secondary" onClick={() => onAddNode("condition")}>
               <GitBranch className="h-4 w-4" />
               Condition
+            </Button>
+            <Button size="sm" variant="secondary" onClick={() => onAddNode("switch")}>
+              <Split className="h-4 w-4" />
+              Switch
+            </Button>
+            <Button size="sm" variant="secondary" onClick={() => onAddNode("delay")}>
+              <Clock className="h-4 w-4" />
+              Delay
             </Button>
             <Button size="sm" variant="secondary" onClick={() => onAddNode("action")}>
               <Bolt className="h-4 w-4" />

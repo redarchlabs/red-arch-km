@@ -1,12 +1,18 @@
 "use client";
 
 import { Pencil, Plus, Search, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { DynamicForm, type RelationshipFormField } from "@/components/entities/DynamicForm";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { Dialog, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -47,8 +53,14 @@ export function EntityRecordsTable({ entity }: EntityRecordsTableProps) {
   const [busy, setBusy] = useState(false);
   const [relFields, setRelFields] = useState<RelationshipFormField[]>([]);
   const [relLoading, setRelLoading] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState<EntityRecord | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const columns = entity.fields.slice(0, MAX_COLUMNS);
+
+  // Monotonic request id so a slow earlier search response can't overwrite a
+  // newer one (type "a" then "ab" — "a"'s late result must be ignored).
+  const loadReq = useRef(0);
 
   // Search only helps when the entity has text-like columns to match against.
   const hasSearchable = useMemo(
@@ -119,17 +131,20 @@ export function EntityRecordsTable({ entity }: EntityRecordsTableProps) {
   const load = useCallback(async () => {
     setIsLoading(true);
     setError(null);
+    const reqId = ++loadReq.current;
     try {
       const result = await listRecords(entity.slug, {
         search: debouncedSearch,
         limit: PAGE_SIZE,
       });
+      if (reqId !== loadReq.current) return; // superseded by a newer search/load
       setRecords(result.items);
       setNextCursor(result.next_cursor);
     } catch (e: unknown) {
+      if (reqId !== loadReq.current) return;
       setError(getApiErrorMessage(e, "Failed to load records"));
     } finally {
-      setIsLoading(false);
+      if (reqId === loadReq.current) setIsLoading(false);
     }
   }, [entity.slug, debouncedSearch]);
 
@@ -174,13 +189,18 @@ export function EntityRecordsTable({ entity }: EntityRecordsTableProps) {
     }
   };
 
-  const handleDelete = async (record: EntityRecord) => {
-    if (!confirm("Delete this record?")) return;
+  const confirmDeleteRecord = async () => {
+    if (!confirmDelete) return;
+    setDeleting(true);
     try {
-      await deleteRecord(entity.slug, String(record.id));
+      await deleteRecord(entity.slug, String(confirmDelete.id));
+      setConfirmDelete(null);
       await load();
     } catch (e: unknown) {
       setError(getApiErrorMessage(e, "Delete failed"));
+      setConfirmDelete(null);
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -225,51 +245,90 @@ export function EntityRecordsTable({ entity }: EntityRecordsTableProps) {
         {isLoading ? (
           <Skeleton className="h-24 w-full" />
         ) : records.length > 0 ? (
-          <div className="overflow-x-auto rounded-md border">
-            <table className="w-full text-sm">
-              <thead className="border-b bg-muted/50">
-                <tr>
-                  {columns.map((f) => (
-                    <th key={f.id} className="px-3 py-2 text-left font-medium">
-                      {f.name}
-                    </th>
-                  ))}
-                  <th className="w-20 px-3 py-2" />
-                </tr>
-              </thead>
-              <tbody>
-                {records.map((record) => (
-                  <tr key={String(record.id)} className="border-b last:border-0">
+          <>
+            {/* Desktop: table. Mobile: a card per record so wide/dynamic column
+                sets stay readable without horizontal scrolling. */}
+            <div className="hidden overflow-x-auto rounded-md border md:block">
+              <table className="w-full text-sm">
+                <thead className="border-b bg-muted/50">
+                  <tr>
                     {columns.map((f) => (
-                      <td key={f.id} className="px-3 py-2">
-                        {formatCell(record[f.slug])}
-                      </td>
+                      <th key={f.id} className="px-3 py-2 text-left font-medium">
+                        {f.name}
+                      </th>
                     ))}
-                    <td className="px-3 py-2">
-                      <div className="flex justify-end gap-1">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => openForm(record)}
-                          aria-label="Edit record"
-                        >
-                          <Pencil className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => void handleDelete(record)}
-                          aria-label="Delete record"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    </td>
+                    <th className="w-20 px-3 py-2" />
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {records.map((record) => (
+                    <tr key={String(record.id)} className="border-b last:border-0">
+                      {columns.map((f) => (
+                        <td key={f.id} className="px-3 py-2">
+                          {formatCell(record[f.slug])}
+                        </td>
+                      ))}
+                      <td className="px-3 py-2">
+                        <div className="flex justify-end gap-1">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => openForm(record)}
+                            aria-label="Edit record"
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => setConfirmDelete(record)}
+                            aria-label="Delete record"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <ul className="space-y-2 md:hidden">
+              {records.map((record) => (
+                <li key={String(record.id)} className="rounded-md border p-3 text-sm">
+                  <dl className="space-y-1">
+                    {columns.map((f) => (
+                      <div key={f.id} className="flex gap-2">
+                        <dt className="w-1/3 shrink-0 font-medium text-muted-foreground">
+                          {f.name}
+                        </dt>
+                        <dd className="min-w-0 flex-1 break-words">{formatCell(record[f.slug])}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                  <div className="mt-2 flex justify-end gap-1 border-t pt-2">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => openForm(record)}
+                      aria-label="Edit record"
+                    >
+                      <Pencil className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => setConfirmDelete(record)}
+                      aria-label="Delete record"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </>
         ) : (
           <p className="text-sm text-muted-foreground">
             {entity.fields.length === 0
@@ -306,6 +365,27 @@ export function EntityRecordsTable({ entity }: EntityRecordsTableProps) {
             onCancel={() => setEditing(null)}
           />
         ) : null}
+      </Dialog>
+
+      <Dialog open={confirmDelete !== null} onClose={() => setConfirmDelete(null)}>
+        <DialogHeader>
+          <DialogTitle>Delete record?</DialogTitle>
+          <DialogDescription>
+            This permanently deletes the record. This cannot be undone.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setConfirmDelete(null)} disabled={deleting}>
+            Cancel
+          </Button>
+          <Button
+            variant="destructive"
+            onClick={() => void confirmDeleteRecord()}
+            disabled={deleting}
+          >
+            {deleting ? "Deleting…" : "Delete"}
+          </Button>
+        </DialogFooter>
       </Dialog>
     </Card>
   );

@@ -19,6 +19,7 @@ const STATUS_CLASSES: Record<string, string> = {
   succeeded: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400",
   failed: "bg-rose-500/15 text-rose-600 dark:text-rose-400",
   running: "bg-sky-500/15 text-sky-600 dark:text-sky-400",
+  waiting: "bg-violet-500/15 text-violet-600 dark:text-violet-400",
   retrying: "bg-amber-500/15 text-amber-600 dark:text-amber-400",
   skipped: "bg-amber-500/15 text-amber-600 dark:text-amber-400",
   pending: "bg-muted text-muted-foreground",
@@ -39,8 +40,8 @@ function duration(start: string | null, end: string | null): string {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
-const ACTIVE = new Set(["pending", "running", "retrying"]);
-const POLL_MS = 2500;
+const ACTIVE = new Set(["pending", "running", "retrying", "waiting"]);
+export const POLL_MS = 2500;
 
 export function RunMonitor({ workflowId }: { workflowId: string }) {
   const [runs, setRuns] = useState<WorkflowRun[]>([]);
@@ -48,34 +49,51 @@ export function RunMonitor({ workflowId }: { workflowId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Monotonic request id: a slow earlier response with a stale id is ignored so
+  // it can't overwrite the result of a newer request.
+  const reqId = useRef(0);
+  // Remember whether the last successful poll saw active runs, so a *failed*
+  // poll can still decide to keep polling instead of stopping forever.
+  const active = useRef(false);
+  const stopped = useRef(false);
 
   const load = useCallback(
     async (quiet = false) => {
       if (!quiet) setIsLoading(true);
+      const id = ++reqId.current;
       try {
-        setRuns(await listRuns(workflowId));
+        const next = await listRuns(workflowId);
+        if (id !== reqId.current) return; // superseded by a newer request
+        setRuns(next);
         setError(null);
+        active.current = next.some((r) => ACTIVE.has(r.status));
       } catch (e: unknown) {
+        if (id !== reqId.current) return;
         setError(getApiErrorMessage(e, "Failed to load runs"));
+        // Leave `active` at its last-known value: a transient failure must not
+        // permanently halt polling while runs are still in flight.
       } finally {
-        if (!quiet) setIsLoading(false);
+        if (id === reqId.current && !quiet) setIsLoading(false);
+      }
+      // Schedule the next poll unconditionally (even after a failed poll) while
+      // runs are active — not off a [runs] effect that a no-op update wouldn't
+      // retrigger. Only the freshest request reaches here (stale ones returned).
+      if (id === reqId.current && !stopped.current && active.current) {
+        if (timer.current) clearTimeout(timer.current);
+        timer.current = setTimeout(() => void load(true), POLL_MS);
       }
     },
     [workflowId],
   );
 
   useEffect(() => {
+    stopped.current = false;
     void load();
-  }, [load]);
-
-  // Poll while any run is still active; stop when everything is terminal.
-  useEffect(() => {
-    if (!runs.some((r) => ACTIVE.has(r.status))) return;
-    timer.current = setTimeout(() => void load(true), POLL_MS);
     return () => {
+      stopped.current = true;
       if (timer.current) clearTimeout(timer.current);
     };
-  }, [runs, load]);
+  }, [load]);
 
   if (isLoading) return <Skeleton className="h-40 w-full" />;
 

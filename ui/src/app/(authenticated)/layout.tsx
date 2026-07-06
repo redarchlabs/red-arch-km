@@ -1,7 +1,7 @@
 "use client";
 
-import { useRouter } from "next/navigation";
-import { useEffect, useRef, type ReactNode } from "react";
+import { usePathname, useRouter } from "next/navigation";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { HelpDock } from "@/components/help/HelpDock";
 import { Header } from "@/components/nav/Header";
@@ -17,9 +17,16 @@ interface Props {
 
 export default function AuthenticatedLayout({ children }: Props) {
   const router = useRouter();
+  const pathname = usePathname();
+  const [navOpen, setNavOpen] = useState(false);
   const { isAuthenticated, isInitializing } = useAuth();
   const { orgs, isLoading: orgLoading } = useOrg();
   const setupCheckedRef = useRef(false);
+
+  // Close the mobile nav drawer on any route change (covers programmatic nav).
+  useEffect(() => {
+    setNavOpen(false);
+  }, [pathname]);
 
   useEffect(() => {
     if (!isInitializing && !isAuthenticated) {
@@ -63,10 +70,10 @@ export default function AuthenticatedLayout({ children }: Props) {
   return (
     <HelpProvider>
       <div className="flex h-screen">
-        <Sidebar />
+        <Sidebar open={navOpen} onClose={() => setNavOpen(false)} />
         <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-          <Header />
-          <main className="flex-1 overflow-auto p-6">{children}</main>
+          <Header onMenuClick={() => setNavOpen(true)} />
+          <main className="flex-1 overflow-auto p-4 sm:p-6">{children}</main>
         </div>
         <HelpDock />
       </div>

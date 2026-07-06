@@ -1,6 +1,6 @@
 "use client";
 
-import { Send } from "lucide-react";
+import { MessagesSquare, Send } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { AssistantPanel } from "@/components/chat/AssistantPanel";
@@ -8,6 +8,7 @@ import { ChatMessage, type Message } from "@/components/chat/ChatMessage";
 import { ScopeSelector } from "@/components/chat/ScopeSelector";
 import { SessionList } from "@/components/chat/SessionList";
 import { Button } from "@/components/ui/button";
+import { MobileDrawer } from "@/components/ui/MobileDrawer";
 import { Textarea } from "@/components/ui/textarea";
 import { useOrg } from "@/context/OrgContext";
 import {
@@ -42,6 +43,7 @@ export default function ChatPage() {
   const [scopeFolderIds, setScopeFolderIds] = useState<string[]>([]);
   const [scopeTagIds, setScopeTagIds] = useState<string[]>([]);
   const [mode, setMode] = useState<ChatMode>("standard");
+  const [sessionsOpen, setSessionsOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
 
@@ -316,25 +318,65 @@ export default function ChatPage() {
     return <p className="text-muted-foreground">Select an organization to chat.</p>;
   }
 
+  // Selecting a conversation also dismisses the mobile drawer.
+  const handleSelect = (id: string | null) => {
+    void selectSession(id);
+    setSessionsOpen(false);
+  };
+
   return (
     <div className="flex h-full">
+      {/* Desktop: docked list. Mobile: opened via the header toggle. */}
       <SessionList
+        className="hidden md:flex"
         sessions={sessions}
         activeId={activeId}
-        onSelect={(id) => void selectSession(id)}
+        onSelect={handleSelect}
         onNew={handleNew}
         onDelete={(id) => void handleDelete(id)}
       />
+      <div className="md:hidden">
+        <MobileDrawer
+          open={sessionsOpen}
+          onClose={() => setSessionsOpen(false)}
+          side="left"
+          label="Conversations"
+          className="w-72 max-w-[80%]"
+        >
+          <SessionList
+            className="h-full w-full border-0"
+            sessions={sessions}
+            activeId={activeId}
+            onSelect={handleSelect}
+            onNew={() => {
+              handleNew();
+              setSessionsOpen(false);
+            }}
+            onDelete={(id) => void handleDelete(id)}
+          />
+        </MobileDrawer>
+      </div>
 
-      <div className="flex flex-1 flex-col pl-4">
-        <div className="mb-4 flex items-start justify-between gap-4">
-          <div>
-            <h1 className="text-2xl font-semibold">Chat</h1>
-            <p className="text-sm text-muted-foreground">
-              Ask questions about documents in your organization.
-            </p>
+      <div className="flex flex-1 flex-col md:pl-4">
+        <div className="mb-4 flex flex-wrap items-start justify-between gap-2">
+          <div className="flex items-start gap-2">
+            <Button
+              variant="outline"
+              size="icon"
+              className="md:hidden"
+              onClick={() => setSessionsOpen(true)}
+              aria-label="Show conversations"
+            >
+              <MessagesSquare className="h-4 w-4" />
+            </Button>
+            <div>
+              <h1 className="text-2xl font-semibold">Chat</h1>
+              <p className="text-sm text-muted-foreground">
+                Ask questions about documents in your organization.
+              </p>
+            </div>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-2 sm:gap-3">
             <div
               className="flex overflow-hidden rounded-md border text-xs"
               role="group"

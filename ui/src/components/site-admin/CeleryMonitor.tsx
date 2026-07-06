@@ -87,26 +87,39 @@ export function CeleryMonitor() {
               </div>
 
               {data.schedule.length > 0 ? (
-                <div className="overflow-x-auto rounded-md border">
-                  <table className="w-full text-sm">
-                    <thead className="bg-muted/50 text-left text-xs text-muted-foreground">
-                      <tr>
-                        <th className="px-3 py-2 font-medium">Schedule</th>
-                        <th className="px-3 py-2 font-medium">Task</th>
-                        <th className="px-3 py-2 font-medium">Cadence</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {data.schedule.map((entry) => (
-                        <tr key={entry.name} className="border-t">
-                          <td className="px-3 py-2 font-medium">{entry.name}</td>
-                          <td className="px-3 py-2 font-mono text-xs text-muted-foreground">{entry.task ?? "—"}</td>
-                          <td className="px-3 py-2 whitespace-nowrap">{formatInterval(entry.schedule_seconds)}</td>
+                <>
+                  <div className="hidden overflow-x-auto rounded-md border md:block">
+                    <table className="w-full text-sm">
+                      <thead className="bg-muted/50 text-left text-xs text-muted-foreground">
+                        <tr>
+                          <th className="px-3 py-2 font-medium">Schedule</th>
+                          <th className="px-3 py-2 font-medium">Task</th>
+                          <th className="px-3 py-2 font-medium">Cadence</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                      </thead>
+                      <tbody>
+                        {data.schedule.map((entry) => (
+                          <tr key={entry.name} className="border-t">
+                            <td className="px-3 py-2 font-medium">{entry.name}</td>
+                            <td className="px-3 py-2 font-mono text-xs text-muted-foreground">{entry.task ?? "—"}</td>
+                            <td className="px-3 py-2 whitespace-nowrap">{formatInterval(entry.schedule_seconds)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <ul className="space-y-2 md:hidden">
+                    {data.schedule.map((entry) => (
+                      <li key={entry.name} className="rounded-md border p-3 text-sm">
+                        <p className="font-medium">{entry.name}</p>
+                        <p className="mt-1 font-mono text-xs break-all text-muted-foreground">
+                          {entry.task ?? "—"}
+                        </p>
+                        <p className="mt-1 text-xs">{formatInterval(entry.schedule_seconds)}</p>
+                      </li>
+                    ))}
+                  </ul>
+                </>
               ) : (
                 <p className="text-xs text-muted-foreground">
                   No schedule published — beat has not reported in yet.
@@ -140,30 +153,45 @@ export function CeleryMonitor() {
           {isLoading ? (
             <Skeleton className="h-24 w-full" />
           ) : data && data.items.length > 0 ? (
-            <div className="overflow-x-auto rounded-md border">
-              <table className="w-full text-sm">
-                <thead className="bg-muted/50 text-left text-xs text-muted-foreground">
-                  <tr>
-                    <th className="px-3 py-2 font-medium">Task</th>
-                    <th className="px-3 py-2 font-medium">ID</th>
-                    <th className="px-3 py-2 font-medium">Args</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.items.map((item, i) => (
-                    <tr key={item.id ?? i} className="border-t align-top">
-                      <td className="px-3 py-2 font-mono text-xs">{item.task ?? "(unparseable)"}</td>
-                      <td className="px-3 py-2 font-mono text-xs text-muted-foreground">
-                        {item.id ? item.id.slice(0, 8) : "—"}
-                      </td>
-                      <td className="px-3 py-2 font-mono text-xs text-muted-foreground">
-                        {[item.args, item.kwargs].filter(Boolean).join(" ") || "—"}
-                      </td>
+            <>
+              <div className="hidden overflow-x-auto rounded-md border md:block">
+                <table className="w-full text-sm">
+                  <thead className="bg-muted/50 text-left text-xs text-muted-foreground">
+                    <tr>
+                      <th className="px-3 py-2 font-medium">Task</th>
+                      <th className="px-3 py-2 font-medium">ID</th>
+                      <th className="px-3 py-2 font-medium">Args</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {data.items.map((item, i) => (
+                      <tr key={item.id ?? i} className="border-t align-top">
+                        <td className="px-3 py-2 font-mono text-xs">{item.task ?? "(unparseable)"}</td>
+                        <td className="px-3 py-2 font-mono text-xs text-muted-foreground">
+                          {item.id ? item.id.slice(0, 8) : "—"}
+                        </td>
+                        <td className="px-3 py-2 font-mono text-xs text-muted-foreground">
+                          {[item.args, item.kwargs].filter(Boolean).join(" ") || "—"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <ul className="space-y-2 md:hidden">
+                {data.items.map((item, i) => (
+                  <li key={item.id ?? i} className="rounded-md border p-3 text-xs">
+                    <p className="font-mono">{item.task ?? "(unparseable)"}</p>
+                    <p className="mt-1 font-mono text-muted-foreground">
+                      ID: {item.id ? item.id.slice(0, 8) : "—"}
+                    </p>
+                    <p className="mt-1 font-mono break-all text-muted-foreground">
+                      Args: {[item.args, item.kwargs].filter(Boolean).join(" ") || "—"}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+            </>
           ) : data ? (
             <p className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">
               Queue is empty — workers are keeping up (or no work has been enqueued).

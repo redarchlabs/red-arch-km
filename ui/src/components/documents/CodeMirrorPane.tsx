@@ -4,6 +4,7 @@ import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { languages } from "@codemirror/language-data";
 import { EditorView } from "@codemirror/view";
 import CodeMirror from "@uiw/react-codemirror";
+import { useMemo } from "react";
 
 interface CodeMirrorPaneProps {
   value: string;
@@ -34,11 +35,21 @@ export default function CodeMirrorPane({
   onCursor,
   editable = true,
 }: CodeMirrorPaneProps) {
-  const cursorListener = EditorView.updateListener.of((u) => {
-    if (onCursor && (u.selectionSet || u.docChanged)) {
-      onCursor(u.state.selection.main.head);
-    }
-  });
+  // Memoize the extensions so CodeMirror isn't reconfigured on every render
+  // (a fresh array / listener identity each keystroke forces a reconfigure).
+  const extensions = useMemo(() => {
+    const cursorListener = EditorView.updateListener.of((u) => {
+      if (onCursor && (u.selectionSet || u.docChanged)) {
+        onCursor(u.state.selection.main.head);
+      }
+    });
+    return [
+      markdown({ base: markdownLanguage, codeLanguages: languages }),
+      EditorView.lineWrapping,
+      paneTheme,
+      cursorListener,
+    ];
+  }, [onCursor]);
   return (
     <CodeMirror
       value={value}
@@ -46,12 +57,7 @@ export default function CodeMirrorPane({
       editable={editable}
       onChange={onChange}
       onCreateEditor={(view) => onReady(view)}
-      extensions={[
-        markdown({ base: markdownLanguage, codeLanguages: languages }),
-        EditorView.lineWrapping,
-        paneTheme,
-        cursorListener,
-      ]}
+      extensions={extensions}
       basicSetup={{ lineNumbers: false, foldGutter: false, highlightActiveLine: false }}
       className="h-full"
     />

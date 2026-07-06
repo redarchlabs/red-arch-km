@@ -8,7 +8,13 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import type { EntityField } from "@/lib/api/entities";
 import { FieldValueInput } from "@/components/workflows/FieldValueInput";
-import { fieldMap, objectToRows, rowsToObject, type RecordRow } from "@/components/workflows/recordFields";
+import {
+  fieldMap,
+  findDuplicateKeys,
+  objectToRows,
+  rowsToObject,
+  type RecordRow,
+} from "@/components/workflows/recordFields";
 
 interface RecordFieldEditorProps {
   /** The stored value: a flat object, a JSON string, or null/undefined. */
@@ -125,11 +131,18 @@ export function RecordFieldEditor({
 
   const fieldOptions = fields ?? [];
   const sourceOptions = sourceFields ?? [];
+  const duplicateKeys = findDuplicateKeys(rows);
 
   return (
     <div className="space-y-2">
       {rows.length === 0 ? (
         <p className="text-xs text-muted-foreground">{emptyLabel ?? "No fields set."}</p>
+      ) : null}
+      {duplicateKeys.length > 0 ? (
+        <p className="text-xs text-destructive">
+          Duplicate field{duplicateKeys.length > 1 ? "s" : ""}: {duplicateKeys.join(", ")}. Only the
+          last value is kept.
+        </p>
       ) : null}
       {rows.map((row, index) => {
         const field = map.get(row.key.trim());
