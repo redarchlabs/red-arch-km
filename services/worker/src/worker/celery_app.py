@@ -57,6 +57,13 @@ app.conf.beat_schedule = {
         # Daily is plenty to keep 1-2 months of partitions pre-created.
         "schedule": float(os.environ.get("WORKFLOW_PARTITION_INTERVAL", "86400")),
     },
+    # Time-based work: resume delayed runs that are due + fire scheduled
+    # workflows. Interval only needs to be finer than the shortest delay/schedule.
+    "workflow-run-timers": {
+        "task": "worker.tasks.workflow.run_timers",
+        "schedule": float(os.environ.get("WORKFLOW_TIMER_INTERVAL", "30")),
+        "options": {"expires": 60},
+    },
     # Liveness beacon for the site-admin console: proves beat -> broker -> worker
     # is healthy. A stale/absent heartbeat there means beat is down.
     "beat-heartbeat": {

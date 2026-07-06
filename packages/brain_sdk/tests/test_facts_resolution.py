@@ -149,6 +149,80 @@ class TestEntityResolver:
         assert eid != planet.entity_id  # created fresh, not merged across types
 
 
+class CountingEmbedder:
+    def __init__(self) -> None:
+        self.embed_calls = 0
+
+    def embed(self, text: str) -> list[float]:
+        self.embed_calls += 1
+        return [0.1, 0.2, 0.3]
+
+    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        return [self.embed(t) for t in texts]
+
+    @property
+    def dimension(self) -> int:
+        return 3
+
+
+class TestEntityResolverMemoization:
+    """A document mentions the same entity many times; the resolver must embed +
+    adjudicate it only once per run (mirrors PredicateResolver._cache)."""
+
+    def test_repeated_mention_hits_cache_no_re_embed(self) -> None:
+        store = FakeStore()  # empty → CREATE_NEW on first resolve
+        embedder = CountingEmbedder()
+        resolver = EntityResolver(store, embedder)  # type: ignore[arg-type]
+
+        first = resolver.resolve("t1", "Acme Corp", "ORG")
+        second = resolver.resolve("t1", "Acme Corp", "ORG")
+        # Case/spacing-insensitive on the mention name.
+        third = resolver.resolve("t1", "acme corp", "ORG")
+
+        assert first == second == third
+        assert embedder.embed_calls == 1  # only the first miss embedded
+
+    def test_repeated_adjudicated_mention_calls_llm_once(self) -> None:
+        store = FakeStore()
+        cand = _entity("Apple Inc")
+        store.entities[cand.entity_id] = cand
+        store.vector_hits = [(cand, 0.7)]  # middle band → adjudicate
+        llm = FakeLLM(json.dumps({"match": cand.entity_id}))
+        embedder = CountingEmbedder()
+        resolver = EntityResolver(store, embedder, llm=llm)  # type: ignore[arg-type]
+
+        a = resolver.resolve("t1", "Apple", "ORG")
+        b = resolver.resolve("t1", "Apple", "ORG")
+
+        assert a == b == cand.entity_id
+        assert len(llm.calls) == 1  # adjudication ran once, not per mention
+        assert embedder.embed_calls == 1
+
+
+class TestAdjudicateErrorHandling:
+    """An LLM outage must be swallowed (return None → create new) and is logged
+    distinctly from a malformed-but-received response."""
+
+    def test_llm_exception_returns_none_and_creates_new(self) -> None:
+        store = FakeStore()
+        cand = _entity("Apple Inc")
+        store.entities[cand.entity_id] = cand
+        store.vector_hits = [(cand, 0.7)]
+
+        class BoomLLM:
+            @property
+            def model(self) -> str:
+                return "boom"
+
+            def complete(self, *a, **k):  # type: ignore[no-untyped-def]
+                raise TimeoutError("upstream timed out")
+
+        resolver = EntityResolver(store, FakeEmbedder(), llm=BoomLLM())  # type: ignore[arg-type]
+        eid = resolver.resolve("t1", "Apple", "ORG")
+        assert eid != cand.entity_id  # outage → fall through to create new
+        assert eid in store.entities
+
+
 class TestPredicateResolution:
     def test_alias_resolves_to_canonical(self) -> None:
         reg = PredicateRegistry()

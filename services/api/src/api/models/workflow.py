@@ -46,9 +46,13 @@ from api.models.org import Org
 # Status vocabularies (kept as plain strings + CHECKs in the migration).
 VERSION_STATUSES = ("draft", "published", "archived")
 OUTBOX_STATUSES = ("pending", "claimed", "done", "skipped")
-RUN_STATUSES = ("pending", "running", "succeeded", "failed", "skipped")
+# "waiting" is a run parked at a delay node until its resume_at elapses.
+RUN_STATUSES = ("pending", "running", "waiting", "succeeded", "failed", "skipped")
 STEP_STATUSES = ("pending", "running", "succeeded", "failed", "skipped", "retrying")
 OPERATIONS = ("create", "update", "delete")
+# Where an outbox change originated. "record" = an ordinary edit; "form" = a
+# public intake-form submission (lets a trigger fire only on form submissions).
+OUTBOX_SOURCES = ("record", "form")
 
 
 class Workflow(Base, UUIDMixin, TimestampMixin):
@@ -64,6 +68,11 @@ class Workflow(Base, UUIDMixin, TimestampMixin):
     # References workflow_versions.id. No DB FK to avoid a circular dependency
     # with workflow_versions.workflow_id; the service layer keeps it consistent.
     active_version_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    # Who may MANUALLY run this workflow. Org admins always may; ``mode`` can
+    # additionally allow any member or specific roles/groups. See can_run().
+    run_permission: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, default=lambda: {"mode": "org_admin"}, server_default='{"mode": "org_admin"}'
+    )
 
     org_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True
@@ -125,6 +134,8 @@ class WorkflowOutbox(Base):
     after_data: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     actor_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     origin_run_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    # "record" (ordinary edit) or "form" (public intake-form submission).
+    source: Mapped[str] = mapped_column(String(20), default="record", server_default="record")
     dedup_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
     status: Mapped[str] = mapped_column(String(10), default="pending")
     claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -139,6 +150,8 @@ class WorkflowRun(Base):
         PrimaryKeyConstraint("id", "created_at"),
         UniqueConstraint("org_id", "outbox_id", "workflow_id", "created_at", name="uq_wf_run_event"),
         Index("ix_wf_runs_workflow", "org_id", "workflow_id", "created_at"),
+        # Drives the run-timers sweep for delayed runs due to resume.
+        Index("ix_wf_runs_waiting", "resume_at", postgresql_where=text("status = 'waiting'")),
         {"postgresql_partition_by": "RANGE (created_at)"},
     )
 
@@ -160,6 +173,10 @@ class WorkflowRun(Base):
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     depth: Mapped[int] = mapped_column(SmallInteger, default=0)
+    # Delay/wait support: a "waiting" run resumes from resume_node_id once
+    # resume_at elapses (swept by the run-timers job).
+    resume_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    resume_node_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
 class WorkflowRunStep(Base):

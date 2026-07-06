@@ -25,7 +25,11 @@ from api.schemas.custom_entity import (
     EntityFieldCreate,
     EntityRelationshipCreate,
 )
-from api.services.entity_service import EntityConflictError, EntityService
+from api.services.entity_service import (
+    EntityConflictError,
+    EntityNotFoundError,
+    EntityService,
+)
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -287,6 +291,193 @@ class TestRecordCrudAndIsolation:
 
         ok = await repo.create({"title": "x", "status": "closed"})
         assert ok["status"] == "closed"
+
+
+class TestDropField:
+    async def test_drop_field_removes_column_and_catalog_row(
+        self, admin_session: AsyncSession
+    ) -> None:
+        org = await _make_org(admin_session, "CE-DROP")
+        await set_tenant(admin_session, str(org.id))
+        service = EntityService(admin_session, org.id)
+        definition = await service.create_definition(
+            EntityDefinitionCreate(
+                name="Lead",
+                slug="lead",
+                fields=[
+                    EntityFieldCreate(name="Name", slug="name", field_type="text", is_required=True),
+                    # Unique so the drop also has to cascade a constraint + index.
+                    EntityFieldCreate(name="Nickname", slug="nickname", field_type="text", is_unique=True),
+                ],
+            )
+        )
+        await admin_session.commit()
+
+        fields = await EntityFieldRepository(admin_session, org.id).list_for_definition(definition.id)
+        nickname = next(f for f in fields if f.slug == "nickname")
+
+        async def _columns() -> set[str]:
+            rows = await admin_session.execute(
+                text("SELECT column_name FROM information_schema.columns WHERE table_name = :t"),
+                {"t": definition.physical_table},
+            )
+            return set(rows.scalars().all())
+
+        assert nickname.physical_column in await _columns()
+
+        await service.drop_field(definition.id, nickname.id)
+        await admin_session.commit()
+
+        # Physical column gone (its unique constraint + trgm index cascaded away).
+        assert nickname.physical_column not in await _columns()
+        # Catalog row gone; the untouched field remains.
+        remaining = await EntityFieldRepository(admin_session, org.id).list_for_definition(definition.id)
+        assert {f.slug for f in remaining} == {"name"}
+
+    async def test_drop_unknown_field_raises(self, admin_session: AsyncSession) -> None:
+        org = await _make_org(admin_session, "CE-DROP-404")
+        await set_tenant(admin_session, str(org.id))
+        service = EntityService(admin_session, org.id)
+        definition = await service.create_definition(EntityDefinitionCreate(name="X", slug="xx"))
+        await admin_session.commit()
+        with pytest.raises(EntityNotFoundError):
+            await service.drop_field(definition.id, uuid.uuid4())
+
+
+class TestDropDefinitionForce:
+    async def test_force_drop_referenced_entity_cleans_up_fk(
+        self, admin_session: AsyncSession
+    ) -> None:
+        """Force-dropping an entity that another entity references (to-one FK)
+        must succeed: the referencing FK column + its relationship catalog row are
+        torn down first, so neither the table drop nor the catalog delete 500s."""
+        org = await _make_org(admin_session, "CE-FORCE")
+        await set_tenant(admin_session, str(org.id))
+        service = EntityService(admin_session, org.id)
+        customer = await service.create_definition(
+            EntityDefinitionCreate(name="Customer", slug="customer")
+        )
+        order = await service.create_definition(
+            EntityDefinitionCreate(
+                name="Order", slug="order",
+                fields=[EntityFieldCreate(name="Ref", slug="ref", field_type="text")],
+            )
+        )
+        await admin_session.commit()
+        rel = await service.create_relationship(
+            order.id,
+            EntityRelationshipCreate(
+                name="Customer", slug="customer",
+                cardinality="many_to_one", target_definition_id=customer.id, on_delete="RESTRICT",
+            ),
+        )
+        await admin_session.commit()
+
+        # Snapshot identifiers as plain values before any rollback/commit. A rollback
+        # expires all ORM objects in the session, so re-reading an attribute (e.g.
+        # org.id) afterwards triggers a lazy load — sync IO outside the async
+        # greenlet — which raises MissingGreenlet.
+        org_id = org.id
+        customer_id = customer.id
+        customer_table = customer.physical_table
+        order_id = order.id
+        order_table = order.physical_table
+        rel_name = rel.physical_name
+
+        async def _order_has_fk() -> bool:
+            col = (
+                await admin_session.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_name = :t AND column_name = :c"
+                    ),
+                    {"t": order_table, "c": rel_name},
+                )
+            ).scalar_one_or_none()
+            return col is not None
+
+        assert await _order_has_fk()
+
+        # Without force, the incoming reference blocks the drop.
+        with pytest.raises(EntityConflictError):
+            await service.drop_definition(customer_id)
+        await admin_session.rollback()
+
+        # With force, it succeeds and cleans up the referencing FK + catalog row.
+        await set_tenant(admin_session, str(org_id))
+        service = EntityService(admin_session, org_id)
+        await service.drop_definition(customer_id, force=True)
+        await admin_session.commit()
+
+        # Customer table + catalog row gone.
+        assert (
+            await admin_session.execute(text("SELECT to_regclass(:t)"), {"t": customer_table})
+        ).scalar_one() is None
+        assert await EntityDefinitionRepository(admin_session, org_id).get(customer_id) is None
+        # Referencing FK column dropped from the order table, catalog rel removed.
+        assert not await _order_has_fk()
+        assert await EntityRelationshipRepository(admin_session, org_id).list_for_source(order_id) == []
+
+    async def test_force_drop_referenced_by_m2m_drops_join_table(
+        self, admin_session: AsyncSession
+    ) -> None:
+        org = await _make_org(admin_session, "CE-FORCE-M2M")
+        await set_tenant(admin_session, str(org.id))
+        service = EntityService(admin_session, org.id)
+        student = await service.create_definition(EntityDefinitionCreate(name="Student", slug="student"))
+        course = await service.create_definition(EntityDefinitionCreate(name="Course", slug="course"))
+        await admin_session.commit()
+        rel = await service.create_relationship(
+            student.id,
+            EntityRelationshipCreate(
+                name="Courses", slug="courses",
+                cardinality="many_to_many", target_definition_id=course.id,
+            ),
+        )
+        await admin_session.commit()
+
+        # Force-drop the *target* (course); the join table references it.
+        await service.drop_definition(course.id, force=True)
+        await admin_session.commit()
+
+        assert (
+            await admin_session.execute(text("SELECT to_regclass(:t)"), {"t": rel.physical_name})
+        ).scalar_one() is None  # join table gone
+        assert await EntityRelationshipRepository(admin_session, org.id).list_for_source(student.id) == []
+
+
+class TestUpdateValidation:
+    async def test_update_nulling_required_field_is_client_error(
+        self, admin_session: AsyncSession, session: AsyncSession
+    ) -> None:
+        """PATCH setting a required scalar to null is a 400 (EntityRecordError),
+        not a NOT NULL 500."""
+        org = await _make_org(admin_session, "CE-UPD-REQ")
+        await set_tenant(admin_session, str(org.id))
+        definition = await EntityService(admin_session, org.id).create_definition(
+            EntityDefinitionCreate(
+                name="Widget", slug="widget",
+                fields=[
+                    EntityFieldCreate(name="Name", slug="name", field_type="text", is_required=True),
+                    EntityFieldCreate(name="Qty", slug="qty", field_type="integer"),
+                ],
+            )
+        )
+        await admin_session.commit()
+
+        await set_tenant(session, str(org.id))
+        repo = await _load_repo(session, org.id, definition.id)
+        created = await repo.create({"name": "W1", "qty": 3})
+        await session.commit()
+
+        await set_tenant(session, str(org.id))
+        repo = await _load_repo(session, org.id, definition.id)
+        rec_id = uuid.UUID(str(created["id"]))
+        with pytest.raises(EntityRecordError):
+            await repo.update(rec_id, {"name": None})
+        # A bad-typed integer on update is likewise a 400, never a codec 500.
+        with pytest.raises(EntityRecordError):
+            await repo.update(rec_id, {"qty": "not-a-number"})
 
 
 class TestRelationships:

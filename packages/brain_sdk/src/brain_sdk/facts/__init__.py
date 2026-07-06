@@ -36,6 +36,7 @@ from brain_sdk.facts.protocol import FactStore
 from brain_sdk.facts.reconciliation import ReconcileAction, ReconcileResult, reconcile
 from brain_sdk.facts.resolution import (
     EntityResolver,
+    PredicateResolver,
     ResolutionAction,
     ResolutionDecision,
     ResolutionThresholds,
@@ -64,9 +65,8 @@ __all__ = [
     "FactIngestPipeline",
     "FactStore",
     "ObjectType",
-    "detect_communities",
-    "score_case",
     "PredicateRegistry",
+    "PredicateResolver",
     "PredicateSpec",
     "Provenance",
     "ReconcileAction",
@@ -77,6 +77,8 @@ __all__ = [
     "compute_dedup_key",
     "compute_entity_id",
     "decide_resolution",
+    "detect_communities",
     "reconcile",
     "resolve_predicate",
+    "score_case",
 ]

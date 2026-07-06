@@ -45,6 +45,12 @@ def sweep_outbox(limit: int = 200) -> dict[str, Any] | None:
 
 
 @app.task  # type: ignore[untyped-decorator]
+def run_timers() -> dict[str, Any] | None:
+    """Resume due delayed runs + fire due scheduled workflows via the API."""
+    return _post("/api/internal/workflows/run-timers")
+
+
+@app.task  # type: ignore[untyped-decorator]
 def maintain_partitions(months_ahead: int = 2) -> None:
     """Pre-create upcoming month partitions for the workflow tables."""
     _post("/api/internal/workflows/maintain-partitions", {"months_ahead": months_ahead})

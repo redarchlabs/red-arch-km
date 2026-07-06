@@ -130,6 +130,23 @@ services:
     networks:
       - km2
 
+  # Dev mail catcher: accepts SMTP on 1025 and shows every captured message in a
+  # web UI on 8025 (nothing is delivered externally). Point the API's SMTP_* env
+  # at localhost:1025 to test intake-form emails end-to-end.
+  mailpit:
+    image: axllent/mailpit:v1.21
+    container_name: km2_mailpit
+    ports:
+      - "1025:1025" # SMTP
+      - "8025:8025" # web UI — open http://localhost:8025
+    environment:
+      MP_MAX_MESSAGES: "500"
+      MP_SMTP_AUTH_ACCEPT_ANY: "1"
+      MP_SMTP_AUTH_ALLOW_INSECURE: "1"
+    restart: unless-stopped
+    networks:
+      - km2
+
 volumes:
   postgres-data:
   redis-data:

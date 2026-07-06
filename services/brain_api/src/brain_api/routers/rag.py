@@ -28,10 +28,24 @@ router = APIRouter()
 
 
 class AskRequest(BaseModel):
+    """Retrieval request.
+
+    SECURITY (defense-in-depth note): brain-api sits behind a single shared
+    ``X-API-Key`` (``BRAIN_API_KEY``) and *trusts* the caller-supplied
+    ``tenant_id`` and ``access_keys`` — the key holder (the app backend) is
+    responsible for scoping these to the authenticated end user before calling.
+    That makes ``BRAIN_API_KEY`` a high-value secret: anyone holding it can read
+    ANY tenant's data by passing an arbitrary ``tenant_id``. It must never be
+    exposed to browsers/end users, only to server-side callers that have already
+    authenticated + authorized the request. ``tenant_id``/``access_keys`` are
+    bounded/typed below (length + int list) as a minimal guard, but the trust
+    boundary is the API key itself.
+    """
+
     tenant_id: str = Field(min_length=1, max_length=128)
     query: str = Field(min_length=1, max_length=5000)
     chat_history: list[dict[str, str]] = Field(default_factory=list)
-    access_keys: list[int] = Field(default_factory=list)
+    access_keys: list[int] = Field(default_factory=list, max_length=256)
     tags: list[str] = Field(default_factory=list)
     folder_tags: list[str] = Field(
         default_factory=list,

@@ -17,6 +17,11 @@ class OrgUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
     description: str | None = None
     use_knowledge_graph: bool | None = None
+    # Per-org OpenAI key (used by the config-assistant + AI OCR). Accepted in
+    # plaintext at this boundary and encrypted at rest by the router before it
+    # reaches the DB (services/crypto.py). Empty string clears it. Never
+    # returned in OrgRead — reads go through the internal decrypt path only.
+    openai_api_key: str | None = Field(default=None, max_length=500)
 
 
 class OrgRead(BaseModel):

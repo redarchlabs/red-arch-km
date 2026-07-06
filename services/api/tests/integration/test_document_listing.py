@@ -95,3 +95,63 @@ class TestDocumentListing:
         docs, total = await repo.list_for_folders(folder_ids=[], include_unfiled=True)
         assert {d.title for d in docs} == {"Unfiled"}
         assert total == 1
+
+
+class TestInheritingDocuments:
+    """``list_inheriting_in_folder`` underpins folder-permission propagation:
+    it must return docs that inherit the folder (NULL viewer config) and skip
+    those with their own override."""
+
+    async def test_returns_only_non_overridden_docs_in_folder(self, session: AsyncSession) -> None:
+        org = Org(name=f"Inherit-{uuid.uuid4().hex[:8]}", permission_number=1)
+        session.add(org)
+        await session.flush()
+        await set_tenant(session, str(org.id))
+
+        folder = Folder(name="HR", org_id=org.id, dot_path="HR")
+        other = Folder(name="IT", org_id=org.id, dot_path="IT")
+        session.add_all([folder, other])
+        await session.flush()
+
+        inherits = Document(title="Inherits", org_id=org.id, folder_id=folder.id, text="a")
+        # An explicit per-document override (non-NULL viewer config) must be excluded.
+        overridden = Document(
+            title="Overridden",
+            org_id=org.id,
+            folder_id=folder.id,
+            text="b",
+            viewer_permissions_config=[{"role": "manager"}],
+            view_permission_masks=[42],
+        )
+        # A doc in a different folder must not leak in.
+        elsewhere = Document(title="Elsewhere", org_id=org.id, folder_id=other.id, text="c")
+        session.add_all([inherits, overridden, elsewhere])
+        await session.flush()
+
+        repo = DocumentRepository(session, org.id)
+        found = await repo.list_inheriting_in_folder(folder.id)
+        assert {d.title for d in found} == {"Inherits"}
+
+    async def test_created_doc_inherits_rather_than_snapshots(self, session: AsyncSession) -> None:
+        """A document created in a folder has NULL viewer config (inherits it),
+        so a later folder-permission change can propagate to it."""
+        org = Org(name=f"Inherit2-{uuid.uuid4().hex[:8]}", permission_number=1)
+        session.add(org)
+        await session.flush()
+        await set_tenant(session, str(org.id))
+
+        folder = Folder(
+            name="Secure",
+            org_id=org.id,
+            dot_path="Secure",
+            viewer_permissions_config=[{"role": "admin"}],
+            view_permission_masks=[7],
+        )
+        session.add(folder)
+        await session.flush()
+
+        doc = await DocumentRepository(session, org.id).create(
+            title="Fresh", text="x", folder_id=folder.id
+        )
+        assert doc.viewer_permissions_config is None
+        assert doc.view_permission_masks == []

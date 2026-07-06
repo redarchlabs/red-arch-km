@@ -1,7 +1,7 @@
 [project]
 name = "shared-config"
 version = "1.0.0"
-description = "Shared Pydantic Settings + telemetry utilities for all Red Arch KM services"
+description = "Shared Pydantic Settings + telemetry utilities for all Red Arch Knowledge Manager services"
 requires-python = ">=3.12"
 dependencies = [
     "pydantic>=2.0",

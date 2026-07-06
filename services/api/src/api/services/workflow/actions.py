@@ -8,6 +8,8 @@ flag sprinkled through ``execute``.
 
 from __future__ import annotations
 
+import ipaddress
+import re
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -15,6 +17,12 @@ from typing import Any, Protocol
 from urllib.parse import urlparse
 
 from api.repositories.dynamic_entity import DynamicEntityRepository
+from api.services.email import is_valid_email
+
+# Outbound webhook timeout. Kept deliberately tight: the send runs INSIDE the
+# dispatch DB transaction (holding a pooled connection + the claimed outbox row
+# lock), so a slow endpoint directly bounds how long those resources are held.
+WEBHOOK_TIMEOUT_SECONDS = 10.0
 
 
 @dataclass
@@ -33,6 +41,15 @@ class ActionContext:
     repo_for_slug: Callable[[str], Awaitable[DynamicEntityRepository]]
     # Allow-listed webhook hosts (SSRF guard).
     webhook_allowlist: tuple[str, ...] = ()
+    # Mints an intake-form link bound to (form_id, record_id) and emails the
+    # recipient if given + SMTP configured. Returns (url, email_sent). None when
+    # form links aren't wired (e.g. the dry-run test path).
+    mint_form_link: (
+        Callable[[uuid.UUID, uuid.UUID, str | None], Awaitable[tuple[str, bool]]] | None
+    ) = None
+    # Sends a plain email (to, subject, body). Returns True if actually sent
+    # (SMTP configured), False otherwise. None on the dry-run test path.
+    send_email: Callable[[str, str, str], Awaitable[bool]] | None = None
 
 
 class ActionHandler(Protocol):
@@ -44,6 +61,11 @@ class ActionHandler(Protocol):
 
 
 ACTION_REGISTRY: dict[str, ActionHandler] = {}
+
+# Actions that reach OUTSIDE the workspace (email/webhook/form invite). A manual
+# run may only execute these when its inputs were loaded server-side from a real
+# record — never against free-form, client-supplied ``before``/``after`` data.
+SIDE_EFFECTING_ACTIONS: frozenset[str] = frozenset({"send_email", "send_webhook", "send_form"})
 
 
 def register(cls: type[ActionHandler]) -> type[ActionHandler]:
@@ -90,6 +112,21 @@ def _resolve_values(values: dict[str, Any], context: dict[str, Any]) -> dict[str
     return {key: _resolve_ref(value, context) for key, value in values.items()}
 
 
+# ``{{ after.first_name }}`` style tokens in email subject/body/recipient.
+_TEMPLATE_TOKEN = re.compile(r"\{\{\s*(before|after)\.([A-Za-z0-9_]+)\s*\}\}")
+
+
+def _render_template(template: str, context: dict[str, Any]) -> str:
+    """Substitute ``{{before.slug}}`` / ``{{after.slug}}`` tokens from the trigger
+    context. An unknown/missing field renders as an empty string (never raises)."""
+
+    def _sub(match: re.Match[str]) -> str:
+        value = _lookup(context, f"{match.group(1)}.{match.group(2)}")
+        return "" if value is None else str(value)
+
+    return _TEMPLATE_TOKEN.sub(_sub, template)
+
+
 @register
 class UpdateRecordField:
     type = "update_record_field"
@@ -134,6 +171,91 @@ class CreateRecord:
 
 
 @register
+class SendForm:
+    """Mint an intake-form link for the triggering record and email it.
+
+    Config: ``{"form_id": "<uuid>", "recipient": {"$ref": "after.email"}}`` (or a
+    literal email string). The link is bound to the triggering record so the
+    recipient's submission updates it."""
+
+    type = "send_form"
+
+    async def execute(self, ctx: ActionContext) -> dict[str, Any]:
+        form_id = ctx.config.get("form_id")
+        if not form_id:
+            raise ActionError("send_form requires form_id")
+        if ctx.record_id is None:
+            raise ActionError("send_form requires a triggering record")
+        if ctx.mint_form_link is None:
+            raise ActionError("form links are not available in this context")
+        # Recipient: prefer a field on the triggering record (recipient_field →
+        # after.<slug>), then a $ref, then a literal.
+        recipient = None
+        recipient_field = ctx.config.get("recipient_field")
+        if recipient_field:
+            recipient = (ctx.after or {}).get(recipient_field)
+        if not recipient:
+            recipient = _resolve_ref(ctx.config.get("recipient"), _trigger_context(ctx))
+        try:
+            form_uuid = uuid.UUID(str(form_id))
+        except ValueError as exc:
+            raise ActionError(f"invalid form_id: {form_id!r}") from exc
+        url, email_sent = await ctx.mint_form_link(
+            form_uuid, ctx.record_id, str(recipient) if recipient else None
+        )
+        return {"form_id": str(form_id), "url": url, "email_sent": email_sent}
+
+    def simulate(self, ctx: ActionContext) -> dict[str, Any]:
+        return {
+            "form_id": ctx.config.get("form_id"),
+            "recipient": _resolve_ref(ctx.config.get("recipient"), _trigger_context(ctx)),
+        }
+
+
+@register
+class SendEmail:
+    """Send a templated email.
+
+    Config: ``{"to": "...", "subject": "...", "body": "..."}``. Each field may
+    embed ``{{after.<slug>}}`` / ``{{before.<slug>}}`` tokens resolved against
+    the triggering record; ``to`` may instead be a ``{"$ref": "after.email"}``
+    envelope. Delivery is a no-op (``sent=False``) when SMTP isn't configured."""
+
+    type = "send_email"
+
+    async def execute(self, ctx: ActionContext) -> dict[str, Any]:
+        if ctx.send_email is None:
+            raise ActionError("email is not available in this context")
+        template_ctx = _trigger_context(ctx)
+        raw_to = ctx.config.get("to")
+        if isinstance(raw_to, dict):
+            # A $ref recipient envelope (e.g. {"$ref": "after.email"}).
+            resolved = _resolve_ref(raw_to, template_ctx)
+            to = str(resolved).strip() if resolved else ""
+        else:
+            to = _render_template(str(raw_to or ""), template_ctx).strip()
+        if not to:
+            raise ActionError("send_email requires a recipient (to)")
+        # Validate the resolved recipient before handing it to smtplib: a
+        # templated value could be malformed or carry a CR/LF header-injection
+        # payload. A bad address fails this action, not the SMTP conversation.
+        if not is_valid_email(to):
+            raise ActionError(f"send_email recipient is not a valid address: {to!r}")
+        subject = _render_template(str(ctx.config.get("subject", "")), template_ctx)
+        body = _render_template(str(ctx.config.get("body", "")), template_ctx)
+        sent = await ctx.send_email(to, subject, body)
+        return {"to": to, "subject": subject, "sent": sent}
+
+    def simulate(self, ctx: ActionContext) -> dict[str, Any]:
+        template_ctx = _trigger_context(ctx)
+        return {
+            "to": _render_template(str(ctx.config.get("to", "")), template_ctx),
+            "subject": _render_template(str(ctx.config.get("subject", "")), template_ctx),
+            "body": _render_template(str(ctx.config.get("body", "")), template_ctx),
+        }
+
+
+@register
 class SendWebhook:
     type = "send_webhook"
 
@@ -152,10 +274,12 @@ class SendWebhook:
         # even if it were allow-listed (guards against a rebinding mistake).
         if _is_private_host(host):
             raise ActionError(f"webhook host resolves to a private address: {host}")
+        # Deferred import: httpx is only needed when a webhook actually fires,
+        # keeping it off the hot import path for the common no-webhook workflow.
         import httpx
 
         payload = {"before": ctx.before, "after": ctx.after, **ctx.config.get("body", {})}
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=WEBHOOK_TIMEOUT_SECONDS) as client:
             resp = await client.post(url, json=payload)
         return {"url": url, "status_code": resp.status_code}
 
@@ -181,8 +305,6 @@ class LogAction:
 
 def _is_private_host(host: str) -> bool:
     """True if ``host`` is a literal private/loopback/link-local IP address."""
-    import ipaddress
-
     try:
         ip = ipaddress.ip_address(host)
     except ValueError:

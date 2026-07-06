@@ -29,4 +29,31 @@ func TestHealthz(t *testing.T) {
 	}
 }
 
-// Readyz tests require a database connection, so they are integration tests.
+// TestReadyzNilPool verifies readyz reports 503 (not ready) when the pool is
+// nil, e.g. DATABASE_URL was not configured. Reporting 200 in that case would
+// let a misconfigured deploy pass readiness with DB features silently
+// disabled.
+func TestReadyzNilPool(t *testing.T) {
+	handler := Readyz(nil)
+
+	r := httptest.NewRequest("GET", "/readyz", nil)
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, r)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusServiceUnavailable)
+	}
+
+	var resp HealthResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+
+	if resp.Status != "error" {
+		t.Errorf("status = %q, want %q", resp.Status, "error")
+	}
+}
+
+// Readyz tests with a live pool require a database connection, so they are
+// integration tests.

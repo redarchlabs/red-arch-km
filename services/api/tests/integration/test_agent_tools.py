@@ -13,7 +13,7 @@ from api.config import Settings
 from api.models.org import Org
 from api.repositories.custom_entity import EntityDefinitionRepository
 from api.services.agent import AgentService
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from .helpers import set_tenant
 
@@ -22,6 +22,18 @@ pytestmark = pytest.mark.integration
 
 def _settings() -> Settings:
     return Settings(secret_key="test")  # type: ignore[call-arg]
+
+
+def _agent(engine: AsyncEngine, org_id: uuid.UUID) -> AgentService:
+    """Build an AgentService against the test engine.
+
+    Post Finding 2, AgentService opens a fresh RLS-scoped session per tool call
+    from this factory (rather than borrowing a single request-scoped session),
+    so tool writes commit independently — exactly the production behaviour this
+    exercises. The separate ``admin_session`` then reads back the committed data.
+    """
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    return AgentService(org_id, _settings(), session_factory=factory)
 
 
 async def _org(admin_session: AsyncSession) -> Org:
@@ -33,9 +45,11 @@ async def _org(admin_session: AsyncSession) -> Org:
     return org
 
 
-async def test_agent_creates_entity_and_workflow(admin_session: AsyncSession) -> None:
+async def test_agent_creates_entity_and_workflow(
+    engine: AsyncEngine, admin_session: AsyncSession
+) -> None:
     org = await _org(admin_session)
-    agent = AgentService(admin_session, org.id, _settings())
+    agent = _agent(engine, org.id)
 
     # create_entity
     created = await agent._dispatch(
@@ -75,13 +89,15 @@ async def test_agent_creates_entity_and_workflow(admin_session: AsyncSession) ->
     assert wf["created_workflow"]["fires_on"] == "customer"
 
 
-async def test_agent_wires_workflow_trigger_and_action(admin_session: AsyncSession) -> None:
+async def test_agent_wires_workflow_trigger_and_action(
+    engine: AsyncEngine, admin_session: AsyncSession
+) -> None:
     """create_workflow seeds a draft graph with the intended trigger operation
     and a create_record action targeting another entity."""
     from api.repositories.workflow import WorkflowRepository, WorkflowVersionRepository
 
     org = await _org(admin_session)
-    agent = AgentService(admin_session, org.id, _settings())
+    agent = _agent(engine, org.id)
 
     await agent._dispatch("create_entity", {"name": "Customer", "fields": [{"name": "Email", "field_type": "text"}]})
     await agent._dispatch("create_entity", {"name": "Patient", "fields": [{"name": "Name", "field_type": "text"}]})
@@ -116,9 +132,11 @@ async def test_agent_wires_workflow_trigger_and_action(admin_session: AsyncSessi
     assert any(e["source"] == "trigger" and e["target"] == action["id"] for e in definition["edges"])
 
 
-async def test_agent_create_workflow_rejects_unknown_target(admin_session: AsyncSession) -> None:
+async def test_agent_create_workflow_rejects_unknown_target(
+    engine: AsyncEngine, admin_session: AsyncSession
+) -> None:
     org = await _org(admin_session)
-    agent = AgentService(admin_session, org.id, _settings())
+    agent = _agent(engine, org.id)
     await agent._dispatch("create_entity", {"name": "Customer", "fields": [{"name": "Email", "field_type": "text"}]})
 
     result = await agent._dispatch(
@@ -136,9 +154,11 @@ async def test_agent_create_workflow_rejects_unknown_target(admin_session: Async
     assert await WorkflowRepository(admin_session, org.id).list_all() == []
 
 
-async def test_agent_tool_errors_are_returned_not_raised(admin_session: AsyncSession) -> None:
+async def test_agent_tool_errors_are_returned_not_raised(
+    engine: AsyncEngine, admin_session: AsyncSession
+) -> None:
     org = await _org(admin_session)
-    agent = AgentService(admin_session, org.id, _settings())
+    agent = _agent(engine, org.id)
 
     # Unknown entity → structured error, not an exception.
     result = await agent._dispatch("get_entity_schema", {"slug": "nonexistent"})

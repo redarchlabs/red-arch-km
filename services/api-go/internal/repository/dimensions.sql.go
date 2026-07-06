@@ -22,12 +22,34 @@ func (q *Queries) CountDepartments(ctx context.Context) (int64, error) {
 	return count, err
 }
 
+const countDepartmentsForOrg = `-- name: CountDepartmentsForOrg :one
+SELECT COUNT(*) FROM departments WHERE org_id = $1
+`
+
+func (q *Queries) CountDepartmentsForOrg(ctx context.Context, orgID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countDepartmentsForOrg, orgID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countGroups = `-- name: CountGroups :one
 SELECT COUNT(*) FROM groups
 `
 
 func (q *Queries) CountGroups(ctx context.Context) (int64, error) {
 	row := q.db.QueryRow(ctx, countGroups)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countGroupsForOrg = `-- name: CountGroupsForOrg :one
+SELECT COUNT(*) FROM groups WHERE org_id = $1
+`
+
+func (q *Queries) CountGroupsForOrg(ctx context.Context, orgID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countGroupsForOrg, orgID)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -44,12 +66,34 @@ func (q *Queries) CountRegions(ctx context.Context) (int64, error) {
 	return count, err
 }
 
+const countRegionsForOrg = `-- name: CountRegionsForOrg :one
+SELECT COUNT(*) FROM regions WHERE org_id = $1
+`
+
+func (q *Queries) CountRegionsForOrg(ctx context.Context, orgID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countRegionsForOrg, orgID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countRoles = `-- name: CountRoles :one
 SELECT COUNT(*) FROM roles
 `
 
 func (q *Queries) CountRoles(ctx context.Context) (int64, error) {
 	row := q.db.QueryRow(ctx, countRoles)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countRolesForOrg = `-- name: CountRolesForOrg :one
+SELECT COUNT(*) FROM roles WHERE org_id = $1
+`
+
+func (q *Queries) CountRolesForOrg(ctx context.Context, orgID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countRolesForOrg, orgID)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -488,6 +532,44 @@ func (q *Queries) ListDepartments(ctx context.Context, arg ListDepartmentsParams
 	return items, nil
 }
 
+const listDepartmentsForOrg = `-- name: ListDepartmentsForOrg :many
+SELECT id, name, description, permission_number, org_id, created_at, updated_at FROM departments WHERE org_id = $1 ORDER BY name LIMIT $2 OFFSET $3
+`
+
+type ListDepartmentsForOrgParams struct {
+	OrgID  pgtype.UUID `json:"org_id"`
+	Limit  int32       `json:"limit"`
+	Offset int32       `json:"offset"`
+}
+
+func (q *Queries) ListDepartmentsForOrg(ctx context.Context, arg ListDepartmentsForOrgParams) ([]Department, error) {
+	rows, err := q.db.Query(ctx, listDepartmentsForOrg, arg.OrgID, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Department
+	for rows.Next() {
+		var i Department
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Description,
+			&i.PermissionNumber,
+			&i.OrgID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listGroups = `-- name: ListGroups :many
 SELECT id, name, description, permission_number, org_id, created_at, updated_at FROM groups ORDER BY name LIMIT $1 OFFSET $2
 `
@@ -499,6 +581,44 @@ type ListGroupsParams struct {
 
 func (q *Queries) ListGroups(ctx context.Context, arg ListGroupsParams) ([]Group, error) {
 	rows, err := q.db.Query(ctx, listGroups, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Group
+	for rows.Next() {
+		var i Group
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Description,
+			&i.PermissionNumber,
+			&i.OrgID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listGroupsForOrg = `-- name: ListGroupsForOrg :many
+SELECT id, name, description, permission_number, org_id, created_at, updated_at FROM groups WHERE org_id = $1 ORDER BY name LIMIT $2 OFFSET $3
+`
+
+type ListGroupsForOrgParams struct {
+	OrgID  pgtype.UUID `json:"org_id"`
+	Limit  int32       `json:"limit"`
+	Offset int32       `json:"offset"`
+}
+
+func (q *Queries) ListGroupsForOrg(ctx context.Context, arg ListGroupsForOrgParams) ([]Group, error) {
+	rows, err := q.db.Query(ctx, listGroupsForOrg, arg.OrgID, arg.Limit, arg.Offset)
 	if err != nil {
 		return nil, err
 	}
@@ -562,6 +682,44 @@ func (q *Queries) ListRegions(ctx context.Context, arg ListRegionsParams) ([]Reg
 	return items, nil
 }
 
+const listRegionsForOrg = `-- name: ListRegionsForOrg :many
+SELECT id, name, description, permission_number, org_id, created_at, updated_at FROM regions WHERE org_id = $1 ORDER BY name LIMIT $2 OFFSET $3
+`
+
+type ListRegionsForOrgParams struct {
+	OrgID  pgtype.UUID `json:"org_id"`
+	Limit  int32       `json:"limit"`
+	Offset int32       `json:"offset"`
+}
+
+func (q *Queries) ListRegionsForOrg(ctx context.Context, arg ListRegionsForOrgParams) ([]Region, error) {
+	rows, err := q.db.Query(ctx, listRegionsForOrg, arg.OrgID, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Region
+	for rows.Next() {
+		var i Region
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Description,
+			&i.PermissionNumber,
+			&i.OrgID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listRoles = `-- name: ListRoles :many
 SELECT id, name, description, permission_number, org_id, created_at, updated_at FROM roles ORDER BY name LIMIT $1 OFFSET $2
 `
@@ -573,6 +731,44 @@ type ListRolesParams struct {
 
 func (q *Queries) ListRoles(ctx context.Context, arg ListRolesParams) ([]Role, error) {
 	rows, err := q.db.Query(ctx, listRoles, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Role
+	for rows.Next() {
+		var i Role
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Description,
+			&i.PermissionNumber,
+			&i.OrgID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRolesForOrg = `-- name: ListRolesForOrg :many
+SELECT id, name, description, permission_number, org_id, created_at, updated_at FROM roles WHERE org_id = $1 ORDER BY name LIMIT $2 OFFSET $3
+`
+
+type ListRolesForOrgParams struct {
+	OrgID  pgtype.UUID `json:"org_id"`
+	Limit  int32       `json:"limit"`
+	Offset int32       `json:"offset"`
+}
+
+func (q *Queries) ListRolesForOrg(ctx context.Context, arg ListRolesForOrgParams) ([]Role, error) {
+	rows, err := q.db.Query(ctx, listRolesForOrg, arg.OrgID, arg.Limit, arg.Offset)
 	if err != nil {
 		return nil, err
 	}

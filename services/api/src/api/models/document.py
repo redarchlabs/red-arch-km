@@ -99,6 +99,15 @@ class Document(Base, UUIDMixin, TimestampMixin):
     metadata_: Mapped[dict[str, Any] | None] = mapped_column("metadata", JSONB, nullable=True, default=dict)
     use_knowledge_graph: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
 
+    # Per-document permissions, independent of the folder. Seeded from the
+    # folder at creation (the default) and overridable via the document's
+    # Properties. A NULL config means "no override" — entitlement then falls
+    # back to the folder's masks. Mirrors the Folder columns above.
+    view_permission_masks: Mapped[list[int]] = mapped_column(ARRAY(BIGINT), default=list, server_default="{}")
+    contributor_permission_masks: Mapped[list[int]] = mapped_column(ARRAY(BIGINT), default=list, server_default="{}")
+    viewer_permissions_config: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB, nullable=True)
+    contributor_permissions_config: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB, nullable=True)
+
     # Foreign keys
     org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True)
     folder_id: Mapped[uuid.UUID | None] = mapped_column(

@@ -73,6 +73,25 @@ class DocumentRepository:
         result = await self._session.execute(query)
         return list(result.scalars().all()), total
 
+    async def list_inheriting_in_folder(self, folder_id: uuid.UUID) -> list[Document]:
+        """Documents in a folder that inherit its viewer permissions.
+
+        A NULL ``viewer_permissions_config`` means the document has no override
+        of its own, so its entitlement tracks the folder. Used to propagate a
+        folder viewer-permission change to its non-overridden documents. Tags
+        are eager-loaded because the re-tag payload needs their names.
+        """
+        result = await self._session.execute(
+            select(Document)
+            .where(
+                Document.org_id == self._org_id,
+                Document.folder_id == folder_id,
+                Document.viewer_permissions_config.is_(None),
+            )
+            .options(selectinload(Document.tags))
+        )
+        return list(result.scalars().all())
+
     async def create(
         self,
         *,

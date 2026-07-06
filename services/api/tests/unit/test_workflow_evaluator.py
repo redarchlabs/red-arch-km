@@ -49,6 +49,24 @@ class TestTriggerMatches:
     def test_empty_field_filter_matches_any_update(self) -> None:
         assert trigger_matches({"operations": ["update"]}, "update", {"anything"})
 
+    def test_absent_operations_matches_any(self) -> None:
+        # Legacy definitions without the key fire on every operation.
+        assert trigger_matches({}, "delete", set())
+
+    def test_explicit_empty_operations_matches_none(self) -> None:
+        # A schedule-only workflow unchecks all change operations.
+        assert not trigger_matches({"operations": []}, "update", set())
+
+    def test_form_source_filter(self) -> None:
+        data = {"operations": ["update"], "source": "form"}
+        assert trigger_matches(data, "update", set(), source="form")
+        assert not trigger_matches(data, "update", set(), source="record")
+
+    def test_any_source_matches_form_and_record(self) -> None:
+        data = {"operations": ["update"], "source": "any"}
+        assert trigger_matches(data, "update", set(), source="form")
+        assert trigger_matches(data, "update", set(), source="record")
+
 
 def _graph(nodes, edges):
     return {"nodes": nodes, "edges": edges}
@@ -136,3 +154,90 @@ class TestEvaluateGraph:
         )
         result = evaluate_graph(g, {})
         assert [n["id"] for n in result.actions] == ["a1", "a2"]
+
+
+class TestSwitchNode:
+    def _graph(self):
+        return _graph(
+            [
+                {"id": "t", "type": "trigger", "data": {}},
+                {
+                    "id": "s",
+                    "type": "switch",
+                    "data": {
+                        "cases": [
+                            {"handle": "hi", "expr": {">": [{"var": "after.n"}, 100]}},
+                            {"handle": "mid", "expr": {">": [{"var": "after.n"}, 10]}},
+                        ]
+                    },
+                },
+                {"id": "a_hi", "type": "action", "data": {}},
+                {"id": "a_mid", "type": "action", "data": {}},
+                {"id": "a_def", "type": "action", "data": {}},
+            ],
+            [
+                {"id": "e0", "source": "t", "target": "s"},
+                {"id": "e1", "source": "s", "target": "a_hi", "source_handle": "hi"},
+                {"id": "e2", "source": "s", "target": "a_mid", "source_handle": "mid"},
+                {"id": "e3", "source": "s", "target": "a_def", "source_handle": "default"},
+            ],
+        )
+
+    def test_first_matching_case_wins(self) -> None:
+        result = evaluate_graph(self._graph(), {"after": {"n": 500}})
+        assert [n["id"] for n in result.actions] == ["a_hi"]
+
+    def test_second_case(self) -> None:
+        result = evaluate_graph(self._graph(), {"after": {"n": 50}})
+        assert [n["id"] for n in result.actions] == ["a_mid"]
+
+    def test_default_when_no_case_matches(self) -> None:
+        result = evaluate_graph(self._graph(), {"after": {"n": 1}})
+        assert [n["id"] for n in result.actions] == ["a_def"]
+
+
+class TestDelayNode:
+    def _graph(self):
+        return _graph(
+            [
+                {"id": "t", "type": "trigger", "data": {}},
+                {"id": "a1", "type": "action", "data": {"action_type": "first"}},
+                {"id": "d", "type": "delay", "data": {"delay_seconds": 3600}},
+                {"id": "a2", "type": "action", "data": {"action_type": "second"}},
+            ],
+            [
+                {"id": "e0", "source": "t", "target": "a1"},
+                {"id": "e1", "source": "a1", "target": "d"},
+                {"id": "e2", "source": "d", "target": "a2"},
+            ],
+        )
+
+    def test_pauses_at_delay_returning_pre_delay_actions(self) -> None:
+        result = evaluate_graph(self._graph(), {})
+        assert result.matched is True
+        assert result.paused is True
+        assert result.delay_seconds == 3600
+        assert result.resume_node_id == "a2"
+        assert [n["id"] for n in result.actions] == ["a1"]
+
+    def test_resume_from_node_runs_remaining_actions(self) -> None:
+        result = evaluate_graph(self._graph(), {}, start_node_id="a2")
+        assert result.paused is False
+        assert [n["id"] for n in result.actions] == ["a2"]
+
+    def test_delay_first_still_matches(self) -> None:
+        g = _graph(
+            [
+                {"id": "t", "type": "trigger", "data": {}},
+                {"id": "d", "type": "delay", "data": {"delay_seconds": 60}},
+                {"id": "a", "type": "action", "data": {}},
+            ],
+            [
+                {"id": "e0", "source": "t", "target": "d"},
+                {"id": "e1", "source": "d", "target": "a"},
+            ],
+        )
+        result = evaluate_graph(g, {})
+        assert result.matched is True
+        assert result.actions == []
+        assert result.resume_node_id == "a"

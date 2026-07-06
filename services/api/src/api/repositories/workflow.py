@@ -57,6 +57,7 @@ class OutboxWriter:
         after: dict[str, Any] | None,
         actor_user_id: uuid.UUID | None = None,
         origin_run_id: uuid.UUID | None = None,
+        source: str = "record",
     ) -> None:
         row = WorkflowOutbox(
             org_id=org_id,
@@ -68,6 +69,7 @@ class OutboxWriter:
             after_data=json_safe(after) if after is not None else None,
             actor_user_id=actor_user_id,
             origin_run_id=origin_run_id,
+            source=source,
         )
         self._session.add(row)
         await self._session.flush()
@@ -126,6 +128,7 @@ class WorkflowRepository:
         description: str | None = None,
         enabled: bool | None = None,
         active_version_id: uuid.UUID | None = None,
+        run_permission: dict[str, Any] | None = None,
     ) -> Workflow:
         if name is not None:
             wf.name = name
@@ -135,6 +138,8 @@ class WorkflowRepository:
             wf.enabled = enabled
         if active_version_id is not None:
             wf.active_version_id = active_version_id
+        if run_permission is not None:
+            wf.run_permission = run_permission
         await self._session.flush()
         return wf
 

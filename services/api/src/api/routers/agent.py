@@ -15,13 +15,13 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth.dependencies import OrgContext, require_org_admin
 from api.config import Settings, get_settings
-from api.dependencies import get_db
+from api.db import get_session_factory
 from api.models.org import Org
-from api.services.agent import AgentService
+from api.services.agent import AgentService, apply_tenant_scope
+from api.services.crypto import decrypt_secret
 
 router = APIRouter()
 
@@ -39,22 +39,35 @@ class AgentChatRequest(BaseModel):
 async def agent_chat_stream(
     body: AgentChatRequest,
     ctx: Annotated[OrgContext, Depends(require_org_admin)],
-    session: Annotated[AsyncSession, Depends(get_db)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> StreamingResponse:
-    org = (await session.execute(select(Org).where(Org.id == ctx.org_id))).scalar_one_or_none()
-    org_key = org.openai_api_key if org else None
-    agent = AgentService(session, ctx.org_id, settings, org_openai_key=org_key)
+    # Deliberately NOT depending on get_db: a request-scoped session would stay
+    # open (pinning a pool connection) for the whole SSE stream — the entire
+    # multi-iteration LLM loop. Instead we do a short-lived read for the org key
+    # here, then hand AgentService the session factory so it opens a fresh
+    # short-lived session per tool call and commits per tool (Finding 2). These
+    # sessions keep the privileged get_db role (the assistant runs schema DDL);
+    # see AgentService.apply_tenant_scope for why RLS/app_user is not used.
+    factory = get_session_factory(settings)
+    org_key: str | None = None
+    async with factory() as session:
+        await apply_tenant_scope(session, ctx.org_id)
+        org = (await session.execute(select(Org).where(Org.id == ctx.org_id))).scalar_one_or_none()
+        stored = org.openai_api_key if org else None
+        # Stored encrypted at rest (services/crypto.py); decrypt for the client.
+        if stored:
+            org_key = decrypt_secret(stored, settings.org_encryption_key.get_secret_value())
+
+    agent = AgentService(ctx.org_id, settings, session_factory=factory, org_openai_key=org_key)
     history = [{"role": m.role, "content": m.content} for m in body.messages]
 
     async def iterator() -> AsyncGenerator[bytes]:
         try:
             async for event in agent.run_stream(history):
                 yield f"data: {json.dumps(event, default=str)}\n\n".encode()
-            # Commit any tool-driven DB changes once the run completes cleanly.
-            await session.commit()
         except Exception:  # noqa: BLE001 - never break the SSE frame contract
-            await session.rollback()
+            # Per-tool sessions are already committed/rolled back inside the
+            # loop; there is no request-scoped transaction to unwind here.
             yield b'data: {"type": "error", "error": "Stream failed"}\n\n'
 
     return StreamingResponse(

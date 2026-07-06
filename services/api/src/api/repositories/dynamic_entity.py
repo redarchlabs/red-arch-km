@@ -14,15 +14,22 @@ slugs for the same reason.
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from sqlalchemy import Column, MetaData, Table, func, or_, select, text, tuple_
+from sqlalchemy import Column, MetaData, Table, bindparam, func, or_, select, text, tuple_
 from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.models.custom_entity import EntityDefinition, EntityField, EntityRelationship
+from api.repositories.workflow import OutboxWriter
 from api.services import identifiers
 from api.services.schema_manager import SEARCHABLE_FIELD_TYPES, _sa_type
+
+# Case-insensitive string spellings accepted for a JSON-delivered boolean field.
+_TRUE_STRINGS = frozenset({"true", "t", "1", "yes", "y", "on"})
+_FALSE_STRINGS = frozenset({"false", "f", "0", "no", "n", "off"})
 
 # Base columns present on every entity table, exposed read-only.
 _BASE_READ_COLUMNS = ("id", "created_at", "updated_at")
@@ -47,15 +54,16 @@ class EntityRecordError(ValueError):
 class DynamicEntityRepository:
     def __init__(
         self,
-        session: Any,
+        session: AsyncSession,
         org_id: uuid.UUID,
         definition: EntityDefinition,
         fields: list[EntityField],
         relationships: list[EntityRelationship] | None = None,
         *,
-        outbox: Any = None,
+        outbox: OutboxWriter | None = None,
         actor_user_id: uuid.UUID | None = None,
         origin_run_id: uuid.UUID | None = None,
+        outbox_source: str = "record",
     ) -> None:
         self._session = session
         self._org_id = org_id
@@ -68,6 +76,7 @@ class DynamicEntityRepository:
         self._outbox = outbox
         self._actor_user_id = actor_user_id
         self._origin_run_id = origin_run_id
+        self._outbox_source = outbox_source
 
         # slug <-> physical maps for writable columns (fields + to-one FKs).
         self._slug_to_col: dict[str, str] = {f.slug: f.physical_column for f in fields}
@@ -97,12 +106,16 @@ class DynamicEntityRepository:
     def _coerce_value(field: EntityField | None, value: Any) -> Any:
         """Coerce a JSON-decoded scalar into the Python type asyncpg requires.
 
-        JSON only carries strings/numbers, but asyncpg's binary codecs are
-        strict: a ``date`` column needs a ``datetime.date`` and a ``timestamptz``
-        column a timezone-aware ``datetime`` — an ISO *string* makes the codec
-        raise ``'str' object has no attribute 'toordinal'``, which would surface
-        as an unhandled HTTP 500. Parse date/time fields here; malformed input
-        raises ``EntityRecordError`` (mapped to HTTP 400) instead.
+        JSON only carries strings/numbers/booleans, but asyncpg's binary codecs
+        are strict: a ``date`` column needs a ``datetime.date``; a numeric column
+        rejects the string ``"abc"``; an integer column rejects ``"42"`` /
+        ``"true"``. Handing any of those to the codec raises deep in the driver
+        and surfaces as an unhandled HTTP 500. We coerce + validate every scalar
+        type whose JSON form can mismatch here; malformed input raises
+        ``EntityRecordError`` (mapped to HTTP 400) instead.
+
+        Only *string* inputs are coerced — a JSON number/boolean already decodes
+        to the right Python type and passes through untouched.
         """
         if field is None or not isinstance(value, str):
             return value
@@ -119,7 +132,29 @@ class DynamicEntityRepository:
                 raise EntityRecordError(f"{field.slug!r} must be a valid date-time") from exc
             # A ``datetime-local`` input carries no zone; treat naive values as UTC
             # so asyncpg (which rejects naive datetimes for timestamptz) accepts it.
-            return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+            return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
+        if field.field_type in ("integer", "bigint"):
+            # int() is strict: it rejects trailing garbage ("42abc"), floats
+            # ("42.5"), and non-numeric text ("true"/"abc").
+            try:
+                return int(value.strip())
+            except ValueError as exc:
+                raise EntityRecordError(f"{field.slug!r} must be a whole number") from exc
+        if field.field_type == "numeric":
+            try:
+                dec = Decimal(value.strip())
+            except (InvalidOperation, ValueError) as exc:
+                raise EntityRecordError(f"{field.slug!r} must be a number") from exc
+            if not dec.is_finite():  # reject NaN / Infinity that Decimal accepts but is nonsense here
+                raise EntityRecordError(f"{field.slug!r} must be a finite number")
+            return dec
+        if field.field_type == "boolean":
+            normalized = value.strip().casefold()
+            if normalized in _TRUE_STRINGS:
+                return True
+            if normalized in _FALSE_STRINGS:
+                return False
+            raise EntityRecordError(f"{field.slug!r} must be a boolean")
         return value
 
     def _to_row(self, payload: dict[str, Any], *, for_create: bool) -> dict[str, Any]:
@@ -134,6 +169,16 @@ class DynamicEntityRepository:
         row: dict[str, Any] = {}
         for slug, value in payload.items():
             field = self._field_by_slug.get(slug)
+            rel = self._rel_by_slug.get(slug)
+            # Explicitly setting a required scalar/relationship to null is a 400,
+            # not a 500. Without this, a required scalar hits the column's NOT NULL
+            # constraint (unhandled IntegrityError) and a required relationship —
+            # whose FK column is physically nullable — would silently null out.
+            if value is None and (
+                (field is not None and field.is_required)
+                or (rel is not None and rel.is_required)
+            ):
+                raise EntityRecordError(f"{slug!r} is required and cannot be null")
             if field is not None and field.field_type == "picklist" and value is not None:
                 options = field.picklist_options or []
                 if value not in options:
@@ -186,6 +231,7 @@ class DynamicEntityRepository:
             after=after,
             actor_user_id=self._actor_user_id,
             origin_run_id=self._origin_run_id,
+            source=self._outbox_source,
         )
 
     async def _validate_relationships(self, payload: dict[str, Any]) -> None:
@@ -194,7 +240,12 @@ class DynamicEntityRepository:
         Postgres FK checks run as the table owner and bypass RLS, so the DB alone
         won't stop a cross-tenant link — validate ownership explicitly against the
         (trusted, catalog-derived) target table filtered by org_id.
+
+        Batched to avoid an N+1: one query resolves every target's physical table
+        and one existence query runs per *distinct* target table (relationships
+        are capped at 50, and only present, non-null ones are checked).
         """
+        present: list[tuple[str, EntityRelationship, uuid.UUID]] = []
         for slug, rel in self._rel_by_slug.items():
             if slug not in payload or payload[slug] is None:
                 continue
@@ -202,24 +253,47 @@ class DynamicEntityRepository:
                 value = uuid.UUID(str(payload[slug]))
             except (ValueError, TypeError) as exc:
                 raise EntityRecordError(f"{slug!r} must be a record id (uuid)") from exc
-            target_table = (
-                await self._session.execute(
-                    select(EntityDefinition.physical_table).where(
-                        EntityDefinition.id == rel.target_definition_id,
-                        EntityDefinition.org_id == self._org_id,
-                    )
+            present.append((slug, rel, value))
+        if not present:
+            return
+
+        # One query for all target physical tables (org-scoped).
+        target_def_ids = {rel.target_definition_id for _, rel, _ in present}
+        rows = (
+            await self._session.execute(
+                select(EntityDefinition.id, EntityDefinition.physical_table).where(
+                    EntityDefinition.id.in_(target_def_ids),
+                    EntityDefinition.org_id == self._org_id,
                 )
-            ).scalar_one_or_none()
-            if target_table is None:
+            )
+        ).all()
+        table_by_def = {r[0]: r[1] for r in rows}
+
+        # Group the ids to verify by physical table so each distinct table costs
+        # a single existence query rather than one per relationship.
+        ids_by_table: dict[str, set[uuid.UUID]] = {}
+        for slug, rel, value in present:
+            table = table_by_def.get(rel.target_definition_id)
+            if table is None:
                 raise EntityRecordError(f"unknown relationship target for {slug!r}")
-            # target_table is a catalog-derived generated identifier validated +
-            # quoted by identifiers.quote(); id/org are bound parameters.
-            sql = f"SELECT 1 FROM {identifiers.quote(target_table)} WHERE id = :val AND org_id = :org"  # noqa: S608
-            exists = (
-                await self._session.execute(text(sql), {"val": value, "org": self._org_id})
-            ).first()
-            if exists is None:
-                raise EntityRecordError(f"{slug!r} references a record not in this org")
+            ids_by_table.setdefault(table, set()).add(value)
+
+        for table, ids in ids_by_table.items():
+            # table is a catalog-derived generated identifier validated + quoted
+            # by identifiers.quote(); ids/org are bound parameters (expanding IN).
+            sql = f"SELECT id FROM {identifiers.quote(table)} WHERE org_id = :org AND id IN :ids"  # noqa: S608
+            stmt = text(sql).bindparams(bindparam("ids", expanding=True))
+            found = set(
+                (await self._session.execute(stmt, {"org": self._org_id, "ids": list(ids)})).scalars().all()
+            )
+            missing = ids - found
+            if missing:
+                bad_slug = next(
+                    slug
+                    for slug, rel, value in present
+                    if table_by_def.get(rel.target_definition_id) == table and value in missing
+                )
+                raise EntityRecordError(f"{bad_slug!r} references a record not in this org")
 
     async def create(self, payload: dict[str, Any]) -> dict[str, Any]:
         await self._validate_relationships(payload)
@@ -258,7 +332,11 @@ class DynamicEntityRepository:
         limit = max(1, min(limit, 200))
         conditions = [self._table.c.org_id == self._org_id]
         for slug, value in (filters or {}).items():
-            conditions.append(self._column(slug) == value)
+            # Coerce the filter value with the same rules as writes so a
+            # bad-typed filter (e.g. "abc" against an integer column) raises a
+            # clean EntityRecordError (400) rather than an asyncpg codec 500.
+            coerced = self._coerce_value(self._field_by_slug.get(slug), value)
+            conditions.append(self._column(slug) == coerced)
 
         if search and search.strip():
             pattern = f"%{_escape_like(search.strip())}%"
@@ -300,6 +378,11 @@ class DynamicEntityRepository:
         row = self._to_row(patch, for_create=False)
         if not row:
             return await self.get(record_id)
+        # NOTE: the "before" audit snapshot is read without a FOR UPDATE row lock,
+        # so a concurrent update between this read and the UPDATE below could make
+        # the captured "before" slightly stale. Acceptable for change-capture
+        # (the outbox is advisory, not the source of truth); revisit with a
+        # locked read if exact before/after diffs become a hard requirement.
         before = await self.get(record_id) if self._outbox is not None else None
         row["updated_at"] = func.now()
         stmt = (

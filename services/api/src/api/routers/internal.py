@@ -24,6 +24,7 @@ from api.db import get_session_factory
 from api.models.document import ProcessingStatus
 from api.models.org import Org
 from api.repositories.document import DocumentRepository
+from api.services.crypto import decrypt_secret
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -108,10 +109,12 @@ async def get_org_openai_key(
 ) -> OrgOpenAIKey:
     """Return the per-org OpenAI key so the worker can use it for AI OCR.
 
-    The worker calls this (not the Celery payload) so the secret never rides
-    the broker. A null key tells the worker to fall back to the central
-    OPENAI_API_KEY. Uses a dedicated RLS-scoped session, mirroring the status
-    callback — the worker has no user JWT.
+    The worker (the only cross-service consumer) calls this — not the Celery
+    payload — so the secret never rides the broker. The key is stored encrypted
+    at rest (see services/crypto.py); we decrypt it here before returning. A null
+    key tells the worker to fall back to the central OPENAI_API_KEY. Uses a
+    dedicated RLS-scoped session, mirroring the status callback — the worker has
+    no user JWT. Never log the decrypted value.
     """
     factory = get_session_factory(settings)
     async with factory() as session:
@@ -123,7 +126,13 @@ async def get_org_openai_key(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Org not found",
             )
-        return OrgOpenAIKey(openai_api_key=org.openai_api_key)
+        stored = org.openai_api_key
+        plaintext = (
+            decrypt_secret(stored, settings.org_encryption_key.get_secret_value())
+            if stored
+            else None
+        )
+        return OrgOpenAIKey(openai_api_key=plaintext)
 
 
 class DispatchResult(BaseModel):
@@ -147,21 +156,77 @@ async def dispatch_workflows(
     """Claim and process a batch of pending workflow-outbox events.
 
     Runs on the privileged session (no tenant context) so the cross-org claim
-    sees every tenant; the dispatcher scopes each event's work by org_id.
+    (``FOR UPDATE SKIP LOCKED``) sees every tenant. The dispatcher then downgrades
+    to ``app_user`` + sets ``app.current_tenant_id`` PER EVENT (see
+    ``WorkflowDispatchService._enter_tenant``), so every action write is a real
+    RLS-enforced write scoped to that event's org — a privileged session is used
+    only for the cross-org claim, never for the per-tenant action writes.
     """
+    from api.services.email import EmailSender
     from api.services.workflow.dispatcher import WorkflowDispatchService
 
     allowlist = tuple(getattr(settings, "workflow_webhook_allowlist", ()) or ())
     factory = get_session_factory(settings)
     async with factory() as session:
         try:
-            service = WorkflowDispatchService(session, webhook_allowlist=allowlist)
+            service = WorkflowDispatchService(
+                session,
+                webhook_allowlist=allowlist,
+                public_base_url=settings.public_base_url,
+                email_sender=EmailSender(settings),
+            )
             counters = await service.process_pending(limit=limit)
             await session.commit()
             return DispatchResult(**{k: counters.get(k, 0) for k in ("events", "runs", "actions", "skipped")})
         except Exception:
             await session.rollback()
             logger.exception("workflow dispatch batch failed")
+            raise
+
+
+class TimerResult(BaseModel):
+    """Counters returned by a workflow run-timers sweep."""
+
+    resumed: int = 0
+    scheduled: int = 0
+    actions: int = 0
+
+
+@router.post(
+    "/workflows/run-timers",
+    dependencies=[Depends(require_internal_api_key)],
+    response_model=TimerResult,
+)
+async def run_workflow_timers(
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> TimerResult:
+    """Resume delayed runs that are due + fire due scheduled workflows.
+
+    Time-based work (unlike the change-driven outbox sweep): runs on the
+    privileged session so the cross-org scan/claim sees every tenant. As with
+    dispatch-batch, the dispatcher downgrades to ``app_user`` + the tenant GUC
+    per resumed run / per scheduled workflow, so each unit's writes are RLS-
+    enforced for that org rather than running privileged.
+    """
+    from api.services.email import EmailSender
+    from api.services.workflow.dispatcher import WorkflowDispatchService
+
+    allowlist = tuple(settings.workflow_webhook_allowlist or ())
+    factory = get_session_factory(settings)
+    async with factory() as session:
+        try:
+            service = WorkflowDispatchService(
+                session,
+                webhook_allowlist=allowlist,
+                public_base_url=settings.public_base_url,
+                email_sender=EmailSender(settings),
+            )
+            counters = await service.process_timers()
+            await session.commit()
+            return TimerResult(**{k: counters.get(k, 0) for k in ("resumed", "scheduled", "actions")})
+        except Exception:
+            await session.rollback()
+            logger.exception("workflow run-timers sweep failed")
             raise
 
 

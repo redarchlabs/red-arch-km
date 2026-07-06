@@ -15,10 +15,21 @@ class WorkflowCreate(BaseModel):
     description: str | None = Field(default=None, max_length=2000)
 
 
+class RunPermission(BaseModel):
+    """Who may MANUALLY run a workflow. Org admins always may; ``mode`` widens it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["org_admin", "any_member", "roles"] = "org_admin"
+    role_ids: list[uuid.UUID] = Field(default_factory=list)
+    group_ids: list[uuid.UUID] = Field(default_factory=list)
+
+
 class WorkflowUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=2000)
     enabled: bool | None = None
+    run_permission: RunPermission | None = None
 
 
 class WorkflowVersionRead(BaseModel):
@@ -40,6 +51,24 @@ class WorkflowRead(BaseModel):
     entity_definition_id: uuid.UUID
     enabled: bool
     active_version_id: uuid.UUID | None
+    run_permission: RunPermission = Field(default_factory=RunPermission)
+
+
+class ManualRunRequest(BaseModel):
+    """Run the published workflow for real against provided inputs."""
+
+    operation: Literal["create", "update", "delete"] = "update"
+    record_id: uuid.UUID | None = None
+    before: dict[str, Any] | None = None
+    after: dict[str, Any] | None = None
+
+
+class ManualRunResult(BaseModel):
+    run_id: uuid.UUID
+    status: str
+    conditions_matched: bool
+    actions_executed: int = 0
+    error: str | None = None
 
 
 class VersionSaveRequest(BaseModel):

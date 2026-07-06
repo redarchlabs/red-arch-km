@@ -155,6 +155,27 @@ async def test_edit_inline_doc_updates_text_and_reingests(wiring: dict[str, Any]
     wiring["brain"].remove_document.assert_awaited_once()
 
 
+async def test_edit_doc_with_own_perms_uses_doc_masks_not_folder(wiring: dict[str, Any]) -> None:
+    # A document that carries its own viewer permissions must re-ingest with ITS
+    # masks, not the folder's — per-document permissions take precedence.
+    wiring["doc"] = _fake_doc(
+        document_url=None,
+        folder_id=FOLDER_ID,
+        viewer_permissions_config=[{"role": "manager"}],
+        view_permission_masks=[42],
+    )
+    wiring["folder"] = SimpleNamespace(id=FOLDER_ID, view_permission_masks=[7])
+
+    async with _client(_build_app()) as client:
+        resp = await client.put(f"/api/documents/{uuid.uuid4()}/content", json={"text": "# Hi\n"})
+
+    assert resp.status_code == 200
+    ingest = wiring["ingest"]
+    assert ingest is not None
+    assert ingest["access_keys"] == [42]
+    assert f"folder:{FOLDER_ID}" in ingest["tags"]
+
+
 async def test_edit_stored_markdown_rewrites_object_and_reextracts(wiring: dict[str, Any]) -> None:
     key = f"{ORG_ID}/deadbeef/notes.md"
     wiring["doc"] = _fake_doc(document_url=key, title="notes.md")

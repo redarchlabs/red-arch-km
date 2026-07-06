@@ -194,13 +194,11 @@ async def create_document(
     # Byte-length of pasted text (uploaded files set this from the file size).
     doc.size_bytes = len(body.text.encode("utf-8")) if body.text else None
 
-    # Seed the document's own permissions from its folder (the per-document
-    # default); an admin can later override them via the document's Properties.
-    if folder is not None:
-        doc.viewer_permissions_config = folder.viewer_permissions_config
-        doc.contributor_permissions_config = folder.contributor_permissions_config
-        doc.view_permission_masks = list(folder.view_permission_masks or [])
-        doc.contributor_permission_masks = list(folder.contributor_permission_masks or [])
+    # The document is created WITHOUT its own permissions (NULL config): it
+    # inherits its folder's entitlement, so a later folder-permission change
+    # propagates to it. An admin can override it via the document's Properties,
+    # at which point it stops inheriting. The initial ingest below still scopes
+    # to the folder's masks (see ``access_keys`` above).
 
     # Commit before dispatching so the worker can read the row via the API
     await session.commit()
@@ -351,13 +349,10 @@ async def _stage_document(
     )
     doc.size_bytes = len(content)  # original file size, for the explorer's size column
 
-    # Seed the document's own permissions from its folder (per-document default;
-    # overridable later via the document's Properties dialog).
-    if folder is not None:
-        doc.viewer_permissions_config = folder.viewer_permissions_config
-        doc.contributor_permissions_config = folder.contributor_permissions_config
-        doc.view_permission_masks = list(folder.view_permission_masks or [])
-        doc.contributor_permission_masks = list(folder.contributor_permission_masks or [])
+    # No per-document permissions (NULL config): the document inherits its
+    # folder's entitlement so a later folder-permission change propagates to it.
+    # Overridable via the document's Properties. The dispatch payload below still
+    # scopes to the folder's masks (see ``access_keys``).
 
     object_key = f"{ctx.org_id}/{doc.document_key}/{filename}"
     try:
