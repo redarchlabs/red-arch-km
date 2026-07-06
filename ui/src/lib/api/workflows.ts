@@ -1,6 +1,6 @@
 import apiClient from "./client";
 
-export type NodeType = "trigger" | "condition" | "action";
+export type NodeType = "trigger" | "condition" | "action" | "switch" | "delay";
 
 export interface GraphNode {
   id: string;
@@ -24,6 +24,14 @@ export interface WorkflowDefinition {
 
 export type VersionStatus = "draft" | "published" | "archived";
 
+export type RunPermissionMode = "org_admin" | "any_member" | "roles";
+
+export interface RunPermission {
+  mode: RunPermissionMode;
+  role_ids: string[];
+  group_ids: string[];
+}
+
 export interface Workflow {
   id: string;
   name: string;
@@ -31,6 +39,15 @@ export interface Workflow {
   entity_definition_id: string;
   enabled: boolean;
   active_version_id: string | null;
+  run_permission: RunPermission;
+}
+
+export interface ManualRunResult {
+  run_id: string;
+  status: RunStatus;
+  conditions_matched: boolean;
+  actions_executed: number;
+  error: string | null;
 }
 
 export interface WorkflowVersion {
@@ -48,7 +65,7 @@ export interface WorkflowTestResult {
   steps: { node_id: string; action_type: string; simulated_output: Record<string, unknown> }[];
 }
 
-export type RunStatus = "pending" | "running" | "succeeded" | "failed" | "skipped";
+export type RunStatus = "pending" | "running" | "waiting" | "succeeded" | "failed" | "skipped";
 
 export interface WorkflowRun {
   id: string;
@@ -98,9 +115,27 @@ export async function createWorkflow(input: {
 
 export async function updateWorkflow(
   id: string,
-  input: { name?: string; description?: string | null; enabled?: boolean },
+  input: {
+    name?: string;
+    description?: string | null;
+    enabled?: boolean;
+    run_permission?: RunPermission;
+  },
 ): Promise<Workflow> {
   return (await apiClient.patch<Workflow>(`/workflows/${id}`, input)).data;
+}
+
+/** Run the published workflow for real against provided inputs. */
+export async function runWorkflow(
+  id: string,
+  input: {
+    operation: string;
+    record_id?: string | null;
+    before?: Record<string, unknown> | null;
+    after?: Record<string, unknown> | null;
+  },
+): Promise<ManualRunResult> {
+  return (await apiClient.post<ManualRunResult>(`/workflows/${id}/run`, input)).data;
 }
 
 export async function deleteWorkflow(id: string): Promise<void> {

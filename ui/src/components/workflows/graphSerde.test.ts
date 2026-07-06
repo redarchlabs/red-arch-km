@@ -1,7 +1,7 @@
 import type { Edge, Node } from "@xyflow/react";
 import { describe, expect, it } from "vitest";
 
-import { normalizeForSave, toDefinition, toReactFlow } from "./graphSerde";
+import { checkGraphIntegrity, normalizeForSave, toDefinition, toReactFlow } from "./graphSerde";
 import type { WorkflowDefinition } from "@/lib/api/workflows";
 
 describe("graphSerde", () => {
@@ -45,5 +45,78 @@ describe("graphSerde", () => {
     ];
     const def = normalizeForSave(toDefinition(nodes, [] as Edge[]));
     expect((def.nodes[0].data.config as Record<string, unknown>).values).toBe("{not json");
+  });
+
+  it("throws on an unknown node type instead of defaulting to 'action'", () => {
+    const nodes = [
+      { id: "x", type: "bogus", position: { x: 0, y: 0 }, data: {} },
+    ] as unknown as Node[];
+    expect(() => toDefinition(nodes, [] as Edge[])).toThrow(/unknown node type/i);
+  });
+
+  it("defaults a missing node position to the origin", () => {
+    const nodes = [{ id: "t", type: "trigger", data: {} }] as unknown as Node[];
+    const def = toDefinition(nodes, [] as Edge[]);
+    expect(def.nodes[0].position).toEqual({ x: 0, y: 0 });
+  });
+});
+
+describe("checkGraphIntegrity", () => {
+  function def(partial: Partial<WorkflowDefinition>): WorkflowDefinition {
+    return { schema_version: 1, nodes: [], edges: [], ...partial };
+  }
+
+  it("passes a clean connected graph", () => {
+    const result = checkGraphIntegrity(
+      def({
+        nodes: [
+          { id: "t", type: "trigger", position: { x: 0, y: 0 }, data: {} },
+          { id: "a", type: "action", position: { x: 0, y: 0 }, data: {} },
+        ],
+        edges: [{ id: "e1", source: "t", target: "a" }],
+      }),
+    );
+    expect(result.errors).toEqual([]);
+    expect(result.warnings).toEqual([]);
+  });
+
+  it("reports a dangling edge as an error", () => {
+    const result = checkGraphIntegrity(
+      def({
+        nodes: [{ id: "t", type: "trigger", position: { x: 0, y: 0 }, data: {} }],
+        edges: [{ id: "e1", source: "t", target: "ghost" }],
+      }),
+    );
+    expect(result.errors.some((m) => m.includes("e1"))).toBe(true);
+  });
+
+  it("reports a cycle as an error", () => {
+    const result = checkGraphIntegrity(
+      def({
+        nodes: [
+          { id: "t", type: "trigger", position: { x: 0, y: 0 }, data: {} },
+          { id: "a", type: "action", position: { x: 0, y: 0 }, data: {} },
+        ],
+        edges: [
+          { id: "e1", source: "t", target: "a" },
+          { id: "e2", source: "a", target: "t" },
+        ],
+      }),
+    );
+    expect(result.errors.some((m) => /cycle/i.test(m))).toBe(true);
+  });
+
+  it("warns about an unreachable non-trigger node without blocking", () => {
+    const result = checkGraphIntegrity(
+      def({
+        nodes: [
+          { id: "t", type: "trigger", position: { x: 0, y: 0 }, data: {} },
+          { id: "orphan", type: "action", position: { x: 0, y: 0 }, data: {} },
+        ],
+        edges: [],
+      }),
+    );
+    expect(result.errors).toEqual([]);
+    expect(result.warnings.some((m) => m.includes("orphan"))).toBe(true);
   });
 });

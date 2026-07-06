@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import type { EntityField } from "@/lib/api/entities";
-import { coerceValue, makeRef, objectToRows, parseRef, rowsToObject } from "./recordFields";
+import {
+  coerceValue,
+  findDuplicateKeys,
+  makeRef,
+  objectToRows,
+  parseRef,
+  rowsToObject,
+} from "./recordFields";
 
 function field(partial: Partial<EntityField> & Pick<EntityField, "slug" | "field_type">): EntityField {
   return {
@@ -97,6 +104,36 @@ describe("coerceValue", () => {
   it("leaves invalid numbers/json untouched rather than emitting NaN", () => {
     expect(coerceValue(field({ slug: "n", field_type: "integer" }), "abc")).toBe("abc");
     expect(coerceValue(field({ slug: "j", field_type: "json" }), "{bad")).toBe("{bad");
+  });
+
+  it("keeps non-integer input for integer fields instead of truncating", () => {
+    // parseInt would lossily yield 12 for both of these.
+    expect(coerceValue(field({ slug: "n", field_type: "integer" }), "12abc")).toBe("12abc");
+    expect(coerceValue(field({ slug: "n", field_type: "integer" }), "12.9")).toBe("12.9");
+    expect(coerceValue(field({ slug: "n", field_type: "integer" }), "12")).toBe(12);
+    expect(coerceValue(field({ slug: "n", field_type: "bigint" }), "9")).toBe(9);
+  });
+});
+
+describe("findDuplicateKeys", () => {
+  it("returns keys that appear more than once (trimmed, blanks ignored)", () => {
+    expect(
+      findDuplicateKeys([
+        { key: "status", value: "a" },
+        { key: " status ", value: "b" },
+        { key: "amount", value: "1" },
+        { key: "", value: "x" },
+      ]),
+    ).toEqual(["status"]);
+  });
+
+  it("returns an empty array when all keys are unique", () => {
+    expect(
+      findDuplicateKeys([
+        { key: "a", value: "1" },
+        { key: "b", value: "2" },
+      ]),
+    ).toEqual([]);
   });
 });
 

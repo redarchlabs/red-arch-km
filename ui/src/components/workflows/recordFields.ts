@@ -115,8 +115,11 @@ export function coerceValue(field: EntityField | undefined, raw: string): unknow
       return trimmed === "true";
     case "integer":
     case "bigint": {
-      const n = parseInt(trimmed, 10);
-      return trimmed === "" || Number.isNaN(n) ? raw : n;
+      // parseInt is lenient/lossy ("12abc" → 12, "12.9" → 12); require a whole
+      // number and keep the raw string otherwise so the backend can validate it.
+      if (trimmed === "") return raw;
+      const n = Number(trimmed);
+      return Number.isInteger(n) ? n : raw;
     }
     case "numeric": {
       const n = Number(trimmed);
@@ -146,4 +149,21 @@ export function rowsToObject(
     obj[key] = row.ref ? makeRef(row.ref) : coerceValue(map.get(key), row.value);
   }
   return obj;
+}
+
+/**
+ * Keys that appear more than once across the rows (trimmed, blanks ignored).
+ * `rowsToObject` keeps only the last value for a duplicate key, so callers use
+ * this to surface a warning rather than silently dropping the earlier rows.
+ */
+export function findDuplicateKeys(rows: RecordRow[]): string[] {
+  const seen = new Set<string>();
+  const duplicates = new Set<string>();
+  for (const row of rows) {
+    const key = row.key.trim();
+    if (!key) continue;
+    if (seen.has(key)) duplicates.add(key);
+    else seen.add(key);
+  }
+  return [...duplicates];
 }

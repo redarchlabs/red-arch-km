@@ -28,9 +28,20 @@ vi.mock("next/navigation", () => ({
 }));
 
 // react-window's virtualizer observes container size; jsdom has no real layout,
-// so provide a no-op ResizeObserver to keep it from throwing.
+// so this stub reports a fixed non-zero size on observe() — otherwise the
+// measured height is 0 and the virtualizer mounts no rows to assert against.
 class ResizeObserverStub {
-  observe() {}
+  private cb: ResizeObserverCallback;
+  constructor(cb: ResizeObserverCallback) {
+    this.cb = cb;
+  }
+  observe(el: Element) {
+    this.cb(
+      [{ contentRect: { width: 800, height: 600 } } as ResizeObserverEntry],
+      this as unknown as ResizeObserver,
+    );
+    void el;
+  }
   unobserve() {}
   disconnect() {}
 }
@@ -51,6 +62,14 @@ const folder: Folder = {
 
 function emptyPage() {
   return { items: [] as Document[], total: 0, page: 1, page_size: 200, pages: 1 };
+}
+
+function doc(id: string, title: string): Document {
+  return { id, title, processing_status: "SUCCESS" } as unknown as Document;
+}
+
+function pageWith(items: Document[]) {
+  return { items, total: items.length, page: 1, page_size: 200, pages: 1 };
 }
 
 function renderContents(overrides: Partial<React.ComponentProps<typeof FolderContents>> = {}) {
@@ -114,6 +133,29 @@ describe("FolderContents whitespace context menu", () => {
     renderContents();
     await waitForEmptyFolder();
     expect(screen.queryByRole("menuitem")).toBeNull();
+  });
+});
+
+describe("FolderContents view rendering", () => {
+  it("renders documents in the default details view", async () => {
+    listDocuments.mockResolvedValue(pageWith([doc("d1", "Budget.md"), doc("d2", "Report.pdf")]));
+    renderContents();
+
+    expect(await screen.findByText("Budget.md")).toBeTruthy();
+    expect(screen.getByText("Report.pdf")).toBeTruthy();
+    // Details view shows the column header the grid views omit.
+    expect(screen.getByRole("button", { name: /Name/ })).toBeTruthy();
+  });
+
+  it("renders documents after switching to the list (grid) view", async () => {
+    listDocuments.mockResolvedValue(pageWith([doc("d1", "Budget.md")]));
+    renderContents();
+    await screen.findByText("Budget.md");
+
+    fireEvent.click(screen.getByRole("button", { name: "List" }));
+
+    // The item survives the switch into the virtualized grid.
+    expect(await screen.findByText("Budget.md")).toBeTruthy();
   });
 });
 

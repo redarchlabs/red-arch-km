@@ -59,4 +59,64 @@ describe("conditionExpr", () => {
     expect(describeExpr(null)).toBe("");
     expect(describeExpr({ or: [] })).toBe("custom rule");
   });
+
+  describe("coerce (numeric-looking strings)", () => {
+    it("keeps look-alike numeric strings intact for non-numeric fields", () => {
+      // "01234" / "1e3" would be corrupted by a blind Number() cast.
+      expect(compileRows([{ field: "after.code", op: "==", value: "01234" }])).toEqual({
+        "==": [{ var: "after.code" }, "01234"],
+      });
+      expect(compileRows([{ field: "after.code", op: "==", value: "1e3" }])).toEqual({
+        "==": [{ var: "after.code" }, "1e3"],
+      });
+    });
+
+    it("coerces values that round-trip exactly", () => {
+      expect(compileRows([{ field: "after.n", op: "==", value: "12.9" }])).toEqual({
+        "==": [{ var: "after.n" }, 12.9],
+      });
+      expect(compileRows([{ field: "after.n", op: "==", value: "100" }])).toEqual({
+        "==": [{ var: "after.n" }, 100],
+      });
+    });
+
+    it("coerces to number when the field is declared numeric via the resolver", () => {
+      const isNumeric = (path: string) => path === "after.code";
+      expect(compileRows([{ field: "after.code", op: "==", value: "01234" }], isNumeric)).toEqual({
+        "==": [{ var: "after.code" }, 1234],
+      });
+    });
+  });
+
+  describe("'in' operator edge cases", () => {
+    it("treats an empty/whitespace value as an empty list, not ['']", () => {
+      expect(compileRows([{ field: "after.s", op: "in", value: "" }])).toEqual({
+        in: [{ var: "after.s" }, []],
+      });
+      expect(compileRows([{ field: "after.s", op: "in", value: "  " }])).toEqual({
+        in: [{ var: "after.s" }, []],
+      });
+    });
+
+    it("drops blank entries between commas", () => {
+      expect(compileRows([{ field: "after.s", op: "in", value: "a, , b" }])).toEqual({
+        in: [{ var: "after.s" }, ["a", "b"]],
+      });
+    });
+
+    it("falls back to the raw editor for lists whose elements contain commas", () => {
+      expect(parseExpr({ in: [{ var: "after.s" }, ["a,b", "c"]] })).toBeNull();
+    });
+  });
+
+  describe("parseClause scalar guard", () => {
+    it("returns null when the right side is a var (not a scalar)", () => {
+      expect(parseExpr({ "==": [{ var: "a" }, { var: "b" }] })).toBeNull();
+    });
+
+    it("returns null when the right side is a list or object", () => {
+      expect(parseExpr({ ">": [{ var: "a" }, [1, 2]] })).toBeNull();
+      expect(parseExpr({ ">": [{ var: "a" }, { nested: 1 }] })).toBeNull();
+    });
+  });
 });

@@ -13,6 +13,8 @@ interface SessionListProps {
   onSelect: (id: string | null) => void;
   onNew: () => void;
   onDelete: (id: string) => void;
+  /** Root className override so the list can render docked or inside a drawer. */
+  className?: string;
 }
 
 function previewFromSession(session: ChatSession): string {
@@ -27,9 +29,10 @@ export function SessionList({
   onSelect,
   onNew,
   onDelete,
+  className,
 }: SessionListProps) {
   return (
-    <aside className="flex w-64 flex-col border-r">
+    <aside className={cn("flex w-64 flex-col border-r", className)}>
       <div className="p-3">
         <Button onClick={onNew} className="w-full justify-start" variant="outline">
           <Plus className="h-4 w-4" />

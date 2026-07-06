@@ -21,7 +21,7 @@ import { updateDocument } from "@/lib/api/documents";
 import type { Document, Folder } from "@/types";
 
 interface DocumentPropertiesProps {
-  document: Document;
+  doc: Document;
   folders: Folder[];
   open: boolean;
   onClose: () => void;
@@ -34,32 +34,32 @@ interface DocumentPropertiesProps {
  * creation but can be overridden here).
  */
 export function DocumentProperties({
-  document,
+  doc,
   folders,
   open,
   onClose,
   onSaved,
 }: DocumentPropertiesProps) {
-  const [title, setTitle] = useState(document.title);
-  const [description, setDescription] = useState(document.description ?? "");
-  const [folderId, setFolderId] = useState<string | null>(document.folder_id);
+  const [title, setTitle] = useState(doc.title);
+  const [description, setDescription] = useState(doc.description ?? "");
+  const [folderId, setFolderId] = useState<string | null>(doc.folder_id);
   const [viewers, setViewers] = useState<PermissionEntry[]>(
-    document.viewer_permissions_config ?? [],
+    doc.viewer_permissions_config ?? [],
   );
   const [contributors, setContributors] = useState<PermissionEntry[]>(
-    document.contributor_permissions_config ?? [],
+    doc.contributor_permissions_config ?? [],
   );
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    setTitle(document.title);
-    setDescription(document.description ?? "");
-    setFolderId(document.folder_id);
-    setViewers(document.viewer_permissions_config ?? []);
-    setContributors(document.contributor_permissions_config ?? []);
+    setTitle(doc.title);
+    setDescription(doc.description ?? "");
+    setFolderId(doc.folder_id);
+    setViewers(doc.viewer_permissions_config ?? []);
+    setContributors(doc.contributor_permissions_config ?? []);
     setError(null);
-  }, [document]);
+  }, [doc]);
 
   const handleClose = () => {
     if (!submitting) onClose();
@@ -74,7 +74,7 @@ export function DocumentProperties({
     setSubmitting(true);
     setError(null);
     try {
-      await updateDocument(document.id, {
+      await updateDocument(doc.id, {
         title: title.trim(),
         description,
         folder_id: folderId,

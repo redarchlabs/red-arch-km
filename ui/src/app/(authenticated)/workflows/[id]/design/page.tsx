@@ -13,18 +13,27 @@ import {
 import { ArrowLeft, Rocket, Save } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { NodeInspector } from "@/components/workflows/NodeInspector";
+import { RunPanel } from "@/components/workflows/RunPanel";
 import { TestPanel } from "@/components/workflows/TestPanel";
-import { WorkflowCanvas } from "@/components/workflows/WorkflowCanvas";
-import { newNodeId, normalizeForSave, starterGraph, toDefinition, toReactFlow } from "@/components/workflows/graphSerde";
+import { WorkflowCanvas, type AddableNodeType } from "@/components/workflows/WorkflowCanvas";
+import {
+  checkGraphIntegrity,
+  newNodeId,
+  normalizeForSave,
+  starterGraph,
+  toDefinition,
+  toReactFlow,
+} from "@/components/workflows/graphSerde";
 import { listEntities, type EntityDefinition, type EntityField } from "@/lib/api/entities";
 import { getApiErrorMessage } from "@/lib/api/errors";
+import { listForms, type Form } from "@/lib/api/forms";
 import {
   getWorkflow,
   listVersions,
@@ -41,8 +50,10 @@ export default function WorkflowDesignPage() {
 
   const [workflow, setWorkflow] = useState<Workflow | null>(null);
   const [entityName, setEntityName] = useState<string | null>(null);
+  const [entitySlug, setEntitySlug] = useState<string | null>(null);
   const [entityFields, setEntityFields] = useState<EntityField[]>([]);
   const [entities, setEntities] = useState<EntityDefinition[]>([]);
+  const [forms, setForms] = useState<Form[]>([]);
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
   const [baseVersion, setBaseVersion] = useState<WorkflowVersion | null>(null);
@@ -56,24 +67,38 @@ export default function WorkflowDesignPage() {
 
   const selected = useMemo(() => nodes.find((n) => n.selected) ?? null, [nodes]);
 
+  // Monotonic request id: the App Router reuses this component across `id`
+  // changes, so a slow load for an old id must not overwrite a newer one.
+  const loadReq = useRef(0);
+
   const load = useCallback(async () => {
     setIsLoading(true);
     setError(null);
+    const reqId = ++loadReq.current;
     try {
       const [wf, versions] = await Promise.all([getWorkflow(id), listVersions(id)]);
+      if (reqId !== loadReq.current) return; // a newer id superseded this load
       setWorkflow(wf);
+      // Forms power the send_form action's picker; failure shouldn't block editing.
+      const loadedForms = await listForms().catch(() => []);
+      if (reqId !== loadReq.current) return;
+      setForms(loadedForms);
       // Entities power the field pickers in the inspector and test panel (own
       // entity) and the create_record target picker (all entities). A failure
       // here shouldn't block editing, so fall back to free-form input.
       try {
         const all = await listEntities();
+        if (reqId !== loadReq.current) return;
         setEntities(all);
         const own = all.find((e) => e.id === wf.entity_definition_id) ?? null;
         setEntityName(own?.name ?? null);
+        setEntitySlug(own?.slug ?? null);
         setEntityFields(own?.fields ?? []);
       } catch {
+        if (reqId !== loadReq.current) return;
         setEntities([]);
         setEntityName(null);
+        setEntitySlug(null);
         setEntityFields([]);
       }
       const latest = versions[0] ?? null;
@@ -86,9 +111,10 @@ export default function WorkflowDesignPage() {
       setSavedVersion(latest && latest.status === "draft" ? latest : null);
       setDirty(false);
     } catch (e: unknown) {
+      if (reqId !== loadReq.current) return;
       setError(getApiErrorMessage(e, "Failed to load workflow"));
     } finally {
-      setIsLoading(false);
+      if (reqId === loadReq.current) setIsLoading(false);
     }
   }, [id]);
 
@@ -120,12 +146,18 @@ export default function WorkflowDesignPage() {
     setDirty(true);
   }, []);
 
-  const addNode = useCallback((type: "condition" | "action") => {
+  const addNode = useCallback((type: AddableNodeType) => {
+    const dataByType: Record<AddableNodeType, Record<string, unknown>> = {
+      condition: { expr: null },
+      action: { action_type: "", config: {} },
+      switch: { cases: [] },
+      delay: { delay_amount: 30, delay_unit: "minutes", delay_seconds: 1800 },
+    };
     const node: Node = {
       id: newNodeId(type),
       type,
       position: { x: 200 + Math.random() * 120, y: 200 + Math.random() * 160 },
-      data: type === "condition" ? { expr: null } : { action_type: "", config: {} },
+      data: dataByType[type],
     };
     setNodes((nds) => [...nds, node]);
     setDirty(true);
@@ -145,6 +177,15 @@ export default function WorkflowDesignPage() {
   const ensureSaved = useCallback(async (): Promise<WorkflowVersion> => {
     if (savedVersion && !dirty) return savedVersion;
     const definition = normalizeForSave(toDefinition(nodes, edges));
+    // Block structurally broken graphs (cycles, edges to deleted nodes); warn
+    // about unreachable nodes but let the save proceed.
+    const { errors, warnings } = checkGraphIntegrity(definition);
+    if (errors.length > 0) {
+      throw new Error(errors.join(" "));
+    }
+    if (warnings.length > 0) {
+      toast.warning(warnings.join(" "));
+    }
     const version = await saveDraft(id, definition);
     setSavedVersion(version);
     setBaseVersion(version);
@@ -199,12 +240,12 @@ export default function WorkflowDesignPage() {
   }
 
   return (
-    <div className="flex h-[calc(100vh-7rem)] flex-col gap-3">
-      <div className="flex items-center gap-3">
+    <div className="flex min-h-[calc(100vh-7rem)] flex-col gap-3 lg:h-[calc(100vh-7rem)] lg:min-h-0">
+      <div className="flex flex-wrap items-center gap-2">
         <Link href="/workflows" className="text-muted-foreground hover:text-foreground">
           <ArrowLeft className="h-5 w-5" />
         </Link>
-        <div className="flex-1">
+        <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <h1 className="text-xl font-semibold">{workflow?.name ?? "Workflow"}</h1>
             {entityName ? (
@@ -225,11 +266,11 @@ export default function WorkflowDesignPage() {
           <Badge variant="outline">unsaved</Badge>
         )}
         {dirty ? <Badge variant="outline">unsaved changes</Badge> : null}
-        <Button variant="outline" size="sm" onClick={handleSave} disabled={busy}>
+        <Button variant="outline" size="sm" onClick={() => void handleSave()} disabled={busy}>
           <Save className="h-4 w-4" />
           Save draft
         </Button>
-        <Button size="sm" onClick={handlePublish} disabled={busy}>
+        <Button size="sm" onClick={() => void handlePublish()} disabled={busy}>
           <Rocket className="h-4 w-4" />
           Publish
         </Button>
@@ -238,7 +279,7 @@ export default function WorkflowDesignPage() {
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
 
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 lg:grid-cols-[1fr_360px]">
-        <div className="min-h-[400px]">
+        <div className="h-[60vh] min-h-[360px] lg:h-auto">
           <WorkflowCanvas
             nodes={nodes}
             edges={edges}
@@ -253,10 +294,21 @@ export default function WorkflowDesignPage() {
             node={selected}
             fields={entityFields}
             entities={entities}
+            forms={forms}
             onChangeData={updateNodeData}
             onDelete={deleteNode}
           />
           <TestPanel running={testing} result={testResult} fields={entityFields} onRun={handleTest} />
+          {workflow ? (
+            <RunPanel
+              workflowId={workflow.id}
+              entitySlug={entitySlug}
+              fields={entityFields}
+              runPermission={workflow.run_permission}
+              onPermissionSaved={(p) => setWorkflow({ ...workflow, run_permission: p })}
+              canRun={baseVersion?.status === "published" || workflow.active_version_id != null}
+            />
+          ) : null}
         </div>
       </div>
     </div>

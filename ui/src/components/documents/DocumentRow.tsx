@@ -7,9 +7,9 @@ import { useState } from "react";
 
 import { DocumentProperties } from "@/components/documents/DocumentProperties";
 import { type MenuItem, useRowMenu } from "@/components/common/ActionMenu";
+import { deleteEntry } from "@/components/folders/entryActions";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
-import { deleteDocument } from "@/lib/api/documents";
 import { formatDate } from "@/lib/format";
 import type { Document, Folder } from "@/types";
 
@@ -45,11 +45,7 @@ export function DocumentRow({ doc, folders, onChanged }: DocumentRowProps) {
       label: "Delete",
       icon: <Trash2 className="h-4 w-4" />,
       destructive: true,
-      onSelect: async () => {
-        if (!confirm(`Delete "${doc.title}" permanently?`)) return;
-        await deleteDocument(doc.id);
-        onChanged();
-      },
+      onSelect: () => void deleteEntry("doc", doc.id, doc.title, onChanged),
     },
   ];
 
@@ -83,7 +79,7 @@ export function DocumentRow({ doc, folders, onChanged }: DocumentRowProps) {
       </Link>
       {menu}
       <DocumentProperties
-        document={doc}
+        doc={doc}
         folders={folders}
         open={propsOpen}
         onClose={() => setPropsOpen(false)}

@@ -1,7 +1,7 @@
 export interface ActionConfigField {
   key: string;
   label: string;
-  type: "text" | "json" | "entity";
+  type: "text" | "textarea" | "json" | "entity" | "form" | "trigger_field";
   placeholder?: string;
   help?: string;
   /**
@@ -18,6 +18,8 @@ export interface ActionConfigField {
 export const ACTION_LABELS: Record<string, string> = {
   update_record_field: "Update field on the changed record",
   create_record: "Create a record in another entity",
+  send_form: "Email an intake form for the changed record",
+  send_email: "Send an email",
   send_webhook: "Send a webhook (HTTP POST)",
   log: "Log a message (no side effect)",
 };
@@ -36,6 +38,32 @@ export const ACTION_CONFIG_FIELDS: Record<string, ActionConfigField[]> = {
       type: "json",
       entityFieldsFrom: "target_slug",
       placeholder: '{ "title": "Follow up" }',
+    },
+  ],
+  send_form: [
+    { key: "form_id", label: "Form to send", type: "form" },
+    {
+      key: "recipient_field",
+      label: "Email address from field",
+      type: "trigger_field",
+      help: "Which field on the changed record holds the recipient's email.",
+    },
+  ],
+  send_email: [
+    {
+      key: "to",
+      label: "To",
+      type: "text",
+      placeholder: "person@example.com or {{after.email}}",
+      help: "A literal address, or {{after.<field>}} to pull it from the changed record.",
+    },
+    { key: "subject", label: "Subject", type: "text", placeholder: "Your request {{after.name}}" },
+    {
+      key: "body",
+      label: "Message",
+      type: "textarea",
+      placeholder: "Hi {{after.name}},\n\nYour status is now {{after.status}}.",
+      help: "Use {{after.<field>}} / {{before.<field>}} to insert record values.",
     },
   ],
   send_webhook: [

@@ -207,7 +207,7 @@ const DEFAULT_TOPIC: HelpTopic = {
   prefix: "/",
   title: "Getting started",
   body: `
-Welcome to **Red Arch KM** — a knowledge base your team can search and ask
+Welcome to **Red Arch Knowledge Manager** — a knowledge base your team can search and ask
 questions of.
 
 ### The essentials

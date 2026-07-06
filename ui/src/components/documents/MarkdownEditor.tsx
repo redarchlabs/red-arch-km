@@ -288,54 +288,72 @@ export function MarkdownEditor({
         </div>
       </div>
 
-      {/* Contextual table toolbar — appears only while the caret is inside a
-          Markdown table. Buttons rewrite the table's Markdown in place. */}
-      {activeTable ? (
-        <div className="flex flex-wrap items-center gap-1 border-b bg-accent/40 px-2 py-1 text-xs">
-          <span className="mr-1 inline-flex items-center gap-1 font-medium text-muted-foreground">
+      {/* Contextual table toolbar. The row is ALWAYS rendered at a fixed
+          height so moving the caret in and out of a table never shifts the
+          editor body underneath it (a collapsing row made table cells hard to
+          click and edit). The controls are only active while the caret is
+          inside a Markdown table; otherwise the row shows a muted hint. */}
+      <div className="flex min-h-[2rem] flex-wrap items-center gap-1 border-b bg-accent/40 px-2 py-1 text-xs">
+        {activeTable ? (
+          <>
+            <span className="mr-1 inline-flex items-center gap-1 font-medium text-muted-foreground">
+              <TableIcon className="h-3.5 w-3.5" />
+              Table
+            </span>
+            <TableAction label="Add column" onClick={() => applyTableOp((t) => addColumn(t, t.cursorCol))} />
+            <TableAction
+              label="Delete column"
+              disabled={activeTable.header.length <= 1}
+              onClick={() => applyTableOp((t) => deleteColumn(t, t.cursorCol))}
+            />
+            <span className="mx-0.5 h-4 w-px bg-border" />
+            <TableAction label="Add row" onClick={() => applyTableOp((t) => addRow(t, t.cursorRow))} />
+            <TableAction
+              label="Delete row"
+              disabled={activeTable.cursorRow < 0}
+              onClick={() => applyTableOp((t) => deleteRow(t, t.cursorRow))}
+            />
+            <span className="mx-0.5 h-4 w-px bg-border" />
+            <span className="text-muted-foreground">Align</span>
+            <TableIconAction
+              label="Align left"
+              onClick={() => applyTableOp((t) => setAlign(t, t.cursorCol, "left"))}
+            >
+              <AlignLeft className="h-3.5 w-3.5" />
+            </TableIconAction>
+            <TableIconAction
+              label="Align center"
+              onClick={() => applyTableOp((t) => setAlign(t, t.cursorCol, "center"))}
+            >
+              <AlignCenter className="h-3.5 w-3.5" />
+            </TableIconAction>
+            <TableIconAction
+              label="Align right"
+              onClick={() => applyTableOp((t) => setAlign(t, t.cursorCol, "right"))}
+            >
+              <AlignRight className="h-3.5 w-3.5" />
+            </TableIconAction>
+          </>
+        ) : (
+          <span className="inline-flex items-center gap-1 text-muted-foreground/70">
             <TableIcon className="h-3.5 w-3.5" />
-            Table
+            Place the cursor inside a table to edit its rows, columns, and alignment
           </span>
-          <TableAction label="Add column" onClick={() => applyTableOp((t) => addColumn(t, t.cursorCol))} />
-          <TableAction
-            label="Delete column"
-            disabled={activeTable.header.length <= 1}
-            onClick={() => applyTableOp((t) => deleteColumn(t, t.cursorCol))}
-          />
-          <span className="mx-0.5 h-4 w-px bg-border" />
-          <TableAction label="Add row" onClick={() => applyTableOp((t) => addRow(t, t.cursorRow))} />
-          <TableAction
-            label="Delete row"
-            disabled={activeTable.cursorRow < 0}
-            onClick={() => applyTableOp((t) => deleteRow(t, t.cursorRow))}
-          />
-          <span className="mx-0.5 h-4 w-px bg-border" />
-          <span className="text-muted-foreground">Align</span>
-          <TableIconAction
-            label="Align left"
-            onClick={() => applyTableOp((t) => setAlign(t, t.cursorCol, "left"))}
-          >
-            <AlignLeft className="h-3.5 w-3.5" />
-          </TableIconAction>
-          <TableIconAction
-            label="Align center"
-            onClick={() => applyTableOp((t) => setAlign(t, t.cursorCol, "center"))}
-          >
-            <AlignCenter className="h-3.5 w-3.5" />
-          </TableIconAction>
-          <TableIconAction
-            label="Align right"
-            onClick={() => applyTableOp((t) => setAlign(t, t.cursorCol, "right"))}
-          >
-            <AlignRight className="h-3.5 w-3.5" />
-          </TableIconAction>
-        </div>
-      ) : null}
+        )}
+      </div>
 
-      {/* Body: source + preview */}
-      <div className="flex min-h-0 flex-1">
+      {/* Body: source + preview. Side-by-side on md+, stacked on mobile so
+          neither pane is squeezed to an unusable width. */}
+      <div className="flex min-h-0 flex-1 flex-col md:flex-row">
         {showEditor ? (
-          <div className={cn("min-w-0 overflow-hidden", showPreview ? "w-1/2 border-r" : "w-full")}>
+          <div
+            className={cn(
+              "min-h-0 min-w-0 overflow-hidden",
+              showPreview
+                ? "flex-1 border-b md:w-1/2 md:flex-none md:border-b-0 md:border-r"
+                : "flex-1 md:w-full md:flex-none",
+            )}
+          >
             {loading ? (
               <div className="h-full w-full animate-pulse bg-muted/30" />
             ) : (
@@ -351,7 +369,12 @@ export function MarkdownEditor({
           </div>
         ) : null}
         {showPreview ? (
-          <div className={cn("min-w-0 overflow-y-auto p-4", showEditor ? "w-1/2" : "w-full")}>
+          <div
+            className={cn(
+              "min-h-0 min-w-0 overflow-y-auto p-4",
+              showEditor ? "flex-1 md:w-1/2 md:flex-none" : "flex-1 md:w-full md:flex-none",
+            )}
+          >
             {value.trim() ? (
               <Markdown content={value} />
             ) : (

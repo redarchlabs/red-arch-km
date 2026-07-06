@@ -1,15 +1,23 @@
 "use client";
 
-import { Plus } from "lucide-react";
+import { Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import {
   addEntityField,
   createRelationship,
+  deleteEntityField,
   type Cardinality,
   type EntityDefinition,
   type EntityRelationship,
@@ -62,6 +70,8 @@ export function EntitySchemaEditor({
   const [fType, setFType] = useState<FieldType>("text");
   const [fOptions, setFOptions] = useState("");
   const [fUnique, setFUnique] = useState(false);
+  const [deletingFieldId, setDeletingFieldId] = useState<string | null>(null);
+  const [fieldToDelete, setFieldToDelete] = useState<{ id: string; name: string } | null>(null);
 
   // Add-relationship form state.
   const [rName, setRName] = useState("");
@@ -93,6 +103,22 @@ export function EntitySchemaEditor({
       onChange();
     } catch (e: unknown) {
       setError(getApiErrorMessage(e, "Failed to add field"));
+    }
+  };
+
+  const confirmDeleteField = async () => {
+    if (!fieldToDelete) return;
+    setError(null);
+    setDeletingFieldId(fieldToDelete.id);
+    try {
+      await deleteEntityField(entity.id, fieldToDelete.id);
+      setFieldToDelete(null);
+      onChange();
+    } catch (e: unknown) {
+      setError(getApiErrorMessage(e, "Failed to delete field"));
+      setFieldToDelete(null);
+    } finally {
+      setDeletingFieldId(null);
     }
   };
 
@@ -129,10 +155,22 @@ export function EntitySchemaEditor({
             <ul className="divide-y rounded-md border">
               {entity.fields.map((field) => (
                 <li key={field.id} className="flex items-center gap-2 px-3 py-2 text-sm">
-                  <span className="flex-1">{field.name}</span>
+                  <span className="min-w-0 flex-1 truncate">{field.name}</span>
                   <Badge variant="outline">{field.field_type}</Badge>
                   {field.is_required ? <Badge variant="outline">required</Badge> : null}
                   {field.is_unique ? <Badge variant="outline">unique</Badge> : null}
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                    disabled={deletingFieldId === field.id}
+                    onClick={() => setFieldToDelete({ id: field.id, name: field.name })}
+                    aria-label={`Delete field ${field.name}`}
+                    title="Delete field"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
                 </li>
               ))}
             </ul>
@@ -141,7 +179,7 @@ export function EntitySchemaEditor({
           )}
 
           <form onSubmit={handleAddField} className="space-y-2 border-t pt-4">
-            <div className="flex gap-2">
+            <div className="flex flex-col gap-2 sm:flex-row">
               <Input
                 value={fName}
                 onChange={(e) => setFName(e.target.value)}
@@ -248,6 +286,31 @@ export function EntitySchemaEditor({
       </Card>
 
       {error ? <p className="text-sm text-destructive lg:col-span-2">{error}</p> : null}
+
+      <Dialog open={fieldToDelete !== null} onClose={() => setFieldToDelete(null)}>
+        <DialogHeader>
+          <DialogTitle>Delete field{fieldToDelete ? ` “${fieldToDelete.name}”` : ""}?</DialogTitle>
+          <DialogDescription>
+            This drops the column and all data stored in it. This cannot be undone.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button
+            variant="outline"
+            onClick={() => setFieldToDelete(null)}
+            disabled={deletingFieldId !== null}
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="destructive"
+            onClick={() => void confirmDeleteField()}
+            disabled={deletingFieldId !== null}
+          >
+            {deletingFieldId !== null ? "Deleting…" : "Delete field"}
+          </Button>
+        </DialogFooter>
+      </Dialog>
     </div>
   );
 }

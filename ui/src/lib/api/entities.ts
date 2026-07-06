@@ -124,9 +124,21 @@ export async function addEntityField(id: string, input: EntityFieldInput): Promi
   return response.data;
 }
 
+export async function deleteEntityField(id: string, fieldId: string): Promise<void> {
+  await apiClient.delete(`/entity-definitions/${id}/fields/${fieldId}`);
+}
+
 export async function listRelationships(id: string): Promise<EntityRelationship[]> {
   const response = await apiClient.get<EntityRelationship[]>(
     `/entity-definitions/${id}/relationships`,
+  );
+  return response.data;
+}
+
+/** Relationships from other entities that target this one (drive 1:M form sections). */
+export async function listIncomingRelationships(id: string): Promise<EntityRelationship[]> {
+  const response = await apiClient.get<EntityRelationship[]>(
+    `/entity-definitions/${id}/incoming-relationships`,
   );
   return response.data;
 }

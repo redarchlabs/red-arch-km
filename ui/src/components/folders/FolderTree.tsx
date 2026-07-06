@@ -18,9 +18,10 @@ import { type MenuItem, useRowMenu } from "@/components/common/ActionMenu";
 import { DocumentUpload } from "@/components/documents/DocumentUpload";
 import { FolderCreate } from "@/components/folders/FolderCreate";
 import { FolderProperties } from "@/components/folders/FolderProperties";
-import { deleteFolder } from "@/lib/api/folders";
 import { cn } from "@/lib/utils";
 import type { Folder } from "@/types";
+
+import { deleteEntry } from "./entryActions";
 
 interface FolderTreeProps {
   folders: Folder[];
@@ -113,6 +114,13 @@ export function FolderTree({ folders, onMove, onChanged, selectedId, onSelect }:
     await onMove(draggedId, targetId);
   };
 
+  // DOM onDrop can't await, so run the (async) move fire-and-forget with a
+  // defensive .catch — onMove already try/catches, this guards against any
+  // future throw becoming an unhandled rejection.
+  const handleDropSafe = (draggedId: string, targetId: string | null) => {
+    void handleDrop(draggedId, targetId).catch(() => {});
+  };
+
   if (visible.length === 0) {
     return <p className="p-4 text-sm text-muted-foreground">No folders yet.</p>;
   }
@@ -130,7 +138,7 @@ export function FolderTree({ folders, onMove, onChanged, selectedId, onSelect }:
         onDrop={(e) => {
           e.preventDefault();
           setDragOverId(null);
-          handleDrop(e.dataTransfer.getData("application/x-folder-id"), null);
+          handleDropSafe(e.dataTransfer.getData("application/x-folder-id"), null);
         }}
         className={cn("rounded-md p-1", dragOverId === "__root__" && "ring-2 ring-primary ring-inset")}
       >
@@ -145,13 +153,9 @@ export function FolderTree({ folders, onMove, onChanged, selectedId, onSelect }:
             onSelect: onSelect ?? null,
             onToggle: toggle,
             onDragOverRow: setDragOverId,
-            onDropRow: handleDrop,
+            onDropRow: handleDropSafe,
             onAction: setDialog,
-            onDelete: async (folder: Folder) => {
-              if (!confirm(`Delete folder "${folder.name}"? Documents inside are not deleted.`)) return;
-              await deleteFolder(folder.id);
-              onChanged();
-            },
+            onDelete: (folder: Folder) => void deleteEntry("folder", folder.id, folder.name, onChanged),
           }}
           style={{ height: listHeight, width: "100%" }}
         />

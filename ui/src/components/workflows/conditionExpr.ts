@@ -11,30 +11,64 @@ export interface ConditionRow {
 
 export type JsonLogic = Record<string, unknown> | null;
 
-function coerce(value: string): unknown {
+/**
+ * Coerce an editor string into a JsonLogic scalar.
+ *
+ * A raw `Number()` cast silently corrupts string fields whose contents merely
+ * look numeric ("01234" → 1234, "1e3" → 1000, phone/order codes). We only turn
+ * the value into a number when the field is *declared* numeric, or when the
+ * value round-trips exactly (`String(n) === trimmed`) so no information is lost.
+ */
+function coerce(value: string, numeric = false): unknown {
   const trimmed = value.trim();
   if (trimmed === "") return "";
   if (trimmed === "true") return true;
   if (trimmed === "false") return false;
   const n = Number(trimmed);
-  return Number.isNaN(n) ? trimmed : n;
+  if (Number.isNaN(n)) return trimmed;
+  return numeric || String(n) === trimmed ? n : trimmed;
 }
 
-function compileRow(row: ConditionRow): JsonLogic {
+/** Whether a JsonLogic argument is a comparable scalar (not a var/list/object). */
+function isScalar(x: unknown): boolean {
+  return x === null || ["string", "number", "boolean"].includes(typeof x);
+}
+
+/** Render a scalar back to the editor's string form. */
+function scalarToText(x: unknown): string {
+  if (typeof x === "boolean") return x ? "true" : "false";
+  if (x === null) return "";
+  return String(x);
+}
+
+/** Resolves whether a var path targets a numeric entity field. */
+export type NumericResolver = (fieldPath: string) => boolean;
+
+function compileRow(row: ConditionRow, numeric = false): JsonLogic {
   const varRef = { var: row.field };
   if (row.op === "in") {
-    const list = row.value.split(",").map((v) => coerce(v));
+    // Trim + drop blanks so "" / "  " yield [] (incomplete), not [""].
+    const list = row.value
+      .split(",")
+      .map((v) => v.trim())
+      .filter((v) => v !== "")
+      .map((v) => coerce(v, numeric));
     return { in: [varRef, list] };
   }
-  return { [row.op]: [varRef, coerce(row.value)] };
+  return { [row.op]: [varRef, coerce(row.value, numeric)] };
 }
 
-/** Compile AND-combined rows to a JsonLogic expression (null = always true). */
-export function compileRows(rows: ConditionRow[]): JsonLogic {
+/**
+ * Compile AND-combined rows to a JsonLogic expression (null = always true).
+ * `isNumeric` (optional) lets callers thread entity field types through so a
+ * numeric field coerces "01234" to a number while a text field keeps the string.
+ */
+export function compileRows(rows: ConditionRow[], isNumeric?: NumericResolver): JsonLogic {
+  const numeric = (r: ConditionRow) => isNumeric?.(r.field) ?? false;
   const valid = rows.filter((r) => r.field.trim() !== "");
   if (valid.length === 0) return null;
-  if (valid.length === 1) return compileRow(valid[0]);
-  return { and: valid.map(compileRow) };
+  if (valid.length === 1) return compileRow(valid[0], numeric(valid[0]));
+  return { and: valid.map((r) => compileRow(r, numeric(r))) };
 }
 
 function parseClause(clause: unknown): ConditionRow | null {
@@ -44,15 +78,20 @@ function parseClause(clause: unknown): ConditionRow | null {
   const [op, args] = entries[0];
   if (op === "in" && Array.isArray(args) && args.length === 2) {
     const [needle, haystack] = args;
-    if (isVar(needle) && Array.isArray(haystack)) {
-      return { field: needle.var, op: "in", value: haystack.join(", ") };
+    // Only scalar lists round-trip through the comma-joined editor.
+    if (isVar(needle) && Array.isArray(haystack) && haystack.every(isScalar)) {
+      const parts = haystack.map(scalarToText);
+      // A comma inside an element can't survive a comma-join/split — keep raw.
+      if (parts.some((p) => p.includes(","))) return null;
+      return { field: needle.var, op: "in", value: parts.join(", ") };
     }
     return null;
   }
   if ((CONDITION_OPS as readonly string[]).includes(op) && Array.isArray(args) && args.length === 2) {
     const [left, right] = args;
-    if (isVar(left)) {
-      return { field: left.var, op: op as ConditionOp, value: String(right) };
+    // Right side must be a scalar; a var/list/object can't be shown as a row.
+    if (isVar(left) && isScalar(right)) {
+      return { field: left.var, op: op as ConditionOp, value: scalarToText(right) };
     }
   }
   return null;
