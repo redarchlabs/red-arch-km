@@ -78,6 +78,7 @@ class OrgRepository:
         name: str | None = None,
         description: str | None = None,
         use_knowledge_graph: bool | None = None,
+        openai_api_key: str | None = None,
     ) -> Org:
         if name is not None:
             org.name = name
@@ -85,5 +86,10 @@ class OrgRepository:
             org.description = description
         if use_knowledge_graph is not None:
             org.use_knowledge_graph = use_knowledge_graph
+        if openai_api_key is not None:
+            # Stored as-is: the caller (router) is responsible for encrypting the
+            # value before it reaches here (services/crypto.py). An empty string
+            # clears the key.
+            org.openai_api_key = openai_api_key or None
         await self._session.flush()
         return org

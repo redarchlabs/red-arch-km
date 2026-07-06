@@ -13,6 +13,7 @@ import uuid
 import pytest
 from api.models.chat import ChatSession
 from api.models.org import Org
+from api.models.user import UserProfile
 from api.repositories.chat import ChatRepository
 from api.schemas.chat import ChatSessionRead
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,12 +24,18 @@ pytestmark = pytest.mark.integration
 async def test_update_data_result_serializes(admin_session: AsyncSession) -> None:
     org = Org(name=f"Chat-Org-{uuid.uuid4().hex[:6]}", permission_number=7)
     admin_session.add(org)
+    user = UserProfile(
+        auth_subject=f"chat-owner-{uuid.uuid4()}",
+        username=f"chat_owner_{uuid.uuid4().hex[:8]}",
+        email=f"chat_owner_{uuid.uuid4().hex[:8]}@test.local",
+    )
+    admin_session.add(user)
     await admin_session.flush()
-    chat = ChatSession(org_id=org.id, chat_data={})
+    chat = ChatSession(org_id=org.id, user_id=user.id, chat_data={})
     admin_session.add(chat)
     await admin_session.flush()
 
-    repo = ChatRepository(admin_session)
+    repo = ChatRepository(admin_session, org.id)
     payload = {"messages": [{"role": "user", "content": "hello"}]}
     updated = await repo.update_data(chat.id, payload)
     assert updated is not None

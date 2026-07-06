@@ -134,8 +134,10 @@ func (h *FolderHandler) ListFolders(w http.ResponseWriter, r *http.Request) {
 
 	queries := repository.New(tenantConn)
 
-	// Get all folders for org
-	folders, err := queries.ListFolders(ctx, repository.ListFoldersParams{
+	// Get all folders for org. Filtered by org_id explicitly (defense in
+	// depth) rather than relying solely on RLS to scope the result set.
+	folders, err := queries.ListFoldersForOrg(ctx, repository.ListFoldersForOrgParams{
+		OrgID:  ToPgUUID(orgID),
 		Limit:  int32(10000), // Get all for filtering
 		Offset: 0,
 	})

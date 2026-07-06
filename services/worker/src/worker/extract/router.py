@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 import os
 
-from worker.extract import openai_vision, tesseract
+from worker.extract import docx, legacy_doc, openai_vision, tesseract
 
 logger = logging.getLogger(__name__)
 
@@ -19,12 +19,15 @@ IMAGE_EXTENSIONS: frozenset[str] = frozenset(
     {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".gif", ".webp"}
 )
 PDF_EXTENSION = ".pdf"
+DOCX_EXTENSION = ".docx"
+DOC_EXTENSION = ".doc"
 
 
 def extract_text(data: bytes, filename: str, method: str, openai_key: str | None) -> str:
     """Extract text from ``data`` given its ``filename`` and ``method``.
 
     - ``.txt`` / ``.md`` → decoded directly (no OCR, method ignored).
+    - ``.docx`` → converted to Markdown (no OCR, method ignored).
     - ``method == "ai"`` → OpenAI vision on PDFs/images.
     - otherwise → Tesseract OCR on PDFs/images.
 
@@ -35,6 +38,14 @@ def extract_text(data: bytes, filename: str, method: str, openai_key: str | None
 
     if ext in TEXT_EXTENSIONS:
         return data.decode("utf-8", errors="ignore")
+
+    if ext == DOCX_EXTENSION:
+        logger.info("docx → Markdown extraction for %s", filename)
+        return docx.extract(data)
+
+    if ext == DOC_EXTENSION:
+        logger.info("legacy .doc → text extraction for %s", filename)
+        return legacy_doc.extract(data)
 
     if ext != PDF_EXTENSION and ext not in IMAGE_EXTENSIONS:
         msg = f"Unsupported file type for extraction: {ext or filename!r}"

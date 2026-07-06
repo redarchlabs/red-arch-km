@@ -5,8 +5,14 @@ SELECT * FROM regions WHERE id = $1;
 -- name: ListRegions :many
 SELECT * FROM regions ORDER BY name LIMIT $1 OFFSET $2;
 
+-- name: ListRegionsForOrg :many
+SELECT * FROM regions WHERE org_id = $1 ORDER BY name LIMIT $2 OFFSET $3;
+
 -- name: CountRegions :one
 SELECT COUNT(*) FROM regions;
+
+-- name: CountRegionsForOrg :one
+SELECT COUNT(*) FROM regions WHERE org_id = $1;
 
 -- name: GetNextRegionPermissionNumber :one
 SELECT COALESCE(MAX(permission_number), 0) + 1 FROM regions FOR UPDATE;
@@ -37,8 +43,14 @@ SELECT * FROM departments WHERE id = $1;
 -- name: ListDepartments :many
 SELECT * FROM departments ORDER BY name LIMIT $1 OFFSET $2;
 
+-- name: ListDepartmentsForOrg :many
+SELECT * FROM departments WHERE org_id = $1 ORDER BY name LIMIT $2 OFFSET $3;
+
 -- name: CountDepartments :one
 SELECT COUNT(*) FROM departments;
+
+-- name: CountDepartmentsForOrg :one
+SELECT COUNT(*) FROM departments WHERE org_id = $1;
 
 -- name: GetNextDepartmentPermissionNumber :one
 SELECT COALESCE(MAX(permission_number), 0) + 1 FROM departments FOR UPDATE;
@@ -69,8 +81,14 @@ SELECT * FROM roles WHERE id = $1;
 -- name: ListRoles :many
 SELECT * FROM roles ORDER BY name LIMIT $1 OFFSET $2;
 
+-- name: ListRolesForOrg :many
+SELECT * FROM roles WHERE org_id = $1 ORDER BY name LIMIT $2 OFFSET $3;
+
 -- name: CountRoles :one
 SELECT COUNT(*) FROM roles;
+
+-- name: CountRolesForOrg :one
+SELECT COUNT(*) FROM roles WHERE org_id = $1;
 
 -- name: GetNextRolePermissionNumber :one
 SELECT COALESCE(MAX(permission_number), 0) + 1 FROM roles FOR UPDATE;
@@ -101,8 +119,14 @@ SELECT * FROM groups WHERE id = $1;
 -- name: ListGroups :many
 SELECT * FROM groups ORDER BY name LIMIT $1 OFFSET $2;
 
+-- name: ListGroupsForOrg :many
+SELECT * FROM groups WHERE org_id = $1 ORDER BY name LIMIT $2 OFFSET $3;
+
 -- name: CountGroups :one
 SELECT COUNT(*) FROM groups;
+
+-- name: CountGroupsForOrg :one
+SELECT COUNT(*) FROM groups WHERE org_id = $1;
 
 -- name: GetNextGroupPermissionNumber :one
 SELECT COALESCE(MAX(permission_number), 0) + 1 FROM groups FOR UPDATE;

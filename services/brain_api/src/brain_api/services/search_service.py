@@ -21,7 +21,16 @@ _tracer = get_tracer("brain_api.search")
 _RAG_SYSTEM_PROMPT = """\
 You are the organization's knowledge-base assistant. Answer questions ONLY \
 from the provided context (document excerpts and knowledge-graph facts).
-Cite sources by referencing document titles when possible.
+
+Each source in the context is prefixed with a bracketed number, like [1] or \
+[2]. When a statement in your answer comes from a source, cite it inline by \
+appending that source's number in brackets right after the statement — e.g. \
+"Migrations run before app services [2]." Cite every claim you can, and cite \
+multiple sources together when relevant, e.g. "[1][3]". Only use the numbers \
+shown in the context; never invent a number. Do NOT append a separate \
+"Sources" list at the end of your answer — the interface renders the sources \
+separately, so a trailing list would be redundant.
+
 Your general world knowledge must NOT be used to answer questions: when the \
 context is empty or does not contain the answer, tell the user that the \
 organization's knowledge base has no relevant documents for their question, \
@@ -124,8 +133,9 @@ class SearchService:
             except Exception as e:
                 logger.warning("Graph search failed: %s", e)
 
-        # 3. Build LLM prompt
-        context_blocks = self._format_context(hits, graph_context)
+        # 3. Build LLM prompt (sources deduped to unique documents & numbered)
+        sources = self._dedupe_document_sources(hits)
+        context_blocks = self._format_context(hits, graph_context, sources)
         messages = cast(
             "list[ChatCompletionMessageParam]",
             self._build_messages(query, chat_history or [], context_blocks),
@@ -146,16 +156,7 @@ class SearchService:
 
         return {
             "answer": answer,
-            "sources": [
-                {
-                    "document_id": h["payload"].get("document_id", ""),
-                    "document_key": h["payload"].get("document_key", ""),
-                    "document_title": h["payload"].get("document_title", ""),
-                    "text": h["payload"].get("text", "")[:500],
-                    "score": h["score"],
-                }
-                for h in hits
-            ],
+            "sources": sources,
             "graph_context": graph_context,
         }
 
@@ -192,15 +193,9 @@ class SearchService:
             yield {"type": "error", "message": "Retrieval failed"}
             return
 
-        sources = [
-            {
-                "document_id": h["payload"].get("document_id", ""),
-                "document_key": h["payload"].get("document_key", ""),
-                "document_title": h["payload"].get("document_title", ""),
-                "score": h["score"],
-            }
-            for h in hits
-        ]
+        # Collapse chunk hits to unique, numbered documents so the UI shows each
+        # source once and the answer's inline [n] citations line up with them.
+        sources = self._dedupe_document_sources(hits)
         yield {"type": "sources", "sources": sources}
 
         # 2. Optional graph context
@@ -218,7 +213,7 @@ class SearchService:
         yield {"type": "graph", "triplets": graph_context}
 
         # 3. Stream LLM completion
-        context_blocks = self._format_context(hits, graph_context)
+        context_blocks = self._format_context(hits, graph_context, sources)
         messages = cast(
             "list[ChatCompletionMessageParam]",
             self._build_messages(query, chat_history or [], context_blocks),
@@ -245,20 +240,58 @@ class SearchService:
 
         yield {"type": "done"}
 
+    @staticmethod
+    def _dedupe_document_sources(hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Collapse chunk-level hits into unique documents, numbered [1..N].
+
+        A single document usually matches several chunks, which previously
+        surfaced as several identical "Sources" rows. We keep one entry per
+        document (first appearance wins its position; best score is retained)
+        and assign a stable ``number`` so the answer's inline ``[n]`` citations
+        map 1:1 to the sources the UI renders.
+        """
+        by_key: dict[str, dict[str, Any]] = {}
+        ordered: list[dict[str, Any]] = []
+        for hit in hits:
+            payload = hit["payload"]
+            key = payload.get("document_key") or payload.get("document_id") or ""
+            existing = by_key.get(key)
+            if existing is not None:
+                existing["score"] = max(existing["score"], hit["score"])
+                continue
+            source = {
+                "document_id": payload.get("document_id", ""),
+                "document_key": payload.get("document_key", ""),
+                "document_title": payload.get("document_title", ""),
+                "score": hit["score"],
+            }
+            by_key[key] = source
+            ordered.append(source)
+        for number, source in enumerate(ordered, 1):
+            source["number"] = number
+        return ordered
+
     def _format_context(
         self,
         hits: list[dict[str, Any]],
         graph_context: list[dict[str, Any]],
+        sources: list[dict[str, Any]],
     ) -> str:
         parts: list[str] = []
 
+        # Map each document to its source number so every excerpt of the same
+        # document is labelled with the SAME [n] the UI shows.
+        number_by_key = {s["document_key"]: s["number"] for s in sources}
+
         if hits:
             parts.append("### Document Excerpts\n")
-            for i, hit in enumerate(hits, 1):
+            for hit in hits:
                 payload = hit["payload"]
+                key = payload.get("document_key", "")
+                number = number_by_key.get(key, "?")
                 title = payload.get("document_title", "Untitled")
                 text = payload.get("text", "")
-                parts.append(f"[Source {i} — {title}]\n{text}\n")
+                parts.append(f"[{number}] {title}\n{text}\n")
 
         if graph_context:
             parts.append("\n### Knowledge Graph Relationships\n")

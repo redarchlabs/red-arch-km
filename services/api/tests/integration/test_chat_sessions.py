@@ -67,10 +67,9 @@ class TestChatSessionRepository:
             {"tid": str(org_a.id)},
         )
 
-        repo = ChatRepository(session)
+        repo = ChatRepository(session, org_a.id)
         chat = await repo.create(
             user_id=user_a.id,
-            org_id=org_a.id,
             chat_data={"messages": []},
         )
 
@@ -87,13 +86,12 @@ class TestChatSessionRepository:
             {"tid": str(org_a.id)},
         )
 
-        repo = ChatRepository(session)
+        repo = ChatRepository(session, org_a.id)
 
         # Create 3 sessions
         for i in range(3):
             await repo.create(
                 user_id=user_a.id,
-                org_id=org_a.id,
                 chat_data={"messages": [{"id": str(i)}]},
             )
 
@@ -108,10 +106,9 @@ class TestChatSessionRepository:
             {"tid": str(org_a.id)},
         )
 
-        repo = ChatRepository(session)
+        repo = ChatRepository(session, org_a.id)
         chat = await repo.create(
             user_id=user_a.id,
-            org_id=org_a.id,
         )
 
         result = await repo.soft_delete(chat.id)
@@ -133,10 +130,9 @@ class TestChatSessionRepository:
             {"tid": str(org_a.id)},
         )
 
-        repo = ChatRepository(session)
+        repo = ChatRepository(session, org_a.id)
         chat = await repo.create(
             user_id=user_a.id,
-            org_id=org_a.id,
             chat_data={"messages": [{"id": "1", "role": "user", "content": "Hi"}]},
         )
 
@@ -181,10 +177,11 @@ class TestChatSessionRLSIsolation:
             {"tid": str(org_b.id)},
         )
 
-        repo = ChatRepository(session)
+        repo = ChatRepository(session, org_b.id)
         result = await repo.get(session_id)
 
-        # Should not be visible due to RLS
+        # Should not be visible: neither the explicit org_id filter (bound to
+        # org_b) nor RLS (tenant = org_b) matches a session owned by org_a.
         assert result is None
 
     @pytest.mark.asyncio
@@ -211,15 +208,20 @@ class TestChatSessionRLSIsolation:
             {"tid": str(org_a.id)},
         )
 
-        repo = ChatRepository(session)
+        repo = ChatRepository(session, org_a.id)
         result = await repo.get(session_id)
 
         assert result is not None
         assert result.id == session_id
 
 
-class TestChatAskEndpoint:
-    """Integration tests for the /sessions/{id}/ask endpoint logic."""
+class TestChatSessionOwnershipAndPersistence:
+    """Repository-level ownership and message-persistence behavior.
+
+    These validate the ChatRepository semantics the chat routes rely on:
+    a missing session resolves to None (routes raise 404), sessions are
+    owned by their creating user, and message appends preserve history.
+    """
 
     @pytest.mark.asyncio
     async def test_ask_session_not_found(self, session: AsyncSession, org_a: Org, user_a: UserProfile) -> None:
@@ -229,7 +231,7 @@ class TestChatAskEndpoint:
             {"tid": str(org_a.id)},
         )
 
-        repo = ChatRepository(session)
+        repo = ChatRepository(session, org_a.id)
         nonexistent_id = uuid.uuid4()
         result = await repo.get(nonexistent_id)
 
@@ -246,12 +248,11 @@ class TestChatAskEndpoint:
             {"tid": str(org_a.id)},
         )
 
-        repo = ChatRepository(session)
+        repo = ChatRepository(session, org_a.id)
 
         # Create session owned by user_b
         chat_b = await repo.create(
             user_id=user_b.id,
-            org_id=org_a.id,
             chat_data={"messages": []},
         )
 
@@ -277,10 +278,9 @@ class TestChatAskEndpoint:
             {"tid": str(org_a.id)},
         )
 
-        repo = ChatRepository(session)
+        repo = ChatRepository(session, org_a.id)
         chat = await repo.create(
             user_id=user_a.id,
-            org_id=org_a.id,
             chat_data={"messages": []},
         )
 
@@ -319,7 +319,7 @@ class TestChatAskEndpoint:
             {"tid": str(org_a.id)},
         )
 
-        repo = ChatRepository(session)
+        repo = ChatRepository(session, org_a.id)
 
         # Create session with existing messages
         existing_messages = [
@@ -328,7 +328,6 @@ class TestChatAskEndpoint:
         ]
         chat = await repo.create(
             user_id=user_a.id,
-            org_id=org_a.id,
             chat_data={"messages": existing_messages},
         )
 
@@ -356,10 +355,9 @@ class TestChatAskEndpoint:
             {"tid": str(org_a.id)},
         )
 
-        repo = ChatRepository(session)
+        repo = ChatRepository(session, org_a.id)
         chat = await repo.create(
             user_id=user_a.id,
-            org_id=org_a.id,
             chat_data={"messages": []},
         )
 

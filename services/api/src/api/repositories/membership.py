@@ -13,13 +13,20 @@ from api.models.user import UserOrgMembership
 
 
 class MembershipRepository:
-    def __init__(self, session: AsyncSession) -> None:
+    """Tenant-bound repository. Every query is explicitly scoped to ``org_id``
+    (belt-and-suspenders alongside RLS)."""
+
+    def __init__(self, session: AsyncSession, org_id: uuid.UUID) -> None:
         self._session = session
+        self._org_id = org_id
 
     async def get(self, membership_id: uuid.UUID) -> UserOrgMembership | None:
         result = await self._session.execute(
             select(UserOrgMembership)
-            .where(UserOrgMembership.id == membership_id)
+            .where(
+                UserOrgMembership.id == membership_id,
+                UserOrgMembership.org_id == self._org_id,
+            )
             .options(
                 selectinload(UserOrgMembership.regions),
                 selectinload(UserOrgMembership.departments),
@@ -29,24 +36,30 @@ class MembershipRepository:
         )
         return result.scalar_one_or_none()
 
-    async def count_org_admins(self, org_id: uuid.UUID) -> int:
-        """Number of org-admin memberships in the given org."""
+    async def count_org_admins(self) -> int:
+        """Number of org-admin memberships in this repository's org."""
         from sqlalchemy import func
 
         result = await self._session.execute(
             select(func.count())
             .select_from(UserOrgMembership)
             .where(
-                UserOrgMembership.org_id == org_id,
+                UserOrgMembership.org_id == self._org_id,
                 UserOrgMembership.is_org_admin.is_(True),
             )
         )
         return int(result.scalar_one())
 
     async def delete(self, membership_id: uuid.UUID) -> bool:
-        """Delete a membership; returns False when it doesn't exist (or is not
-        visible under the current RLS tenant scope)."""
-        membership = await self._session.get(UserOrgMembership, membership_id)
+        """Delete a membership in this org; returns False when it doesn't exist
+        (or belongs to a different org)."""
+        result = await self._session.execute(
+            select(UserOrgMembership).where(
+                UserOrgMembership.id == membership_id,
+                UserOrgMembership.org_id == self._org_id,
+            )
+        )
+        membership = result.scalar_one_or_none()
         if membership is None:
             return False
         await self._session.delete(membership)
@@ -57,19 +70,18 @@ class MembershipRepository:
         self,
         *,
         profile_id: uuid.UUID,
-        org_id: uuid.UUID,
         is_org_admin: bool = False,
     ) -> UserOrgMembership:
         existing = await self._session.execute(
             select(UserOrgMembership).where(
                 UserOrgMembership.profile_id == profile_id,
-                UserOrgMembership.org_id == org_id,
+                UserOrgMembership.org_id == self._org_id,
             )
         )
         membership = existing.scalar_one_or_none()
 
         if membership is None:
-            membership = UserOrgMembership(profile_id=profile_id, org_id=org_id, is_org_admin=is_org_admin)
+            membership = UserOrgMembership(profile_id=profile_id, org_id=self._org_id, is_org_admin=is_org_admin)
             self._session.add(membership)
         else:
             membership.is_org_admin = is_org_admin
@@ -113,22 +125,30 @@ class MembershipRepository:
             await self._session.refresh(membership, to_refresh)
 
         if region_ids is not None:
-            region_result = await self._session.execute(select(Region).where(Region.id.in_(region_ids)))
+            region_result = await self._session.execute(
+                select(Region).where(Region.id.in_(region_ids), Region.org_id == self._org_id)
+            )
             regions = list(region_result.scalars().all())
             _assert_all_found("region", region_ids, {r.id for r in regions})
             membership.regions = regions
         if department_ids is not None:
-            department_result = await self._session.execute(select(Department).where(Department.id.in_(department_ids)))
+            department_result = await self._session.execute(
+                select(Department).where(Department.id.in_(department_ids), Department.org_id == self._org_id)
+            )
             departments = list(department_result.scalars().all())
             _assert_all_found("department", department_ids, {d.id for d in departments})
             membership.departments = departments
         if role_ids is not None:
-            role_result = await self._session.execute(select(Role).where(Role.id.in_(role_ids)))
+            role_result = await self._session.execute(
+                select(Role).where(Role.id.in_(role_ids), Role.org_id == self._org_id)
+            )
             roles = list(role_result.scalars().all())
             _assert_all_found("role", role_ids, {r.id for r in roles})
             membership.roles = roles
         if group_ids is not None:
-            group_result = await self._session.execute(select(Group).where(Group.id.in_(group_ids)))
+            group_result = await self._session.execute(
+                select(Group).where(Group.id.in_(group_ids), Group.org_id == self._org_id)
+            )
             groups = list(group_result.scalars().all())
             _assert_all_found("group", group_ids, {g.id for g in groups})
             membership.groups = groups

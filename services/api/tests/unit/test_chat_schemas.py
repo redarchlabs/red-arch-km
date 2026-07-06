@@ -5,63 +5,12 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-import pytest
 from api.schemas.chat import (
-    AskRequest,
     ChatData,
     ChatMessage,
     ChatSessionCreate,
     ChatSessionRead,
-    ContextFilters,
 )
-from pydantic import ValidationError
-
-
-class TestContextFilters:
-    def test_empty_filters(self) -> None:
-        filters = ContextFilters()
-        assert filters.folder_ids == []
-        assert filters.tag_ids == []
-        assert filters.document_keys == []
-
-    def test_with_values(self) -> None:
-        folder_id = uuid.uuid4()
-        tag_id = uuid.uuid4()
-        filters = ContextFilters(
-            folder_ids=[folder_id],
-            tag_ids=[tag_id],
-            document_keys=["doc-key-1", "doc-key-2"],
-        )
-        assert filters.folder_ids == [folder_id]
-        assert filters.tag_ids == [tag_id]
-        assert filters.document_keys == ["doc-key-1", "doc-key-2"]
-
-
-class TestAskRequest:
-    def test_minimal_request(self) -> None:
-        req = AskRequest(query="What is the policy?")
-        assert req.query == "What is the policy?"
-        assert req.context_filters is None
-
-    def test_with_context_filters(self) -> None:
-        folder_id = uuid.uuid4()
-        req = AskRequest(
-            query="Tell me about budgets",
-            context_filters=ContextFilters(folder_ids=[folder_id]),
-        )
-        assert req.query == "Tell me about budgets"
-        assert req.context_filters is not None
-        assert req.context_filters.folder_ids == [folder_id]
-
-    def test_empty_query_rejected(self) -> None:
-        with pytest.raises(ValidationError) as exc_info:
-            AskRequest(query="")
-        assert "String should have at least 1 character" in str(exc_info.value)
-
-    def test_query_too_long_rejected(self) -> None:
-        with pytest.raises(ValidationError) as exc_info:
-            AskRequest(query="x" * 5001)
-        assert "String should have at most 5000 characters" in str(exc_info.value)
 
 
 class TestChatMessage:

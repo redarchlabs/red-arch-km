@@ -93,7 +93,151 @@ API_URL=http://api:8000
 # Celery
 CELERY_BROKER_URL=redis://redis:6379/0
 CELERY_RESULT_BACKEND=redis://redis:6379/1
+
+# Object storage (MinIO / S3-compatible) — stores uploaded document originals
+STORAGE_ENDPOINT=http://minio:9000        # S3 API URL. NEVER use a host with an
+                                          # underscore (e.g. "km2_minio") — botocore
+                                          # rejects it as an invalid endpoint.
+STORAGE_ACCESS_KEY=<access-key>
+STORAGE_SECRET_KEY=<strong-secret>
+STORAGE_BUCKET=km-documents               # Auto-created by the createbuckets init container
+STORAGE_REGION=us-east-1
+MAX_FILE_SIZE_MB=50
 ```
+
+### Object Storage (MinIO / S3)
+
+Uploaded document originals (PDF, images, `.docx`, `.md`, `.txt`) are kept in an
+S3-compatible bucket: the API writes the original on upload, the worker downloads
+it for OCR/extraction, and the reader serves it back (text inline, PDFs/images via
+a short-lived presigned URL).
+
+- **Bucket creation is automatic.** `docker/docker-compose.infra.yml` includes a
+  one-shot `createbuckets` container that creates `STORAGE_BUCKET` once MinIO is
+  healthy. It is idempotent and safe to re-run on every `up`. In production
+  against managed S3, create the bucket via your provider instead.
+- **Endpoint hostname:** containers reach storage at `http://minio:9000`; host
+  processes (the hybrid dev layout) use `http://localhost:9000`. Do **not** use a
+  hostname containing an underscore — botocore raises `Invalid endpoint`.
+- **Binaries for extraction** live in the worker image: `tesseract-ocr` +
+  `poppler-utils` (PDF/image OCR) and `mammoth` (`.docx` → Markdown).
+- **Backup:** the bucket holds the only copy of uploaded originals — include it
+  in backups (`mc mirror` or your provider's replication).
+
+### Email (SMTP) Configuration
+
+Intake forms send email invitations via SMTP. Email is disabled by default (dev/test); enable by setting both
+`SMTP_HOST` and `SMTP_FROM`:
+
+```bash
+# Gmail (using App Password or OAuth2 token)
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USERNAME=your-email@gmail.com
+SMTP_PASSWORD=<app-password>
+SMTP_FROM=your-email@gmail.com
+SMTP_USE_TLS=true
+
+# SendGrid
+SMTP_HOST=smtp.sendgrid.net
+SMTP_PORT=587
+SMTP_USERNAME=apikey
+SMTP_PASSWORD=<sendgrid-api-key>
+SMTP_FROM=noreply@yourdomain.com
+SMTP_USE_TLS=true
+
+# AWS SES
+SMTP_HOST=email-smtp.<region>.amazonaws.com
+SMTP_PORT=587
+SMTP_USERNAME=<iam-smtp-user>
+SMTP_PASSWORD=<iam-smtp-password>
+SMTP_FROM=noreply@yourdomain.com
+SMTP_USE_TLS=true
+```
+
+- If `SMTP_HOST` is empty, email sending is silently disabled (safe for dev).
+- Recipient emails in form links are validated; malformed addresses are rejected (400).
+
+### Encryption for Per-Org Secrets
+
+Per-org OpenAI API keys are encrypted at rest using Fernet (symmetric encryption):
+
+```bash
+# Generate a 32-byte random key
+python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+
+# Set in .env
+ORG_ENCRYPTION_KEY=<32-byte-random-string>
+```
+
+**In production, this is MANDATORY.** A dev default keeps local/test environments working but logs a warning at startup.
+Existing keys are encrypted by migration 016 on upgrade; the migration is idempotent.
+
+### Workflow Webhooks (SSRF Guard)
+
+Workflows can send data to external webhooks via the `send_webhook` action. To prevent SSRF attacks, only allowlisted hosts
+are accepted:
+
+```bash
+# Comma-separated list of allowed webhook hosts (no scheme/path)
+WORKFLOW_WEBHOOK_ALLOWLIST=api.slack.com,webhooks.example.com,example-webhook-provider.com
+
+# Empty or unset = webhooks disabled
+WORKFLOW_WEBHOOK_ALLOWLIST=
+```
+
+### Celery Beat (Workflow Scheduling)
+
+Workflows use a poll-based dispatch model: Celery Beat periodically sweeps the `workflow_outbox` table for pending events
+and processes them. Without Celery Beat running, workflows do not fire.
+
+**Start Celery Beat** (in production):
+
+```bash
+# Via docker-compose
+docker compose -f docker-compose.prod.yml up -d beat
+
+# Or standalone
+celery -A worker.celery_app beat --loglevel=info
+```
+
+Beat calls two internal endpoints every minute (by default):
+- `POST /api/internal/workflows/dispatch-batch` — Process pending change-triggered workflows
+- `POST /api/internal/workflows/run-timers` — Resume due delayed runs and fire due scheduled workflows
+
+**Partition Maintenance:**
+
+The workflow tables (`workflow_outbox`, `workflow_runs`, `workflow_run_steps`) are RANGE-partitioned by `created_at` with
+monthly boundaries. Partitions are pre-created by the `workflow_ensure_partitions(months_ahead)` PL/pgSQL function; Celery Beat
+calls `POST /api/internal/workflows/maintain-partitions?months_ahead=2` once per day (configurable) to pre-create partitions
+2 months ahead of the current date.
+
+**Backfill existing partitions** (after upgrade):
+
+```bash
+# Manually, via psql
+SELECT workflow_ensure_partitions(2);
+
+# Or via internal endpoint (requires INTERNAL_API_KEY)
+curl -X POST \
+  -H "X-Internal-API-Key: ${INTERNAL_API_KEY}" \
+  http://api:8000/api/internal/workflows/maintain-partitions?months_ahead=2
+```
+
+### Internal API Key
+
+The worker communicates with the API via an internal, service-to-service key separate from `BRAIN_API_KEY`:
+
+```bash
+# Generate a strong key
+python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+
+# Set in .env
+INTERNAL_API_KEY=<32-byte-random-string>
+```
+
+The worker passes this as an `X-Internal-API-Key` header on callbacks (document status, workflow dispatch, etc.).
+Without it, the worker cannot report processing results.
 
 ## Docker Compose Production
 

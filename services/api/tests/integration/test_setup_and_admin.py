@@ -124,12 +124,14 @@ async def test_membership_delete_respects_rls(
     await admin_session.commit()
 
     try:
-        # Wrong tenant context: FORCE RLS hides the row → repo reports missing.
+        # Wrong tenant context: both the explicit org_id filter (bound to a
+        # different org) and FORCE RLS hide the row → repo reports missing.
+        wrong_org = uuid.uuid4()
         await session.execute(
             text("SELECT set_config('app.current_tenant_id', :tid, true)"),
-            {"tid": str(uuid.uuid4())},
+            {"tid": str(wrong_org)},
         )
-        assert await MembershipRepository(session).delete(membership.id) is False
+        assert await MembershipRepository(session, wrong_org).delete(membership.id) is False
         await session.rollback()
 
         # Correct tenant context: delete succeeds.
@@ -137,7 +139,7 @@ async def test_membership_delete_respects_rls(
             text("SELECT set_config('app.current_tenant_id', :tid, true)"),
             {"tid": str(org.id)},
         )
-        assert await MembershipRepository(session).delete(membership.id) is True
+        assert await MembershipRepository(session, org.id).delete(membership.id) is True
         await session.commit()
     finally:
         # Row-level cleanup of committed data (schema is session-scoped).

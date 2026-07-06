@@ -68,3 +68,25 @@ class StorageClient:
         except ClientError:
             logger.exception("Failed to delete object %s from bucket %s", key, self._bucket)
             raise
+
+    def presigned_get_url(
+        self,
+        key: str,
+        *,
+        expires_seconds: int = 300,
+        content_type: str | None = None,
+    ) -> str:
+        """A short-lived signed URL the browser can GET directly from storage.
+
+        Used to embed binary originals (PDF/images) in the reader: an <iframe>
+        cannot carry an Authorization header, so we hand the browser a
+        time-limited signed URL instead. ``content_type`` is echoed back as the
+        response Content-Type so a PDF renders inline rather than downloading.
+        """
+        params: dict[str, str] = {"Bucket": self._bucket, "Key": key}
+        if content_type:
+            params["ResponseContentType"] = content_type
+        url: str = self._client.generate_presigned_url(
+            "get_object", Params=params, ExpiresIn=expires_seconds
+        )
+        return url

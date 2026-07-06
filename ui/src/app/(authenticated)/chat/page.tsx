@@ -1,22 +1,34 @@
 "use client";
 
-import { Send } from "lucide-react";
+import { MessagesSquare, Send } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { AssistantPanel } from "@/components/chat/AssistantPanel";
 import { ChatMessage, type Message } from "@/components/chat/ChatMessage";
+import { ScopeSelector } from "@/components/chat/ScopeSelector";
 import { SessionList } from "@/components/chat/SessionList";
 import { Button } from "@/components/ui/button";
+import { MobileDrawer } from "@/components/ui/MobileDrawer";
 import { Textarea } from "@/components/ui/textarea";
 import { useOrg } from "@/context/OrgContext";
 import {
   createSession,
+  deleteSession,
   getSession,
   listSessions,
   updateSession,
 } from "@/lib/api/chat";
 import { listFolders } from "@/lib/api/folders";
-import { streamChat } from "@/lib/api/search";
-import type { ChatSession, Folder } from "@/types";
+import {
+  emptyAgentState,
+  reduceAgentEvent,
+  streamAgentChat,
+  streamChat,
+} from "@/lib/api/search";
+import { listTags } from "@/lib/api/tags";
+import type { ChatSession, Folder, Tag } from "@/types";
+
+type ChatMode = "standard" | "agentic" | "assistant";
 
 export default function ChatPage() {
   const { currentOrgId } = useOrg();
@@ -27,17 +39,24 @@ export default function ChatPage() {
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [folders, setFolders] = useState<Folder[]>([]);
-  const [scopeFolderId, setScopeFolderId] = useState<string>("");
+  const [tags, setTags] = useState<Tag[]>([]);
+  const [scopeFolderIds, setScopeFolderIds] = useState<string[]>([]);
+  const [scopeTagIds, setScopeTagIds] = useState<string[]>([]);
+  const [mode, setMode] = useState<ChatMode>("standard");
+  const [sessionsOpen, setSessionsOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
 
-  // Load folders so the user can scope the chat to one (context switching).
-  // Reset the selected scope on org change — a folder UUID from the previous
-  // org must never ride along under the new org's X-Org-ID.
+  // Load folders + tags so the user can scope the chat's retrieval to any
+  // combination of them (context switching). Reset the selected scope on org
+  // change — an id from the previous org must never ride along under the new
+  // org's X-Org-ID.
   useEffect(() => {
-    setScopeFolderId("");
+    setScopeFolderIds([]);
+    setScopeTagIds([]);
     if (!currentOrgId) {
       setFolders([]);
+      setTags([]);
       return;
     }
     let active = true;
@@ -46,7 +65,14 @@ export default function ChatPage() {
         if (active) setFolders(f);
       })
       .catch(() => {
-        // Non-fatal: the scope selector just stays at "All documents".
+        // Non-fatal: the scope selector just omits folders.
+      });
+    listTags()
+      .then((page) => {
+        if (active) setTags(page.items);
+      })
+      .catch(() => {
+        // Non-fatal: the scope selector just omits tags.
       });
     return () => {
       active = false;
@@ -144,35 +170,71 @@ export default function ChatPage() {
 
     let finalMessages: Message[] = [...messages, userMsg, assistantMsg];
 
+    // brain-api filters by tag *name*, not id — map the selected ids across.
+    const scopeTagNames = tags
+      .filter((t) => scopeTagIds.includes(t.id))
+      .map((t) => t.name);
+
     try {
-      for await (const event of streamChat(query, {
-        chat_history: history,
-        folder_ids: scopeFolderId ? [scopeFolderId] : [],
-        signal: controller.signal,
-      })) {
-        if (event.type === "sources" && event.sources) {
+      if (mode === "agentic") {
+        // Agentic mode: consume the fact-engine trace stream. The answer only
+        // arrives on the terminal `final` event; until then we surface the live
+        // reasoning trace so the multi-step loop reads as progress.
+        let agentState = emptyAgentState();
+        for await (const event of streamAgentChat(query, {
+          chat_history: history,
+          folder_ids: scopeFolderIds,
+          tags: scopeTagNames,
+          signal: controller.signal,
+        })) {
+          agentState = reduceAgentEvent(agentState, event);
+          if (event.type === "error") setError(agentState.error ?? "Stream error");
           setMessages((prev) => {
             const next = [...prev];
             const last = next[next.length - 1];
             if (last && last.role === "assistant") {
-              next[next.length - 1] = { ...last, sources: event.sources };
+              next[next.length - 1] = {
+                ...last,
+                content: agentState.answer || last.content,
+                agentTrace: agentState.trace,
+                unsupportedCitations: agentState.unsupportedCitations,
+              };
             }
             finalMessages = next;
             return next;
           });
-        } else if (event.type === "delta" && event.content) {
-          setMessages((prev) => {
-            const next = [...prev];
-            const last = next[next.length - 1];
-            if (last && last.role === "assistant") {
-              next[next.length - 1] = { ...last, content: last.content + event.content };
-            }
-            finalMessages = next;
-            return next;
-          });
-        } else if (event.type === "error") {
-          setError(event.message ?? "Stream error");
-          break;
+        }
+      } else {
+        for await (const event of streamChat(query, {
+          chat_history: history,
+          folder_ids: scopeFolderIds,
+          tags: scopeTagNames,
+          signal: controller.signal,
+        })) {
+          if (event.type === "sources" && event.sources) {
+            setMessages((prev) => {
+              const next = [...prev];
+              const last = next[next.length - 1];
+              if (last && last.role === "assistant") {
+                next[next.length - 1] = { ...last, sources: event.sources };
+              }
+              finalMessages = next;
+              return next;
+            });
+          } else if (event.type === "delta" && event.content) {
+            setMessages((prev) => {
+              const next = [...prev];
+              const last = next[next.length - 1];
+              if (last && last.role === "assistant") {
+                next[next.length - 1] = { ...last, content: last.content + event.content };
+              }
+              finalMessages = next;
+              return next;
+            });
+          } else if (event.type === "error") {
+            setError(event.message ?? "Stream error");
+            break;
+          }
         }
       }
     } catch (e: unknown) {
@@ -223,6 +285,27 @@ export default function ChatPage() {
     setError(null);
   };
 
+  const handleDelete = useCallback(
+    async (id: string) => {
+      // Optimistically drop the row; restore it if the request fails so the
+      // list never silently loses a conversation the server still holds.
+      const previous = sessions;
+      setSessions((prev) => prev.filter((s) => s.id !== id));
+      if (id === activeId) {
+        abortRef.current?.abort();
+        setActiveId(null);
+        setMessages([]);
+      }
+      try {
+        await deleteSession(id);
+      } catch (e: unknown) {
+        setSessions(previous);
+        setError(e instanceof Error ? e.message : "Failed to delete conversation");
+      }
+    },
+    [sessions, activeId],
+  );
+
   // Cancel any in-flight stream when the user navigates away from /chat
   // so brain-api stops generating immediately.
   useEffect(() => {
@@ -235,82 +318,148 @@ export default function ChatPage() {
     return <p className="text-muted-foreground">Select an organization to chat.</p>;
   }
 
+  // Selecting a conversation also dismisses the mobile drawer.
+  const handleSelect = (id: string | null) => {
+    void selectSession(id);
+    setSessionsOpen(false);
+  };
+
   return (
     <div className="flex h-full">
+      {/* Desktop: docked list. Mobile: opened via the header toggle. */}
       <SessionList
+        className="hidden md:flex"
         sessions={sessions}
         activeId={activeId}
-        onSelect={(id) => void selectSession(id)}
+        onSelect={handleSelect}
         onNew={handleNew}
+        onDelete={(id) => void handleDelete(id)}
       />
-
-      <div className="flex flex-1 flex-col pl-4">
-        <div className="mb-4 flex items-start justify-between gap-4">
-          <div>
-            <h1 className="text-2xl font-semibold">Chat</h1>
-            <p className="text-sm text-muted-foreground">
-              Ask questions about documents in your organization.
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <label htmlFor="chat-scope" className="text-sm text-muted-foreground">
-              Scope
-            </label>
-            <select
-              id="chat-scope"
-              value={scopeFolderId}
-              onChange={(e) => setScopeFolderId(e.target.value)}
-              disabled={streaming}
-              className="h-9 rounded-md border border-input bg-transparent px-2 py-1 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"
-            >
-              <option value="">All documents</option>
-              {folders.map((f) => (
-                <option key={f.id} value={f.id}>
-                  {f.dot_path || f.name}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
-
-        <div
-          ref={scrollRef}
-          className="flex-1 space-y-4 overflow-y-auto rounded-lg border bg-muted/20 p-4"
+      <div className="md:hidden">
+        <MobileDrawer
+          open={sessionsOpen}
+          onClose={() => setSessionsOpen(false)}
+          side="left"
+          label="Conversations"
+          className="w-72 max-w-[80%]"
         >
-          {messages.length === 0 ? (
-            <div className="flex h-full items-center justify-center text-muted-foreground">
-              <p>Start a conversation by asking a question below.</p>
-            </div>
-          ) : (
-            messages.map((m) => <ChatMessage key={m.id} message={m} />)
-          )}
-        </div>
-
-        {error ? (
-          <p className="mt-2 text-sm text-destructive" role="alert">
-            {error}
-          </p>
-        ) : null}
-
-        <div className="mt-4 flex gap-2">
-          <Textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="Ask a question… (Shift+Enter for new line)"
-            className="min-h-[60px] resize-none"
-            disabled={streaming}
+          <SessionList
+            className="h-full w-full border-0"
+            sessions={sessions}
+            activeId={activeId}
+            onSelect={handleSelect}
+            onNew={() => {
+              handleNew();
+              setSessionsOpen(false);
+            }}
+            onDelete={(id) => void handleDelete(id)}
           />
-          <Button
-            onClick={() => void sendMessage()}
-            disabled={streaming || !input.trim()}
-            size="icon"
-            className="h-auto"
-            aria-label="Send"
-          >
-            <Send className="h-4 w-4" />
-          </Button>
+        </MobileDrawer>
+      </div>
+
+      <div className="flex flex-1 flex-col md:pl-4">
+        <div className="mb-4 flex flex-wrap items-start justify-between gap-2">
+          <div className="flex items-start gap-2">
+            <Button
+              variant="outline"
+              size="icon"
+              className="md:hidden"
+              onClick={() => setSessionsOpen(true)}
+              aria-label="Show conversations"
+            >
+              <MessagesSquare className="h-4 w-4" />
+            </Button>
+            <div>
+              <h1 className="text-2xl font-semibold">Chat</h1>
+              <p className="text-sm text-muted-foreground">
+                Ask questions about documents in your organization.
+              </p>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+            <div
+              className="flex overflow-hidden rounded-md border text-xs"
+              role="group"
+              aria-label="Chat mode"
+            >
+              {(["standard", "agentic", "assistant"] as const).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => setMode(m)}
+                  disabled={streaming}
+                  aria-pressed={mode === m}
+                  className={
+                    mode === m
+                      ? "bg-primary px-2.5 py-1 font-medium text-primary-foreground"
+                      : "px-2.5 py-1 text-muted-foreground hover:bg-muted"
+                  }
+                >
+                  {m === "standard" ? "Standard" : m === "agentic" ? "Agentic" : "Assistant"}
+                </button>
+              ))}
+            </div>
+            {mode !== "assistant" ? (
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-muted-foreground">Scope</span>
+                <ScopeSelector
+                  folders={folders}
+                  tags={tags}
+                  selectedFolderIds={scopeFolderIds}
+                  selectedTagIds={scopeTagIds}
+                  onChangeFolders={setScopeFolderIds}
+                  onChangeTags={setScopeTagIds}
+                  disabled={streaming}
+                />
+              </div>
+            ) : null}
+          </div>
         </div>
+
+        {mode === "assistant" ? (
+          <AssistantPanel />
+        ) : (
+          <>
+            <div
+              ref={scrollRef}
+              className="flex-1 space-y-4 overflow-y-auto rounded-lg border bg-muted/20 p-4"
+            >
+              {messages.length === 0 ? (
+                <div className="flex h-full items-center justify-center text-muted-foreground">
+                  <p>Start a conversation by asking a question below.</p>
+                </div>
+              ) : (
+                messages.map((m) => <ChatMessage key={m.id} message={m} />)
+              )}
+            </div>
+
+            {error ? (
+              <p className="mt-2 text-sm text-destructive" role="alert">
+                {error}
+              </p>
+            ) : null}
+
+            <div className="mt-4 flex gap-2">
+              <Textarea
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder="Ask a question… (Shift+Enter for new line)"
+                className="min-h-[60px] resize-none"
+                disabled={streaming}
+              />
+              <Button
+                onClick={() => void sendMessage()}
+                disabled={streaming || !input.trim()}
+                size="icon"
+                className="h-auto"
+                aria-label="Send"
+              >
+                <Send className="h-4 w-4" />
+              </Button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

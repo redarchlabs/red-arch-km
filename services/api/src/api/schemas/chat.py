@@ -26,21 +26,6 @@ class ChatSessionRead(BaseModel):
     updated_at: datetime
 
 
-class ContextFilters(BaseModel):
-    """Optional filters to scope RAG retrieval."""
-
-    folder_ids: list[uuid.UUID] = Field(default_factory=list)
-    tag_ids: list[uuid.UUID] = Field(default_factory=list)
-    document_keys: list[str] = Field(default_factory=list)
-
-
-class AskRequest(BaseModel):
-    """Request body for the chat ask endpoint."""
-
-    query: str = Field(min_length=1, max_length=5000)
-    context_filters: ContextFilters | None = None
-
-
 class ChatMessage(BaseModel):
     """A single message in the chat history."""
 

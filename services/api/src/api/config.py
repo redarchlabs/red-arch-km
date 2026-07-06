@@ -6,10 +6,18 @@ unprefixed env var — the global `env_prefix` only applies when no alias
 is declared.
 """
 
+import logging
 from functools import lru_cache
 
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = logging.getLogger(__name__)
+
+# Dev/test fallback for ORG_ENCRYPTION_KEY so local envs and the test suite work
+# without extra setup. A production deployment MUST override this via the env var
+# (see the _warn_org_encryption_key validator below).
+_DEV_ORG_ENCRYPTION_KEY = "dev-insecure-org-encryption-key-change-me"
 
 
 class Settings(BaseSettings):
@@ -37,6 +45,24 @@ class Settings(BaseSettings):
     # Brain API (url is per-API, key is shared secret)
     brain_api_url: str = Field(default="http://localhost:8020")
     brain_api_key: str = Field(default="", validation_alias="BRAIN_API_KEY")
+
+    # OpenAI (the in-API agent's tool-calling loop). The central key is a
+    # fallback; an org's own key (orgs.openai_api_key) takes precedence.
+    openai_api_key: SecretStr = Field(default=SecretStr(""), validation_alias="OPENAI_API_KEY")
+    openai_model: str = Field(default="gpt-5-mini", validation_alias="OPENAI_CHAT_MODEL")
+
+    # Application-level encryption secret for per-org third-party credentials at
+    # rest (e.g. orgs.openai_api_key). Derives a Fernet key (see services/crypto.py).
+    # A dev default keeps local/test envs working; production MUST set the env var.
+    org_encryption_key: SecretStr = Field(
+        default=SecretStr(_DEV_ORG_ENCRYPTION_KEY), validation_alias="ORG_ENCRYPTION_KEY"
+    )
+
+    # Allow-listed webhook hosts for workflow send_webhook actions (SSRF guard).
+    # Comma-separated; empty means webhooks are disabled.
+    workflow_webhook_allowlist_raw: str = Field(
+        default="", validation_alias="WORKFLOW_WEBHOOK_ALLOWLIST"
+    )
 
     # Internal API key for service-to-service callbacks (worker → api).
     # Separate from brain_api_key so compromise of one doesn't grant the other.
@@ -68,6 +94,19 @@ class Settings(BaseSettings):
     # simply means "restart the API to reissue".
     setup_token_ttl_seconds: int = Field(default=86400)
 
+    # Public base URL for user-facing links the backend mints (e.g. intake-form
+    # links emailed to external users). Points at the Next.js app, not the API.
+    public_base_url: str = Field(default="http://localhost:3000", validation_alias="PUBLIC_BASE_URL")
+
+    # Outbound email (SMTP) for intake-form invitations. Email is disabled unless
+    # smtp_host and smtp_from are both set, so dev/test never tries to send.
+    smtp_host: str = Field(default="", validation_alias="SMTP_HOST")
+    smtp_port: int = Field(default=587, validation_alias="SMTP_PORT")
+    smtp_username: str = Field(default="", validation_alias="SMTP_USERNAME")
+    smtp_password: SecretStr = Field(default=SecretStr(""), validation_alias="SMTP_PASSWORD")
+    smtp_from: str = Field(default="", validation_alias="SMTP_FROM")
+    smtp_use_tls: bool = Field(default=True, validation_alias="SMTP_USE_TLS")
+
     # Observability (shared)
     log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
 
@@ -88,6 +127,11 @@ class Settings(BaseSettings):
         """Parse CLERK_ALLOWED_AZP into a trimmed list (mirrors Go comma split)."""
         return [p.strip() for p in self.clerk_allowed_azp.split(",") if p.strip()]
 
+    @property
+    def workflow_webhook_allowlist(self) -> tuple[str, ...]:
+        """Allow-listed hosts for workflow webhooks (empty tuple = disabled)."""
+        return tuple(p.strip() for p in self.workflow_webhook_allowlist_raw.split(",") if p.strip())
+
     @model_validator(mode="after")
     def _require_azp_when_clerk_enabled(self) -> "Settings":
         """Fail fast when Clerk is enabled without an azp allowlist — without it
@@ -96,6 +140,20 @@ class Settings(BaseSettings):
         if self.clerk_jwt_issuer and not self.clerk_allowed_azp_list:
             msg = "CLERK_ALLOWED_AZP is required when CLERK_JWT_ISSUER is set"
             raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def _warn_org_encryption_key(self) -> "Settings":
+        """Warn (don't fail) when the insecure dev ORG_ENCRYPTION_KEY is in use.
+
+        Failing hard would break local dev and tests, which rely on the default.
+        In production the operator is expected to set ORG_ENCRYPTION_KEY; this
+        warning surfaces the misconfiguration in the logs at startup."""
+        if self.org_encryption_key.get_secret_value() == _DEV_ORG_ENCRYPTION_KEY:
+            logger.warning(
+                "ORG_ENCRYPTION_KEY is unset; using the insecure dev default. "
+                "Set ORG_ENCRYPTION_KEY in production to protect per-org secrets at rest."
+            )
         return self
 
 

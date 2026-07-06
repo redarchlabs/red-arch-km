@@ -40,7 +40,7 @@ class _FakeDoc(SimpleNamespace):
 
 
 class _FakeDocRepo:
-    def __init__(self, session: Any) -> None: ...
+    def __init__(self, session: Any, org_id: uuid.UUID) -> None: ...
     async def get(self, _id: uuid.UUID) -> _FakeDoc:
         return _FakeDoc(
             id=uuid.uuid4(),
@@ -53,6 +53,10 @@ class _FakeDocRepo:
             created_at=datetime.now(UTC),
             tags=[],
             metadata_={},
+            # No per-document permissions of its own → entitlement falls back to
+            # the folder's masks on retag (mirrors a freshly-created document).
+            viewer_permissions_config=None,
+            contributor_permissions_config=None,
         )
 
 
@@ -61,9 +65,12 @@ class _FakeFolder(SimpleNamespace):
 
 
 class _FakeFolderRepo:
-    def __init__(self, session: Any) -> None: ...
+    def __init__(self, session: Any, org_id: uuid.UUID) -> None: ...
     async def get(self, folder_id: uuid.UUID) -> _FakeFolder:
         return _FakeFolder(id=folder_id, view_permission_masks=[7, 9])
+
+    async def effective_view_masks(self, folder: Any) -> list[int]:
+        return list(folder.view_permission_masks or []) if folder else []
 
 
 @pytest.fixture
@@ -110,6 +117,41 @@ async def test_folder_move_dispatches_retag_with_new_tag_and_masks(wiring: dict[
     assert dispatched["tenant_id"] == str(ORG_ID)
     assert f"folder:{NEW_FOLDER_ID}" in dispatched["new_tags"]
     assert dispatched["new_access_keys"] == [7, 9]
+
+
+async def test_doc_with_own_perms_retags_with_doc_masks(
+    monkeypatch: pytest.MonkeyPatch, wiring: dict[str, Any]
+) -> None:
+    # A document that has its own viewer permissions re-tags with ITS masks on a
+    # move, not the destination folder's — per-document permissions take
+    # precedence over the folder's.
+    class _OwnPermsDocRepo:
+        def __init__(self, session: Any, org_id: uuid.UUID) -> None: ...
+        async def get(self, _id: uuid.UUID) -> _FakeDoc:
+            return _FakeDoc(
+                id=uuid.uuid4(),
+                title="Doc",
+                description=None,
+                document_key=DOC_KEY,
+                processing_status="SUCCESS",
+                folder_id=None,
+                org_id=ORG_ID,
+                created_at=datetime.now(UTC),
+                tags=[],
+                metadata_={},
+                viewer_permissions_config=[{"role": "manager"}],
+                contributor_permissions_config=None,
+                view_permission_masks=[42],
+            )
+
+    monkeypatch.setattr(documents_module, "DocumentRepository", _OwnPermsDocRepo)
+
+    async with _client(_app()) as client:
+        resp = await client.patch(
+            f"/api/documents/{uuid.uuid4()}", json={"folder_id": str(NEW_FOLDER_ID)}
+        )
+    assert resp.status_code == 200
+    assert wiring["dispatched"]["new_access_keys"] == [42]
 
 
 async def test_description_only_change_does_not_retag(wiring: dict[str, Any]) -> None:

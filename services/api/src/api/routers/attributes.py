@@ -27,7 +27,7 @@ async def list_attributes(
     session: Annotated[AsyncSession, Depends(get_tenant_db)],
     pagination: Annotated[PaginationParams, Depends()],
 ) -> PaginatedResponse[AttributeDefinitionRead]:
-    repo = AttributeDefinitionRepository(session)
+    repo = AttributeDefinitionRepository(session, ctx.org_id)
     items, total = await repo.list_all(offset=pagination.offset, limit=pagination.page_size)
     return make_page([AttributeDefinitionRead.model_validate(i) for i in items], total, pagination)
 
@@ -38,7 +38,7 @@ async def get_attribute(
     ctx: Annotated[OrgContext, Depends(require_org_admin)],
     session: Annotated[AsyncSession, Depends(get_tenant_db)],
 ) -> AttributeDefinitionRead:
-    repo = AttributeDefinitionRepository(session)
+    repo = AttributeDefinitionRepository(session, ctx.org_id)
     instance = await repo.get(attribute_id)
     if instance is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
@@ -51,11 +51,10 @@ async def create_attribute(
     ctx: Annotated[OrgContext, Depends(require_org_admin)],
     session: Annotated[AsyncSession, Depends(get_tenant_db)],
 ) -> AttributeDefinitionRead:
-    repo = AttributeDefinitionRepository(session)
+    repo = AttributeDefinitionRepository(session, ctx.org_id)
     instance = await repo.create(
         name=body.name,
         slug=body.slug,
-        org_id=ctx.org_id,
         attribute_type=body.attribute_type,
         picklist_options=body.picklist_options,
         required=body.required,
@@ -71,7 +70,7 @@ async def update_attribute(
     ctx: Annotated[OrgContext, Depends(require_org_admin)],
     session: Annotated[AsyncSession, Depends(get_tenant_db)],
 ) -> AttributeDefinitionRead:
-    repo = AttributeDefinitionRepository(session)
+    repo = AttributeDefinitionRepository(session, ctx.org_id)
     instance = await repo.get(attribute_id)
     if instance is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
@@ -93,7 +92,7 @@ async def delete_attribute(
     ctx: Annotated[OrgContext, Depends(require_org_admin)],
     session: Annotated[AsyncSession, Depends(get_tenant_db)],
 ) -> None:
-    repo = AttributeDefinitionRepository(session)
+    repo = AttributeDefinitionRepository(session, ctx.org_id)
     deleted = await repo.delete(attribute_id)
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")

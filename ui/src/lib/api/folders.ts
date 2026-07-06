@@ -38,6 +38,8 @@ export interface FolderUpdateInput {
   name?: string;
   description?: string | null;
   parent_id?: string | null;
+  viewer_permissions_config?: PermissionRule[] | null;
+  contributor_permissions_config?: PermissionRule[] | null;
 }
 
 export async function updateFolder(id: string, input: FolderUpdateInput): Promise<Folder> {

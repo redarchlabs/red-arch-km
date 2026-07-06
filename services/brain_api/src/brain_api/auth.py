@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import logging
 from typing import Annotated
 
@@ -35,7 +36,9 @@ async def require_api_key(
             detail="Service not configured",
         )
 
-    if api_key != settings.api_key:
+    # Constant-time comparison so a timing side-channel can't be used to recover
+    # the key byte-by-byte. Both operands are ASCII strings from config/headers.
+    if not hmac.compare_digest(api_key, settings.api_key):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid API key",

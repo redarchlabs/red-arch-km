@@ -23,7 +23,7 @@ async def list_tags(
     session: Annotated[AsyncSession, Depends(get_tenant_db)],
     pagination: Annotated[PaginationParams, Depends()],
 ) -> PaginatedResponse[TagRead]:
-    repo = TagRepository(session)
+    repo = TagRepository(session, ctx.org_id)
     tags, total = await repo.list_all(offset=pagination.offset, limit=pagination.page_size)
     return make_page([TagRead.model_validate(t) for t in tags], total, pagination)
 
@@ -34,8 +34,8 @@ async def create_tag(
     ctx: Annotated[OrgContext, Depends(require_org_access)],
     session: Annotated[AsyncSession, Depends(get_tenant_db)],
 ) -> TagRead:
-    repo = TagRepository(session)
-    tag = await repo.create(name=body.name, org_id=ctx.org_id)
+    repo = TagRepository(session, ctx.org_id)
+    tag = await repo.create(name=body.name)
     return TagRead.model_validate(tag)
 
 
@@ -45,7 +45,7 @@ async def get_tag(
     ctx: Annotated[OrgContext, Depends(require_org_access)],
     session: Annotated[AsyncSession, Depends(get_tenant_db)],
 ) -> TagRead:
-    repo = TagRepository(session)
+    repo = TagRepository(session, ctx.org_id)
     tag = await repo.get(tag_id)
     if tag is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tag not found")
@@ -59,7 +59,7 @@ async def update_tag(
     ctx: Annotated[OrgContext, Depends(require_org_access)],
     session: Annotated[AsyncSession, Depends(get_tenant_db)],
 ) -> TagRead:
-    repo = TagRepository(session)
+    repo = TagRepository(session, ctx.org_id)
     tag = await repo.get(tag_id)
     if tag is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tag not found")
@@ -74,7 +74,7 @@ async def delete_tag(
     ctx: Annotated[OrgContext, Depends(require_org_access)],
     session: Annotated[AsyncSession, Depends(get_tenant_db)],
 ) -> None:
-    repo = TagRepository(session)
+    repo = TagRepository(session, ctx.org_id)
     deleted = await repo.delete(tag_id)
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tag not found")

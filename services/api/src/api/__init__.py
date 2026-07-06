@@ -1,1 +1,1 @@
-"""Red Arch KM API service."""
+"""Red Arch Knowledge Manager API service."""
