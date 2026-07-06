@@ -176,7 +176,7 @@ async def create_document(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="folder_id does not exist in this organization",
             )
-        access_keys = list(folder.view_permission_masks or [])
+        access_keys = await folder_repo.effective_view_masks(folder)
         # Encode folder membership as a tag for graph-level filtering
         tag_names.append(f"folder:{folder.id}")
 
@@ -460,7 +460,7 @@ async def upload_document(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="folder_id does not exist in this organization",
             )
-        access_keys = list(folder.view_permission_masks or [])
+        access_keys = await folder_repo.effective_view_masks(folder)
         tag_names.append(f"folder:{folder.id}")
 
     # --- Stage document(s): one for a plain file, N for a .zip's members ---
@@ -630,11 +630,12 @@ async def update_document(
         if folder is not None:
             tag_names.append(f"folder:{doc.folder_id}")
         # The document's OWN viewer permissions take precedence for entitlement;
-        # fall back to the folder's only when the document has none of its own.
+        # otherwise it inherits its folder's effective masks (which themselves
+        # inherit up the folder tree when the folder has no config of its own).
         if doc.viewer_permissions_config is not None:
             access_keys = list(doc.view_permission_masks or [])
-        elif folder is not None:
-            access_keys = list(folder.view_permission_masks or [])
+        else:
+            access_keys = await folder_repo.effective_view_masks(folder)
         await session.commit()
         try:
             dispatch_metadata_update(
@@ -834,7 +835,8 @@ async def _derive_ingest_scoping(folder_repo: FolderRepository, doc: Any) -> tup
     ``access_keys``. Mirrors the derivation in ``create_document`` /
     ``update_document`` so re-indexing keeps folder-scoped retrieval and
     permission filtering correct: the document's OWN viewer permissions take
-    precedence, falling back to the folder's only when it has none of its own.
+    precedence, otherwise it inherits its folder's effective masks (which
+    themselves inherit up the folder tree when unconfigured).
     """
     tag_names: list[str] = []
     access_keys: list[int] = []
@@ -843,8 +845,8 @@ async def _derive_ingest_scoping(folder_repo: FolderRepository, doc: Any) -> tup
         tag_names.append(f"folder:{doc.folder_id}")
     if doc.viewer_permissions_config is not None:
         access_keys = list(doc.view_permission_masks or [])
-    elif folder is not None:
-        access_keys = list(folder.view_permission_masks or [])
+    else:
+        access_keys = await folder_repo.effective_view_masks(folder)
     return tag_names, access_keys
 
 

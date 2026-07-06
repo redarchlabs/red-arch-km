@@ -69,6 +69,9 @@ class _FakeFolderRepo:
     async def get(self, folder_id: uuid.UUID) -> _FakeFolder:
         return _FakeFolder(id=folder_id, view_permission_masks=[7, 9])
 
+    async def effective_view_masks(self, folder: Any) -> list[int]:
+        return list(folder.view_permission_masks or []) if folder else []
+
 
 @pytest.fixture
 def wiring(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:

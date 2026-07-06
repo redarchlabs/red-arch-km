@@ -97,6 +97,9 @@ def wiring(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         async def get(self, _folder_id: uuid.UUID) -> Any:
             return state["folder"]
 
+        async def effective_view_masks(self, folder: Any) -> list[int]:
+            return list(folder.view_permission_masks or []) if folder else []
+
     monkeypatch.setattr(documents_module, "DocumentRepository", _DocRepo)
     monkeypatch.setattr(documents_module, "FolderRepository", _FolderRepo)
 

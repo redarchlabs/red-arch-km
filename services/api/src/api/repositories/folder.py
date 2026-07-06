@@ -25,6 +25,16 @@ def _escape_like(value: str) -> str:
     return value.translate(_LIKE_ESCAPE)
 
 
+def _ancestor_dot_paths(dot_path: str) -> list[str]:
+    """Dot_paths of a folder's ancestors (nearest last), excluding itself.
+
+    ``"HR.Benefits.2024"`` → ``["HR", "HR.Benefits"]``. Folder names cannot
+    contain ``.`` (validated on write), so splitting on it is unambiguous.
+    """
+    parts = dot_path.split(".")
+    return [".".join(parts[:i]) for i in range(1, len(parts))]
+
+
 class FolderRepository:
     """Tenant-bound repository. Every query is explicitly scoped to ``org_id``
     (belt-and-suspenders alongside RLS)."""
@@ -113,6 +123,44 @@ class FolderRepository:
         self._session.add(folder)
         await self._session.flush()
         return folder
+
+    async def nearest_configured_ancestor(self, folder: Folder) -> Folder | None:
+        """The closest ancestor folder that has its OWN viewer config.
+
+        Used to resolve inherited entitlement: a folder with a NULL viewer
+        config inherits from the nearest ancestor that defines one. Returns
+        ``None`` when no ancestor in the chain is configured.
+        """
+        prefixes = _ancestor_dot_paths(folder.dot_path)
+        if not prefixes:
+            return None
+        result = await self._session.execute(
+            select(Folder)
+            .where(
+                Folder.org_id == self._org_id,
+                Folder.dot_path.in_(prefixes),
+                Folder.viewer_permissions_config.isnot(None),
+            )
+            .order_by(func.length(Folder.dot_path).desc())  # longest path = nearest ancestor
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
+    async def effective_view_masks(self, folder: Folder | None) -> list[int]:
+        """View masks a folder contributes to its documents, honoring inheritance.
+
+        A folder with its OWN viewer config uses its own masks; a folder with a
+        NULL config inherits the nearest configured ancestor's masks. Empty when
+        nothing in the chain is configured (i.e. public within the org). This is
+        the single source of truth for a document's inherited entitlement, so
+        ingest-time derivation and folder-change propagation stay in lockstep.
+        """
+        if folder is None:
+            return []
+        if folder.viewer_permissions_config is not None:
+            return list(folder.view_permission_masks or [])
+        ancestor = await self.nearest_configured_ancestor(folder)
+        return list(ancestor.view_permission_masks or []) if ancestor else []
 
     async def descendants(self, folder: Folder) -> list[Folder]:
         """Return this folder and all descendants via dot_path prefix match."""

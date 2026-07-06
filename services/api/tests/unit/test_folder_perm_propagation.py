@@ -69,6 +69,14 @@ def wiring(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         async def get(self, _id: uuid.UUID) -> SimpleNamespace:
             return state["folder"]
 
+        async def descendants(self, _folder: Any) -> list[Any]:
+            # Single-folder subtree; recursion across a real tree is covered by
+            # the integration tests.
+            return [state["folder"]]
+
+        async def effective_view_masks(self, folder: Any) -> list[int]:
+            return list(folder.view_permission_masks or []) if folder else []
+
     class _DocRepo:
         def __init__(self, session: Any, org_id: uuid.UUID) -> None: ...
         async def list_inheriting_in_folder(self, _folder_id: uuid.UUID) -> list[Any]:
