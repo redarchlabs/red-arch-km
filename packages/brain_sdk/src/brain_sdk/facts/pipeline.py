@@ -19,10 +19,10 @@ from dataclasses import dataclass
 from brain_sdk.facts.doc_profiles import DocumentProfile
 from brain_sdk.facts.extraction import ClaimCandidate, ClaimExtractor
 from brain_sdk.facts.models import Claim, ObjectType, Provenance
-from brain_sdk.facts.structure import extract_structured
 from brain_sdk.facts.predicates import PredicateNormalizer, PredicateRegistry
 from brain_sdk.facts.protocol import FactStore
 from brain_sdk.facts.resolution import EntityResolver
+from brain_sdk.facts.structure import extract_structured
 
 logger = logging.getLogger(__name__)
 

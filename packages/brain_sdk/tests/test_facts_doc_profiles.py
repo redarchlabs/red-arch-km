@@ -130,8 +130,8 @@ class TestExtractionConditioning:
 
     def test_generic_profile_adds_no_suffix(self) -> None:
         llm = FakeLLM(json.dumps({"claims": []}))
-        base = self._extractor(FakeLLM(json.dumps({"claims": []})))
-        # Capture the un-conditioned prompt.
+        # The generic profile carries no type/guidance, so it must not change the
+        # un-conditioned base prompt.
         base_llm = FakeLLM(json.dumps({"claims": []}))
         ClaimExtractor(base_llm).extract("hi")  # type: ignore[arg-type]
         self._extractor(llm).extract("hi", PROFILE_REGISTRY[GENERIC])
