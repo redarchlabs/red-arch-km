@@ -145,7 +145,7 @@ the cross-org site-admin console).
 | Package | Purpose |
 |---------|---------|
 | `packages/access_mask` | Pure-computation 32-bit RBAC mask: `encode`/`decode`/`matches`, layout `[org:11][region:5][role:5][group:7][dept:4]`. Used by the API to compile folder/document permissions and user entitlements |
-| `packages/brain_sdk` | AI/ML primitives: sentence-aware chunker (`o200k_base`), OpenAI embedding provider, hierarchical `ChunkSummarizer`, `TripletExtractor`, and the Qdrant vector-store and Neo4j graph-store abstractions |
+| `packages/brain_sdk` | AI/ML primitives: sentence-aware chunker (`o200k_base`), OpenAI embedding provider, hierarchical `ChunkSummarizer`, `TripletExtractor`; reified-claim knowledge engine (`packages/brain_sdk/facts/` — Neo4j-backed tenant-scoped fact store); and Qdrant vector-store and Neo4j graph-store abstractions |
 | `packages/shared_config` | Pydantic settings (DB/Redis/OpenAI/observability), JSON logging with OTel correlation, and OTLP telemetry setup |
 
 Go counterparts exist under `packages/accessmask` and `packages/shared/{logging,telemetry}`.
@@ -218,14 +218,108 @@ UI ──POST /api/search/chat/stream (fetch, SSE)──► API
 UI renders tokens incrementally, turns [n] into citation links, can AbortController-cancel
 ```
 
+### 5.3 Custom Entities (Schema-Driven Records)
+
+```
+UI ──POST /api/entity-definitions──► API
+                                     ├─ validate slug (no reserved words)
+                                     ├─ insert catalog rows
+                                     └─ run physical DDL ──► PostgreSQL
+                                        CREATE TABLE ce_<slug> (
+                                          id UUID,
+                                          <field_name> <field_type>,
+                                          ...
+                                          org_id UUID,
+                                          created_at TIMESTAMPTZ
+                                        )
+                                        ALTER TABLE ce_<slug> ENABLE RLS
+
+UI ──GET /api/entities/{slug}/records──► API
+                                         ├─ resolve entity_definition + fields from catalog
+                                         ├─ keyset-paginated query (cursor = (created_at, id))
+                                         ├─ RLS-enforced read from ce_<slug>
+                                         └─ optional full-text search ──► PostgreSQL pg_trgm
+```
+
+Record changes (create/update/delete) write to the `workflow_outbox` in the same transaction (at-least-once semantics),
+triggering any automations.
+
+### 5.4 Workflow Automation (Poll-Based Dispatch)
+
+```
+Entity record change ──► DynamicEntityRepository ──► PostgreSQL (same txn)
+                        └─ INSERT into workflow_outbox
+                           (operation, before_data, after_data, ...)
+
+Celery Beat (periodic)
+  │
+  └─ POST /api/internal/workflows/dispatch-batch (INTERNAL_API_KEY)
+       │
+       └─ API ──── FOR UPDATE SKIP LOCKED ──► PostgreSQL
+                   SELECT * FROM workflow_outbox WHERE status='pending' LIMIT 100
+                   │
+                   ├─ For each event:
+                   │  ├─ UPDATE outbox SET status='claimed'
+                   │  ├─ find matching workflows (entity_definition_id + trigger type)
+                   │  ├─ INSERT workflow_run + workflow_run_steps
+                   │  └─ per-step: DROP to app_user role (RLS-scoped action writes)
+                   │     ├─ update_record_field ──► ce_<slug> UPDATE
+                   │     ├─ send_email ──► SMTP (HTML-escaped template)
+                   │     ├─ send_webhook ──► allowlist-validated HTTPS POST
+                   │     ├─ send_form ──► mint form_links + email
+                   │     └─ create_record ──► ce_<slug> INSERT
+                   │
+                   └─ UPDATE outbox SET status='done'
+
+Scheduled/Delayed Runs:
+  └─ POST /api/internal/workflows/run-timers (INTERNAL_API_KEY, Celery Beat)
+     ├─ SELECT workflow_runs WHERE status='pending' AND delay_until <= now()
+     ├─ pg_advisory_lock per scheduled workflow (exactly-once)
+     └─ resume/execute similarly to dispatch-batch
+```
+
+**Partitioning:** `workflow_outbox`, `workflow_runs`, `workflow_run_steps` are RANGE-partitioned by `created_at` (monthly);
+`workflow_ensure_partitions(months_ahead)` pre-creates upcoming partitions idempotently.
+
+### 5.5 Intake Forms (Token-Linked Public Collection)
+
+```
+UI (admin) ──POST /api/forms/{id}/links──► API
+                                          ├─ INSERT form_links (token_hash = SHA-256(random))
+                                          └─ send email (if recipient_email set)
+
+External user
+  │
+  └─ GET /api/public/forms/{token}  (unauthenticated)
+     ├─ API ──── SELECT * FROM form_links WHERE token_hash = ?  ──► PostgreSQL (privileged)
+     │           (resolve org_id from token_hash before RLS)
+     │
+     └─ UI renders form
+
+  └─ POST /api/public/forms/{token}  (data submission)
+     ├─ validate token status (pending → submitted); check expiry
+     ├─ target entity record ──► ce_<slug> UPDATE | INSERT
+     ├─ INSERT into workflow_outbox (source='form_submission')
+     └─ UPDATE form_links SET status='submitted' (single-use guarantee)
+
+Workflow (if on_form_submission trigger exists)
+  └─ Celery Beat → dispatch-batch processes the outbox event
+     ├─ conditions evaluate (e.g., "if stage == lead")
+     └─ actions execute (send welcome email, create related record, etc.)
+```
+
 ---
 
 ## 6. Multi-Tenancy & Isolation
 
-**PostgreSQL RLS.** Eleven tenant tables (`regions, departments, roles, groups,
-folders, tags, documents, document_access, document_attribute_definitions,
-chat_sessions, user_org_memberships`) have `ENABLE` + `FORCE ROW LEVEL SECURITY`
+**PostgreSQL RLS.** Over 25 tenant tables have `ENABLE` + `FORCE ROW LEVEL SECURITY`
 with four policies each (`tenant_isolation_{select,insert,update,delete}`):
+
+- **Permission & org:** regions, departments, roles, groups, user_org_memberships
+- **Documents:** folders, tags, documents (+ per-doc permission columns), chat_sessions
+- **Custom entities:** entity_definitions, entity_fields, entity_relationships, ce_* (dynamic)
+- **Workflows:** workflows, workflow_versions, workflow_outbox, workflow_runs, workflow_run_steps
+- **Forms:** forms, form_links
 
 ```sql
 org_id = nullif(current_setting('app.current_tenant_id', true), '')::uuid
@@ -235,7 +329,8 @@ The `nullif(..., '')` hardening (migration `002`) makes an unset/empty GUC norma
 to NULL → zero rows / blocked writes, rather than raising on an empty `::uuid` cast
 (fail-closed and error-free). `orgs` and `user_profiles` are **not** RLS-scoped
 (they cross tenants by design); junction tables are not RLS-scoped but are granted
-to `app_user`.
+to `app_user`. `form_links.token_hash` is globally unique (for public token resolution
+before tenant context) and indexed.
 
 **Roles:** `app_user` (`NOBYPASSRLS`, request-time via `SET ROLE`) and `app_admin`
 (`BYPASSRLS`, migrations/admin ops). Migration `007` idempotently ensures `app_user`
@@ -254,19 +349,35 @@ filtering and folder/tag scoping (`MatchAny`).
 
 ## 7. Security Boundaries
 
-Three distinct, non-overlapping secrets guard three trust boundaries:
+Four distinct, non-overlapping secrets guard trust boundaries:
 
 | Boundary | Header / secret | Enforcement |
 |----------|-----------------|-------------|
 | Browser → API | `Authorization: Bearer <Clerk JWT>` | RS256 + issuer pin + **default-deny `azp` allowlist** (Clerk tokens have no `aud`) |
 | API → Brain API | `X-API-Key: <BRAIN_API_KEY>` | Required; missing config → 503, mismatch → 401 |
 | Worker → API (internal) | `X-Internal-API-Key: <INTERNAL_API_KEY>` | **Constant-time** compare (`hmac.compare_digest`); empty key → 503 |
+| Per-org secrets (at-rest) | `ORG_ENCRYPTION_KEY` (Fernet) | Per-org OpenAI keys encrypted/decrypted with symmetric key; never logged |
 
 Authorization tiers: **site admin** (`user_profiles.is_site_admin`) ⊃ **org admin**
 (`user_org_memberships.is_org_admin`) ⊃ **member** (mask-gated). Retrieval is
 entitlement-filtered by 32-bit access masks *before* any content reaches the LLM.
 The E2E header-auth bypass (`X-Test-User`/`X-Test-Secret`) is gated by
 `e2e_test_mode` and must never be enabled in production.
+
+**Workflow security:**
+- **Record ownership:** Manual run validates `record_id` ownership; side-effecting actions
+  rejected on free-form client data (prevents email/webhook spam via `any_member` mode).
+- **Webhook SSRF guard:** Targets validated against `WORKFLOW_WEBHOOK_ALLOWLIST`; empty list
+  disables webhooks. Recipient email validated before send.
+- **Exactly-once dispatch:** `FOR UPDATE SKIP LOCKED` on outbox claim; pg_advisory_lock on
+  scheduled workflows; idempotency keys supported via `dedup_key`.
+
+**Intake forms:**
+- **Single-use links:** Token hashed (SHA-256) for lookup; status transitions `pending → submitted`
+  or `expired`/`revoked` guarantee one-time use.
+- **Template safety:** Email templating HTML-escaped; recipient email validated.
+- **Token security:** Hash indexed globally (public resolution before RLS); raw token shown only
+  at creation and **never** stored.
 
 ---
 
@@ -277,16 +388,17 @@ Compose files live in `docker/`; `docker-compose.infra.yml` is the shared base
 
 | Component | Image | Ports (host→cluster) | Notes |
 |-----------|-------|----------------------|-------|
-| PostgreSQL | `postgres:18` | **5433**→5432 | RLS; `init-db.sql` seeds roles |
-| Redis | `redis:7.4-alpine` | 6379 | Celery broker/result + setup token |
+| PostgreSQL | `postgres:18` | **5433**→5432 | RLS; `init-db.sql` seeds roles; custom functions for workflow partitioning |
+| Redis | `redis:7.4-alpine` | 6379 | Celery broker/result + setup token + pg_advisory_lock |
 | Qdrant | `qdrant/qdrant:v1.12.4` | 6333 | Vector DB (no healthcheck in image) |
-| Neo4j | `neo4j:5.25.1` | 7474 / 7687 | Knowledge graph + APOC |
+| Neo4j | `neo4j:5.25.1` | 7474 / 7687 | Knowledge graph + APOC; fact-store queries |
 | MinIO | `minio/minio:…` | 9000 / 9001 | Object storage for originals; bucket auto-created |
-| API | `docker/api.Dockerfile` | 8000 | FastAPI (Python) |
-| Brain API | `docker/brain-api.Dockerfile` | 8020 | FastAPI (Python) |
-| Worker | `docker/worker.Dockerfile` | — | Celery + Tesseract/poppler/antiword |
+| API | `docker/api.Dockerfile` | 8000 | FastAPI (Python); entity DDL, workflow dispatch, form submission, agent |
+| Brain API | `docker/brain-api.Dockerfile` | 8020 | FastAPI (Python); ingest, search, knowledge extraction |
+| Worker | `docker/worker.Dockerfile` | — | Celery worker; Tesseract/poppler/antiword; ingest tasks |
+| Beat | `docker/worker.Dockerfile` | — | Celery Beat scheduler; workflow dispatch, timers, partition maintenance (runs internal endpoints) |
 | Flower | `mher/flower:2.0` | 5555 | Celery task monitor |
-| UI | `docker/ui.Dockerfile` | 3000 | Next.js standalone |
+| UI | `docker/ui.Dockerfile` | 3000 | Next.js standalone; workflow editor, form management, agent chat |
 | pgAdmin | `dpage/pgadmin4:8.12` | 81→80 | Profile `dev-tools` only |
 
 **Stacks:** `make dev` → Python (`docker-compose.yml` [+ `.dev.yml` for reload]);
