@@ -73,14 +73,11 @@ test.describe.serial("Chat / RAG Flow", () => {
   });
 
   test("send message via API", async ({ apiContext }) => {
-    const res = await apiContext.post("/api/chat/ask", {
-      data: {
-        message: "What is Red Arch?",
-        context: { document_ids: [documentId] },
-      },
+    const res = await apiContext.post("/api/search/chat", {
+      data: { query: "What is Red Arch?" },
     });
 
-    expect([200, 201]).toContain(res.status());
+    expect(res.status()).toBe(200);
   });
 
   test("receive streamed response", async ({ page, e2eState }) => {
@@ -119,43 +116,49 @@ test.describe.serial("Chat / RAG Flow", () => {
   });
 
   test("response references ingested content", async ({ apiContext }) => {
-    const res = await apiContext.post("/api/chat/ask", {
-      data: {
-        message: "What database does Red Arch use?",
-        context: { document_ids: [documentId] },
-      },
+    const res = await apiContext.post("/api/search/chat", {
+      data: { query: "What database does Red Arch use?" },
     });
 
     expect(res.ok()).toBe(true);
 
-    // Read streamed response
-    const text = await res.text();
-    expect(text.toLowerCase()).toMatch(
+    // /search/chat returns a JSON ChatResponse { answer, sources, ... }.
+    const body = (await res.json()) as { answer: string };
+    expect(body.answer.toLowerCase()).toMatch(
       /postgres|vector|qdrant|semantic|knowledge/i,
     );
   });
 
-  test("chat persists conversation history", async ({ apiContext }) => {
-    const message1 = "Hello, what is this system?";
-    const message2 = "Tell me more about the architecture";
-
-    const res1 = await apiContext.post("/api/chat/ask", {
-      data: { message: message1 },
+  test("chat sessions persist conversation history", async ({ apiContext }) => {
+    // Persistence lives in the chat-session CRUD, not the (stateless) RAG
+    // endpoint: create a session, write messages, read them back.
+    const createRes = await apiContext.post("/api/chat/sessions", {
+      data: { chat_data: { messages: [] } },
     });
-    expect(res1.ok()).toBe(true);
+    expect(createRes.status()).toBe(201);
+    const created = (await createRes.json()) as { id: string };
 
-    const res2 = await apiContext.post("/api/chat/ask", {
-      data: { message: message2 },
+    const messages = [
+      { id: "m1", role: "user", content: "Hello, what is this system?" },
+      { id: "m2", role: "assistant", content: "It is Red Arch, a knowledge manager." },
+    ];
+    const patchRes = await apiContext.patch(`/api/chat/sessions/${created.id}`, {
+      data: { chat_data: { messages } },
     });
-    expect(res2.ok()).toBe(true);
+    expect(patchRes.ok()).toBe(true);
+
+    const getRes = await apiContext.get(`/api/chat/sessions/${created.id}`);
+    expect(getRes.ok()).toBe(true);
+    const fetched = (await getRes.json()) as { chat_data: { messages: unknown[] } };
+    expect(fetched.chat_data.messages).toHaveLength(2);
   });
 
   test("handle empty/invalid messages gracefully", async ({ apiContext }) => {
-    const res = await apiContext.post("/api/chat/ask", {
-      data: { message: "" },
+    const res = await apiContext.post("/api/search/chat", {
+      data: { query: "" },
     });
 
-    // Should reject or return error
+    // Empty query violates the min_length=1 constraint.
     expect([400, 422]).toContain(res.status());
   });
 

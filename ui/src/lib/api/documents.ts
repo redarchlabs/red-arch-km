@@ -29,6 +29,17 @@ export async function updateDocument(
   return response.data;
 }
 
+/**
+ * Replace a document's body text and re-index it (the Markdown editor's Save).
+ * Unlike {@link updateDocument} (metadata only), this re-chunks and re-embeds,
+ * so the document briefly re-enters PENDING. Works for both authored inline-text
+ * documents and uploaded `.md`/`.markdown`/`.txt` originals; other types 415.
+ */
+export async function updateDocumentContent(id: string, text: string): Promise<Document> {
+  const response = await apiClient.put<Document>(`/documents/${id}/content`, { text });
+  return response.data;
+}
+
 export async function listDocuments(
   page = 1,
   pageSize = 20,
@@ -72,7 +83,22 @@ export interface DocumentUploadInput {
   translation_method?: TranslationMethod;
 }
 
-export async function uploadDocument(input: DocumentUploadInput): Promise<Document> {
+/** Server response when a .zip is expanded into one document per member. */
+interface UploadBatchResponse {
+  batch: true;
+  created: number;
+  skipped: string[];
+  documents: Document[];
+}
+
+/** Normalized upload outcome: one document for a file, many for a .zip. */
+export interface UploadResult {
+  documents: Document[];
+  /** Names of archive members that were skipped (unsupported / too large). */
+  skipped: string[];
+}
+
+export async function uploadDocument(input: DocumentUploadInput): Promise<UploadResult> {
   const form = new FormData();
   form.append("file", input.file);
   form.append("title", input.title);
@@ -84,10 +110,14 @@ export async function uploadDocument(input: DocumentUploadInput): Promise<Docume
   // boundary* — setting it manually (even to "multipart/form-data") omits the
   // boundary and the server can't parse the body. Passing undefined suppresses
   // the client's JSON default so the FormData branch sets it correctly.
-  const response = await apiClient.post<Document>("/documents/upload", form, {
+  const response = await apiClient.post<Document | UploadBatchResponse>("/documents/upload", form, {
     headers: { "Content-Type": undefined },
   });
-  return response.data;
+  const data = response.data;
+  if ("batch" in data) {
+    return { documents: data.documents, skipped: data.skipped };
+  }
+  return { documents: [data], skipped: [] };
 }
 
 export async function deleteDocument(id: string): Promise<void> {

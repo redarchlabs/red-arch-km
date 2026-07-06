@@ -38,4 +38,23 @@ class BrainAPISettings(BaseSettings):
         validation_alias="OPENAI_EMBEDDING_MODEL",
     )
 
+    # Agentic fact engine (provider-agnostic; OpenAI is the default provider).
+    # `use_fact_engine` gates the new reified-claim ingest + agentic query path;
+    # the legacy top-K RAG path stays available regardless.
+    use_fact_engine: bool = Field(default=False, validation_alias="USE_FACT_ENGINE")
+    llm_provider: str = Field(default="openai", validation_alias="LLM_PROVIDER")
+    agent_model: str = Field(default="", validation_alias="AGENT_MODEL")
+    agent_api_key: str = Field(default="", validation_alias="AGENT_API_KEY")
+    agent_max_iterations: int = Field(default=6, validation_alias="AGENT_MAX_ITERATIONS")
+
     log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
+
+    @property
+    def resolved_agent_model(self) -> str:
+        """Agent/extraction model, falling back to the chat model."""
+        return self.agent_model or self.openai_chat_model
+
+    @property
+    def resolved_agent_api_key(self) -> str:
+        """Provider key for the agent LLM, falling back to the OpenAI key."""
+        return self.agent_api_key or self.openai_api_key

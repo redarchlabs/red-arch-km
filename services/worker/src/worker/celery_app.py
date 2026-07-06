@@ -45,6 +45,27 @@ app.conf.update(
 
 app.autodiscover_tasks(["worker.tasks"])
 
+# Workflow engine cadence: drain the outbox frequently, keep partitions ahead.
+app.conf.beat_schedule = {
+    "workflow-sweep-outbox": {
+        "task": "worker.tasks.workflow.sweep_outbox",
+        "schedule": float(os.environ.get("WORKFLOW_SWEEP_INTERVAL", "10")),
+        "options": {"expires": 30},
+    },
+    "workflow-maintain-partitions": {
+        "task": "worker.tasks.workflow.maintain_partitions",
+        # Daily is plenty to keep 1-2 months of partitions pre-created.
+        "schedule": float(os.environ.get("WORKFLOW_PARTITION_INTERVAL", "86400")),
+    },
+    # Liveness beacon for the site-admin console: proves beat -> broker -> worker
+    # is healthy. A stale/absent heartbeat there means beat is down.
+    "beat-heartbeat": {
+        "task": "worker.tasks.monitoring.beat_heartbeat",
+        "schedule": float(os.environ.get("BEAT_HEARTBEAT_INTERVAL", "15")),
+        "options": {"expires": 30},
+    },
+}
+
 
 @worker_process_init.connect(weak=False)  # type: ignore[untyped-decorator]  # celery signals are untyped
 def _init_observability(**_kwargs: object) -> None:
