@@ -236,9 +236,12 @@ TOOLS: list[dict[str, Any]] = [
                                 "values": {
                                     "type": "object",
                                     "description": (
-                                        "create_record: field slug -> static value. Values are "
-                                        "literal; there is no templating from the triggering "
-                                        "record yet."
+                                        "create_record: target field slug -> value. A value is "
+                                        "either a literal, or a reference to a field on the "
+                                        'triggering record via the envelope {"$ref": '
+                                        '"after.<field_slug>"} (also "before.<field_slug>") — use '
+                                        "this to copy a value from the record that fired the "
+                                        "workflow into the new record."
                                     ),
                                 },
                                 "field": {

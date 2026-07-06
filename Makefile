@@ -12,8 +12,8 @@ help: ## Show this help
 dev-infra: ## Start infrastructure only (PostgreSQL, Qdrant, Neo4j, Redis)
 	docker compose --env-file .env -f docker/docker-compose.infra.yml up -d
 
-dev: ## Start full development stack
-	docker compose --env-file .env -f docker/docker-compose.yml up -d --build
+dev: ## Start full development stack (source bind-mounts + uvicorn --reload)
+	docker compose --env-file .env -f docker/docker-compose.dev.yml up -d --build
 
 down: ## Stop all containers
 	docker compose --env-file .env -f docker/docker-compose.yml down

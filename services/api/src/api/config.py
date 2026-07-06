@@ -38,6 +38,17 @@ class Settings(BaseSettings):
     brain_api_url: str = Field(default="http://localhost:8020")
     brain_api_key: str = Field(default="", validation_alias="BRAIN_API_KEY")
 
+    # OpenAI (the in-API agent's tool-calling loop). The central key is a
+    # fallback; an org's own key (orgs.openai_api_key) takes precedence.
+    openai_api_key: SecretStr = Field(default=SecretStr(""), validation_alias="OPENAI_API_KEY")
+    openai_model: str = Field(default="gpt-5-mini", validation_alias="OPENAI_CHAT_MODEL")
+
+    # Allow-listed webhook hosts for workflow send_webhook actions (SSRF guard).
+    # Comma-separated; empty means webhooks are disabled.
+    workflow_webhook_allowlist_raw: str = Field(
+        default="", validation_alias="WORKFLOW_WEBHOOK_ALLOWLIST"
+    )
+
     # Internal API key for service-to-service callbacks (worker → api).
     # Separate from brain_api_key so compromise of one doesn't grant the other.
     internal_api_key: str = Field(default="", validation_alias="INTERNAL_API_KEY")
@@ -87,6 +98,11 @@ class Settings(BaseSettings):
     def clerk_allowed_azp_list(self) -> list[str]:
         """Parse CLERK_ALLOWED_AZP into a trimmed list (mirrors Go comma split)."""
         return [p.strip() for p in self.clerk_allowed_azp.split(",") if p.strip()]
+
+    @property
+    def workflow_webhook_allowlist(self) -> tuple[str, ...]:
+        """Allow-listed hosts for workflow webhooks (empty tuple = disabled)."""
+        return tuple(p.strip() for p in self.workflow_webhook_allowlist_raw.split(",") if p.strip())
 
     @model_validator(mode="after")
     def _require_azp_when_clerk_enabled(self) -> "Settings":

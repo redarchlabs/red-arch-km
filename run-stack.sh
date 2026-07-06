@@ -10,7 +10,7 @@
 # linger on :8000/:3000 and shadow the fresh one.
 #
 # The dev stack is a hybrid:
-#   docker : postgres(5433) redis qdrant neo4j | brain-api(8020) | celery worker
+#   docker : postgres(5433) redis qdrant neo4j | brain-api(8020) | celery worker + beat
 #   host   : FastAPI api via uvicorn (8000)    | Next.js UI dev server (3000)
 #
 # Host processes read .env.host (localhost URLs, Clerk issuer, e2e test mode);
@@ -56,7 +56,7 @@ stop_host() {
 
 if [ "$MODE" = "stop" ]; then
   stop_host
-  docker stop km2_brain_api km2_worker_fixed 2>/dev/null || true
+  docker stop km2_brain_api km2_worker_fixed km2_beat 2>/dev/null || true
   say "app stopped (infra containers left running; 'make down' stops those too)"
   exit 0
 fi
@@ -104,6 +104,23 @@ if ! docker ps --format '{{.Names}}' | grep -q '^km2_worker_fixed$'; then
   }
 fi
 
+# --- 3b. celery beat (scheduler) ----------------------------------------------
+# Beat fires the periodic tasks — the workflow outbox sweep (every 10s) and
+# partition maintenance. The worker only *executes* tasks; without beat,
+# sweep_outbox is never enqueued and the workflow outbox never drains (create/
+# update events pile up as 'pending' and no workflow ever runs). Kept as a
+# separate single-process container: one scheduler regardless of worker
+# concurrency, so periodic tasks are never double-fired.
+if ! docker ps --format '{{.Names}}' | grep -q '^km2_beat$'; then
+  say "beat…"
+  docker start km2_beat 2>/dev/null || \
+    docker run -d --name km2_beat --network km2_network --env-file .env \
+      -e CELERY_BROKER_URL=redis://redis:6379/0 \
+      -e CELERY_RESULT_BACKEND=redis://redis:6379/1 \
+      docker-worker celery -A worker.celery_app beat --loglevel=info \
+        --schedule /tmp/celerybeat-schedule
+fi
+
 # --- 4. host processes (uvicorn API + next dev UI) ----------------------------
 # Always kill any existing host API/UI first so a stale process can't linger.
 say "stopping any existing host api/ui…"
@@ -134,5 +151,6 @@ status "api        http://localhost:8000" api_up "$API_LOG"
 status "ui         http://localhost:3000" ui_up "$UI_LOG"
 status "brain-api  http://localhost:8020" "curl -sf -m 2 http://localhost:8020/healthz >/dev/null" "docker logs km2_brain_api"
 status "worker" "docker ps --format '{{.Names}}' | grep -q km2_worker_fixed" "docker logs km2_worker_fixed"
+status "beat" "docker ps --format '{{.Names}}' | grep -q km2_beat" "docker logs km2_beat"
 echo
 say "first-run? check '$API_LOG' for the setup token banner, then open /setup"
