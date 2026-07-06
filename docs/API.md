@@ -1,6 +1,6 @@
 # API Reference
 
-Red Arch KM exposes two REST APIs: the main API (port 8000) and Brain API (port 8020).
+Red Arch Knowledge Manager exposes two REST APIs: the main API (port 8000) and Brain API (port 8020).
 
 ## Authentication
 
@@ -679,6 +679,446 @@ Delete all tenant data from stores.
   "tenant_id": "org-uuid"
 }
 ```
+
+### Custom Entities
+
+Custom entities allow organizations to define domain-specific record types with dynamic schema. Entities are backed by dynamically-created Postgres tables and support relationships.
+
+#### Entity Definitions
+
+##### GET /api/entity-definitions
+List entity definitions for the org (org admin only).
+
+**Query Parameters:**
+- `page` (int, default: 1) — Page number
+- `page_size` (int, default: 50) — Items per page
+
+**Response:**
+```json
+{
+  "items": [
+    {
+      "id": "uuid",
+      "name": "Company",
+      "slug": "company",
+      "description": "Client company records",
+      "is_active": true,
+      "fields": [
+        {
+          "id": "uuid",
+          "name": "Company Name",
+          "slug": "company_name",
+          "field_type": "text",
+          "is_required": true
+        }
+      ]
+    }
+  ],
+  "total": 1,
+  "page": 1,
+  "page_size": 50,
+  "pages": 1
+}
+```
+
+##### POST /api/entity-definitions
+Create a new entity definition (org admin only). The API creates a physical Postgres table `ce_<slug>`.
+
+**Request:**
+```json
+{
+  "name": "Company",
+  "slug": "company",
+  "description": "Client company records",
+  "fields": [
+    {
+      "name": "Company Name",
+      "slug": "company_name",
+      "field_type": "text",
+      "is_required": true
+    }
+  ]
+}
+```
+
+**Response:** `201 Created` with entity definition object (including generated `id`)
+
+##### GET /api/entity-definitions/{definition_id}
+Get entity definition with fields (org admin only).
+
+##### PATCH /api/entity-definitions/{definition_id}
+Update entity definition (org admin only). Cannot change slug or field types.
+
+##### DELETE /api/entity-definitions/{definition_id}
+Delete entity definition and drop its physical table (org admin only).
+
+#### Entity Records
+
+Records are paginated using keyset cursors for scalability (no OFFSET).
+
+##### GET /api/entities/{slug}/records
+List records for an entity (keyset-paginated, any org member).
+
+**Query Parameters:**
+- `cursor` (string, optional) — Opaque cursor token from a previous response
+- `limit` (int, default: 50, max: 200) — Records per page
+- `q` (string, optional) — Case-insensitive text search across text columns
+
+**Response:**
+```json
+{
+  "items": [
+    {
+      "id": "uuid",
+      "company_name": "Acme Corp",
+      "created_at": "2024-01-01T00:00:00Z"
+    }
+  ],
+  "next_cursor": "opaque-base64-token",
+  "limit": 50
+}
+```
+
+##### POST /api/entities/{slug}/records
+Create a new record (any org member).
+
+**Request:** Object with field values:
+```json
+{
+  "company_name": "Acme Corp"
+}
+```
+
+**Response:** `201 Created` with created record
+
+##### GET /api/entities/{slug}/records/{record_id}
+Get a single record.
+
+##### PATCH /api/entities/{slug}/records/{record_id}
+Update a record. Triggers workflow automations via the outbox.
+
+##### DELETE /api/entities/{slug}/records/{record_id}
+Delete a record.
+
+### Workflows
+
+Workflows automate actions based on entity record changes or form submissions.
+
+#### GET /api/workflows
+List workflows (org admin only).
+
+**Response:**
+```json
+[
+  {
+    "id": "uuid",
+    "name": "Onboard Customer",
+    "description": "Send welcome email on new customer",
+    "entity_definition_id": "uuid",
+    "enabled": true,
+    "active_version_id": "uuid",
+    "run_permission": {
+      "mode": "org_admin"
+    },
+    "created_at": "2024-01-01T00:00:00Z"
+  }
+]
+```
+
+#### POST /api/workflows
+Create a workflow (org admin only).
+
+**Request:**
+```json
+{
+  "name": "Onboard Customer",
+  "entity_definition_id": "uuid",
+  "description": "Send welcome email on new customer"
+}
+```
+
+**Response:** `201 Created` with workflow object
+
+#### GET /api/workflows/{workflow_id}
+Get workflow details (org admin only).
+
+#### PATCH /api/workflows/{workflow_id}
+Update workflow (org admin only). Can update `run_permission` to control who may manually run it:
+
+**Request:**
+```json
+{
+  "name": "Updated name",
+  "description": "Updated description",
+  "enabled": true,
+  "run_permission": {
+    "mode": "org_admin"
+  }
+}
+```
+
+`run_permission.mode` values:
+- `"org_admin"` — Only org admins (default)
+- `"any_member"` — Any org member
+- `"specific_roles"` — Only members with specified roles; include `role_ids` list
+- `"specific_groups"` — Only members of specified groups; include `group_ids` list
+
+#### POST /api/workflows/{workflow_id}/run
+Execute the workflow's published version for real (gated by `run_permission`).
+
+**Request:**
+```json
+{
+  "operation": "update",
+  "record_id": "uuid",
+  "before": { "field": "old_value" },
+  "after": { "field": "new_value" }
+}
+```
+
+- `record_id`: Optional; if provided, the record must exist for this workflow's entity. Real record data takes precedence.
+- `before`/`after`: Skipped if `record_id` is provided. Required for side-effecting actions (email/webhook/form) without a record.
+
+**Response:**
+```json
+{
+  "run_id": "uuid",
+  "status": "succeeded",
+  "conditions_matched": true,
+  "actions_executed": 2,
+  "error": null
+}
+```
+
+#### DELETE /api/workflows/{workflow_id}
+Delete a workflow (org admin only).
+
+#### GET /api/workflows/{workflow_id}/versions
+List all versions for a workflow (org admin only).
+
+#### POST /api/workflows/{workflow_id}/versions
+Save a new draft version (org admin only).
+
+**Request:**
+```json
+{
+  "definition": { "nodes": [...], "edges": [...] }
+}
+```
+
+#### POST /api/workflows/{workflow_id}/versions/{version_id}/publish
+Publish a version (org admin only). Published versions are immutable.
+
+#### POST /api/workflows/{workflow_id}/versions/{version_id}/test
+Dry-run test a version (org admin only). Does not execute real side effects.
+
+#### GET /api/workflows/{workflow_id}/runs
+List workflow runs (org admin only).
+
+**Query Parameters:**
+- `limit` (int, default: 50, max: 200)
+
+#### GET /api/workflows/runs/{run_id}/steps
+List steps for a run (org admin only).
+
+### Forms (Intake)
+
+Public intake forms collect entity record data from external users via token-linked, one-time-use links.
+
+#### GET /api/forms
+List forms (org admin only).
+
+**Response:**
+```json
+[
+  {
+    "id": "uuid",
+    "name": "Customer Feedback",
+    "slug": "customer-feedback",
+    "entity_definition_id": "uuid",
+    "is_active": true,
+    "created_at": "2024-01-01T00:00:00Z"
+  }
+]
+```
+
+#### POST /api/forms
+Create a form (org admin only).
+
+**Request:**
+```json
+{
+  "name": "Customer Feedback",
+  "slug": "customer-feedback",
+  "entity_definition_id": "uuid",
+  "description": "Collect feedback",
+  "config": { "fields": [...] }
+}
+```
+
+#### GET /api/forms/{form_id}
+Get form details (org admin only).
+
+#### PATCH /api/forms/{form_id}
+Update a form (org admin only).
+
+#### DELETE /api/forms/{form_id}
+Delete a form (org admin only).
+
+#### GET /api/forms/{form_id}/links
+List generated links for a form (org admin only).
+
+**Response:**
+```json
+[
+  {
+    "id": "uuid",
+    "status": "pending",
+    "recipient_email": "user@example.com",
+    "expires_at": "2024-02-01T00:00:00Z",
+    "submitted_at": null,
+    "created_at": "2024-01-01T00:00:00Z"
+  }
+]
+```
+
+#### POST /api/forms/{form_id}/links
+Generate a new link (org admin only). Optionally sends an email invitation.
+
+**Request:**
+```json
+{
+  "recipient_email": "user@example.com",
+  "expires_at": "2024-02-01T00:00:00Z",
+  "send_email": true
+}
+```
+
+**Response:** `201 Created`
+```json
+{
+  "id": "uuid",
+  "status": "pending",
+  "recipient_email": "user@example.com",
+  "expires_at": "2024-02-01T00:00:00Z",
+  "token": "raw-token-shown-only-here",
+  "url": "http://localhost:3000/forms/token-here",
+  "email_sent": true
+}
+```
+
+#### GET /api/public/forms/{token}
+Render a form (public, unauthenticated).
+
+**Response:**
+```json
+{
+  "id": "uuid",
+  "name": "Customer Feedback",
+  "fields": [...]
+}
+```
+
+#### POST /api/public/forms/{token}
+Submit form data (public, unauthenticated). Updates the entity record and may trigger workflows.
+
+**Request:**
+```json
+{
+  "field1": "value1",
+  "field2": "value2"
+}
+```
+
+**Response:** `204 No Content`
+
+### Agent Chat (Tool-Calling)
+
+Org-admin-gated in-API tool-calling agent for configuration assistance.
+
+#### POST /api/agent/chat/stream
+Stream agent responses with tool calls (org admin only).
+
+**Request:**
+```json
+{
+  "messages": [
+    {
+      "role": "user",
+      "content": "Create an entity for customers"
+    }
+  ]
+}
+```
+
+**Response:** Server-Sent Events (SSE) stream with event types:
+- `tool_call` — Agent invoked a tool
+- `tool_result` — Tool execution result
+- `delta` — Incremental text response
+- `done` — Stream end marker
+- `error` — Error marker
+
+### Internal API (Service-to-Service)
+
+These endpoints are gated by `X-Internal-API-Key` header and are for inter-service callbacks only. NOT for end-user use.
+
+#### POST /api/internal/documents/{document_id}/status
+Worker callback: set document processing status and details.
+
+**Request:**
+```json
+{
+  "tenant_id": "org-uuid",
+  "status": "SUCCESS",
+  "details": { "chunks": 42, "triplets": 10 }
+}
+```
+
+#### GET /api/internal/orgs/{org_id}/openai-key
+Retrieve org's decrypted OpenAI key (or null for central fallback).
+
+**Response:**
+```json
+{
+  "openai_api_key": "sk-..."
+}
+```
+
+#### POST /api/internal/workflows/dispatch-batch
+Process pending workflow-outbox events (Celery beat task).
+
+**Query Parameters:**
+- `limit` (int, default: 100)
+
+**Response:**
+```json
+{
+  "events": 5,
+  "runs": 3,
+  "actions": 8,
+  "skipped": 0
+}
+```
+
+#### POST /api/internal/workflows/run-timers
+Resume due delayed runs and fire scheduled workflows (Celery beat task).
+
+**Response:**
+```json
+{
+  "resumed": 2,
+  "scheduled": 1,
+  "actions": 3
+}
+```
+
+#### POST /api/internal/workflows/maintain-partitions
+Pre-create upcoming month partitions for workflow tables.
+
+**Query Parameters:**
+- `months_ahead` (int, default: 2, max: 24)
+
+**Response:** `204 No Content`
 
 ## Error Responses
 
