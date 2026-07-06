@@ -84,8 +84,14 @@ themes", "what is this collection about").
 
 Rules:
 - Prefer claim_query/entity_lookup/neighborhood for facts; use search_passages for wording/quotes.
+- The structured fact store is deliberately incomplete — many true facts live \
+only in the raw document text. So if a fact tool (claim_query/entity_lookup/\
+neighborhood) returns NO results, you MUST try search_passages before concluding \
+anything: reformulate the question as a passage query and search the text. The \
+document may state the answer even when no claim was extracted for it.
+- Only answer "no information is available" AFTER search_passages has also come \
+back empty. A fact-tool miss alone is never sufficient grounds to give up.
 - Every observation is labelled [E<n>] evidence. Cite the evidence ids you used.
-- If the gathered evidence does not answer the question, say so plainly.
 - Stop as soon as you can answer; do not loop needlessly.
 """
 
