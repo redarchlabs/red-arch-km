@@ -34,7 +34,7 @@ async def list_folders(
     pagination: Annotated[PaginationParams, Depends()],
 ) -> PaginatedResponse[FolderRead]:
     """List folders visible to the current user via permission masks."""
-    repo = FolderRepository(session)
+    repo = FolderRepository(session, ctx.org_id)
 
     if ctx.is_org_admin:
         folders, total = await repo.list_visible_to_masks(
@@ -63,9 +63,9 @@ async def create_folder(
     session: Annotated[AsyncSession, Depends(get_tenant_db)],
 ) -> FolderRead:
     """Create a folder with computed dot_path and resolved permission masks."""
-    repo = FolderRepository(session)
+    repo = FolderRepository(session, ctx.org_id)
 
-    dot_path = await build_dot_path(session, body.name, body.parent_id)
+    dot_path = await build_dot_path(session, ctx.org_id, body.name, body.parent_id)
     view_masks, contrib_masks = await compute_folder_masks(
         session,
         ctx.org_id,
@@ -75,7 +75,6 @@ async def create_folder(
 
     folder = await repo.create(
         name=body.name,
-        org_id=ctx.org_id,
         parent_id=body.parent_id,
         description=body.description,
         viewer_permissions_config=body.viewer_permissions_config,
@@ -94,7 +93,7 @@ async def get_folder(
     ctx: Annotated[OrgContext, Depends(require_org_access)],
     session: Annotated[AsyncSession, Depends(get_tenant_db)],
 ) -> FolderRead:
-    repo = FolderRepository(session)
+    repo = FolderRepository(session, ctx.org_id)
     folder = await repo.get(folder_id)
     if folder is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Folder not found")
@@ -113,7 +112,7 @@ async def update_folder(
     Distinguishes between "parent_id omitted" (leave unchanged) and
     "parent_id: null" (move to root) via `model_fields_set`.
     """
-    repo = FolderRepository(session)
+    repo = FolderRepository(session, ctx.org_id)
     folder = await repo.get(folder_id)
     if folder is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Folder not found")
@@ -145,7 +144,7 @@ async def update_folder(
 
     if "parent_id" in body.model_fields_set:
         try:
-            folder = await move_folder(session, folder, body.parent_id)
+            folder = await move_folder(session, ctx.org_id, folder, body.parent_id)
         except FolderCycleError as e:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
         except ValueError as e:
@@ -167,7 +166,7 @@ async def delete_folder(
     FK's ON DELETE SET NULL rule; callers should re-bucket them explicitly
     if that's not desired.
     """
-    repo = FolderRepository(session)
+    repo = FolderRepository(session, ctx.org_id)
     folder = await repo.get(folder_id)
     if folder is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Folder not found")

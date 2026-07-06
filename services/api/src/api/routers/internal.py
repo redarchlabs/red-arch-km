@@ -13,7 +13,7 @@ import logging
 import uuid
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -72,7 +72,7 @@ async def update_document_status(
     async with factory() as session:
         try:
             await _set_tenant(session, body.tenant_id)
-            repo = DocumentRepository(session)
+            repo = DocumentRepository(session, body.tenant_id)
             doc = await repo.update_status(document_id, status=body.status, details=body.details)
             if doc is None:
                 # RLS filtered it out, or it was deleted while processing.
@@ -126,8 +126,69 @@ async def get_org_openai_key(
         return OrgOpenAIKey(openai_api_key=org.openai_api_key)
 
 
+class DispatchResult(BaseModel):
+    """Counters returned by a workflow dispatch sweep."""
+
+    events: int = 0
+    runs: int = 0
+    actions: int = 0
+    skipped: int = 0
+
+
+@router.post(
+    "/workflows/dispatch-batch",
+    dependencies=[Depends(require_internal_api_key)],
+    response_model=DispatchResult,
+)
+async def dispatch_workflows(
+    settings: Annotated[Settings, Depends(get_settings)],
+    limit: int = 100,
+) -> DispatchResult:
+    """Claim and process a batch of pending workflow-outbox events.
+
+    Runs on the privileged session (no tenant context) so the cross-org claim
+    sees every tenant; the dispatcher scopes each event's work by org_id.
+    """
+    from api.services.workflow.dispatcher import WorkflowDispatchService
+
+    allowlist = tuple(getattr(settings, "workflow_webhook_allowlist", ()) or ())
+    factory = get_session_factory(settings)
+    async with factory() as session:
+        try:
+            service = WorkflowDispatchService(session, webhook_allowlist=allowlist)
+            counters = await service.process_pending(limit=limit)
+            await session.commit()
+            return DispatchResult(**{k: counters.get(k, 0) for k in ("events", "runs", "actions", "skipped")})
+        except Exception:
+            await session.rollback()
+            logger.exception("workflow dispatch batch failed")
+            raise
+
+
+@router.post(
+    "/workflows/maintain-partitions",
+    dependencies=[Depends(require_internal_api_key)],
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def maintain_partitions(
+    settings: Annotated[Settings, Depends(get_settings)],
+    months_ahead: Annotated[int, Query(ge=0, le=24)] = 2,
+) -> None:
+    """Pre-create upcoming month partitions for the workflow tables."""
+    factory = get_session_factory(settings)
+    async with factory() as session:
+        await session.execute(text("SELECT workflow_ensure_partitions(:m)"), {"m": months_ahead})
+        await session.commit()
+
+
 async def _set_tenant(session: AsyncSession, tenant_id: uuid.UUID) -> None:
-    """Scope the session to the given tenant for RLS enforcement."""
+    """Scope the session to the given tenant for RLS enforcement.
+
+    Mirrors get_tenant_db: drop to the non-superuser app_user role so RLS is
+    actually enforced (the connection role bypasses it otherwise), then set the
+    tenant GUC the policies compare against. Both are transaction-local.
+    """
+    await session.execute(text("SET LOCAL ROLE app_user"))
     await session.execute(
         text("SELECT set_config('app.current_tenant_id', :tid, true)"),
         {"tid": str(tenant_id)},

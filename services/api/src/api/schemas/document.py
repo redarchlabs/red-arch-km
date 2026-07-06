@@ -44,6 +44,17 @@ class DocumentUpdate(BaseModel):
     contributor_permissions_config: list[dict[str, Any]] | None = None
 
 
+class DocumentContentUpdate(BaseModel):
+    """Full-body replacement for a document's text (the Markdown editor).
+
+    Distinct from ``DocumentUpdate`` (metadata only): persisting new text
+    re-chunks and re-embeds the document, so it lives on its own endpoint. An
+    empty string clears the body (and skips re-ingestion).
+    """
+
+    text: str
+
+
 class DocumentRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -58,6 +69,19 @@ class DocumentRead(BaseModel):
     size_bytes: int | None = None
     viewer_permissions_config: list[dict[str, Any]] | None = None
     contributor_permissions_config: list[dict[str, Any]] | None = None
+
+
+class UploadBatchRead(BaseModel):
+    """Result of expanding an uploaded ``.zip`` into per-file documents.
+
+    Distinguished from a single ``DocumentRead`` by the ``batch`` flag so the
+    client can tell the two upload outcomes apart.
+    """
+
+    batch: bool = True
+    created: int
+    skipped: list[str]
+    documents: list[DocumentRead]
 
 
 class FolderCreate(BaseModel):

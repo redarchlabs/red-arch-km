@@ -41,8 +41,8 @@ async def create_membership(
     ctx: Annotated[OrgContext, Depends(require_org_admin)],
     session: Annotated[AsyncSession, Depends(get_tenant_db)],
 ) -> MembershipRead:
-    repo = MembershipRepository(session)
-    membership = await repo.upsert(profile_id=body.profile_id, org_id=ctx.org_id, is_org_admin=body.is_org_admin)
+    repo = MembershipRepository(session, ctx.org_id)
+    membership = await repo.upsert(profile_id=body.profile_id, is_org_admin=body.is_org_admin)
     try:
         membership = await repo.assign_dimensions(
             membership,
@@ -72,7 +72,7 @@ async def delete_membership(
     remove themselves, and the last org admin cannot be removed (site admins
     are exempt from the self-guard — they retain synthetic org access).
     """
-    repo = MembershipRepository(session)
+    repo = MembershipRepository(session, ctx.org_id)
     membership = await repo.get(membership_id)
     if membership is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
@@ -81,7 +81,7 @@ async def delete_membership(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="You cannot remove your own membership",
         )
-    if membership.is_org_admin and await repo.count_org_admins(ctx.org_id) <= 1:
+    if membership.is_org_admin and await repo.count_org_admins() <= 1:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Cannot remove the organization's last admin",
@@ -97,7 +97,7 @@ async def update_membership(
     ctx: Annotated[OrgContext, Depends(require_org_admin)],
     session: Annotated[AsyncSession, Depends(get_tenant_db)],
 ) -> MembershipRead:
-    repo = MembershipRepository(session)
+    repo = MembershipRepository(session, ctx.org_id)
     membership = await repo.get(membership_id)
     if membership is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")

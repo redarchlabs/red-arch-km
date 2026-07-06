@@ -40,7 +40,7 @@ class _FakeDoc(SimpleNamespace):
 
 
 class _FakeDocRepo:
-    def __init__(self, session: Any) -> None: ...
+    def __init__(self, session: Any, org_id: uuid.UUID) -> None: ...
     async def get(self, _id: uuid.UUID) -> _FakeDoc:
         return _FakeDoc(
             id=uuid.uuid4(),
@@ -65,7 +65,7 @@ class _FakeFolder(SimpleNamespace):
 
 
 class _FakeFolderRepo:
-    def __init__(self, session: Any) -> None: ...
+    def __init__(self, session: Any, org_id: uuid.UUID) -> None: ...
     async def get(self, folder_id: uuid.UUID) -> _FakeFolder:
         return _FakeFolder(id=folder_id, view_permission_masks=[7, 9])
 

@@ -12,12 +12,12 @@ from api.repositories.folder import FolderRepository
 from api.services.permission_config import permission_config_to_masks
 
 
-async def build_dot_path(session: AsyncSession, name: str, parent_id: uuid.UUID | None) -> str:
+async def build_dot_path(session: AsyncSession, org_id: uuid.UUID, name: str, parent_id: uuid.UUID | None) -> str:
     """Build a dot-separated path for a folder based on its ancestors."""
     if parent_id is None:
         return name
 
-    repo = FolderRepository(session)
+    repo = FolderRepository(session, org_id)
     parent = await repo.get(parent_id)
     if parent is None:
         return name
@@ -58,6 +58,7 @@ def would_create_cycle(folder: Folder, new_parent: Folder | None) -> bool:
 
 async def move_folder(
     session: AsyncSession,
+    org_id: uuid.UUID,
     folder: Folder,
     new_parent_id: uuid.UUID | None,
 ) -> Folder:
@@ -65,7 +66,7 @@ async def move_folder(
 
     Raises FolderCycleError if the move would create a cycle.
     """
-    repo = FolderRepository(session)
+    repo = FolderRepository(session, org_id)
 
     new_parent: Folder | None = None
     if new_parent_id is not None:

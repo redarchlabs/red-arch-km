@@ -26,11 +26,18 @@ def _escape_like(value: str) -> str:
 
 
 class FolderRepository:
-    def __init__(self, session: AsyncSession) -> None:
+    """Tenant-bound repository. Every query is explicitly scoped to ``org_id``
+    (belt-and-suspenders alongside RLS)."""
+
+    def __init__(self, session: AsyncSession, org_id: uuid.UUID) -> None:
         self._session = session
+        self._org_id = org_id
 
     async def get(self, folder_id: uuid.UUID) -> Folder | None:
-        return await self._session.get(Folder, folder_id)
+        result = await self._session.execute(
+            select(Folder).where(Folder.id == folder_id, Folder.org_id == self._org_id)
+        )
+        return result.scalar_one_or_none()
 
     async def list_visible_to_masks(
         self,
@@ -49,7 +56,7 @@ class FolderRepository:
         Pagination is optional — when offset/limit are omitted, all matching
         rows are returned (used internally by document permission filtering).
         """
-        base = select(Folder)
+        base = select(Folder).where(Folder.org_id == self._org_id)
 
         if user_masks is not None:
             masks_param = bindparam("user_masks", value=user_masks, type_=ARRAY(BIGINT))
@@ -72,7 +79,11 @@ class FolderRepository:
         return list(result.scalars().all()), total
 
     async def list_children(self, parent_id: uuid.UUID | None) -> list[Folder]:
-        query = select(Folder).where(Folder.parent_id == parent_id).order_by(Folder.order, Folder.name)
+        query = (
+            select(Folder)
+            .where(Folder.parent_id == parent_id, Folder.org_id == self._org_id)
+            .order_by(Folder.order, Folder.name)
+        )
         result = await self._session.execute(query)
         return list(result.scalars().all())
 
@@ -80,7 +91,6 @@ class FolderRepository:
         self,
         *,
         name: str,
-        org_id: uuid.UUID,
         parent_id: uuid.UUID | None = None,
         description: str | None = None,
         viewer_permissions_config: list[dict[str, Any]] | None = None,
@@ -91,7 +101,7 @@ class FolderRepository:
     ) -> Folder:
         folder = Folder(
             name=name,
-            org_id=org_id,
+            org_id=self._org_id,
             parent_id=parent_id,
             description=description,
             viewer_permissions_config=viewer_permissions_config,
@@ -109,7 +119,10 @@ class FolderRepository:
         prefix = folder.dot_path
         escaped = _escape_like(prefix)
         result = await self._session.execute(
-            select(Folder).where((Folder.dot_path == prefix) | Folder.dot_path.like(f"{escaped}.%", escape="\\"))
+            select(Folder).where(
+                Folder.org_id == self._org_id,
+                (Folder.dot_path == prefix) | Folder.dot_path.like(f"{escaped}.%", escape="\\"),
+            )
         )
         return list(result.scalars().all())
 
@@ -141,23 +154,25 @@ class FolderRepository:
     async def _rewrite_subtree_paths(self, old_prefix: str, new_prefix: str, folder_id: uuid.UUID) -> None:
         """Rewrite dot_path for the given folder and all descendants atomically.
 
-        RLS still enforces tenant scope on these UPDATE statements; we rely
-        on the `app.current_tenant_id` session setting being in effect.
+        Both statements are explicitly scoped to the repository's ``org_id`` so
+        a subtree rewrite can never touch another tenant's folders — this holds
+        regardless of whether RLS is enforced on the current connection.
         """
         await self._session.execute(
-            sql_text("UPDATE folders SET dot_path = :new_prefix WHERE id = :folder_id"),
-            {"new_prefix": new_prefix, "folder_id": folder_id},
+            sql_text("UPDATE folders SET dot_path = :new_prefix WHERE id = :folder_id AND org_id = :org_id"),
+            {"new_prefix": new_prefix, "folder_id": folder_id, "org_id": self._org_id},
         )
         await self._session.execute(
             sql_text(
                 "UPDATE folders "
                 "SET dot_path = :new_prefix || substr(dot_path, :old_len + 1) "
-                "WHERE dot_path LIKE :old_like ESCAPE '\\'"
+                "WHERE dot_path LIKE :old_like ESCAPE '\\' AND org_id = :org_id"
             ),
             {
                 "new_prefix": new_prefix,
                 "old_len": len(old_prefix),
                 "old_like": f"{_escape_like(old_prefix)}.%",
+                "org_id": self._org_id,
             },
         )
         await self._session.flush()

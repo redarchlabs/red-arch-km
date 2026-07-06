@@ -12,11 +12,18 @@ from api.models.chat import ChatSession
 
 
 class ChatRepository:
-    def __init__(self, session: AsyncSession) -> None:
+    """Tenant-bound repository. Every query is explicitly scoped to ``org_id``
+    (belt-and-suspenders alongside RLS)."""
+
+    def __init__(self, session: AsyncSession, org_id: uuid.UUID) -> None:
         self._session = session
+        self._org_id = org_id
 
     async def get(self, session_id: uuid.UUID) -> ChatSession | None:
-        return await self._session.get(ChatSession, session_id)
+        result = await self._session.execute(
+            select(ChatSession).where(ChatSession.id == session_id, ChatSession.org_id == self._org_id)
+        )
+        return result.scalar_one_or_none()
 
     async def list_for_user(
         self,
@@ -27,7 +34,10 @@ class ChatRepository:
         limit: int = 200,
     ) -> tuple[list[ChatSession], int]:
         """Return a page of chat sessions + total count."""
-        base = select(ChatSession).where(ChatSession.user_id == user_id)
+        base = select(ChatSession).where(
+            ChatSession.user_id == user_id,
+            ChatSession.org_id == self._org_id,
+        )
         if not include_deleted:
             base = base.where(ChatSession.deleted.is_(False))
 
@@ -39,12 +49,11 @@ class ChatRepository:
         self,
         *,
         user_id: uuid.UUID,
-        org_id: uuid.UUID,
         chat_data: dict[str, Any] | None = None,
     ) -> ChatSession:
         session = ChatSession(
             user_id=user_id,
-            org_id=org_id,
+            org_id=self._org_id,
             chat_data=chat_data or {},
         )
         self._session.add(session)

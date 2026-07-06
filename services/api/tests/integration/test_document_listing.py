@@ -52,8 +52,8 @@ async def _seed(session: AsyncSession) -> tuple[uuid.UUID, uuid.UUID]:
 class TestDocumentListing:
     async def test_unfiled_docs_visible_when_include_unfiled(self, session: AsyncSession) -> None:
         """The general list (include_unfiled=True) surfaces NULL-folder docs."""
-        _, folder_id = await _seed(session)
-        repo = DocumentRepository(session)
+        org_id, folder_id = await _seed(session)
+        repo = DocumentRepository(session, org_id)
 
         docs, total = await repo.list_for_folders(folder_ids=[folder_id], include_unfiled=True)
         titles = {d.title for d in docs}
@@ -66,8 +66,8 @@ class TestDocumentListing:
         This is the bug we are guarding against — it must NOT be how the router
         lists the general view.
         """
-        _, folder_id = await _seed(session)
-        repo = DocumentRepository(session)
+        org_id, folder_id = await _seed(session)
+        repo = DocumentRepository(session, org_id)
 
         docs, total = await repo.list_for_folders(folder_ids=[folder_id], include_unfiled=False)
         titles = {d.title for d in docs}
@@ -76,8 +76,8 @@ class TestDocumentListing:
 
     async def test_folder_scoped_excludes_unfiled(self, session: AsyncSession) -> None:
         """Folder browse (a single folder) returns only that folder's docs."""
-        _, folder_id = await _seed(session)
-        repo = DocumentRepository(session)
+        org_id, folder_id = await _seed(session)
+        repo = DocumentRepository(session, org_id)
 
         docs, total = await repo.list_for_folders(folder_ids=[folder_id], include_unfiled=False)
         assert {d.title for d in docs} == {"Filed"}
@@ -89,8 +89,8 @@ class TestDocumentListing:
         Without the fix, folder_ids=[] means `folder_id IN ()` — nothing — and
         the pasted document is invisible to everyone, including admins.
         """
-        await _seed(session)
-        repo = DocumentRepository(session)
+        org_id, _ = await _seed(session)
+        repo = DocumentRepository(session, org_id)
 
         docs, total = await repo.list_for_folders(folder_ids=[], include_unfiled=True)
         assert {d.title for d in docs} == {"Unfiled"}

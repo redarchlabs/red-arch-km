@@ -25,30 +25,35 @@ DimensionType = type[Region] | type[Department] | type[Role] | type[Group]
 class DimensionRepository:
     """Generic repository for any permission dimension model."""
 
-    def __init__(self, session: AsyncSession, model: DimensionType) -> None:
+    def __init__(self, session: AsyncSession, model: DimensionType, org_id: uuid.UUID) -> None:
         self._session = session
         self._model: DimensionType = model
+        self._org_id = org_id
 
     async def get(self, dimension_id: uuid.UUID) -> DimensionModel | None:
-        return await self._session.get(self._model, dimension_id)
+        result = await self._session.execute(
+            select(self._model).where(self._model.id == dimension_id, self._model.org_id == self._org_id)
+        )
+        return cast("DimensionModel | None", result.scalar_one_or_none())
 
     async def list_all(self, *, offset: int = 0, limit: int = 200) -> tuple[list[DimensionModel], int]:
-        """Return a page of dimensions plus total count (RLS-scoped)."""
+        """Return a page of dimensions plus total count (org-scoped)."""
         from sqlalchemy import func
 
-        total = (await self._session.execute(select(func.count()).select_from(self._model))).scalar_one()
-        result = await self._session.execute(select(self._model).order_by(self._model.name).offset(offset).limit(limit))
+        base = select(self._model).where(self._model.org_id == self._org_id)
+        total = (await self._session.execute(select(func.count()).select_from(base.subquery()))).scalar_one()
+        result = await self._session.execute(base.order_by(self._model.name).offset(offset).limit(limit))
         # select() over the model union yields rows typed as the shared Base; the
         # runtime rows are always one concrete dimension type.
         return cast("list[DimensionModel]", list(result.scalars().all())), total
 
-    async def create(self, *, name: str, org_id: uuid.UUID, description: str | None = None) -> DimensionModel:
+    async def create(self, *, name: str, description: str | None = None) -> DimensionModel:
         # Assign next permission_number per-org. Row-level lock prevents the
         # select-max/insert race that would otherwise let two concurrent
         # creates pick the same value.
         last_num_result = await self._session.execute(
             select(self._model.permission_number)
-            .where(self._model.org_id == org_id)
+            .where(self._model.org_id == self._org_id)
             .order_by(self._model.permission_number.desc())
             .limit(1)
             .with_for_update()
@@ -58,7 +63,7 @@ class DimensionRepository:
         instance = self._model(
             name=name,
             description=description,
-            org_id=org_id,
+            org_id=self._org_id,
             permission_number=last_num + 1,
         )
         self._session.add(instance)

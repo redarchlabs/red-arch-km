@@ -64,13 +64,18 @@ User identities synchronized from Clerk.
 | created_at | TIMESTAMPTZ | Creation timestamp |
 | updated_at | TIMESTAMPTZ | Last update timestamp |
 
-> **RLS role assumption for cross-org admin reads:** `user_org_memberships`
-> has FORCE ROW LEVEL SECURITY. The site-admin console's cross-org queries
-> (`GET /api/admin/users/{id}/memberships`, like the existing `/users/me`)
-> run on a session with no tenant context and therefore only return rows when
-> the API's runtime DB role bypasses RLS (superuser or BYPASSRLS, as in the
-> shipped compose files). Under a restricted `app_user`-style role they fail
-> closed to empty results.
+> **RLS role split (tenant vs cross-org sessions):** `user_org_memberships`
+> and the other tenant tables have FORCE ROW LEVEL SECURITY. Tenant-scoped
+> requests go through `get_tenant_db`, which runs `SET LOCAL ROLE app_user`
+> (dropping off the privileged connection role so RLS is actually enforced) and
+> sets `app.current_tenant_id`. Cross-org queries — the site-admin console
+> (`GET /api/admin/users/{id}/memberships`), `/users/me`, and `require_org_access`'s
+> membership lookup — go through `get_db`, which stays on the privileged
+> connection role (superuser/BYPASSRLS, as in the shipped compose files) and
+> deliberately bypasses RLS so those rows are visible without a tenant context.
+> Application code also filters every tenant-scoped query by `org_id` explicitly
+> (tenant-bound repositories), so isolation holds even if RLS is off on a given
+> connection — defense in depth, not RLS alone.
 
 #### user_org_memberships
 Links users to organizations with role assignments.
@@ -251,8 +256,14 @@ await session.execute(
 
 | Role | Permissions | Purpose |
 |------|-------------|---------|
-| app_user | SELECT, INSERT, UPDATE, DELETE (RLS applies) | Application service account |
+| app_user | SELECT, INSERT, UPDATE, DELETE (RLS applies) | Tenant-scoped requests drop to this role via `SET LOCAL ROLE app_user` in `get_tenant_db` so RLS is enforced |
 | app_admin | BYPASSRLS | Migrations, admin operations |
+
+> **Adding a new tenant table:** grant `app_user` DML on it in the same
+> migration (`GRANT SELECT, INSERT, UPDATE, DELETE ON <table> TO app_user`), or
+> tenant requests will fail once they `SET ROLE app_user`. Migration
+> `007_ensure_app_user_role` grants `ALL TABLES IN SCHEMA public` at its point in
+> history, but that does not cover tables created by later migrations.
 
 ## Migrations
 
@@ -275,6 +286,7 @@ alembic downgrade -1
 Located in `services/api/alembic/versions/`:
 - `001_initial_schema_with_rls.py` — Core tables and RLS policies
 - `002_harden_rls_nullif.py` — RED-3: fail-closed RLS on empty tenant GUC (`nullif(..., '')`)
+- `007_ensure_app_user_role.py` — Idempotently create `app_user` (NOSUPERUSER/NOBYPASSRLS) + grants so tenant sessions can `SET ROLE app_user` and have RLS enforced in every environment
 
 ## Indexes
 

@@ -11,21 +11,29 @@ from api.models.document import DocumentAttributeDefinition
 
 
 class AttributeDefinitionRepository:
-    def __init__(self, session: AsyncSession) -> None:
+    """Tenant-bound repository. Every query is explicitly scoped to ``org_id``
+    (belt-and-suspenders alongside RLS)."""
+
+    def __init__(self, session: AsyncSession, org_id: uuid.UUID) -> None:
         self._session = session
+        self._org_id = org_id
 
     async def get(self, definition_id: uuid.UUID) -> DocumentAttributeDefinition | None:
-        return await self._session.get(DocumentAttributeDefinition, definition_id)
+        result = await self._session.execute(
+            select(DocumentAttributeDefinition).where(
+                DocumentAttributeDefinition.id == definition_id,
+                DocumentAttributeDefinition.org_id == self._org_id,
+            )
+        )
+        return result.scalar_one_or_none()
 
     async def list_all(self, *, offset: int = 0, limit: int = 200) -> tuple[list[DocumentAttributeDefinition], int]:
         from sqlalchemy import func
 
-        total = (
-            await self._session.execute(select(func.count()).select_from(DocumentAttributeDefinition))
-        ).scalar_one()
+        base = select(DocumentAttributeDefinition).where(DocumentAttributeDefinition.org_id == self._org_id)
+        total = (await self._session.execute(select(func.count()).select_from(base.subquery()))).scalar_one()
         result = await self._session.execute(
-            select(DocumentAttributeDefinition)
-            .order_by(
+            base.order_by(
                 DocumentAttributeDefinition.order,
                 DocumentAttributeDefinition.name,
             )
@@ -39,7 +47,6 @@ class AttributeDefinitionRepository:
         *,
         name: str,
         slug: str,
-        org_id: uuid.UUID,
         attribute_type: str = "freeform",
         picklist_options: list[str] | None = None,
         required: bool = False,
@@ -48,7 +55,7 @@ class AttributeDefinitionRepository:
         instance = DocumentAttributeDefinition(
             name=name,
             slug=slug,
-            org_id=org_id,
+            org_id=self._org_id,
             attribute_type=attribute_type,
             picklist_options=picklist_options or [],
             required=required,

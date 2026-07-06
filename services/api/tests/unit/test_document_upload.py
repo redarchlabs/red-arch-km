@@ -6,7 +6,9 @@ a broker, or a real database (the repository is stubbed too).
 
 from __future__ import annotations
 
+import io
 import uuid
+import zipfile
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
@@ -43,8 +45,9 @@ class _FakeDoc(SimpleNamespace):
 class _FakeRepo:
     """Stub DocumentRepository whose create returns a fully-attributed doc."""
 
-    def __init__(self, session: Any) -> None:
+    def __init__(self, session: Any, org_id: uuid.UUID) -> None:
         self._session = session
+        self._org_id = org_id
 
     async def create(self, **kwargs: Any) -> _FakeDoc:
         return _FakeDoc(
@@ -54,7 +57,7 @@ class _FakeRepo:
             document_key=str(uuid.uuid4()),
             processing_status="PENDING",
             folder_id=kwargs.get("folder_id"),
-            org_id=kwargs["org_id"],
+            org_id=self._org_id,
             created_at=datetime.now(UTC),
             document_url=None,
             use_knowledge_graph=None,
@@ -64,12 +67,16 @@ class _FakeRepo:
 
 @pytest.fixture
 def wiring(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
-    state: dict[str, Any] = {"put": None, "dispatched": None}
+    # `put`/`dispatched` hold the LAST call (single-file tests); `puts`/
+    # `dispatched_all` hold every call (zip fan-out tests).
+    state: dict[str, Any] = {"put": None, "dispatched": None, "puts": [], "dispatched_all": []}
 
     fake_storage = MagicMock()
 
     def _record_put(key: str, data: bytes, content_type: str) -> None:
-        state["put"] = {"key": key, "size": len(data), "content_type": content_type}
+        entry = {"key": key, "size": len(data), "content_type": content_type}
+        state["put"] = entry
+        state["puts"].append(entry)
 
     fake_storage.put_object.side_effect = _record_put
 
@@ -78,6 +85,7 @@ def wiring(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
 
     def _dispatch(data: dict[str, Any]) -> str:
         state["dispatched"] = data
+        state["dispatched_all"].append(data)
         return "task-123"
 
     monkeypatch.setattr(documents_module, "dispatch_extract_ingest", _dispatch)
@@ -165,6 +173,73 @@ async def test_upload_happy_path_stores_and_dispatches(wiring: dict[str, Any]) -
     assert dispatched["tenant_id"] == str(ORG_ID)
     # Secrets must never ride the payload.
     assert "openai_api_key" not in dispatched
+
+
+def _make_zip(files: dict[str, bytes]) -> bytes:
+    """Build an in-memory .zip from a {name: bytes} mapping."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for name, data in files.items():
+            zf.writestr(name, data)
+    return buf.getvalue()
+
+
+async def test_upload_zip_expands_into_one_document_per_supported_file(
+    wiring: dict[str, Any],
+) -> None:
+    archive = _make_zip(
+        {
+            "notes.md": b"# hello",
+            "sub/scan.pdf": b"%PDF-1.4 body",
+            "readme.xyz": b"unsupported",  # skipped
+            "__MACOSX/._notes.md": b"junk",  # ignored silently
+        }
+    )
+    async with _client(_build_app()) as client:
+        resp = await client.post(
+            "/api/documents/upload",
+            files={"file": ("bundle.zip", archive, "application/zip")},
+            data={"title": "bundle", "translation_method": "ocr"},
+        )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["batch"] is True
+    assert body["created"] == 2
+    assert body["skipped"] == ["readme.xyz"]
+    assert len(body["documents"]) == 2
+
+    # Both supported members stored and dispatched (paths flattened to basenames).
+    stored_names = {p["key"].split("/")[-1] for p in wiring["puts"]}
+    assert stored_names == {"notes.md", "scan.pdf"}
+    dispatched_names = {d["filename"] for d in wiring["dispatched_all"]}
+    assert dispatched_names == {"notes.md", "scan.pdf"}
+    # Per-member titles derive from the filename stem, not the form title.
+    assert {d["title"] for d in wiring["dispatched_all"]} == {"notes", "scan"}
+
+
+async def test_upload_zip_rejects_invalid_archive(wiring: dict[str, Any]) -> None:
+    async with _client(_build_app()) as client:
+        resp = await client.post(
+            "/api/documents/upload",
+            files={"file": ("bundle.zip", b"not a real zip", "application/zip")},
+            data={"title": "x", "translation_method": "ocr"},
+        )
+    assert resp.status_code == 400
+    assert "not a valid archive" in resp.json()["detail"]
+    assert wiring["puts"] == []
+
+
+async def test_upload_zip_with_no_supported_files_is_rejected(wiring: dict[str, Any]) -> None:
+    archive = _make_zip({"a.xyz": b"x", "b.exe": b"y"})
+    async with _client(_build_app()) as client:
+        resp = await client.post(
+            "/api/documents/upload",
+            files={"file": ("bundle.zip", archive, "application/zip")},
+            data={"title": "x", "translation_method": "ocr"},
+        )
+    assert resp.status_code == 400
+    assert "no supported files" in resp.json()["detail"]
+    assert wiring["dispatched_all"] == []
 
 
 async def test_upload_filename_path_traversal_is_stripped(wiring: dict[str, Any]) -> None:
