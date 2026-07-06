@@ -20,16 +20,26 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from dataclasses import dataclass
 from enum import StrEnum
 
 from brain_sdk.embedding.protocol import EmbeddingProvider
 from brain_sdk.facts.models import Entity
-from brain_sdk.facts.predicates import PredicateRegistry
+from brain_sdk.facts.predicates import PredicateRegistry, PredicateSpec
 from brain_sdk.facts.protocol import FactStore
 from brain_sdk.llm.protocol import LLMClient, LLMMessage
 
 logger = logging.getLogger(__name__)
+
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    dot = sum(x * y for x, y in zip(a, b, strict=False))
+    na = math.sqrt(sum(x * x for x in a))
+    nb = math.sqrt(sum(y * y for y in b))
+    if na == 0.0 or nb == 0.0:
+        return 0.0
+    return dot / (na * nb)
 
 
 class ResolutionAction(StrEnum):
@@ -111,9 +121,24 @@ class EntityResolver:
         self._llm = llm
         self._thresholds = thresholds or ResolutionThresholds()
         self._k = candidate_k
+        # Per-resolver memoization keyed on the normalized mention. A document
+        # ingest builds one resolver and mentions the same entity many times;
+        # without this each mention re-embeds and can re-run LLM adjudication —
+        # unbounded cost for zero benefit (the answer is stable within a run).
+        # Mirrors PredicateResolver._cache.
+        self._cache: dict[tuple[str, str], str] = {}
 
     def resolve(self, tenant_id: str, name: str, entity_type: str) -> str:
         """Return the canonical ``entity_id`` for a mention, resolving or creating it."""
+        cache_key = (name.casefold(), entity_type.casefold())
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            return cached
+        entity_id = self._resolve_uncached(tenant_id, name, entity_type)
+        self._cache[cache_key] = entity_id
+        return entity_id
+
+    def _resolve_uncached(self, tenant_id: str, name: str, entity_type: str) -> str:
         embedding = self._embedder.embed(name)
 
         vector_candidates = [
@@ -179,14 +204,89 @@ class EntityResolver:
                 max_tokens=100,
                 json_object=True,
             )
+        except Exception as exc:  # noqa: BLE001 - provider-specific network/timeout/rate-limit
+            # An LLM *outage* (timeout, rate limit, connection error) is
+            # operationally distinct from a malformed-but-received response:
+            # surface it at ERROR so it isn't mistaken for a benign no-match.
+            logger.error("Entity adjudication LLM call failed for %r: %s", name, exc)
+            return None
+        try:
             match = json.loads(raw).get("match")
         except (json.JSONDecodeError, KeyError, AttributeError, ValueError) as exc:
-            logger.warning("Entity adjudication failed for %r: %s", name, exc)
+            logger.warning("Entity adjudication returned malformed response for %r: %s", name, exc)
             return None
         valid = {c.entity_id for c in listed}
         return match if match in valid else None
 
 
 def resolve_predicate(registry: PredicateRegistry, raw: str) -> str:
-    """Canonical predicate key for a raw extracted predicate phrase."""
+    """Canonical predicate key for a raw extracted predicate phrase (string-only)."""
     return registry.normalize(raw).key
+
+
+class PredicateResolver:
+    """Maps raw predicate phrases to canonical keys by *meaning*, not a dictionary.
+
+    Instead of hand-maintaining alias lists for every phrasing ("CEO", "chief
+    exec", "runs"…), we embed the small canonical vocabulary once and match an
+    unknown phrase to the nearest canonical predicate by cosine similarity. Only
+    when nothing is close enough do we mint a new open-domain predicate. This is
+    the predicate-side analogue of :class:`EntityResolver`.
+
+    A cheap exact/alias check runs first so known forms never cost an embedding
+    call; results are cached per phrase for the lifetime of the resolver.
+    """
+
+    def __init__(
+        self,
+        embedder: EmbeddingProvider,
+        registry: PredicateRegistry | None = None,
+        *,
+        threshold: float = 0.60,
+    ) -> None:
+        self._embedder = embedder
+        self._registry = registry or PredicateRegistry()
+        self._threshold = threshold
+        self._indexed_specs: list[PredicateSpec] = []
+        self._vectors: list[list[float]] | None = None
+        self._cache: dict[str, PredicateSpec] = {}
+
+    def _ensure_index(self) -> None:
+        if self._vectors is not None:
+            return
+        self._indexed_specs = list(self._registry.specs())
+        labels = [s.label for s in self._indexed_specs]
+        self._vectors = self._embedder.embed_batch(labels) if labels else []
+
+    def resolve(self, raw: str) -> PredicateSpec:
+        cached = self._cache.get(raw)
+        if cached is not None:
+            return cached
+        spec = self._resolve_uncached(raw)
+        self._cache[raw] = spec
+        return spec
+
+    def _resolve_uncached(self, raw: str) -> PredicateSpec:
+        exact = self._registry.lookup(raw)
+        if exact is not None:
+            return exact
+        self._ensure_index()
+        if self._vectors:
+            try:
+                query_vec = self._embedder.embed(raw)
+            except Exception as exc:  # noqa: BLE001 - embedding failure → open-domain fallback
+                logger.warning("Predicate embedding failed for %r: %s", raw, exc)
+                return self._registry.normalize(raw)
+            best_idx, best_score = -1, 0.0
+            for idx, vec in enumerate(self._vectors):
+                score = _cosine(query_vec, vec)
+                if score > best_score:
+                    best_idx, best_score = idx, score
+            if best_idx >= 0 and best_score >= self._threshold:
+                return self._indexed_specs[best_idx]
+        # Nothing close enough → keep it as a new open-domain (additive) predicate.
+        return self._registry.normalize(raw)
+
+    def key(self, raw: str) -> str:
+        """Canonical key for a raw predicate (satisfies ``PredicateNormalizer``)."""
+        return self.resolve(raw).key

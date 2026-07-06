@@ -75,7 +75,10 @@ func (h *TagHandler) ListTags(w http.ResponseWriter, r *http.Request) {
 
 	queries := repository.New(tenantConn)
 
-	tags, err := queries.ListTags(ctx, repository.ListTagsParams{
+	// Filtered by org_id explicitly (defense in depth) rather than relying
+	// solely on RLS to scope the result set.
+	tags, err := queries.ListTagsForOrg(ctx, repository.ListTagsForOrgParams{
+		OrgID:  ToPgUUID(orgID),
 		Limit:  pagination.Limit(),
 		Offset: pagination.Offset(),
 	})
@@ -85,7 +88,7 @@ func (h *TagHandler) ListTags(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	total, err := queries.CountTags(ctx)
+	total, err := queries.CountTagsForOrg(ctx, ToPgUUID(orgID))
 	if err != nil {
 		slog.Error("count tags", "error", err)
 		httputil.InternalError(w, "")

@@ -43,7 +43,7 @@ func run() error {
 
 	// Setup logging
 	logging.SetDefault(cfg.LogLevel)
-	slog.Info("starting Red Arch KM API",
+	slog.Info("starting Red Arch Knowledge Manager API",
 		"port", cfg.Port,
 		"env", cfg.Env,
 		"debug", cfg.Debug,
@@ -102,22 +102,30 @@ func run() error {
 	r.Use(chimiddleware.Recoverer)
 	r.Use(chimiddleware.Timeout(30 * time.Second))
 
-	// CORS
+	// CORS. Credentials (cookies/Authorization) are allowed, so origins must
+	// be an explicit allowlist (cfg.CORSOrigins) — the CORS spec forbids the
+	// wildcard "*" origin together with credentials, and browsers will
+	// reject the response if both are set. Methods/headers are enumerated to
+	// the set the UI actually sends rather than "*", since a wildcard for
+	// AllowedHeaders also cannot be combined with AllowCredentials per spec.
+	for _, origin := range cfg.CORSOrigins {
+		if origin == "*" {
+			return fmt.Errorf("CORS: wildcard origin %q cannot be combined with AllowCredentials", origin)
+		}
+	}
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   cfg.CORSOrigins,
 		AllowCredentials: true,
 		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"*"},
+		AllowedHeaders:   []string{"Authorization", "Content-Type", "X-Org-ID", "X-Internal-API-Key"},
 		MaxAge:           300,
 	}))
 
-	// Health endpoints (no auth required)
+	// Health endpoints (no auth required). Readyz reports 503 when pool is
+	// nil (DATABASE_URL unset) so a misconfigured deploy fails readiness
+	// instead of silently serving with DB features disabled.
 	r.Get("/healthz", handlers.Healthz())
-	if pool != nil {
-		r.Get("/readyz", handlers.Readyz(pool))
-	} else {
-		r.Get("/readyz", handlers.Healthz()) // Fallback without DB
-	}
+	r.Get("/readyz", handlers.Readyz(pool))
 
 	// JWT middleware — Clerk session-token verifier (issuer-pinned, azp-checked).
 	jwtMiddleware := middleware.NewJWTMiddleware(middleware.JWTConfig{

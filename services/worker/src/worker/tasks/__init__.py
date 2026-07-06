@@ -10,7 +10,7 @@ from worker.tasks.extract import task_extract_and_ingest
 from worker.tasks.ingest import task_ingest_document
 from worker.tasks.metadata import task_update_document_metadata
 from worker.tasks.monitoring import beat_heartbeat
-from worker.tasks.workflow import maintain_partitions, sweep_outbox
+from worker.tasks.workflow import maintain_partitions, run_timers, sweep_outbox
 
 __all__ = [
     "task_extract_and_ingest",
@@ -21,5 +21,6 @@ __all__ = [
     # are dropped as "unregistered task" (the outbox then never gets swept).
     "beat_heartbeat",
     "maintain_partitions",
+    "run_timers",
     "sweep_outbox",
 ]

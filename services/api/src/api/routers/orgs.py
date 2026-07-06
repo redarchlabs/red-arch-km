@@ -20,6 +20,7 @@ from api.repositories.org import OrgRepository
 from api.schemas.common import PaginatedResponse, PaginationParams, make_page
 from api.schemas.org import OrgCreate, OrgRead, OrgUpdate
 from api.services.brain_client import BrainAPIClient
+from api.services.crypto import encrypt_secret
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -90,17 +91,29 @@ async def update_org(
     body: OrgUpdate,
     _admin: Annotated[CurrentUser, Depends(require_site_admin)],
     session: Annotated[AsyncSession, Depends(get_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
 ) -> OrgRead:
     repo = OrgRepository(session)
     org = await repo.get(org_id)
     if org is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Org not found")
 
+    # Encrypt the per-org OpenAI key at rest before it touches the DB. An empty
+    # string is passed through to clear the key; None means "no change".
+    encrypted_key: str | None = None
+    if body.openai_api_key is not None:
+        encrypted_key = (
+            encrypt_secret(body.openai_api_key, settings.org_encryption_key.get_secret_value())
+            if body.openai_api_key
+            else ""
+        )
+
     org = await repo.update(
         org,
         name=body.name,
         description=body.description,
         use_knowledge_graph=body.use_knowledge_graph,
+        openai_api_key=encrypted_key,
     )
     return OrgRead.model_validate(org)
 

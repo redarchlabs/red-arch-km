@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # run-stack.sh — start (or stop) the full KM2 development stack.
 #
-#   ./run-stack.sh          start everything (always restarts host API+UI; infra idempotent)
-#   ./run-stack.sh restart  alias for start (host API+UI are always killed and relaunched)
-#   ./run-stack.sh stop     stop host processes + app containers (infra keeps running)
+#   ./run-stack.sh            start everything (always restarts host API+UI; infra idempotent)
+#   ./run-stack.sh restart    alias for start (host API+UI are always killed and relaunched)
+#   ./run-stack.sh stop       stop host processes + app containers (infra keeps running)
+#   ./run-stack.sh --rebuild  rebuild brain-api + worker images from source, drop their
+#                             containers, then start (use after changing worker/brain code;
+#                             combine with a mode, e.g. `restart --rebuild`)
 #
 # Start ALWAYS kills any existing host API/UI first, so a stale dev server
 # (e.g. one still serving an out-of-date .next build after a rebuild) can never
@@ -21,7 +24,17 @@ cd "$(dirname "$0")"
 ENV_HOST=.env.host
 API_LOG=/tmp/km2_api_dev.log
 UI_LOG=/tmp/km2_ui_dev.log
-MODE="${1:-start}"
+# Args: an optional mode (start|restart|stop) plus an optional --rebuild flag,
+# in any order. `rebuild` on its own means "rebuild then start".
+MODE=start
+REBUILD=0
+for arg in "$@"; do
+  case "$arg" in
+    --rebuild|-r|rebuild) REBUILD=1 ;;
+    start|restart|stop)   MODE="$arg" ;;
+    *) echo "ERROR: unknown argument '$arg' (expected start|restart|stop|--rebuild)" >&2; exit 2 ;;
+  esac
+done
 
 say() { printf '\033[1;36m[stack]\033[0m %s\n' "$*"; }
 
@@ -73,7 +86,7 @@ docker compose --env-file .env -f docker/docker-compose.infra.yml up -d
 # Service-name DNS aliases: the app containers reach these as redis/qdrant/
 # postgres/neo4j. Compose-created containers can lack the aliases when stacks
 # were mixed, so re-assert them idempotently.
-for pair in "km2_redis redis" "km2_qdrant qdrant" "km2_postgres postgres" "km2_neo4j neo4j" "km2_minio minio"; do
+for pair in "km2_redis redis" "km2_qdrant qdrant" "km2_postgres postgres" "km2_neo4j neo4j" "km2_minio minio" "km2_mailpit mailpit"; do
   set -- $pair
   cname=$1; alias=$2
   if ! docker inspect -f '{{json .NetworkSettings.Networks.km2_network.Aliases}}' "$cname" 2>/dev/null | grep -q "\"$alias\""; then
@@ -82,6 +95,18 @@ for pair in "km2_redis redis" "km2_qdrant qdrant" "km2_postgres postgres" "km2_n
     say "added network alias '$alias' -> $cname"
   fi
 done
+
+# --- 1b. optional image rebuild (--rebuild) ----------------------------------
+# Rebuild the app images from source and drop the running app containers so the
+# steps below recreate them from the fresh image. Needed after changing worker/
+# brain-api code, since this script otherwise reuses the existing image and the
+# already-created km2_worker_fixed / km2_beat / km2_brain_api containers.
+if [ "$REBUILD" = "1" ]; then
+  say "rebuilding brain-api + worker images from source…"
+  docker compose --env-file .env -f docker/docker-compose.yml build brain-api worker
+  say "removing app containers so they recreate from the fresh image…"
+  docker rm -f km2_worker_fixed km2_beat km2_brain_api 2>/dev/null || true
+fi
 
 # --- 2. brain-api (python, RAG) ----------------------------------------------
 say "brain-api…"
@@ -150,6 +175,7 @@ echo
 status "api        http://localhost:8000" api_up "$API_LOG"
 status "ui         http://localhost:3000" ui_up "$UI_LOG"
 status "brain-api  http://localhost:8020" "curl -sf -m 2 http://localhost:8020/healthz >/dev/null" "docker logs km2_brain_api"
+status "mailpit    http://localhost:8025" "curl -sf -m 2 -o /dev/null http://localhost:8025" "docker logs km2_mailpit"
 status "worker" "docker ps --format '{{.Names}}' | grep -q km2_worker_fixed" "docker logs km2_worker_fixed"
 status "beat" "docker ps --format '{{.Names}}' | grep -q km2_beat" "docker logs km2_beat"
 echo

@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import logging
 import uuid
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth.dependencies import OrgContext, require_org_access, require_org_admin
 from api.dependencies import get_tenant_db
+from api.models.document import Document, Folder
 from api.models.org import Org
+from api.repositories.document import DocumentRepository
 from api.repositories.folder import FolderRepository
 from api.schemas.common import PaginatedResponse, PaginationParams, make_page
 from api.schemas.document import FolderCreate, FolderRead, FolderUpdate
@@ -22,9 +24,33 @@ from api.services.folder_service import (
     move_folder,
 )
 from api.services.permission_config import calculate_user_masks_from_membership
+from api.tasks.ingest import dispatch_metadata_update
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+def _perm_propagation_payloads(
+    org_id: uuid.UUID, folder: Folder, docs: list[Document]
+) -> list[dict[str, Any]]:
+    """Build brain-api metadata-update payloads for a folder's inheriting docs.
+
+    Each non-overridden document's vector-store ``access_keys`` are refreshed to
+    the folder's (new) view masks, keeping its retrieval entitlement in sync
+    with the folder after a permission change.
+    """
+    new_access_keys = list(folder.view_permission_masks or [])
+    folder_tag = f"folder:{folder.id}"
+    return [
+        {
+            "tenant_id": str(org_id),
+            "document_key": doc.document_key,
+            "new_tags": [t.name for t in doc.tags] + [folder_tag],
+            "new_access_keys": new_access_keys,
+            "title": doc.title,
+        }
+        for doc in docs
+    ]
 
 
 @router.get("/", response_model=PaginatedResponse[FolderRead])
@@ -127,6 +153,7 @@ async def update_folder(
     # Recompute permission masks whenever either config is explicitly provided.
     # Resolve BOTH configs together so masks reflect the folder's current stored
     # configs even when the caller sends only one of them.
+    propagation_payloads: list[dict[str, Any]] = []
     if {"viewer_permissions_config", "contributor_permissions_config"} & body.model_fields_set:
         if "viewer_permissions_config" in body.model_fields_set:
             folder.viewer_permissions_config = body.viewer_permissions_config
@@ -142,6 +169,17 @@ async def update_folder(
         folder.contributor_permission_masks = contrib_masks
         await session.flush()
 
+        # A viewer-permission change must propagate to documents that inherit
+        # this folder (NULL viewer config): their brain-api ``access_keys`` were
+        # baked in at ingest and would otherwise go stale. Documents with their
+        # OWN viewer permissions are overrides and are left untouched. Only the
+        # viewer config affects retrieval entitlement, so contributor-only
+        # changes don't propagate. Gather the payloads now, while the RLS tenant
+        # context is active; dispatch after the commit below.
+        if "viewer_permissions_config" in body.model_fields_set:
+            inheriting = await DocumentRepository(session, ctx.org_id).list_inheriting_in_folder(folder.id)
+            propagation_payloads = _perm_propagation_payloads(ctx.org_id, folder, inheriting)
+
     if "parent_id" in body.model_fields_set:
         try:
             folder = await move_folder(session, ctx.org_id, folder, body.parent_id)
@@ -149,6 +187,20 @@ async def update_folder(
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
         except ValueError as e:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+
+    # Commit before dispatching so a broker outage can't roll back the folder
+    # change; the vector payloads are just briefly stale until a later touch.
+    if propagation_payloads:
+        await session.commit()
+        for payload in propagation_payloads:
+            try:
+                dispatch_metadata_update(payload)
+            except Exception:
+                logger.exception(
+                    "Failed to propagate folder %s permissions to document %s",
+                    folder_id,
+                    payload["document_key"],
+                )
 
     logger.info("Updated folder %s in org %s", folder_id, ctx.org_id)
     return FolderRead.model_validate(folder)

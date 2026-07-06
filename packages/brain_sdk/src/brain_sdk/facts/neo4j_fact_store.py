@@ -23,7 +23,7 @@ from typing import Any
 from neo4j import Driver, GraphDatabase, ManagedTransaction
 
 from brain_sdk.facts.models import Claim, ClaimStatus, Entity, ObjectType, now_iso
-from brain_sdk.facts.predicates import PredicateRegistry
+from brain_sdk.facts.predicates import PredicateNormalizer, PredicateRegistry
 from brain_sdk.facts.reconciliation import ReconcileAction, reconcile
 from brain_sdk.facts.schema import SCHEMA_STATEMENTS, vector_index_statement
 
@@ -43,10 +43,14 @@ class Neo4jFactStore:
         *,
         database: str | None = None,
         registry: PredicateRegistry | None = None,
+        predicate_normalizer: PredicateNormalizer | None = None,
     ) -> None:
         self._driver: Driver = GraphDatabase.driver(uri, auth=(user, password))
         self._db = database
         self._registry = registry or PredicateRegistry()
+        # For query-time predicate matching. Defaults to the registry (string/alias);
+        # inject an embedding-based PredicateResolver for semantic matching.
+        self._normalizer: PredicateNormalizer = predicate_normalizer or self._registry
 
     # ---- infrastructure -------------------------------------------------
 
@@ -201,19 +205,31 @@ class Neo4jFactStore:
         if not claims:
             return counts
         label = self._tenant_label(tenant_id)
-        with self._driver.session(database=self._db) as sess:
+        registry = self._registry
+
+        def _apply_all(tx: ManagedTransaction) -> dict[str, int]:
+            # All of a document's claims land in ONE managed transaction so a
+            # mid-list transient error rolls the whole batch back (no
+            # deleted-old + partially-new state). ``execute_write`` also gives us
+            # the driver's bounded automatic retry on transient errors for free;
+            # every write is a MERGE, so retrying is idempotent.
+            local = {"created": 0, "corroborated": 0, "superseded": 0, "contradicted": 0}
             for claim in claims:
-                action = sess.execute_write(self._apply_claim, claim, label, self._registry)
+                action = Neo4jFactStore._apply_claim(tx, claim, label, registry)
                 if action is ReconcileAction.CREATE:
-                    counts["created"] += 1
+                    local["created"] += 1
                 elif action is ReconcileAction.CORROBORATE:
-                    counts["corroborated"] += 1
+                    local["corroborated"] += 1
                 elif action is ReconcileAction.SUPERSEDE:
-                    counts["created"] += 1
-                    counts["superseded"] += 1
+                    local["created"] += 1
+                    local["superseded"] += 1
                 elif action is ReconcileAction.CONTRADICT:
-                    counts["created"] += 1
-                    counts["contradicted"] += 1
+                    local["created"] += 1
+                    local["contradicted"] += 1
+            return local
+
+        with self._driver.session(database=self._db) as sess:
+            counts = sess.execute_write(_apply_all)
         logger.info("Inserted claims for tenant %s: %s", tenant_id, counts)
         return counts
 
@@ -414,7 +430,7 @@ class Neo4jFactStore:
             params["subject_id"] = subject_id
         if predicate:
             conds.append("c.predicate = $predicate")
-            params["predicate"] = self._registry.normalize(predicate).key
+            params["predicate"] = self._normalizer.key(predicate)
         if object_id:
             conds.append("c.object_id = $object_id")
             params["object_id"] = object_id
@@ -535,13 +551,49 @@ class Neo4jFactStore:
 
     def delete_by_document_key(self, tenant_id: str, document_key: str) -> None:
         label = self._tenant_label(tenant_id)
-        # Drop this document's chunks (and their provenance edges); then remove
-        # claims/entities left with no supporting evidence. Claims corroborated
-        # by other documents survive because they still have SOURCED_FROM edges.
+        # First collect ONLY the claims sourced from this document and the
+        # entities they touch — before deleting the chunks that link them. Orphan
+        # cleanup is then bounded to those candidate ids instead of the previous
+        # two tenant-wide anti-join scans (which were O(tenant graph) per delete).
+        # Claims corroborated by other documents survive (they keep a
+        # SOURCED_FROM edge to a surviving chunk); entities still referenced by
+        # any claim survive.
+        affected = self._run(
+            f"""
+            MATCH (k:Chunk:{label} {{document_key: $dk}})<-[:SOURCED_FROM]-(c:Claim:{label})
+            OPTIONAL MATCH (c)-[:SUBJECT|OBJECT]-(e:Entity:{label})
+            RETURN collect(DISTINCT c.claim_id) AS claim_ids,
+                   collect(DISTINCT e.entity_id) AS entity_ids
+            """,
+            dk=document_key,
+        )
+        claim_ids = affected[0]["claim_ids"] if affected else []
+        entity_ids = affected[0]["entity_ids"] if affected else []
+
+        # Drop this document's chunks (and their provenance edges) + the document.
         self._run(f"MATCH (k:Chunk:{label} {{document_key: $dk}}) DETACH DELETE k", dk=document_key)
         self._run(f"MATCH (d:Document:{label} {{document_key: $dk}}) DETACH DELETE d", dk=document_key)
-        self._run(f"MATCH (c:Claim:{label}) WHERE NOT (c)-[:SOURCED_FROM]->(:Chunk) DETACH DELETE c")
-        self._run(f"MATCH (e:Entity:{label}) WHERE NOT (e)--(:Claim) DETACH DELETE e")
+
+        # Delete only the affected claims that now have no supporting evidence.
+        if claim_ids:
+            self._run(
+                f"""
+                MATCH (c:Claim:{label})
+                WHERE c.claim_id IN $ids AND NOT (c)-[:SOURCED_FROM]->(:Chunk)
+                DETACH DELETE c
+                """,
+                ids=claim_ids,
+            )
+        # Delete only the affected entities now unreferenced by any claim.
+        if entity_ids:
+            self._run(
+                f"""
+                MATCH (e:Entity:{label})
+                WHERE e.entity_id IN $ids AND NOT (e)--(:Claim)
+                DETACH DELETE e
+                """,
+                ids=entity_ids,
+            )
         logger.info("Purged document %s from fact store (tenant %s)", document_key, tenant_id)
 
     def delete_tenant(self, tenant_id: str) -> None:

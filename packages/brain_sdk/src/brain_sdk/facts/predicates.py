@@ -18,6 +18,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Protocol
 
 _NON_WORD = re.compile(r"[^a-z0-9]+")
 
@@ -30,6 +31,17 @@ def slug_predicate(raw: str) -> str:
 class Cardinality(StrEnum):
     FUNCTIONAL = "functional"
     MULTI = "multi"
+
+
+class PredicateNormalizer(Protocol):
+    """Anything that can map a raw predicate phrase to a canonical key.
+
+    Both :class:`PredicateRegistry` (string/alias only) and the embedding-based
+    ``PredicateResolver`` satisfy this, so callers depend on the capability, not
+    the implementation.
+    """
+
+    def key(self, raw: str) -> str: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,12 +75,7 @@ DEFAULT_PREDICATES: tuple[PredicateSpec, ...] = (
         aliases=("is managed by", "works under", "manager is"),
     ),
     PredicateSpec("manages", "manages", Cardinality.MULTI, inverse="reports_to", aliases=("manager of", "leads")),
-    PredicateSpec(
-        "ceo_of",
-        "CEO of",
-        Cardinality.FUNCTIONAL,
-        aliases=("chief executive of", "ceo", "ceo of", "chief executive officer", "chief executive officer of"),
-    ),
+    PredicateSpec("ceo_of", "CEO of", Cardinality.FUNCTIONAL, aliases=("chief executive of",)),
     PredicateSpec("acquired", "acquired", Cardinality.MULTI, aliases=("bought", "purchased", "took over")),
     PredicateSpec("authored", "authored", Cardinality.MULTI, aliases=("wrote", "author of", "written by")),
     PredicateSpec(
@@ -102,18 +109,30 @@ class PredicateRegistry:
         """Canonical keys, for prompting the extractor with the known vocabulary."""
         return tuple(self._by_key)
 
+    def specs(self) -> tuple[PredicateSpec, ...]:
+        """All canonical specs (for building an embedding index over labels)."""
+        return tuple(self._by_key.values())
+
+    def lookup(self, raw: str) -> PredicateSpec | None:
+        """Exact key/alias hit only — no open-domain fallback. ``None`` if unknown."""
+        canonical = self._alias_index.get(slug_predicate(raw))
+        return self._by_key[canonical] if canonical is not None else None
+
     def normalize(self, raw: str) -> PredicateSpec:
         """Resolve a raw predicate to a canonical spec.
 
         Exact key or known alias → that spec. Otherwise the slug is accepted as a
         new open-domain predicate defaulting to ``MULTI``.
         """
-        slug = slug_predicate(raw)
-        canonical = self._alias_index.get(slug)
-        if canonical is not None:
-            return self._by_key[canonical]
+        spec = self.lookup(raw)
+        if spec is not None:
+            return spec
         # Open-domain fallback: keep the value, default to additive semantics.
-        return PredicateSpec(slug, raw.strip(), Cardinality.MULTI)
+        return PredicateSpec(slug_predicate(raw), raw.strip(), Cardinality.MULTI)
+
+    def key(self, raw: str) -> str:
+        """Canonical key for a raw predicate (satisfies ``PredicateNormalizer``)."""
+        return self.normalize(raw).key
 
     def cardinality(self, key: str) -> Cardinality:
         spec = self._by_key.get(key)

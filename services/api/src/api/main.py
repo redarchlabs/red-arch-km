@@ -29,6 +29,7 @@ from api.routers import (
     entity_definitions,
     entity_records,
     folders,
+    forms,
     health,
     internal,
     memberships,
@@ -94,12 +95,12 @@ async def _instance_has_orgs(session: AsyncSession) -> bool:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
-    logger.info("Starting Red Arch KM API")
+    logger.info("Starting Red Arch Knowledge Manager API")
     await _announce_setup_token_if_needed()
 
     yield
 
-    logger.info("Shutting down Red Arch KM API")
+    logger.info("Shutting down Red Arch Knowledge Manager API")
     await close_redis_client()
     await dispose_engine()
 
@@ -116,12 +117,29 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
+    # CORS: we send credentials (cookies / Authorization), so the browser
+    # forbids a wildcard origin in that mode and Starlette silently drops the
+    # ACAO header — fail loud instead. Also enumerate the methods/headers the API
+    # actually uses rather than "*", so a credentialed wildcard can never slip in.
+    if "*" in settings.cors_origins:
+        raise ValueError(
+            "cors_origins must be an explicit allow-list, never '*', because "
+            "allow_credentials=True is incompatible with a wildcard origin."
+        )
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
         allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
+        allow_headers=[
+            "Authorization",
+            "Content-Type",
+            "X-Org-ID",
+            "X-Request-ID",
+            "X-Test-User",
+            "X-Test-Secret",
+            "X-Internal-API-Key",
+        ],
     )
     app.add_middleware(RequestLoggingMiddleware)
 
@@ -159,6 +177,9 @@ def create_app() -> FastAPI:
     )
     app.include_router(entity_records.router, prefix="/api/entities", tags=["custom-entities"])
     app.include_router(workflows.router, prefix="/api/workflows", tags=["workflows"])
+    app.include_router(forms.router, prefix="/api/forms", tags=["forms"])
+    # Public, unauthenticated form rendering + submission (org resolved from token).
+    app.include_router(forms.public_router, prefix="/api/public/forms", tags=["forms-public"])
     app.include_router(agent.router, prefix="/api/agent", tags=["agent"])
     app.include_router(internal.router, prefix="/api/internal", tags=["internal"])
     app.include_router(setup.router, prefix="/api/setup", tags=["setup"])

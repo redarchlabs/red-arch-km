@@ -8,7 +8,7 @@ admin. Record CRUD lives in ``entity_records.py`` and runs under RLS.
 from __future__ import annotations
 
 import uuid
-from typing import Annotated
+from typing import Annotated, NoReturn
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -49,7 +49,7 @@ _ERROR_STATUS = {
 }
 
 
-def _raise_http(exc: Exception) -> None:
+def _raise_http(exc: Exception) -> NoReturn:
     code = _ERROR_STATUS.get(type(exc), status.HTTP_400_BAD_REQUEST)
     raise HTTPException(status_code=code, detail=str(exc)) from exc
 
@@ -151,6 +151,21 @@ async def add_field(
     return EntityFieldRead.model_validate(field)
 
 
+@router.delete("/{definition_id}/fields/{field_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_field(
+    definition_id: uuid.UUID,
+    field_id: uuid.UUID,
+    ctx: Annotated[OrgContext, Depends(require_org_admin)],
+    session: Annotated[AsyncSession, Depends(get_db)],
+) -> None:
+    """Drop a scalar field and its physical column (destructive — data is lost)."""
+    service = EntityService(session, ctx.org_id)
+    try:
+        await service.drop_field(definition_id, field_id)
+    except EntityError as exc:
+        _raise_http(exc)
+
+
 @router.get("/{definition_id}/relationships", response_model=list[EntityRelationshipRead])
 async def list_relationships(
     definition_id: uuid.UUID,
@@ -158,6 +173,18 @@ async def list_relationships(
     session: Annotated[AsyncSession, Depends(get_db)],
 ) -> list[EntityRelationshipRead]:
     rels = await EntityRelationshipRepository(session, ctx.org_id).list_for_source(definition_id)
+    return [EntityRelationshipRead.model_validate(r) for r in rels]
+
+
+@router.get("/{definition_id}/incoming-relationships", response_model=list[EntityRelationshipRead])
+async def list_incoming_relationships(
+    definition_id: uuid.UUID,
+    ctx: Annotated[OrgContext, Depends(require_org_admin)],
+    session: Annotated[AsyncSession, Depends(get_db)],
+) -> list[EntityRelationshipRead]:
+    """Relationships from other entities that TARGET this one — the child→parent
+    links that drive a form's 1:M (table) sections."""
+    rels = await EntityRelationshipRepository(session, ctx.org_id).list_targeting(definition_id)
     return [EntityRelationshipRead.model_validate(r) for r in rels]
 
 

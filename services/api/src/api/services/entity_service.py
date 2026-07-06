@@ -11,6 +11,7 @@ validation, limits, and identifier derivation.
 from __future__ import annotations
 
 import uuid
+from types import SimpleNamespace
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -123,6 +124,22 @@ class EntityService:
         await self._schema.add_field_column(definition, field)
         return field
 
+    async def drop_field(self, definition_id: uuid.UUID, field_id: uuid.UUID) -> None:
+        """Drop a scalar field: its physical column (with data) and catalog row.
+
+        DDL + catalog delete share one privileged transaction, so a failure in
+        either rolls both back. Dropping the column cascades to any unique
+        constraint / trigram index Postgres built on it.
+        """
+        definition = await self._defs.get(definition_id)
+        if definition is None:
+            raise EntityNotFoundError("entity not found")
+        field = await self._fields.get(field_id)
+        if field is None or field.entity_definition_id != definition_id:
+            raise EntityNotFoundError("field not found")
+        await self._schema.drop_field_column(definition, field)
+        await self._fields.delete(field)
+
     async def drop_definition(self, definition_id: uuid.UUID, *, force: bool = False) -> None:
         definition = await self._defs.get(definition_id)
         if definition is None:
@@ -130,12 +147,38 @@ class EntityService:
         incoming = await self._rels.list_targeting(definition_id)
         if incoming and not force:
             raise EntityConflictError("entity is referenced by relationships; pass force=true to drop")
+        # force=True with incoming references: tear each referencing relationship
+        # down FIRST. Otherwise (a) DROP TABLE is rejected by the FK dependency
+        # from the referencing table, and (b) deleting the catalog row raises
+        # IntegrityError because entity_relationships.target_definition_id is
+        # ON DELETE RESTRICT — either way an unhandled 500.
+        for rel in incoming:
+            await self._drop_incoming_relationship(rel)
         # Drop m2m join tables this entity owns before dropping the table itself.
         for rel in await self._rels.list_for_source(definition_id):
             if rel.cardinality == "many_to_many":
                 await self._schema.drop_table_by_name(rel.physical_name)
         await self._schema.drop_entity_table(definition)
-        await self._defs.delete(definition)  # cascades catalog fields/rels
+        await self._defs.delete(definition)  # cascades catalog fields + outgoing rels
+
+    async def _drop_incoming_relationship(self, rel: EntityRelationship) -> None:
+        """Remove one relationship that TARGETS the entity being dropped —
+        physical object first, then its catalog row."""
+        if rel.cardinality == "many_to_many":
+            # The join table references this entity's table (ON DELETE CASCADE);
+            # drop the whole join table.
+            await self._schema.drop_table_by_name(rel.physical_name)
+        else:
+            # To-one: the FK column lives on the SOURCE table. Dropping the column
+            # auto-drops its FK/unique constraint + index. SchemaManager.drop_field
+            # _column only reads ``.physical_table`` / ``.physical_column``.
+            source = await self._defs.get(rel.source_definition_id)
+            if source is not None:
+                await self._schema.drop_field_column(
+                    source,
+                    SimpleNamespace(physical_column=rel.physical_name),  # type: ignore[arg-type]
+                )
+        await self._rels.delete(rel)
 
     # ------------------------------------------------------------------ #
     # Relationships

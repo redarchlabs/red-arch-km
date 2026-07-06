@@ -24,9 +24,21 @@ func Healthz() http.HandlerFunc {
 }
 
 // Readyz returns a readiness probe handler that checks DB connectivity.
+// A nil pool (e.g. DATABASE_URL not configured) is treated as not ready:
+// reporting 200 in that case would let a misconfigured deploy pass
+// readiness checks with database-backed features silently disabled.
 func Readyz(pool *db.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+
+		if pool == nil {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			json.NewEncoder(w).Encode(HealthResponse{
+				Status: "error",
+				DB:     "not_configured",
+			})
+			return
+		}
 
 		if err := pool.Health(r.Context()); err != nil {
 			w.WriteHeader(http.StatusServiceUnavailable)

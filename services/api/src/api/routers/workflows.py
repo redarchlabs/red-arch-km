@@ -8,15 +8,18 @@ tables for the dashboard.
 from __future__ import annotations
 
 import uuid
-from typing import Annotated
+from typing import Annotated, NoReturn
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.auth.dependencies import OrgContext, require_org_admin
+from api.auth.dependencies import OrgContext, require_org_access, require_org_admin
+from api.config import Settings, get_settings
 from api.dependencies import get_db
 from api.repositories.workflow import WorkflowRepository, WorkflowVersionRepository
 from api.schemas.workflow import (
+    ManualRunRequest,
+    ManualRunResult,
     VersionSaveRequest,
     WorkflowCreate,
     WorkflowRead,
@@ -27,6 +30,10 @@ from api.schemas.workflow import (
     WorkflowUpdate,
     WorkflowVersionRead,
 )
+from api.services.email import EmailSender
+from api.services.workflow.actions import SIDE_EFFECTING_ACTIONS
+from api.services.workflow.dispatcher import WorkflowDispatchService
+from api.services.workflow.permissions import can_run
 from api.services.workflow.service import (
     WorkflowConflictError,
     WorkflowNotFoundError,
@@ -41,7 +48,7 @@ _ERROR_STATUS = {
 }
 
 
-def _raise(exc: Exception) -> None:
+def _raise(exc: Exception) -> NoReturn:
     raise HTTPException(
         status_code=_ERROR_STATUS.get(type(exc), status.HTTP_400_BAD_REQUEST), detail=str(exc)
     ) from exc
@@ -95,8 +102,104 @@ async def update_workflow(
     wf = await repo.get(workflow_id)
     if wf is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="workflow not found")
-    await repo.update(wf, name=body.name, description=body.description, enabled=body.enabled)
+    await repo.update(
+        wf,
+        name=body.name,
+        description=body.description,
+        enabled=body.enabled,
+        run_permission=body.run_permission.model_dump(mode="json")
+        if body.run_permission is not None
+        else None,
+    )
     return WorkflowRead.model_validate(wf)
+
+
+@router.post("/{workflow_id}/run", response_model=ManualRunResult)
+async def run_workflow(
+    workflow_id: uuid.UUID,
+    body: ManualRunRequest,
+    ctx: Annotated[OrgContext, Depends(require_org_access)],
+    session: Annotated[AsyncSession, Depends(get_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> ManualRunResult:
+    """Run the workflow's PUBLISHED version for real against provided inputs.
+
+    Gated by the workflow's ``run_permission`` (org admins always; optionally
+    widened to any member or specific roles/groups). Unlike the dry-run test,
+    this performs real side effects and records a ``workflow_run``.
+    """
+    wf = await WorkflowRepository(session, ctx.org_id).get(workflow_id)
+    if wf is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="workflow not found")
+    if not can_run(ctx, wf.run_permission):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You don't have permission to run this workflow",
+        )
+    if wf.active_version_id is None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="workflow has no published version")
+    version = await WorkflowVersionRepository(session, ctx.org_id).get(wf.active_version_id)
+    if version is None or version.status != "published":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="workflow has no published version")
+
+    allowlist = tuple(settings.workflow_webhook_allowlist or ())
+    dispatcher = WorkflowDispatchService(
+        session,
+        webhook_allowlist=allowlist,
+        public_base_url=settings.public_base_url,
+        email_sender=EmailSender(settings),
+    )
+
+    # SECURITY: never trust client-supplied record data for a manual run.
+    #  * With a record_id, load before/after from the real entity table scoped
+    #    to this org + the workflow's entity — a cross-org/cross-entity id can't
+    #    resolve, and the client's before/after are ignored entirely.
+    #  * Without a record_id, refuse to run any side-effecting action (email/
+    #    webhook/form invite) on free-form client data — otherwise a member with
+    #    any_member run_permission could email/webhook arbitrary fabricated data.
+    if body.record_id is not None:
+        record = await dispatcher.load_trigger_record(
+            ctx.org_id, wf.entity_definition_id, body.record_id
+        )
+        if record is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="record not found for this workflow's entity",
+            )
+        before, after = record, record
+    else:
+        action_types = {
+            node.get("data", {}).get("action_type")
+            for node in version.definition.get("nodes", [])
+            if node.get("type") == "action"
+        }
+        if action_types & SIDE_EFFECTING_ACTIONS:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "This workflow performs external actions (email/webhook/form). "
+                    "Provide a record_id so it runs against a real record."
+                ),
+            )
+        before, after = body.before, body.after
+
+    run, executed = await dispatcher.run_version_manually(
+        ctx.org_id,
+        wf,
+        version,
+        operation=body.operation,
+        record_id=body.record_id,
+        before=before,
+        after=after,
+        actor_user_id=ctx.user.profile_id,
+    )
+    return ManualRunResult(
+        run_id=run.id,
+        status=run.status,
+        conditions_matched=bool(run.conditions_matched),
+        actions_executed=executed,
+        error=run.error,
+    )
 
 
 @router.delete("/{workflow_id}", status_code=status.HTTP_204_NO_CONTENT)
