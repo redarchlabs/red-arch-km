@@ -1,8 +1,11 @@
-"""AI configuration-assistant chat with tool-calling.
+"""AI assistant chat with tool-calling.
 
 Runs the agent loop in-process on the privileged session (it can create entities
-and workflows) and streams events over SSE. Gated on org admin because its tools
-mutate workspace configuration.
+and workflows) and streams events over SSE. Open to any org member: the agent
+acts with the CALLER's permissions. Document/read tools are available to all
+members; workspace-configuration and folder/permission tools are gated to org
+admins inside the agent (see AgentService._ADMIN_ONLY_TOOLS), so a non-admin can
+never do more through chat than they could in the UI.
 """
 
 from __future__ import annotations
@@ -16,7 +19,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
-from api.auth.dependencies import OrgContext, require_org_admin
+from api.auth.dependencies import OrgContext, require_org_access
 from api.config import Settings, get_settings
 from api.db import get_session_factory
 from api.models.org import Org
@@ -38,7 +41,7 @@ class AgentChatRequest(BaseModel):
 @router.post("/chat/stream")
 async def agent_chat_stream(
     body: AgentChatRequest,
-    ctx: Annotated[OrgContext, Depends(require_org_admin)],
+    ctx: Annotated[OrgContext, Depends(require_org_access)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> StreamingResponse:
     # Deliberately NOT depending on get_db: a request-scoped session would stay
@@ -58,7 +61,9 @@ async def agent_chat_stream(
         if stored:
             org_key = decrypt_secret(stored, settings.org_encryption_key.get_secret_value())
 
-    agent = AgentService(ctx.org_id, settings, session_factory=factory, org_openai_key=org_key)
+    agent = AgentService(
+        ctx.org_id, settings, session_factory=factory, org_openai_key=org_key, org_context=ctx
+    )
     history = [{"role": m.role, "content": m.content} for m in body.messages]
 
     async def iterator() -> AsyncGenerator[bytes]:

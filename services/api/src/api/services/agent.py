@@ -14,13 +14,18 @@ import logging
 import uuid
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
+from fastapi import HTTPException
 from openai import AsyncOpenAI
+from pydantic import ValidationError
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from api.config import Settings
+
+if TYPE_CHECKING:
+    from api.auth.dependencies import OrgContext
 from api.repositories.custom_entity import (
     EntityDefinitionRepository,
     EntityFieldRepository,
@@ -41,17 +46,92 @@ logger = logging.getLogger(__name__)
 
 MAX_ITERATIONS = 8
 
+# Tools that mutate workspace configuration (entity/workflow schema) or folders
+# and their permissions are org-admin only — the same boundary the REST API
+# enforces (folder routes use require_org_admin; the config assistant was
+# admin-gated at the endpoint). Non-admin callers get the document + read tools
+# only, so the agent can never do more than the user could do in the UI.
+_ADMIN_ONLY_TOOLS = frozenset(
+    {
+        "create_entity",
+        "add_entity_field",
+        "create_relationship",
+        "create_record",
+        "create_workflow",
+        "create_folder",
+        "update_folder",
+    }
+)
+
+# Document/folder tools act as the calling user and therefore require the
+# request's OrgContext to be present (always true in production; absent only in
+# unit tests that exercise the config tools in isolation).
+_USER_CONTEXT_TOOLS = frozenset(
+    {
+        "list_folders",
+        "list_documents",
+        "get_document",
+        "list_permission_dimensions",
+        "create_document",
+        "update_document",
+        "update_document_content",
+        "create_folder",
+        "update_folder",
+    }
+)
+
+
+def _parse_uuid(value: Any) -> uuid.UUID | None:
+    """Best-effort UUID parse for LLM-supplied args; None on missing/invalid."""
+    if not value:
+        return None
+    try:
+        return uuid.UUID(str(value))
+    except (ValueError, TypeError):
+        return None
+
+
+# Reused by the folder/document permission-setting tools. A permission config is
+# a list of groups (OR'd); within a group every named dimension must match.
+_PERMISSION_CONFIG_SCHEMA: dict[str, Any] = {
+    "type": "array",
+    "description": (
+        "Permission groups (OR'd together). Each entry is one group the user must fully match. "
+        "Keys are dimension NAMES from list_permission_dimensions; any subset of "
+        "region/department/role/group (an omitted dimension means 'any'). Empty/omitted = no "
+        "restriction (public within the org)."
+    ),
+    "items": {
+        "type": "object",
+        "properties": {
+            "region": {"type": "string"},
+            "department": {"type": "string"},
+            "role": {"type": "string"},
+            "group": {"type": "string"},
+        },
+    },
+}
+
 _SYSTEM_PROMPT = (
-    "You are the configuration assistant for a knowledge-management platform. "
-    "You help users model their data as custom entities and automate them with workflows. "
-    "Use the provided tools to inspect and change the workspace — do not invent APIs. "
-    "When a user asks to 'create a customer entity' or similar, call create_entity with sensible "
-    "fields. For questions about existing documents, use search_knowledge_base. "
-    "When creating a workflow, fully wire it in one call: set the trigger `operations` from the "
-    "user's intent (e.g. 'when a customer is created' -> operations [\"create\"]) and pass the "
-    "requested steps as `actions` (e.g. a create_record action targeting the entity to populate). "
-    "It is saved as an unpublished draft — tell the user to open it in the builder to review, test, "
-    "then Publish. Slugs must be lowercase snake_case. Be concise and friendly."
+    "You are the assistant for a knowledge-management platform. You help users find, create, and "
+    "organize their knowledge base, and model their data. Use the provided tools — do not invent APIs.\n"
+    "Documents & folders: browse with list_folders / list_documents / get_document; add notes with "
+    "create_document; rewrite a document's body with update_document_content (ALWAYS get_document "
+    "first to read the current text, then send the COMPLETE new body — it replaces the old one); "
+    "rename/move/re-permission with update_document; organize with create_folder / update_folder. "
+    "For questions about existing document contents, use search_knowledge_base.\n"
+    "Permissions: you act with the CURRENT USER's permissions — you can only see and change what "
+    "they could themselves. Creating or changing folders and setting any permissions require "
+    "organization-admin rights; if the user lacks them the tool will refuse, so relay that plainly. "
+    "To set permissions, first call list_permission_dimensions for valid region/department/role/group "
+    "names, then pass permission groups. You CANNOT delete anything — direct users to the UI for "
+    "deletions.\n"
+    "Data modeling: help model custom entities and automate them with workflows. For 'create a "
+    "customer entity', call create_entity with sensible fields. When creating a workflow, fully wire "
+    "it in one call: set the trigger `operations` from intent (e.g. 'when a customer is created' -> "
+    '["create"]) and pass steps as `actions`. It saves as an unpublished draft — tell the user to open '
+    "it in the builder to review, test, then Publish.\n"
+    "Slugs must be lowercase snake_case. Be concise and friendly."
 )
 
 # OpenAI tool (function) schemas.
@@ -261,6 +341,149 @@ TOOLS: list[dict[str, Any]] = [
             },
         },
     },
+    # ---- Knowledge base: documents & folders (act as the calling user) ----
+    {
+        "type": "function",
+        "function": {
+            "name": "list_folders",
+            "description": "List folders the current user can see (their permissions apply).",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_documents",
+            "description": "List documents the user can see, optionally scoped to one folder.",
+            "parameters": {
+                "type": "object",
+                "properties": {"folder_id": {"type": "string", "description": "optional folder UUID to scope to"}},
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_document",
+            "description": "Read a document's metadata and its text content (for Markdown/text documents).",
+            "parameters": {
+                "type": "object",
+                "properties": {"document_id": {"type": "string"}},
+                "required": ["document_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_permission_dimensions",
+            "description": (
+                "List the org's permission dimension names (regions, departments, roles, groups) — "
+                "use these names when setting folder/document permissions."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_document",
+            "description": (
+                "Create a document (e.g. a Markdown note) in a folder the user can see. "
+                "Pass `text` for inline content."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "text": {"type": "string", "description": "Markdown/plain-text body (optional)."},
+                    "description": {"type": "string"},
+                    "folder_id": {"type": "string", "description": "Target folder UUID (omit for unfiled)."},
+                },
+                "required": ["title"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_document",
+            "description": (
+                "Update a document's metadata: title, description, move it to another folder "
+                "(folder_id), or set its viewer/contributor permissions."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "document_id": {"type": "string"},
+                    "title": {"type": "string"},
+                    "description": {"type": "string"},
+                    "folder_id": {"type": "string", "description": "Move to this folder UUID."},
+                    "viewer_permissions_config": _PERMISSION_CONFIG_SCHEMA,
+                    "contributor_permissions_config": _PERMISSION_CONFIG_SCHEMA,
+                },
+                "required": ["document_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_document_content",
+            "description": (
+                "Replace a document's ENTIRE text body and re-index it. Call get_document first to "
+                "read the current content, then send the complete new text."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "document_id": {"type": "string"},
+                    "text": {"type": "string", "description": "The complete new body (replaces the old)."},
+                },
+                "required": ["document_id", "text"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_folder",
+            "description": "Create a folder (organization admins only). Optionally set viewer/contributor permissions.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Folder name (must not contain '.')."},
+                    "parent_id": {"type": "string", "description": "Parent folder UUID (omit for a top-level folder)."},
+                    "description": {"type": "string"},
+                    "viewer_permissions_config": _PERMISSION_CONFIG_SCHEMA,
+                    "contributor_permissions_config": _PERMISSION_CONFIG_SCHEMA,
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_folder",
+            "description": (
+                "Rename or move a folder, or set its viewer/contributor permissions (organization "
+                "admins only). Permission changes propagate to documents and subfolders that inherit it."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "folder_id": {"type": "string"},
+                    "name": {"type": "string"},
+                    "description": {"type": "string"},
+                    "parent_id": {"type": "string", "description": "New parent folder UUID."},
+                    "viewer_permissions_config": _PERMISSION_CONFIG_SCHEMA,
+                    "contributor_permissions_config": _PERMISSION_CONFIG_SCHEMA,
+                },
+                "required": ["folder_id"],
+            },
+        },
+    },
 ]
 
 # Action types the assistant is allowed to wire. send_webhook is intentionally
@@ -354,10 +577,15 @@ class AgentService:
         *,
         session_factory: async_sessionmaker[AsyncSession],
         org_openai_key: str | None = None,
+        org_context: OrgContext | None = None,
     ) -> None:
         self._org_id = org_id
         self._settings = settings
         self._session_factory = session_factory
+        # The caller's request context. Document/folder tools act as this user
+        # and enforce their permissions; None (unit tests exercising config
+        # tools) is treated as admin, preserving the prior admin-only behaviour.
+        self._ctx = org_context
         key = org_openai_key or settings.openai_api_key.get_secret_value()
         self._client = AsyncOpenAI(api_key=key) if key else None
 
@@ -437,11 +665,22 @@ class AgentService:
         handler = getattr(self, f"_tool_{name}", None)
         if handler is None:
             return {"error": f"unknown tool: {name}"}
+        if name in _USER_CONTEXT_TOOLS and self._ctx is None:
+            return {"error": "This tool requires an authenticated user context."}
+        if name in _ADMIN_ONLY_TOOLS and not self._is_admin():
+            return {"error": "This action requires organization-admin permissions, which you don't have."}
         try:
             async with self._tenant_session() as session:
                 result = await handler(session, args)
                 await session.commit()
                 return result
+        except HTTPException as exc:
+            # Reused REST handlers raise HTTPException for validation/permission
+            # errors (e.g. a folder_id that doesn't exist). Surface the message.
+            detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+            return {"error": detail}
+        except ValidationError as exc:
+            return {"error": f"invalid arguments: {exc.errors()[0].get('msg', str(exc))}"}
         except (EntityError, WorkflowError) as exc:
             return {"error": str(exc)}
         except Exception as exc:  # noqa: BLE001
@@ -593,3 +832,214 @@ class AgentService:
                 "test, then click Publish to make it live."
             ),
         }
+
+    # ------------------------------------------------------------------ #
+    # Permission helpers — documents & folders act as the calling user
+    # ------------------------------------------------------------------ #
+    def _is_admin(self) -> bool:
+        # No context (legacy/tests) → treat as admin, preserving the prior
+        # admin-only endpoint behaviour. Production always supplies OrgContext.
+        return self._ctx.is_org_admin if self._ctx is not None else True
+
+    async def _visible_folder_ids(self, session: AsyncSession) -> set[uuid.UUID] | None:
+        """Folder ids the caller may see, or None meaning 'all' (admin)."""
+        if self._is_admin():
+            return None
+        from api.models.org import Org
+        from api.repositories.folder import FolderRepository
+        from api.services.permission_config import calculate_user_masks_from_membership
+
+        org = await session.get(Org, self._org_id)
+        masks = (
+            calculate_user_masks_from_membership(self._ctx.membership, org.permission_number)
+            if org is not None
+            else []
+        )
+        folders, _ = await FolderRepository(session, self._org_id).list_visible_to_masks(user_masks=masks)
+        return {f.id for f in folders}
+
+    async def _can_see_document(self, session: AsyncSession, doc_id: uuid.UUID) -> bool:
+        from api.repositories.document import DocumentRepository
+
+        doc = await DocumentRepository(session, self._org_id).get(doc_id)
+        if doc is None:
+            return False
+        visible = await self._visible_folder_ids(session)
+        if visible is None:  # admin
+            return True
+        if doc.folder_id is None:  # unfiled docs are admin-only (mirrors list rules)
+            return False
+        return doc.folder_id in visible
+
+    async def _folder_visibility_error(self, session: AsyncSession, folder_id: uuid.UUID | None) -> str | None:
+        """Error message if the caller cannot see ``folder_id`` (None = root, allowed)."""
+        if folder_id is None:
+            return None
+        visible = await self._visible_folder_ids(session)
+        if visible is not None and folder_id not in visible:
+            return "That folder does not exist or is not visible to you."
+        return None
+
+    # ------------------------------------------------------------------ #
+    # Document & folder tools — thin wrappers over the REST handlers, so the
+    # business logic and (for lists) the visibility filtering are reused verbatim
+    # with the caller's OrgContext. The admin boundary for folder/permission
+    # mutations is enforced centrally in _dispatch (_ADMIN_ONLY_TOOLS).
+    # ------------------------------------------------------------------ #
+    async def _tool_list_folders(self, session: AsyncSession, _args: dict[str, Any]) -> dict[str, Any]:
+        from api.routers import folders as folders_routes
+        from api.schemas.common import PaginationParams
+
+        page = await folders_routes.list_folders(
+            ctx=self._ctx, session=session, pagination=PaginationParams(page=1, page_size=200)
+        )
+        return {"folders": [{"id": str(f.id), "name": f.name, "path": f.dot_path} for f in page.items]}
+
+    async def _tool_list_documents(self, session: AsyncSession, args: dict[str, Any]) -> dict[str, Any]:
+        from api.routers import documents as documents_routes
+        from api.schemas.common import PaginationParams
+
+        page = await documents_routes.list_documents(
+            ctx=self._ctx,
+            session=session,
+            pagination=PaginationParams(page=1, page_size=200),
+            folder_id=_parse_uuid(args.get("folder_id")),
+        )
+        return {
+            "documents": [
+                {"id": str(d.id), "title": d.title, "folder_id": str(d.folder_id) if d.folder_id else None}
+                for d in page.items
+            ]
+        }
+
+    async def _tool_get_document(self, session: AsyncSession, args: dict[str, Any]) -> dict[str, Any]:
+        from api.routers import documents as documents_routes
+
+        doc_id = _parse_uuid(args.get("document_id"))
+        if doc_id is None:
+            return {"error": "document_id is required"}
+        if not await self._can_see_document(session, doc_id):
+            return {"error": "Document not found or not visible to you."}
+        meta = await documents_routes.get_document(document_id=doc_id, ctx=self._ctx, session=session)
+        content = await documents_routes.get_document_content(
+            document_id=doc_id, ctx=self._ctx, session=session, settings=self._settings
+        )
+        return {
+            "id": str(meta.id),
+            "title": meta.title,
+            "folder_id": str(meta.folder_id) if meta.folder_id else None,
+            "content": content.get("content"),
+            "content_kind": content.get("kind"),
+        }
+
+    async def _tool_list_permission_dimensions(
+        self, session: AsyncSession, _args: dict[str, Any]
+    ) -> dict[str, Any]:
+        from sqlalchemy import select
+
+        from api.models.org import Department, Group, Region, Role
+
+        out: dict[str, list[str]] = {}
+        for key, model in (("regions", Region), ("departments", Department), ("roles", Role), ("groups", Group)):
+            rows = (await session.execute(select(model.name).where(model.org_id == self._org_id))).scalars().all()
+            out[key] = list(rows)
+        return out
+
+    async def _tool_create_document(self, session: AsyncSession, args: dict[str, Any]) -> dict[str, Any]:
+        from api.routers import documents as documents_routes
+        from api.schemas.document import DocumentCreate
+
+        title = args.get("title")
+        if not title:
+            return {"error": "title is required"}
+        folder_id = _parse_uuid(args.get("folder_id"))
+        vis_err = await self._folder_visibility_error(session, folder_id)
+        if vis_err:
+            return {"error": vis_err}
+        body = DocumentCreate(
+            title=title, text=args.get("text"), description=args.get("description"), folder_id=folder_id
+        )
+        result = await documents_routes.create_document(body=body, ctx=self._ctx, session=session)
+        return {"created_document": {"id": str(result.id), "title": result.title}}
+
+    async def _tool_update_document(self, session: AsyncSession, args: dict[str, Any]) -> dict[str, Any]:
+        from api.routers import documents as documents_routes
+        from api.schemas.document import DocumentUpdate
+
+        doc_id = _parse_uuid(args.get("document_id"))
+        if doc_id is None:
+            return {"error": "document_id is required"}
+        if not await self._can_see_document(session, doc_id):
+            return {"error": "Document not found or not visible to you."}
+        provided: dict[str, Any] = {
+            k: args[k]
+            for k in ("title", "description", "viewer_permissions_config", "contributor_permissions_config")
+            if k in args
+        }
+        if "folder_id" in args:
+            target = _parse_uuid(args.get("folder_id"))
+            vis_err = await self._folder_visibility_error(session, target)
+            if vis_err:
+                return {"error": vis_err}
+            provided["folder_id"] = target
+        body = DocumentUpdate(**provided)
+        result = await documents_routes.update_document(
+            document_id=doc_id, body=body, ctx=self._ctx, session=session
+        )
+        return {"updated_document": {"id": str(result.id), "title": result.title}}
+
+    async def _tool_update_document_content(self, session: AsyncSession, args: dict[str, Any]) -> dict[str, Any]:
+        from api.routers import documents as documents_routes
+        from api.schemas.document import DocumentContentUpdate
+
+        doc_id = _parse_uuid(args.get("document_id"))
+        if doc_id is None:
+            return {"error": "document_id is required"}
+        if "text" not in args:
+            return {"error": "text is required"}
+        if not await self._can_see_document(session, doc_id):
+            return {"error": "Document not found or not visible to you."}
+        body = DocumentContentUpdate(text=args["text"] or "")
+        result = await documents_routes.update_document_content(
+            document_id=doc_id, body=body, ctx=self._ctx, session=session, settings=self._settings
+        )
+        return {
+            "updated_document": {"id": str(result.id), "title": result.title, "status": result.processing_status}
+        }
+
+    async def _tool_create_folder(self, session: AsyncSession, args: dict[str, Any]) -> dict[str, Any]:
+        from api.routers import folders as folders_routes
+        from api.schemas.document import FolderCreate
+
+        name = args.get("name")
+        if not name:
+            return {"error": "name is required"}
+        body = FolderCreate(
+            name=name,
+            parent_id=_parse_uuid(args.get("parent_id")),
+            description=args.get("description"),
+            viewer_permissions_config=args.get("viewer_permissions_config"),
+            contributor_permissions_config=args.get("contributor_permissions_config"),
+        )
+        result = await folders_routes.create_folder(body=body, ctx=self._ctx, session=session)
+        return {"created_folder": {"id": str(result.id), "name": result.name, "path": result.dot_path}}
+
+    async def _tool_update_folder(self, session: AsyncSession, args: dict[str, Any]) -> dict[str, Any]:
+        from api.routers import folders as folders_routes
+        from api.schemas.document import FolderUpdate
+
+        folder_id = _parse_uuid(args.get("folder_id"))
+        if folder_id is None:
+            return {"error": "folder_id is required"}
+        provided: dict[str, Any] = {
+            k: args[k]
+            for k in ("name", "description", "viewer_permissions_config", "contributor_permissions_config")
+            if k in args
+        }
+        if "parent_id" in args:
+            provided["parent_id"] = _parse_uuid(args.get("parent_id"))
+        body = FolderUpdate(**provided)
+        result = await folders_routes.update_folder(
+            folder_id=folder_id, body=body, ctx=self._ctx, session=session
+        )
+        return {"updated_folder": {"id": str(result.id), "name": result.name, "path": result.dot_path}}
