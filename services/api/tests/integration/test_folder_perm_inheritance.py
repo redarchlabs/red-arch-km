@@ -131,3 +131,52 @@ class TestSubtreePropagation:
         by_key = {p["document_key"]: p for p in payloads}
         # docB's synthetic folder tag names B (its own folder), not A.
         assert f"folder:{folders['B'].id}" in by_key[docs["b"].document_key]["new_tags"]
+
+
+class TestVisibilityInheritance:
+    """Explorer folder visibility uses EFFECTIVE masks, so an unconfigured
+    subfolder is hidden when its inherited restriction excludes the user."""
+
+    async def _visible_names(self, session: AsyncSession, org: Org, masks: list[int]) -> set[str]:
+        folders, total = await FolderRepository(session, org.id).list_visible_to_masks(user_masks=masks)
+        names = {f.name for f in folders}
+        assert total == len(folders)
+        return names
+
+    async def test_parent_mask_reveals_inheriting_child(self, session: AsyncSession) -> None:
+        org, _, _ = await _seed_tree(session)
+        # Holding A's mask [7] reveals A and the unconfigured B that inherits it,
+        # but not the C boundary subtree (needs [9]).
+        assert await self._visible_names(session, org, [7]) == {"A", "B"}
+
+    async def test_boundary_mask_reveals_only_boundary_subtree(self, session: AsyncSession) -> None:
+        org, _, _ = await _seed_tree(session)
+        # Holding only C's mask [9] reveals C and its inheriting child D.
+        assert await self._visible_names(session, org, [9]) == {"C", "D"}
+
+    async def test_both_masks_reveal_everything(self, session: AsyncSession) -> None:
+        org, _, _ = await _seed_tree(session)
+        assert await self._visible_names(session, org, [7, 9]) == {"A", "B", "C", "D"}
+
+    async def test_no_matching_mask_hides_restricted_subtree(self, session: AsyncSession) -> None:
+        org, _, _ = await _seed_tree(session)
+        assert await self._visible_names(session, org, [999]) == set()
+
+    async def test_unconfigured_tree_is_public(self, session: AsyncSession) -> None:
+        org = Org(name=f"Pub-{uuid.uuid4().hex[:8]}", permission_number=1)
+        session.add(org)
+        await session.flush()
+        await set_tenant(session, str(org.id))
+        # No config anywhere → public → visible to a user with unrelated masks.
+        p = Folder(name="Public", org_id=org.id, dot_path="Public")
+        child = Folder(name="Child", org_id=org.id, dot_path="Public.Child", parent_id=p.id)
+        session.add_all([p, child])
+        await session.flush()
+        assert await self._visible_names(session, org, [123]) == {"Public", "Child"}
+
+    async def test_admin_view_unfiltered(self, session: AsyncSession) -> None:
+        org, _, _ = await _seed_tree(session)
+        # user_masks=None is the admin path: every folder returned regardless.
+        folders, total = await FolderRepository(session, org.id).list_visible_to_masks(user_masks=None)
+        assert {f.name for f in folders} == {"A", "B", "C", "D"}
+        assert total == 4

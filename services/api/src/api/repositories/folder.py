@@ -5,9 +5,8 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from sqlalchemy import bindparam, func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy import text as sql_text
-from sqlalchemy.dialects.postgresql import ARRAY, BIGINT
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.models.document import Folder
@@ -35,6 +34,31 @@ def _ancestor_dot_paths(dot_path: str) -> list[str]:
     return [".".join(parts[:i]) for i in range(1, len(parts))]
 
 
+def _effective_masks_from_map(folder: Folder, by_dot_path: dict[str, Folder]) -> list[int]:
+    """Resolve a folder's effective view masks using an in-memory folder map.
+
+    The bulk equivalent of ``FolderRepository.effective_view_masks`` (no
+    per-folder query): own masks when the folder has its own viewer config,
+    else the nearest configured ancestor's, else empty (public within the org).
+    """
+    if folder.viewer_permissions_config is not None:
+        return folder.view_permission_masks or []
+    for prefix in reversed(_ancestor_dot_paths(folder.dot_path)):  # nearest ancestor first
+        ancestor = by_dot_path.get(prefix)
+        if ancestor is not None and ancestor.viewer_permissions_config is not None:
+            return ancestor.view_permission_masks or []
+    return []
+
+
+def _folder_visible_to(folder: Folder, by_dot_path: dict[str, Folder], user_masks: set[int]) -> bool:
+    """A folder is visible if it has no effective restriction, or one that
+    overlaps the user's masks."""
+    effective = _effective_masks_from_map(folder, by_dot_path)
+    if not effective:
+        return True
+    return bool(user_masks.intersection(effective))
+
+
 class FolderRepository:
     """Tenant-bound repository. Every query is explicitly scoped to ``org_id``
     (belt-and-suspenders alongside RLS)."""
@@ -60,33 +84,43 @@ class FolderRepository:
 
         If user_masks is None, returns all folders (admin view).
         Otherwise returns folders that either:
-          - have no view restrictions (public within the org), OR
-          - have at least one mask overlapping the user's masks (PostgreSQL `&&`)
+          - have no EFFECTIVE view restrictions (public within the org), OR
+          - have at least one effective mask overlapping the user's masks
+
+        Visibility uses *effective* masks: a folder with no viewer config of its
+        own inherits the nearest configured ancestor (mirroring how documents
+        inherit their folder). So a folder under a restricted parent is hidden
+        even if it defines no restriction itself. Resolution is done in Python
+        over the org's full folder set — inheritance needs every ancestor
+        anyway, and folder names may contain LIKE metacharacters that make a
+        column-derived SQL LIKE pattern unsafe. Folder counts per org are modest.
 
         Pagination is optional — when offset/limit are omitted, all matching
         rows are returned (used internally by document permission filtering).
         """
-        base = select(Folder).where(Folder.org_id == self._org_id)
-
-        if user_masks is not None:
-            masks_param = bindparam("user_masks", value=user_masks, type_=ARRAY(BIGINT))
-            base = base.where(
-                or_(
-                    func.coalesce(func.array_length(Folder.view_permission_masks, 1), 0) == 0,
-                    Folder.view_permission_masks.op("&&")(masks_param),
+        all_folders = list(
+            (
+                await self._session.execute(
+                    select(Folder).where(Folder.org_id == self._org_id).order_by(Folder.dot_path)
                 )
             )
+            .scalars()
+            .all()
+        )
 
-        total = (await self._session.execute(select(func.count()).select_from(base.subquery()))).scalar_one()
+        if user_masks is None:
+            visible = all_folders  # admin view: no restriction
+        else:
+            by_dot_path = {f.dot_path: f for f in all_folders}
+            user_set = set(user_masks)
+            visible = [f for f in all_folders if _folder_visible_to(f, by_dot_path, user_set)]
 
-        query = base.order_by(Folder.dot_path)
+        total = len(visible)
         if offset is not None:
-            query = query.offset(offset)
+            visible = visible[offset:]
         if limit is not None:
-            query = query.limit(limit)
-
-        result = await self._session.execute(query)
-        return list(result.scalars().all()), total
+            visible = visible[:limit]
+        return visible, total
 
     async def list_children(self, parent_id: uuid.UUID | None) -> list[Folder]:
         query = (
