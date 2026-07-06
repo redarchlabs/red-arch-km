@@ -14,6 +14,7 @@ from brain_sdk.embedding.openai_provider import OpenAIEmbeddingProvider
 from brain_sdk.extraction.triplet_extractor import TripletExtractor
 from brain_sdk.facts.agent import FactAgent
 from brain_sdk.facts.digest import DigestBuilder
+from brain_sdk.facts.doc_profiles import DocumentProfiler
 from brain_sdk.facts.extraction import ClaimExtractor
 from brain_sdk.facts.neo4j_fact_store import Neo4jFactStore
 from brain_sdk.facts.pipeline import FactIngestPipeline
@@ -52,6 +53,7 @@ class Stores:
         self._resolver: EntityResolver | None = None
         self._claim_extractor: ClaimExtractor | None = None
         self._fact_pipeline: FactIngestPipeline | None = None
+        self._document_profiler: DocumentProfiler | None = None
         self._predicate_resolver: PredicateResolver | None = None
         self._fact_schema_ready = False
 
@@ -184,6 +186,19 @@ class Stores:
                         model_name=self._settings.resolved_agent_model,
                     )
         return self._fact_pipeline
+
+    @property
+    def document_profiler(self) -> DocumentProfiler:
+        """Type-classifier + per-document brief for conditioned extraction.
+
+        Shares the fact engine's LLM so the brief pass reuses one configured
+        provider; the profiler runs the brief only when there is sample text.
+        """
+        if self._document_profiler is None:
+            with self._lock:
+                if self._document_profiler is None:
+                    self._document_profiler = DocumentProfiler(self.llm)
+        return self._document_profiler
 
     def ensure_fact_schema(self) -> None:
         """Create fact-store constraints/indexes once (idempotent)."""

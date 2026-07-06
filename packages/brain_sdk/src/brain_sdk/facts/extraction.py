@@ -16,10 +16,14 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from brain_sdk.facts.models import ObjectType
 from brain_sdk.facts.predicates import PredicateRegistry
 from brain_sdk.llm.protocol import LLMClient, LLMMessage
+
+if TYPE_CHECKING:
+    from brain_sdk.facts.doc_profiles import DocumentProfile
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +91,38 @@ def _build_system_prompt(registry: PredicateRegistry, entity_types: tuple[str, .
     )
 
 
+def _profile_suffix(profile: DocumentProfile) -> str:
+    """Per-document conditioning appended to the base system prompt.
+
+    Steers the extractor toward the predicates/entities that make this document
+    class queryable, and (when a brief ran) toward the document's central
+    entities — without narrowing the open-domain contract of the base prompt.
+    """
+    parts: list[str] = []
+    if profile.doc_type and profile.doc_type != "generic":
+        parts.append(f"This document is a {profile.doc_type.replace('_', ' ')}.")
+    if profile.guidance:
+        parts.append(profile.guidance)
+    if profile.priority_predicates:
+        parts.append(
+            "Strongly prefer these predicates when they apply: "
+            f"[{', '.join(profile.priority_predicates)}]."
+        )
+    if profile.entity_types:
+        parts.append(f"Entities here are usually of type: [{', '.join(profile.entity_types)}].")
+    if profile.central_entities:
+        parts.append(
+            "The document is primarily about these entities — extract everything asserted about "
+            f"them: [{', '.join(profile.central_entities)}]."
+        )
+    if profile.key_points:
+        bullets = "; ".join(profile.key_points)
+        parts.append(f"Known key facts to ensure are captured: {bullets}.")
+    if not parts:
+        return ""
+    return "\n\nDocument context:\n" + " ".join(parts)
+
+
 class ClaimExtractor:
     """Extract claim candidates from text via a provider-agnostic LLM."""
 
@@ -104,12 +140,13 @@ class ClaimExtractor:
         self._max_tokens = max_tokens
         self._system = _build_system_prompt(self._registry, entity_types)
 
-    def extract(self, text: str) -> list[ClaimCandidate]:
+    def extract(self, text: str, profile: DocumentProfile | None = None) -> list[ClaimCandidate]:
         if not text.strip():
             return []
+        system = self._system if profile is None else self._system + _profile_suffix(profile)
         try:
             raw = self._llm.complete(
-                [LLMMessage("system", self._system), LLMMessage("user", text)],
+                [LLMMessage("system", system), LLMMessage("user", text)],
                 temperature=0.1,
                 max_tokens=self._max_tokens,
                 json_object=True,

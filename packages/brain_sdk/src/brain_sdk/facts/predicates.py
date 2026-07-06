@@ -76,6 +76,12 @@ DEFAULT_PREDICATES: tuple[PredicateSpec, ...] = (
     ),
     PredicateSpec("manages", "manages", Cardinality.MULTI, inverse="reports_to", aliases=("manager of", "leads")),
     PredicateSpec("ceo_of", "CEO of", Cardinality.FUNCTIONAL, aliases=("chief executive of",)),
+    PredicateSpec(
+        "holds_title",
+        "holds title",
+        Cardinality.FUNCTIONAL,
+        aliases=("has title", "title is", "serves as", "holds position", "position is", "has role", "role is"),
+    ),
     PredicateSpec("acquired", "acquired", Cardinality.MULTI, aliases=("bought", "purchased", "took over")),
     PredicateSpec("authored", "authored", Cardinality.MULTI, aliases=("wrote", "author of", "written by")),
     PredicateSpec(
