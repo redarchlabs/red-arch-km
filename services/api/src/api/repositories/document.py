@@ -13,13 +13,18 @@ from api.models.document import Document, Tag
 
 
 class DocumentRepository:
-    def __init__(self, session: AsyncSession) -> None:
+    """Tenant-bound repository. Every query is explicitly scoped to ``org_id``
+    (belt-and-suspenders alongside RLS): correctness never depends on the DB
+    role or the ``app.current_tenant_id`` GUC being in effect."""
+
+    def __init__(self, session: AsyncSession, org_id: uuid.UUID) -> None:
         self._session = session
+        self._org_id = org_id
 
     async def get(self, document_id: uuid.UUID) -> Document | None:
         result = await self._session.execute(
             select(Document)
-            .where(Document.id == document_id)
+            .where(Document.id == document_id, Document.org_id == self._org_id)
             .options(selectinload(Document.tags), selectinload(Document.folder))
         )
         return result.scalar_one_or_none()
@@ -27,10 +32,10 @@ class DocumentRepository:
     async def get_by_key(self, document_key: str) -> Document | None:
         """Resolve a document by its ``document_key`` (the id shared with the
         vector store). Chat/search sources reference documents by key, so this
-        maps a key back to the canonical Postgres row. RLS scopes to the org."""
+        maps a key back to the canonical Postgres row. Scoped to the org."""
         result = await self._session.execute(
             select(Document)
-            .where(Document.document_key == document_key)
+            .where(Document.document_key == document_key, Document.org_id == self._org_id)
             .options(selectinload(Document.tags), selectinload(Document.folder))
         )
         return result.scalar_one_or_none()
@@ -53,7 +58,7 @@ class DocumentRepository:
         those unfiled documents so they are not silently invisible; without it,
         docs created without a folder would never appear in any list.
         """
-        query = select(Document).options(selectinload(Document.tags))
+        query = select(Document).where(Document.org_id == self._org_id).options(selectinload(Document.tags))
 
         if folder_ids is not None:
             folder_filter = Document.folder_id.in_(folder_ids)
@@ -72,7 +77,6 @@ class DocumentRepository:
         self,
         *,
         title: str,
-        org_id: uuid.UUID,
         text: str | None = None,
         description: str | None = None,
         folder_id: uuid.UUID | None = None,
@@ -83,7 +87,7 @@ class DocumentRepository:
     ) -> Document:
         doc = Document(
             title=title,
-            org_id=org_id,
+            org_id=self._org_id,
             text=text,
             description=description,
             folder_id=folder_id,
@@ -96,7 +100,9 @@ class DocumentRepository:
         await self._session.flush()
 
         if tag_ids:
-            tag_result = await self._session.execute(select(Tag).where(Tag.id.in_(tag_ids)))
+            tag_result = await self._session.execute(
+                select(Tag).where(Tag.id.in_(tag_ids), Tag.org_id == self._org_id)
+            )
             doc.tags = list(tag_result.scalars().all())
             await self._session.flush()
 
