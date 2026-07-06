@@ -7,8 +7,10 @@ routers/memberships.py — site admins reach any org there via X-Org-ID.
 
 from __future__ import annotations
 
+import json
 import time
 import uuid
+from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -22,6 +24,10 @@ from api.dependencies import get_db, get_redis
 from api.repositories.user import UserRepository
 from api.schemas.admin import (
     AdminUserUpdate,
+    BeatScheduleEntry,
+    BeatStatus,
+    CeleryQueueItem,
+    CeleryStatusRead,
     ComponentStatus,
     SystemStatusRead,
     UserMembershipSummary,
@@ -34,6 +40,11 @@ router = APIRouter()
 
 # Celery's default queue is a Redis list named after the queue ("celery").
 _CELERY_QUEUE_NAME = "celery"
+# Keys the worker's beat_heartbeat task writes (see worker/tasks/monitoring.py).
+_BEAT_HEARTBEAT_KEY = "celery:beat:heartbeat"
+_BEAT_SCHEDULE_KEY = "celery:beat:schedule"
+# Bound how many queue messages we deserialize for the console peek.
+_QUEUE_PEEK_LIMIT = 50
 
 
 @router.get("/users", response_model=PaginatedResponse[UserRead])
@@ -169,4 +180,91 @@ async def system_status(
             "brain_api": await _probe_brain_api(settings),
             "worker_queue": await _probe_celery_queue(redis),
         },
+    )
+
+
+def _parse_celery_message(raw: str) -> CeleryQueueItem:
+    """Pull the human-relevant fields out of a Celery task envelope (protocol v2).
+
+    A malformed message must still appear in the list (so the operator sees the
+    queue isn't empty) rather than break the whole response.
+    """
+    try:
+        headers = (json.loads(raw).get("headers") or {}) if raw else {}
+    except (ValueError, TypeError):
+        return CeleryQueueItem()
+    return CeleryQueueItem(
+        task=headers.get("task"),
+        id=headers.get("id"),
+        eta=headers.get("eta"),
+        args=headers.get("argsrepr"),
+        kwargs=headers.get("kwargsrepr"),
+    )
+
+
+async def _beat_status(redis: Redis) -> tuple[BeatStatus, list[BeatScheduleEntry]]:
+    """Read the beat heartbeat + published schedule the worker stamps into Redis."""
+    try:
+        raw = await redis.get(_BEAT_HEARTBEAT_KEY)
+        raw_schedule = await redis.get(_BEAT_SCHEDULE_KEY)
+    except Exception as e:  # noqa: BLE001 — status endpoint must report, not raise
+        return BeatStatus(status="down", detail=str(e)), []
+
+    schedule: list[BeatScheduleEntry] = []
+    if raw_schedule:
+        try:
+            schedule = [BeatScheduleEntry(**entry) for entry in json.loads(raw_schedule)]
+        except (ValueError, TypeError):
+            schedule = []
+
+    if not raw:
+        return BeatStatus(status="down", detail="no heartbeat — celery beat is not running"), schedule
+
+    try:
+        payload = json.loads(raw)
+        last = datetime.fromisoformat(payload["ts"])
+        interval = float(payload.get("interval", 15))
+    except (ValueError, TypeError, KeyError) as e:
+        return BeatStatus(status="down", detail=f"unreadable heartbeat: {e}"), schedule
+
+    age = (datetime.now(UTC) - last).total_seconds()
+    # Allow a few missed ticks before calling it stale (clock skew, GC pauses).
+    threshold = max(60.0, interval * 3)
+    ok = age <= threshold
+    return (
+        BeatStatus(
+            status="ok" if ok else "stale",
+            last_tick=payload["ts"],
+            age_seconds=round(age, 1),
+            detail=None if ok else f"last tick {round(age)}s ago (expected every {round(interval)}s)",
+        ),
+        schedule,
+    )
+
+
+@router.get("/celery", response_model=CeleryStatusRead)
+async def celery_status(
+    _admin: Annotated[CurrentUser, Depends(require_site_admin)],
+    redis: Annotated[Redis, Depends(get_redis)],
+) -> CeleryStatusRead:
+    """Celery beat liveness + schedule, and a peek at the queue's pending messages.
+
+    Backs the site-admin console's Celery tab: a `down` beat with a non-draining
+    queue is the operator's cue that scheduled work (workflow outbox sweeps,
+    document ingest) has stalled.
+    """
+    try:
+        depth = int(await redis.llen(_CELERY_QUEUE_NAME))  # type: ignore[arg-type]  # sync/async union
+        raw_items = list(await redis.lrange(_CELERY_QUEUE_NAME, 0, _QUEUE_PEEK_LIMIT - 1))  # type: ignore[misc]
+    except Exception:  # noqa: BLE001 — a broker hiccup must not 500 the console
+        depth, raw_items = 0, []
+    items = [_parse_celery_message(r) for r in raw_items]
+    beat, schedule = await _beat_status(redis)
+    return CeleryStatusRead(
+        queue_name=_CELERY_QUEUE_NAME,
+        depth=depth,
+        items=items,
+        truncated=depth > len(items),
+        beat=beat,
+        schedule=schedule,
     )

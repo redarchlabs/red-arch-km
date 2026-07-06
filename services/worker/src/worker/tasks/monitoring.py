@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import redis as redis_sync
@@ -48,7 +48,7 @@ def _schedule_snapshot() -> list[dict[str, Any]]:
 def beat_heartbeat() -> None:
     """Stamp beat liveness + the schedule snapshot into Redis for the console."""
     client = _broker_redis()
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     payload = json.dumps({"ts": now, "interval": BEAT_HEARTBEAT_INTERVAL})
     # TTL is a backstop: if beat dies the key disappears a few ticks later even
     # if nothing rewrites it, so the console reads "down" rather than a frozen ts.
