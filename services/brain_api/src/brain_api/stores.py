@@ -7,10 +7,19 @@ at shutdown. Each FastAPI dependency reuses the same client instance.
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from brain_sdk.embedding.openai_provider import OpenAIEmbeddingProvider
 from brain_sdk.extraction.triplet_extractor import TripletExtractor
+from brain_sdk.facts.agent import FactAgent
+from brain_sdk.facts.digest import DigestBuilder
+from brain_sdk.facts.extraction import ClaimExtractor
+from brain_sdk.facts.neo4j_fact_store import Neo4jFactStore
+from brain_sdk.facts.pipeline import FactIngestPipeline
+from brain_sdk.facts.resolution import EntityResolver
 from brain_sdk.graph_store.neo4j_store import Neo4jGraphStore
+from brain_sdk.llm.factory import make_llm_client
+from brain_sdk.llm.protocol import LLMClient
 from brain_sdk.summarization.chunk_summarizer import ChunkSummarizer
 from brain_sdk.vector_store.qdrant_store import QdrantVectorStore
 
@@ -29,6 +38,17 @@ class Stores:
         self._embedder: OpenAIEmbeddingProvider | None = None
         self._summarizer: ChunkSummarizer | None = None
         self._extractor: TripletExtractor | None = None
+        # Fact engine (reified-claim store + provider-agnostic LLM + agent).
+        self._fact_store: Neo4jFactStore | None = None
+        self._llm: LLMClient | None = None
+        self._resolver: EntityResolver | None = None
+        self._claim_extractor: ClaimExtractor | None = None
+        self._fact_pipeline: FactIngestPipeline | None = None
+        self._fact_schema_ready = False
+
+    @property
+    def settings(self) -> BrainAPISettings:
+        return self._settings
 
     @property
     def embedder(self) -> OpenAIEmbeddingProvider:
@@ -79,10 +99,99 @@ class Stores:
             )
         return self._extractor
 
+    # ---- fact engine ----------------------------------------------------
+
+    @property
+    def fact_store(self) -> Neo4jFactStore:
+        if self._fact_store is None:
+            self._fact_store = Neo4jFactStore(
+                uri=self._settings.neo4j_uri,
+                user=self._settings.neo4j_user,
+                password=self._settings.neo4j_password,
+            )
+        return self._fact_store
+
+    @property
+    def llm(self) -> LLMClient:
+        if self._llm is None:
+            self._llm = make_llm_client(
+                provider=self._settings.llm_provider,
+                model=self._settings.resolved_agent_model,
+                api_key=self._settings.resolved_agent_api_key,
+            )
+        return self._llm
+
+    @property
+    def entity_resolver(self) -> EntityResolver:
+        if self._resolver is None:
+            self._resolver = EntityResolver(self.fact_store, self.embedder, llm=self.llm)
+        return self._resolver
+
+    @property
+    def claim_extractor(self) -> ClaimExtractor:
+        if self._claim_extractor is None:
+            self._claim_extractor = ClaimExtractor(self.llm)
+        return self._claim_extractor
+
+    @property
+    def fact_pipeline(self) -> FactIngestPipeline:
+        if self._fact_pipeline is None:
+            self._fact_pipeline = FactIngestPipeline(
+                self.claim_extractor,
+                self.entity_resolver,
+                self.fact_store,
+                model_name=self._settings.resolved_agent_model,
+            )
+        return self._fact_pipeline
+
+    def ensure_fact_schema(self) -> None:
+        """Create fact-store constraints/indexes once (idempotent)."""
+        if self._fact_schema_ready:
+            return
+        self.fact_store.ensure_schema(embedding_dim=self.embedder.dimension)
+        self._fact_schema_ready = True
+
+    def _search_passages(
+        self, query: str, limit: int, tenant_id: str, access_keys: tuple[int, ...]
+    ) -> list[dict[str, Any]]:
+        """Passage-search tool for the agent: embed + Qdrant search → payloads."""
+        query_vector = self.embedder.embed(query)
+        results = self.vector.search(
+            tenant_id=tenant_id,
+            query_vector=query_vector,
+            limit=limit,
+            access_keys=list(access_keys) or None,
+        )
+        return [
+            {
+                "document_title": r.payload.get("document_title", "Untitled"),
+                "document_key": r.payload.get("document_key", ""),
+                "text": r.payload.get("text", ""),
+                "score": r.score,
+            }
+            for r in results
+        ]
+
+    def make_digest_builder(self) -> DigestBuilder:
+        """Construct a DigestBuilder for (re)building community summaries."""
+        return DigestBuilder(self.fact_store, self.llm)
+
+    def make_fact_agent(self) -> FactAgent:
+        """Construct a FactAgent wired to the fact store + passage search."""
+        return FactAgent(
+            self.llm,
+            self.fact_store,
+            vector_search=self._search_passages,
+            max_iterations=self._settings.agent_max_iterations,
+        )
+
     async def close(self) -> None:
         if self._graph is not None:
             self._graph.close()
             self._graph = None
+        if self._fact_store is not None:
+            self._fact_store.close()
+            self._fact_store = None
         logger.info("Closed brain-api stores")
 
 

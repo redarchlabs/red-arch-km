@@ -3,27 +3,39 @@
 import {
   ArrowDown,
   ArrowUp,
+  FilePlus2,
   FileText,
   Folder as FolderIcon,
   FolderPlus,
   LayoutGrid,
   List as ListIcon,
+  Loader2,
+  Pencil,
   Rows3,
   Settings2,
   SquareArrowOutUpRight,
+  TextCursorInput,
   Trash2,
   Upload,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type CellComponentProps,
+  Grid,
+  List,
+  type RowComponentProps,
+} from "react-window";
 
 import { type MenuItem, useRowMenu } from "@/components/common/ActionMenu";
 import { DocumentProperties } from "@/components/documents/DocumentProperties";
 import { DocumentUpload } from "@/components/documents/DocumentUpload";
+import { MarkdownEditor } from "@/components/documents/MarkdownEditor";
 import { FolderCreate } from "@/components/folders/FolderCreate";
 import { FolderProperties } from "@/components/folders/FolderProperties";
-import { deleteDocument, listDocuments } from "@/lib/api/documents";
-import { deleteFolder } from "@/lib/api/folders";
+import { Badge } from "@/components/ui/badge";
+import { deleteDocument, listDocuments, updateDocument } from "@/lib/api/documents";
+import { deleteFolder, updateFolder } from "@/lib/api/folders";
 import { formatBytes, formatDate } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { Document, Folder } from "@/types";
@@ -32,6 +44,20 @@ type ViewMode = "details" | "list" | "large" | "small";
 type SortKey = "name" | "modified" | "size" | "type";
 type SortDir = "asc" | "desc";
 
+// Fixed row/cell metrics for the virtualizer (react-window needs known sizes).
+const DETAILS_ROW_H = 32;
+const LIST_ROW_H = 34;
+const SMALL_CELL_H = 92;
+const LARGE_CELL_H = 116;
+// Minimum cell width per grid view, used to derive the responsive column count.
+const MIN_CELL_W: Record<"list" | "small" | "large", number> = {
+  list: 220,
+  small: 104,
+  large: 132,
+};
+// Shared column template so the details header and rows stay aligned.
+const DETAILS_COLS = "minmax(120px,1fr) 150px 90px 170px 90px";
+
 interface ExplorerItem {
   id: string;
   kind: "folder" | "doc";
@@ -39,13 +65,34 @@ interface ExplorerItem {
   type: string;
   modified: string | null;
   size: number | null;
+  /** Processing status for docs; undefined for folders. */
+  status?: Document["processing_status"];
   folder?: Folder;
   doc?: Document;
+}
+
+/** True while a document is still being extracted/indexed. */
+function isProcessing(status: Document["processing_status"]): boolean {
+  return status === "PENDING" || status === "PROCESSING";
+}
+
+/** Compact status badge shown in the file browser; nothing once ready. */
+function StatusBadge({ status }: { status: Document["processing_status"] }) {
+  if (status === "SUCCESS") return null;
+  if (status === "FAILED") return <Badge variant="destructive">Failed</Badge>;
+  return (
+    <Badge variant="secondary" className="gap-1">
+      <Loader2 className="h-3 w-3 animate-spin" />
+      Processing
+    </Badge>
+  );
 }
 
 type DialogState =
   | { type: "subfolder"; folder: Folder }
   | { type: "upload"; folder: Folder }
+  | { type: "newMarkdown"; folder: Folder }
+  | { type: "editDoc"; doc: Document }
   | { type: "folderProps"; folder: Folder }
   | { type: "docProps"; doc: Document }
   | null;
@@ -53,6 +100,60 @@ type DialogState =
 function extOf(title: string): string {
   const m = /\.([a-z0-9]+)$/i.exec(title.trim());
   return m ? m[1]!.toUpperCase() : "Document";
+}
+
+// Text originals we can round-trip through the Markdown editor. Detection is by
+// extension (the list has no body); authored docs get a `.md` name on create,
+// so they surface "Edit" too. Non-text originals (pdf/docx) are read-only here.
+const _MARKDOWN_EDITABLE_EXTS = new Set(["md", "markdown", "txt"]);
+function isMarkdownEditable(title: string): boolean {
+  const m = /\.([a-z0-9]+)$/i.exec(title.trim());
+  return m ? _MARKDOWN_EDITABLE_EXTS.has(m[1]!.toLowerCase()) : false;
+}
+
+/**
+ * Prompt for a new name and rename a folder or document in place. Uses the same
+ * lightweight browser dialogs as Delete's confirm(); a null/blank/unchanged name
+ * is a no-op. Folder names cannot contain "." (matches FolderProperties' rule).
+ */
+async function renameEntry(
+  kind: "folder" | "doc",
+  id: string,
+  currentName: string,
+  onDone: () => void,
+): Promise<void> {
+  const next = window.prompt(`Rename "${currentName}" to:`, currentName);
+  if (next == null) return;
+  const trimmed = next.trim();
+  if (!trimmed || trimmed === currentName) return;
+  if (kind === "folder" && trimmed.includes(".")) {
+    window.alert("Folder names cannot contain '.'");
+    return;
+  }
+  try {
+    if (kind === "folder") await updateFolder(id, { name: trimmed });
+    else await updateDocument(id, { title: trimmed });
+    onDone();
+  } catch (e) {
+    window.alert(e instanceof Error ? e.message : "Rename failed");
+  }
+}
+
+/** Track a container's pixel size so the virtualizer can fill it exactly. */
+function useElementSize() {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [size, setSize] = useState({ width: 0, height: 0 });
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const observer = new ResizeObserver(([entry]) => {
+      const rect = entry?.contentRect;
+      if (rect) setSize({ width: rect.width, height: rect.height });
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+  return { ref, ...size };
 }
 
 interface FolderContentsProps {
@@ -71,26 +172,57 @@ export function FolderContents({ folder, folders, onOpenFolder, onChanged }: Fol
   const [sortKey, setSortKey] = useState<SortKey>("name");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
   const [dialog, setDialog] = useState<DialogState>(null);
+  const [error, setError] = useState<string | null>(null);
 
-  const loadDocs = useCallback(async () => {
-    if (!folder) {
-      setDocs([]);
-      return;
-    }
-    setLoading(true);
-    try {
-      const res = await listDocuments(1, 500, folder.id);
-      setDocs(res.items);
-    } catch {
-      setDocs([]);
-    } finally {
-      setLoading(false);
-    }
-  }, [folder]);
+  // `silent` refreshes (used by polling) skip the loading spinner and keep the
+  // current rows on error so the list doesn't flicker or blank out.
+  const loadDocs = useCallback(
+    async (silent = false) => {
+      if (!folder) {
+        setDocs([]);
+        return;
+      }
+      if (!silent) setLoading(true);
+      try {
+        // The API caps page_size at 200 (PaginationParams), so pull every page
+        // and accumulate — the list is virtualized, so holding all rows in
+        // memory is cheap and the user can scroll the whole folder.
+        const pageSize = 200;
+        const first = await listDocuments(1, pageSize, folder.id);
+        const all = [...first.items];
+        const totalPages = Math.max(1, Math.ceil(first.total / pageSize));
+        for (let page = 2; page <= totalPages; page += 1) {
+          const next = await listDocuments(page, pageSize, folder.id);
+          if (next.items.length === 0) break; // safety against a shifting total
+          all.push(...next.items);
+        }
+        setDocs(all);
+        setError(null);
+      } catch (e) {
+        // Surface the failure instead of masking it as an empty folder.
+        if (!silent) {
+          setDocs([]);
+          setError(e instanceof Error ? e.message : "Failed to load documents");
+        }
+      } finally {
+        if (!silent) setLoading(false);
+      }
+    },
+    [folder],
+  );
 
   useEffect(() => {
     void loadDocs();
   }, [loadDocs]);
+
+  // While any document is still processing, poll quietly so its status flips to
+  // ready (or failed) without a manual refresh. Stops once nothing is pending.
+  const anyProcessing = useMemo(() => docs.some((d) => isProcessing(d.processing_status)), [docs]);
+  useEffect(() => {
+    if (!anyProcessing) return;
+    const timer = setInterval(() => void loadDocs(true), 4000);
+    return () => clearInterval(timer);
+  }, [anyProcessing, loadDocs]);
 
   const reload = useCallback(() => {
     void loadDocs();
@@ -119,6 +251,7 @@ export function FolderContents({ folder, folders, onOpenFolder, onChanged }: Fol
       type: extOf(d.title),
       modified: d.created_at,
       size: d.size_bytes,
+      status: d.processing_status,
       doc: d,
     }));
 
@@ -146,6 +279,41 @@ export function FolderContents({ folder, folders, onOpenFolder, onChanged }: Fol
       setSortDir("asc");
     }
   };
+
+  // Background menu for right-clicking the empty whitespace of the browser.
+  // Row/cell menus call stopPropagation, so this only fires on empty space and
+  // offers folder-level actions on the currently open folder.
+  const bgMenu = useRowMenu(
+    folder
+      ? [
+          {
+            label: "New subfolder",
+            icon: <FolderPlus className="h-4 w-4" />,
+            onSelect: () => setDialog({ type: "subfolder", folder }),
+          },
+          {
+            label: "New Markdown file",
+            icon: <FilePlus2 className="h-4 w-4" />,
+            onSelect: () => setDialog({ type: "newMarkdown", folder }),
+          },
+          {
+            label: "Upload document here",
+            icon: <Upload className="h-4 w-4" />,
+            onSelect: () => setDialog({ type: "upload", folder }),
+          },
+          {
+            label: "Rename",
+            icon: <TextCursorInput className="h-4 w-4" />,
+            onSelect: () => void renameEntry("folder", folder.id, folder.name, reload),
+          },
+          {
+            label: "Properties",
+            icon: <Settings2 className="h-4 w-4" />,
+            onSelect: () => setDialog({ type: "folderProps", folder }),
+          },
+        ]
+      : [],
+  );
 
   if (!folder) {
     return (
@@ -175,6 +343,15 @@ export function FolderContents({ folder, folders, onOpenFolder, onChanged }: Fol
             className="rounded p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
           >
             <FolderPlus className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            aria-label="New Markdown file"
+            title="New Markdown file"
+            onClick={() => setDialog({ type: "newMarkdown", folder })}
+            className="rounded p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+          >
+            <FilePlus2 className="h-4 w-4" />
           </button>
           <button
             type="button"
@@ -219,17 +396,27 @@ export function FolderContents({ folder, folders, onOpenFolder, onChanged }: Fol
         </div>
       ) : null}
 
-      {/* Scrollable contents */}
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        {loading ? (
-          <div className="p-4 text-sm text-muted-foreground">Loading…</div>
-        ) : items.length === 0 ? (
-          <div className="p-8 text-center text-sm text-muted-foreground">This folder is empty.</div>
-        ) : view === "details" ? (
-          <DetailsView items={items} sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} onOpen={openItem} onAction={setDialog} onDelete={reload} />
-        ) : (
-          <IconsView items={items} view={view} onOpen={openItem} onAction={setDialog} onDelete={reload} />
-        )}
+      {/* Contents — each view owns its own virtualized scroll region so a
+          folder with thousands of items renders only the visible rows.
+          Right-clicking the whitespace here opens the folder background menu. */}
+      <div className="flex min-h-0 flex-1 flex-col" onContextMenu={bgMenu.open}>
+        {bgMenu.menu}
+        {error ? (
+          <div className="m-3 shrink-0 rounded border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+            {error}
+          </div>
+        ) : null}
+        <div className="min-h-0 flex-1">
+          {loading ? (
+            <div className="p-4 text-sm text-muted-foreground">Loading…</div>
+          ) : items.length === 0 ? (
+            <div className="p-8 text-center text-sm text-muted-foreground">This folder is empty.</div>
+          ) : view === "details" ? (
+            <DetailsView items={items} sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} onOpen={openItem} onAction={setDialog} onDelete={reload} />
+          ) : (
+            <GridView items={items} view={view} onOpen={openItem} onAction={setDialog} onDelete={reload} />
+          )}
+        </div>
       </div>
 
       {/* Hoisted dialogs */}
@@ -238,6 +425,18 @@ export function FolderContents({ folder, folders, onOpenFolder, onChanged }: Fol
       ) : null}
       {dialog?.type === "upload" ? (
         <DocumentUpload open defaultFolderId={dialog.folder.id} onClose={() => setDialog(null)} onCreated={reload} />
+      ) : null}
+      {dialog?.type === "newMarkdown" ? (
+        <MarkdownEditor open defaultFolderId={dialog.folder.id} onClose={() => setDialog(null)} onSaved={reload} />
+      ) : null}
+      {dialog?.type === "editDoc" ? (
+        <MarkdownEditor
+          open
+          documentId={dialog.doc.id}
+          initialTitle={dialog.doc.title}
+          onClose={() => setDialog(null)}
+          onSaved={reload}
+        />
       ) : null}
       {dialog?.type === "folderProps" ? (
         <FolderProperties folder={dialog.folder} open onClose={() => setDialog(null)} onSaved={reload} />
@@ -294,6 +493,11 @@ function useItemMenu(
             onSelect: () => onAction({ type: "subfolder", folder: item.folder! }),
           },
           {
+            label: "New Markdown file",
+            icon: <FilePlus2 className="h-4 w-4" />,
+            onSelect: () => onAction({ type: "newMarkdown", folder: item.folder! }),
+          },
+          {
             label: "Upload document here",
             icon: <Upload className="h-4 w-4" />,
             onSelect: () => onAction({ type: "upload", folder: item.folder! }),
@@ -305,12 +509,26 @@ function useItemMenu(
           },
         ]
       : [
+          ...(item.doc && isMarkdownEditable(item.name)
+            ? [
+                {
+                  label: "Edit",
+                  icon: <Pencil className="h-4 w-4" />,
+                  onSelect: () => onAction({ type: "editDoc", doc: item.doc! }),
+                },
+              ]
+            : []),
           {
             label: "Properties",
             icon: <Settings2 className="h-4 w-4" />,
             onSelect: () => onAction({ type: "docProps", doc: item.doc! }),
           },
         ]),
+    {
+      label: "Rename",
+      icon: <TextCursorInput className="h-4 w-4" />,
+      onSelect: () => void renameEntry(item.kind, item.id, item.name, onDelete),
+    },
     {
       label: "Delete",
       icon: <Trash2 className="h-4 w-4" />,
@@ -351,11 +569,15 @@ function DetailsView({
   onAction,
   onDelete,
 }: RowProps & { sortKey: SortKey; sortDir: SortDir; onSort: (k: SortKey) => void }) {
-  const header = (key: SortKey, label: string, extra?: string) => (
+  const { ref, height } = useElementSize();
+  const header = (key: SortKey, label: string, alignRight?: boolean) => (
     <button
       type="button"
       onClick={() => onSort(key)}
-      className={cn("flex items-center gap-1 py-1 text-left font-medium hover:text-foreground", extra)}
+      className={cn(
+        "flex items-center gap-1 px-3 py-1.5 font-medium hover:text-foreground",
+        alignRight ? "justify-end" : "text-left",
+      )}
     >
       {label}
       {sortKey === key ? (
@@ -364,64 +586,112 @@ function DetailsView({
     </button>
   );
   return (
-    <table className="w-full text-sm">
-      <thead className="sticky top-0 border-b bg-background text-xs text-muted-foreground">
-        <tr className="px-2">
-          <th className="px-3 text-left font-medium">{header("name", "Name")}</th>
-          <th className="px-3 text-left font-medium">{header("type", "Type")}</th>
-          <th className="px-3 text-left font-medium">{header("modified", "Modified")}</th>
-          <th className="px-3 text-right font-medium">{header("size", "Size", "ml-auto")}</th>
-        </tr>
-      </thead>
-      <tbody>
-        {items.map((item) => (
-          <DetailsRow key={`${item.kind}:${item.id}`} item={item} onOpen={onOpen} onAction={onAction} onDelete={onDelete} />
-        ))}
-      </tbody>
-    </table>
+    <div className="flex h-full flex-col text-sm">
+      {/* Fixed header (the rows below scroll under it). */}
+      <div
+        className="grid shrink-0 items-center border-b bg-background text-xs text-muted-foreground"
+        style={{ gridTemplateColumns: DETAILS_COLS }}
+      >
+        {header("name", "Name")}
+        <div className="px-3 py-1.5 font-medium">Status</div>
+        {header("type", "Type")}
+        {header("modified", "Modified")}
+        {header("size", "Size", true)}
+      </div>
+      <div ref={ref} className="min-h-0 flex-1">
+        <List
+          rowComponent={DetailsRow}
+          rowCount={items.length}
+          rowHeight={DETAILS_ROW_H}
+          rowProps={{ items, onOpen, onAction, onDelete }}
+          style={{ height, width: "100%" }}
+        />
+      </div>
+    </div>
   );
 }
 
-function DetailsRow({ item, onOpen, onAction, onDelete }: { item: ExplorerItem } & Omit<RowProps, "items">) {
+function DetailsRow({
+  index,
+  style,
+  ariaAttributes,
+  items,
+  onOpen,
+  onAction,
+  onDelete,
+}: RowComponentProps<RowProps>) {
+  const item = items[index]!;
   const { open, menu } = useItemMenu(item, onOpen, onAction, onDelete);
   return (
-    <tr
+    <div
+      {...ariaAttributes}
+      style={{ ...style, gridTemplateColumns: DETAILS_COLS }}
       onDoubleClick={() => onOpen(item)}
       onContextMenu={open}
-      className="cursor-default border-b border-border/50 hover:bg-accent/50"
+      className="grid cursor-default items-center border-b border-border/50 text-sm hover:bg-accent/50"
     >
-      <td className="px-3 py-1.5">
-        <span className="flex items-center gap-2">
-          <ItemIcon item={item} className="h-4 w-4 shrink-0" />
-          <span className="truncate">{item.name}</span>
-          {menu}
-        </span>
-      </td>
-      <td className="px-3 py-1.5 text-muted-foreground">{item.type}</td>
-      <td className="px-3 py-1.5 text-muted-foreground">{item.modified ? formatDate(item.modified) : "—"}</td>
-      <td className="px-3 py-1.5 text-right text-muted-foreground">
+      <span className="flex min-w-0 items-center gap-2 px-3">
+        <ItemIcon item={item} className="h-4 w-4 shrink-0" />
+        <span className="truncate">{item.name}</span>
+        {menu}
+      </span>
+      <span className="px-3">{item.status ? <StatusBadge status={item.status} /> : null}</span>
+      <span className="truncate px-3 text-muted-foreground">{item.type}</span>
+      <span className="truncate px-3 text-muted-foreground">
+        {item.modified ? formatDate(item.modified) : "—"}
+      </span>
+      <span className="px-3 text-right text-muted-foreground">
         {item.size != null ? formatBytes(item.size) : "—"}
-      </td>
-    </tr>
+      </span>
+    </div>
   );
 }
 
-function IconsView({ items, view, onOpen, onAction, onDelete }: RowProps & { view: ViewMode }) {
-  const large = view === "large";
+interface CellProps extends RowProps {
+  columnCount: number;
+  view: ViewMode;
+}
+
+/** Virtualized grid for the list / small-icon / large-icon views. */
+function GridView({ items, view, onOpen, onAction, onDelete }: RowProps & { view: ViewMode }) {
+  const { ref, width, height } = useElementSize();
+  const kind = view as "list" | "small" | "large";
+  const minCol = MIN_CELL_W[kind];
+  const rowHeight = view === "list" ? LIST_ROW_H : view === "large" ? LARGE_CELL_H : SMALL_CELL_H;
+  // Fit as many min-width columns as the measured width allows (≥ 1).
+  const columnCount = Math.max(1, Math.floor((width || minCol) / minCol));
+  const rowCount = Math.ceil(items.length / columnCount);
   return (
-    <div
-      className={cn(
-        "grid gap-2 p-3",
-        view === "list"
-          ? "grid-cols-[repeat(auto-fill,minmax(200px,1fr))]"
-          : large
-            ? "grid-cols-[repeat(auto-fill,minmax(120px,1fr))]"
-            : "grid-cols-[repeat(auto-fill,minmax(90px,1fr))]",
-      )}
-    >
-      {items.map((item) => (
-        <IconCell key={`${item.kind}:${item.id}`} item={item} view={view} onOpen={onOpen} onAction={onAction} onDelete={onDelete} />
-      ))}
+    <div ref={ref} className="h-full">
+      <Grid
+        cellComponent={GridCell}
+        cellProps={{ items, columnCount, view, onOpen, onAction, onDelete }}
+        columnCount={columnCount}
+        columnWidth={`${100 / columnCount}%`}
+        rowCount={rowCount}
+        rowHeight={rowHeight}
+        style={{ height, width: "100%" }}
+      />
+    </div>
+  );
+}
+
+function GridCell({
+  rowIndex,
+  columnIndex,
+  style,
+  items,
+  columnCount,
+  view,
+  onOpen,
+  onAction,
+  onDelete,
+}: CellComponentProps<CellProps>) {
+  const item = items[rowIndex * columnCount + columnIndex];
+  if (!item) return <div style={style} />; // trailing slot on the last row
+  return (
+    <div style={style} className="p-1">
+      <IconCell item={item} view={view} onOpen={onOpen} onAction={onAction} onDelete={onDelete} />
     </div>
   );
 }
@@ -435,10 +705,11 @@ function IconCell({ item, view, onOpen, onAction, onDelete }: { item: ExplorerIt
         type="button"
         onDoubleClick={() => onOpen(item)}
         onContextMenu={open}
-        className="flex items-center gap-2 rounded px-2 py-1 text-left text-sm hover:bg-accent/50"
+        className="flex h-full w-full items-center gap-2 rounded px-2 text-left text-sm hover:bg-accent/50"
       >
         <ItemIcon item={item} className="h-4 w-4 shrink-0" />
         <span className="truncate">{item.name}</span>
+        {item.status ? <StatusBadge status={item.status} /> : null}
         {menu}
       </button>
     );
@@ -448,10 +719,11 @@ function IconCell({ item, view, onOpen, onAction, onDelete }: { item: ExplorerIt
       type="button"
       onDoubleClick={() => onOpen(item)}
       onContextMenu={open}
-      className="flex flex-col items-center gap-1 rounded p-2 text-center hover:bg-accent/50"
+      className="flex h-full w-full flex-col items-center gap-1 rounded p-2 text-center hover:bg-accent/50"
     >
       <ItemIcon item={item} className={large ? "h-12 w-12" : "h-8 w-8"} />
       <span className={cn("w-full truncate", large ? "text-sm" : "text-xs")}>{item.name}</span>
+      {item.status && item.status !== "SUCCESS" ? <StatusBadge status={item.status} /> : null}
       {menu}
     </button>
   );

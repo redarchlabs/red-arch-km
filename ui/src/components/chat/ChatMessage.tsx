@@ -4,8 +4,10 @@ import DOMPurify from "dompurify";
 import Link from "next/link";
 import { Fragment } from "react";
 
-import type { ChatSource } from "@/lib/api/search";
+import type { AgentTraceStep, ChatSource } from "@/lib/api/search";
 import { cn } from "@/lib/utils";
+
+import { AgentTrace } from "./AgentTrace";
 
 export interface Message {
   /** Stable ID assigned when the message is appended; used as React key. */
@@ -14,6 +16,10 @@ export interface Message {
   content: string;
   sources?: ChatSource[];
   streaming?: boolean;
+  /** Agentic-mode reasoning trace (present only for fact-engine answers). */
+  agentTrace?: AgentTraceStep[];
+  /** Citations the answer made that no gathered evidence supported. */
+  unsupportedCitations?: string[];
 }
 
 interface ChatMessageProps {
@@ -107,6 +113,17 @@ export function ChatMessage({ message }: ChatMessageProps) {
             aria-label="streaming"
             className="ml-1 inline-block h-2 w-2 animate-pulse rounded-full bg-current align-middle"
           />
+        ) : null}
+
+        {message.unsupportedCitations && message.unsupportedCitations.length > 0 ? (
+          <p className="mt-2 text-xs text-amber-600 dark:text-amber-500">
+            ⚠ Some citations ({message.unsupportedCitations.join(", ")}) were not grounded in
+            retrieved evidence.
+          </p>
+        ) : null}
+
+        {!isUser && message.agentTrace ? (
+          <AgentTrace steps={message.agentTrace} live={message.streaming} />
         ) : null}
 
         {sources.length > 0 ? (

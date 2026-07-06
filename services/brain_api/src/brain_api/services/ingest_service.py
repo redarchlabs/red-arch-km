@@ -27,6 +27,8 @@ import uuid
 from typing import Any
 
 from brain_sdk.chunking.chunker import chunk_text
+from brain_sdk.facts.pipeline import Chunk
+from brain_sdk.summarization.chunk_summarizer import SummaryNode
 from brain_sdk.vector_store.protocol import VectorRecord
 from shared_config import get_tracer
 
@@ -180,7 +182,7 @@ class IngestService:
             self._stores.vector.upsert_vectors(tenant_id, [doc_record], collection_type="documents")
 
             triplet_count = 0
-            if use_knowledge_graph:
+            if use_knowledge_graph and not self._stores.settings.use_fact_engine:
                 with _tracer.start_as_current_span("extract_and_store_triplets") as span:
                     triplet_count = self._extract_and_store_triplets(
                         tenant_id=tenant_id,
@@ -190,6 +192,21 @@ class IngestService:
                         access_keys=access_keys,
                     )
                     span.set_attribute("triplet_count", triplet_count)
+
+            # New reified-claim fact engine (replaces the flat triplet path when
+            # enabled). Idempotent: the pipeline purges the document's prior
+            # claims before re-inserting.
+            if use_knowledge_graph and self._stores.settings.use_fact_engine:
+                with _tracer.start_as_current_span("extract_and_store_facts") as span:
+                    facts = self._extract_and_store_facts(
+                        tenant_id=tenant_id,
+                        document_key=document_key,
+                        chunks=chunks,
+                        tags=tags,
+                        access_keys=access_keys,
+                    )
+                    triplet_count = facts.get("claims_extracted", 0)
+                    span.set_attribute("claim_count", triplet_count)
 
             duration_ms = (time.perf_counter() - start) * 1000
             metrics.chunks_ingested.add(len(chunk_records), {"tenant_id": tenant_id})
@@ -212,7 +229,7 @@ class IngestService:
                 "triplets": triplet_count,
             }
 
-    def _safe_document_summary(self, chunk_summaries: list[str]) -> tuple[str, dict[str, Any] | None]:
+    def _safe_document_summary(self, chunk_summaries: list[str]) -> tuple[str, SummaryNode | None]:
         """Hierarchical summary + tree, with a safe fallback if the pipeline fails.
 
         Returns ``(summary, tree)`` where ``tree`` is the nested
@@ -229,13 +246,13 @@ class IngestService:
             return flat, self._synthesize_tree(flat, chunk_summaries)
 
     @staticmethod
-    def _synthesize_tree(root_summary: str, chunk_summaries: list[str]) -> dict[str, Any] | None:
+    def _synthesize_tree(root_summary: str, chunk_summaries: list[str]) -> SummaryNode | None:
         """Build a minimal two-level tree (root + one leaf per chunk summary).
 
         Used only on the fallback path where the hierarchical summariser did
         not return a tree, so the UI still renders structure.
         """
-        leaves = [{"summary": s, "children": []} for s in chunk_summaries if s]
+        leaves: list[SummaryNode] = [{"summary": s, "children": []} for s in chunk_summaries if s]
         if not leaves:
             return None
         return {"summary": root_summary, "children": leaves}
@@ -294,6 +311,30 @@ class IngestService:
             return 0
         return len(all_triplets)
 
+    def _extract_and_store_facts(
+        self,
+        *,
+        tenant_id: str,
+        document_key: str,
+        chunks: list[str],
+        tags: list[str],
+        access_keys: list[int],
+    ) -> dict[str, int]:
+        """Run the reified-claim fact pipeline over a document's chunks."""
+        self._stores.ensure_fact_schema()
+        fact_chunks = [Chunk(chunk_id=f"{document_key}#{idx}", text=text) for idx, text in enumerate(chunks)]
+        try:
+            return self._stores.fact_pipeline.ingest_document(
+                tenant_id,
+                document_key,
+                fact_chunks,
+                tags=tuple(tags),
+                access_keys=tuple(access_keys),
+            )
+        except Exception as e:
+            logger.error("Fact ingest failed for %s: %s", document_key, e)
+            return {"claims_extracted": 0}
+
     def remove_document(self, tenant_id: str, document_key: str) -> None:
         """Remove a document from both vector and graph stores."""
         try:
@@ -305,6 +346,12 @@ class IngestService:
             self._stores.graph.delete_by_document_key(tenant_id, document_key)
         except Exception as e:
             logger.error("Graph delete failed for %s: %s", document_key, e)
+
+        if self._stores.settings.use_fact_engine:
+            try:
+                self._stores.fact_store.delete_by_document_key(tenant_id, document_key)
+            except Exception as e:
+                logger.error("Fact-store delete failed for %s: %s", document_key, e)
 
     def update_metadata(
         self,
@@ -351,3 +398,8 @@ class IngestService:
             self._stores.graph.delete_tenant(tenant_id)
         except Exception as e:
             logger.error("Graph tenant delete failed for %s: %s", tenant_id, e)
+        if self._stores.settings.use_fact_engine:
+            try:
+                self._stores.fact_store.delete_tenant(tenant_id)
+            except Exception as e:
+                logger.error("Fact-store tenant delete failed for %s: %s", tenant_id, e)

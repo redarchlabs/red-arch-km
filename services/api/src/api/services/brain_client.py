@@ -144,6 +144,64 @@ class BrainAPIClient:
             async for chunk in response.aiter_bytes():
                 yield chunk
 
+    async def agent_ask(
+        self,
+        *,
+        tenant_id: str,
+        query: str,
+        chat_history: list[dict[str, str]] | None = None,
+        access_keys: list[int] | None = None,
+        tags: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Non-streaming agentic (fact-engine) query against brain-api."""
+        async with httpx.AsyncClient(timeout=180) as client:
+            response = await client.post(
+                f"{self._base_url}/api/v1/agent/ask",
+                json={
+                    "tenant_id": tenant_id,
+                    "query": query,
+                    "chat_history": chat_history or [],
+                    "access_keys": access_keys or [],
+                    "tags": tags or [],
+                },
+                headers=self._headers(),
+            )
+            response.raise_for_status()
+            return cast("dict[str, Any]", response.json())
+
+    async def agent_ask_stream(
+        self,
+        *,
+        tenant_id: str,
+        query: str,
+        chat_history: list[dict[str, str]] | None = None,
+        access_keys: list[int] | None = None,
+        tags: list[str] | None = None,
+    ) -> AsyncIterator[bytes]:
+        """Stream raw SSE bytes from brain-api's agentic /api/v1/agent/ask/stream.
+
+        Forwarded verbatim (like ``vector_chat_stream``) so the client sees the
+        agent's trace events exactly as brain-api emits them.
+        """
+        async with (
+            httpx.AsyncClient(timeout=None) as client,  # noqa: S113  # deferred: REDARCH-14 (add request timeout)
+            client.stream(
+                "POST",
+                f"{self._base_url}/api/v1/agent/ask/stream",
+                json={
+                    "tenant_id": tenant_id,
+                    "query": query,
+                    "chat_history": chat_history or [],
+                    "access_keys": access_keys or [],
+                    "tags": tags or [],
+                },
+                headers=self._headers(),
+            ) as response,
+        ):
+            response.raise_for_status()
+            async for chunk in response.aiter_bytes():
+                yield chunk
+
     async def init_tenant(self, tenant_id: str) -> dict[str, Any]:
         async with httpx.AsyncClient(timeout=60) as client:
             response = await client.post(
