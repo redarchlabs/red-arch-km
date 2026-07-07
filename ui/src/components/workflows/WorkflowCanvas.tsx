@@ -8,20 +8,10 @@ import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { layoutGraph } from "@/components/workflows/designer/autoLayout";
-import { LabeledEdge } from "@/components/workflows/designer/LabeledEdge";
 import { isValidConnection } from "@/components/workflows/designer/isValidConnection";
 import { useDesignerStore } from "@/components/workflows/designer/store";
 import { useDragAndDrop } from "@/components/workflows/designer/useDragAndDrop";
-import { ActionNode } from "@/components/workflows/nodes/ActionNode";
-import { BoundaryEventNode } from "@/components/workflows/nodes/BoundaryEventNode";
-import { ConditionNode } from "@/components/workflows/nodes/ConditionNode";
-import { DelayNode } from "@/components/workflows/nodes/DelayNode";
-import { EventNode } from "@/components/workflows/nodes/EventNode";
-import { GatewayNode } from "@/components/workflows/nodes/GatewayNode";
-import { GenericNode } from "@/components/workflows/nodes/GenericNode";
-import { SwitchNode } from "@/components/workflows/nodes/SwitchNode";
-import { TaskNode } from "@/components/workflows/nodes/TaskNode";
-import { TriggerNode } from "@/components/workflows/nodes/TriggerNode";
+import { EDGE_TYPES, NODE_TYPES } from "@/components/workflows/nodeTypes";
 
 interface WorkflowCanvasProps {
   readOnly?: boolean;
@@ -60,23 +50,6 @@ export function WorkflowCanvas({ readOnly = false }: WorkflowCanvasProps) {
     }
   }, [applyLayout, fitView]);
 
-  const nodeTypes = useMemo(
-    () => ({
-      trigger: TriggerNode,
-      task: TaskNode,
-      gateway: GatewayNode,
-      event: EventNode,
-      boundaryEvent: BoundaryEventNode,
-      action: ActionNode,
-      condition: ConditionNode,
-      switch: SwitchNode,
-      delay: DelayNode,
-      merge: GenericNode,
-      passthrough: GenericNode,
-    }),
-    [],
-  );
-  const edgeTypes = useMemo(() => ({ labeled: LabeledEdge }), []);
   const validConnection = useMemo(() => isValidConnection(nodes), [nodes]);
 
   return (
@@ -84,8 +57,8 @@ export function WorkflowCanvas({ readOnly = false }: WorkflowCanvasProps) {
       <ReactFlow
         nodes={nodes}
         edges={edges}
-        nodeTypes={nodeTypes}
-        edgeTypes={edgeTypes}
+        nodeTypes={NODE_TYPES}
+        edgeTypes={EDGE_TYPES}
         onNodesChange={readOnly ? undefined : onNodesChange}
         onEdgesChange={readOnly ? undefined : onEdgesChange}
         onConnect={readOnly ? undefined : onConnect}
