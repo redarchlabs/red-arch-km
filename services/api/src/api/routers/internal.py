@@ -230,6 +230,64 @@ async def run_workflow_timers(
             raise
 
 
+class TokenSweepResult(BaseModel):
+    """Counters returned by a token-engine sweep."""
+
+    reactivated: int = 0
+    claimed: int = 0
+    advanced: int = 0
+
+
+@router.post(
+    "/workflows/advance-tokens",
+    dependencies=[Depends(require_internal_api_key)],
+    response_model=TokenSweepResult,
+)
+async def advance_workflow_tokens(
+    settings: Annotated[Settings, Depends(get_settings)],
+    limit: Annotated[int, Query(ge=1, le=1000)] = 200,
+) -> TokenSweepResult:
+    """Drive the BPMN token engine: reactivate parked tokens whose wait elapsed
+    (timers / retries / crashed leases), then drain the active token queue.
+
+    Runs on the privileged session so the cross-org claim sees every tenant; the
+    engine downgrades to ``app_user`` + the tenant GUC per token, so each token's
+    side effects are RLS-enforced for its org. Most v2 runs complete synchronously
+    inside dispatch — this sweep exists to resume parked tokens and to make
+    progress if a synchronous drive was interrupted.
+    """
+    from api.services.email import EmailSender
+    from api.services.workflow.engine import TokenEngine
+
+    allowlist = tuple(settings.workflow_webhook_allowlist or ())
+    factory = get_session_factory(settings)
+    async with factory() as session:
+        try:
+            engine = TokenEngine(
+                session,
+                webhook_allowlist=allowlist,
+                public_base_url=settings.public_base_url,
+                email_sender=EmailSender(settings),
+            )
+            resumed = await engine.resume_due_tokens(limit=limit)
+            await session.commit()
+            totals = {"reactivated": resumed.get("reactivated", 0), "claimed": 0, "advanced": 0}
+            # Bounded drain: keep advancing until a pass claims nothing (or we hit
+            # the pass cap, leaving the rest for the next tick).
+            for _ in range(20):
+                delta = await engine.advance_tokens(limit=limit)
+                await session.commit()
+                totals["claimed"] += delta.get("claimed", 0)
+                totals["advanced"] += delta.get("advanced", 0)
+                if delta.get("claimed", 0) == 0:
+                    break
+            return TokenSweepResult(**totals)
+        except Exception:
+            await session.rollback()
+            logger.exception("workflow advance-tokens sweep failed")
+            raise
+
+
 @router.post(
     "/workflows/maintain-partitions",
     dependencies=[Depends(require_internal_api_key)],

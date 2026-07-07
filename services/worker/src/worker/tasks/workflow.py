@@ -51,6 +51,13 @@ def run_timers() -> dict[str, Any] | None:
 
 
 @app.task  # type: ignore[untyped-decorator]
+def advance_tokens(limit: int = 200) -> dict[str, Any] | None:
+    """Drive the BPMN token engine: reactivate due parked tokens + drain the
+    active token queue (resumes timers/retries and any interrupted v2 runs)."""
+    return _post("/api/internal/workflows/advance-tokens", {"limit": limit})
+
+
+@app.task  # type: ignore[untyped-decorator]
 def maintain_partitions(months_ahead: int = 2) -> None:
     """Pre-create upcoming month partitions for the workflow tables."""
     _post("/api/internal/workflows/maintain-partitions", {"months_ahead": months_ahead})
