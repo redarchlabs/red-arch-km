@@ -7,14 +7,19 @@ tables for the dashboard.
 
 from __future__ import annotations
 
+import asyncio
+import json
 import uuid
-from typing import Annotated, NoReturn
+from collections.abc import AsyncGenerator
+from typing import Annotated, Any, NoReturn
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth.dependencies import OrgContext, require_org_access, require_org_admin
 from api.config import Settings, get_settings
+from api.db import get_session_factory
 from api.dependencies import get_db
 from api.repositories.workflow import (
     WorkflowConnectionRepository,
@@ -493,3 +498,93 @@ async def complete_run_task(
     await engine.drive_run(run)
     refreshed = await run_repo.get_by_id(run_id)
     return CompleteTaskResult(run_id=run_id, status=refreshed.status if refreshed is not None else run.status)
+
+
+# --------------------------------------------------------------------------- #
+# Live run visualization — SSE stream of a run's per-node status + token positions
+# --------------------------------------------------------------------------- #
+_RUN_TERMINAL = ("succeeded", "failed", "skipped")
+
+
+async def _run_stream_snapshot(session: AsyncSession, org_id: uuid.UUID, run_id: uuid.UUID) -> dict[str, Any] | None:
+    """A snapshot for the canvas overlay: run status + a node->status map + live
+    token positions. ``None`` if the run doesn't exist (or is cross-org)."""
+    from api.repositories.workflow import WorkflowRunRepository, WorkflowTokenRepository
+
+    run_repo = WorkflowRunRepository(session, org_id)
+    run = await run_repo.get_by_id(run_id)
+    if run is None:
+        return None
+    steps = await run_repo.steps_for_run(run_id)
+    tokens = await WorkflowTokenRepository(session, org_id).list_for_run(run_id)
+
+    # Per-node status: the recorded step status wins (ordered by step_index, last
+    # wins); a node holding only a live token (e.g. parked at a gateway/user task
+    # before any step) shows running/waiting.
+    nodes: dict[str, str] = {}
+    for step in steps:
+        nodes[step.node_id] = step.status
+    for token in tokens:
+        if token.status in ("active", "running"):
+            nodes.setdefault(token.node_id, "running")
+        elif token.status == "waiting":
+            nodes.setdefault(token.node_id, "waiting")
+
+    return {
+        "run": {"id": str(run.id), "status": run.status, "dead_letter": run.dead_letter, "error": run.error},
+        "nodes": nodes,
+        "tokens": [
+            {"node_id": t.node_id, "status": t.status, "wait_kind": t.wait_kind}
+            for t in tokens
+            if t.status in ("active", "running", "waiting")
+        ],
+    }
+
+
+@router.get("/runs/{run_id}/stream")
+async def stream_run(
+    run_id: uuid.UUID,
+    ctx: Annotated[OrgContext, Depends(require_org_admin)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> StreamingResponse:
+    """Server-Sent Events stream of a run's live state for the designer overlay.
+
+    Poll-to-stream: a fresh short-lived session per tick (never pins a pool
+    connection for the stream's lifetime), emitting a ``snapshot`` frame only when
+    the state changes and a ``done`` frame when the run reaches a terminal state or
+    the cap elapses. The client falls back to ``listRuns`` polling if the stream is
+    unavailable.
+    """
+    org_id = ctx.org_id
+    poll_seconds = 1.0
+    max_ticks = 900  # ~15 min ceiling per connection
+
+    async def iterator() -> AsyncGenerator[bytes]:
+        factory = get_session_factory(settings)
+        last_signature: str | None = None
+        try:
+            for _ in range(max_ticks):
+                async with factory() as session:
+                    snapshot = await _run_stream_snapshot(session, org_id, run_id)
+                if snapshot is None:
+                    yield b'event: error\ndata: {"detail": "run not found"}\n\n'
+                    return
+                signature = json.dumps(snapshot, sort_keys=True, default=str)
+                if signature != last_signature:
+                    last_signature = signature
+                    yield f"event: snapshot\ndata: {json.dumps(snapshot, default=str)}\n\n".encode()
+                if snapshot["run"]["status"] in _RUN_TERMINAL:
+                    yield f"event: done\ndata: {json.dumps(snapshot['run'], default=str)}\n\n".encode()
+                    return
+                await asyncio.sleep(poll_seconds)
+            yield b'event: done\ndata: {"timeout": true}\n\n'
+        except asyncio.CancelledError:  # client disconnected — end quietly
+            raise
+        except Exception:  # noqa: BLE001 - never break the SSE frame contract
+            yield b'event: error\ndata: {"detail": "stream failed"}\n\n'
+
+    return StreamingResponse(
+        iterator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+    )
