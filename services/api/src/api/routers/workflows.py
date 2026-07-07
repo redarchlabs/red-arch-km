@@ -23,6 +23,8 @@ from api.repositories.workflow import (
     WorkflowVersionRepository,
 )
 from api.schemas.workflow import (
+    CompleteTaskRequest,
+    CompleteTaskResult,
     ConnectionCreate,
     ConnectionRead,
     ConnectionUpdate,
@@ -448,3 +450,46 @@ async def list_run_steps(
 ) -> list[WorkflowRunStepRead]:
     steps = await WorkflowService(session, ctx.org_id).run_steps(run_id)
     return [WorkflowRunStepRead.model_validate(s) for s in steps]
+
+
+@router.post("/runs/{run_id}/complete-task", response_model=CompleteTaskResult)
+async def complete_run_task(
+    run_id: uuid.UUID,
+    body: CompleteTaskRequest,
+    ctx: Annotated[OrgContext, Depends(require_org_access)],
+    session: Annotated[AsyncSession, Depends(get_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> CompleteTaskResult:
+    """Complete a human task a run is waiting on (the user-task inbox action).
+
+    Reactivates the parked wait token, merging any decision ``variables`` the flow
+    branches on, then advances the run. Any org member may act (the assignment
+    model is a future refinement).
+    """
+    from api.repositories.workflow import WorkflowRunRepository
+    from api.services.workflow.engine import TokenEngine
+
+    run_repo = WorkflowRunRepository(session, ctx.org_id)
+    run = await run_repo.get_by_id(run_id)
+    if run is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="run not found")
+    if run.status not in ("waiting", "running"):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="run is not awaiting a task")
+    version = await WorkflowVersionRepository(session, ctx.org_id).get(run.workflow_version_id)
+    if version is None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="workflow version missing")
+    engine = TokenEngine(
+        session,
+        webhook_allowlist=tuple(settings.workflow_webhook_allowlist or ()),
+        public_base_url=settings.public_base_url,
+        email_sender=EmailSender(settings),
+        org_encryption_key=settings.org_encryption_key.get_secret_value(),
+    )
+    signaled = await engine.signal_token(
+        run, node_id=body.node_id, variables=body.variables or None, output=body.output or None
+    )
+    if not signaled:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="no human task is waiting on this run")
+    await engine.drive_run(run)
+    refreshed = await run_repo.get_by_id(run_id)
+    return CompleteTaskResult(run_id=run_id, status=refreshed.status if refreshed is not None else run.status)
