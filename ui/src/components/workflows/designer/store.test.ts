@@ -35,6 +35,17 @@ describe("designer store", () => {
     expect(state().nodes).not.toBe(before); // new array
   });
 
+  it("applyLayout replaces node positions and stays undoable", () => {
+    const created = state().addNode("task", { x: 0, y: 0 });
+    const moved = state().nodes.map((n) =>
+      n.id === created.id ? { ...n, position: { x: 300, y: 400 } } : n,
+    );
+    state().applyLayout(moved);
+    expect(state().nodes.find((n) => n.id === created.id)?.position).toEqual({ x: 300, y: 400 });
+    store.temporal.getState().undo();
+    expect(state().nodes.find((n) => n.id === created.id)?.position).toEqual({ x: 0, y: 0 });
+  });
+
   it("deleteNodes cascades boundary-event children and touching edges", () => {
     state().setGraph(
       [

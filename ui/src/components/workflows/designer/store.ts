@@ -86,6 +86,8 @@ export interface DesignerState {
   /** Add a node of `type` at `position`; returns the created node. */
   addNode: (type: string, position: XYPosition, dataOverride?: Record<string, unknown>) => Node;
   updateNodeData: (id: string, data: Record<string, unknown>) => void;
+  /** Replace node positions from an auto-layout pass (edges untouched, undoable). */
+  applyLayout: (nodes: Node[]) => void;
   /** Delete nodes, cascading their boundary-event children and touching edges. */
   deleteNodes: (ids: string[]) => void;
   deleteEdges: (ids: string[]) => void;
@@ -133,6 +135,8 @@ const stateCreator: StateCreator<DesignerState> = (set, get) => ({
 
   updateNodeData: (id, data) =>
     set({ nodes: get().nodes.map((n) => (n.id === id ? { ...n, data } : n)) }),
+
+  applyLayout: (nodes) => set({ nodes: orderParentsFirst(nodes) }),
 
   deleteNodes: (ids) => {
     const idSet = new Set(ids);
