@@ -14,7 +14,7 @@ from api.models.org import Org
 from api.repositories.custom_entity import EntityFieldRepository
 from api.repositories.dynamic_entity import DynamicEntityRepository
 from api.schemas.custom_entity import EntityDefinitionCreate, EntityFieldCreate
-from api.schemas.form import FormConfig, FormCreate, FormFieldConfig, GenerateLinkRequest, PublicFormSubmit
+from api.schemas.form import FormConfig, FormCreate, FormSubmit, GenerateLinkRequest
 from api.services.entity_service import EntityService
 from api.services.form_service import FormLinkError, FormService, PublicFormService
 from sqlalchemy import text
@@ -59,7 +59,11 @@ async def test_concurrent_double_submit_only_one_commits(
             name="Intake",
             slug="intake",
             entity_definition_id=definition.id,
-            config=FormConfig(fields=[FormFieldConfig(slug="name"), FormFieldConfig(slug="phone")]),
+            config=FormConfig.model_validate(
+                {"version": 2, "elements": [
+                    {"type": "field", "slug": "name"}, {"type": "field", "slug": "phone"},
+                ]}
+            ),
         )
     )
     _link, token, _url, _sent = await fsvc.generate_link(
@@ -72,11 +76,11 @@ async def test_concurrent_double_submit_only_one_commits(
         await sa.execute(text("RESET ROLE"))
         await sb.execute(text("RESET ROLE"))
         # A claims the link (row locked, uncommitted), then commits.
-        await PublicFormService(sa).submit(token, PublicFormSubmit(values={"phone": "111"}))
+        await PublicFormService(sa).submit(token, FormSubmit(values={"phone": "111"}))
         await sa.commit()
         # B, running after A's commit, finds the link already submitted → rejected.
         with pytest.raises(FormLinkError):
-            await PublicFormService(sb).submit(token, PublicFormSubmit(values={"phone": "222"}))
+            await PublicFormService(sb).submit(token, FormSubmit(values={"phone": "222"}))
         await sb.rollback()
 
     # The record reflects A's submission only.
