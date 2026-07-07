@@ -290,7 +290,11 @@ class TokenEngine:
                     SET status='active', lease_owner=NULL, leased_at=NULL
                     WHERE (t.id, t.created_at) IN (
                         SELECT id, created_at FROM workflow_run_tokens
-                        WHERE (status='waiting' AND wait_kind IN ('timer','boundary','retry') AND resume_at <= :now)
+                        WHERE (
+                                status='waiting'
+                                AND wait_kind IN ('timer','boundary','retry','user_task','receive')
+                                AND resume_at <= :now
+                              )
                            OR (status='running' AND leased_at < :stale)
                         ORDER BY resume_at NULLS FIRST
                         LIMIT :lim
@@ -416,7 +420,9 @@ class TokenEngine:
             data = token.data or {}
             if data.get("_completed"):
                 output = data.get("_completion_output") or {"completed": True}
-                cleaned = {k: v for k, v in data.items() if k not in ("_completed", "_completion_output")}
+                cleaned = {
+                    k: v for k, v in data.items() if k not in ("_completed", "_completion_output", "_armed")
+                }
                 await self._record_step(run, node, token, status="succeeded", output=output)
                 variables = None
                 capture = node.data.get("capture")
@@ -433,6 +439,31 @@ class TokenEngine:
                 C.TASK_RECEIVE: "receive",
                 C.TASK_MANUAL: "user_task",
             }[task_type]
+            # Timer/escalation boundary: an armed token re-dispatched WITHOUT a
+            # completion marker means its SLA timer fired — route to the
+            # (interrupting) boundary's escalation path. Completion above always
+            # wins the race.
+            if data.get("_armed"):
+                boundary = _timer_boundary_for(model, node.id)
+                if boundary is not None:
+                    await self._record_step(run, node, token, status="skipped", output={"timed_out": True})
+                    cleaned = {k: v for k, v in data.items() if k != "_armed"}
+                    return NodeOutcome(
+                        "advance",
+                        targets=_out_edges(model, boundary.id),
+                        token_data={**cleaned, "_error": {"timeout": node.id}},
+                    )
+            # First arrival: if a timer boundary is attached, park with an SLA
+            # deadline (the timer sweep reactivates it on expiry); else park open.
+            boundary = _timer_boundary_for(model, node.id)
+            if boundary is not None:
+                delay = int((boundary.data or {}).get("delay_seconds", 0) or 0)
+                return NodeOutcome(
+                    "park",
+                    wait_kind=wait_kind,
+                    resume_at=datetime.now(UTC) + timedelta(seconds=max(0, delay)),
+                    token_data={**data, "_armed": True},
+                )
             return NodeOutcome("park", wait_kind=wait_kind)
 
         if task_type == C.TASK_BUSINESS_RULE:
@@ -1076,6 +1107,20 @@ def _error_boundary_for(
             if not boundary_code and catch_all is None:
                 catch_all = node
     return catch_all
+
+
+def _timer_boundary_for(model: WorkflowDefinitionModel, node_id: str) -> WorkflowNode | None:
+    """The timer boundary event attached to ``node_id`` (SLA/escalation), if any."""
+    for node in model.nodes:
+        data = node.data or {}
+        if (
+            node.type == C.NODE_EVENT
+            and data.get("position") == C.EVENT_BOUNDARY
+            and data.get("event_type") == C.EVENT_TIMER
+            and data.get("attached_to") == node_id
+        ):
+            return node
+    return None
 
 
 def _incoming_edges(model: WorkflowDefinitionModel, node_id: str) -> list[tuple[str, str | None]]:
