@@ -29,6 +29,19 @@ function taskNode(data: Record<string, unknown> = {}): Node {
   };
 }
 
+function gatewayNode(data: Record<string, unknown> = {}): Node {
+  return {
+    id: "gw1",
+    type: "gateway",
+    position: { x: 0, y: 0 },
+    data: { gateway_type: "exclusive", ...data },
+  };
+}
+
+function eventNode(data: Record<string, unknown> = {}): Node {
+  return { id: "evt1", type: "event", position: { x: 0, y: 0 }, data };
+}
+
 describe("NodeInspector condition-node isolation (HIGH regression)", () => {
   it("does not leak raw/row mode across node selection", () => {
     const onChangeData = vi.fn();
@@ -168,5 +181,164 @@ describe("NodeInspector retry policy", () => {
     fireEvent.click(screen.getByLabelText(/Continue the workflow/i));
     const [, nextData] = onChangeData.mock.calls[onChangeData.mock.calls.length - 1];
     expect(nextData).not.toHaveProperty("continue_on_error");
+  });
+});
+
+describe("NodeInspector business-rule task (decision table)", () => {
+  it("renders the decision-table editor and adds a rule through onChangeData", () => {
+    const onChangeData = vi.fn();
+    render(
+      <NodeInspector
+        node={taskNode({ task_type: "businessRule" })}
+        onChangeData={onChangeData}
+        onDelete={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText("Hit policy")).not.toBeNull();
+    fireEvent.click(screen.getByText("Add rule"));
+    expect(onChangeData).toHaveBeenCalledWith(
+      "task1",
+      expect.objectContaining({
+        decision_table: { hit_policy: "first", rules: [{ when: null, output: {} }] },
+      }),
+    );
+  });
+});
+
+describe("NodeInspector script task (transform)", () => {
+  it("edits an expression cell and threads the parsed transform back", () => {
+    const onChangeData = vi.fn();
+    render(
+      <NodeInspector
+        node={taskNode({ task_type: "script", transform: { total: 5 } })}
+        onChangeData={onChangeData}
+        onDelete={vi.fn()}
+      />,
+    );
+    // The seeded row shows variable "total" and expression "5".
+    fireEvent.change(screen.getByDisplayValue("5"), { target: { value: "10" } });
+    expect(onChangeData).toHaveBeenCalledWith(
+      "task1",
+      expect.objectContaining({ transform: { total: 10 } }),
+    );
+  });
+});
+
+describe("NodeInspector user/manual task", () => {
+  it("edits the assignee for a user task", () => {
+    const onChangeData = vi.fn();
+    render(
+      <NodeInspector
+        node={taskNode({ task_type: "user" })}
+        onChangeData={onChangeData}
+        onDelete={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText("Label")).not.toBeNull();
+    fireEvent.change(screen.getByPlaceholderText("user@example.com or a role"), {
+      target: { value: "ops@example.com" },
+    });
+    expect(onChangeData).toHaveBeenCalledWith(
+      "task1",
+      expect.objectContaining({ assignee: "ops@example.com" }),
+    );
+  });
+});
+
+describe("NodeInspector gateway routing modes", () => {
+  it("switching a condition gateway to multi-way drops expr and seeds cases", () => {
+    const onChangeData = vi.fn();
+    render(
+      <NodeInspector
+        node={gatewayNode({ expr: { "==": [{ var: "after.status" }, "open"] } })}
+        onChangeData={onChangeData}
+        onDelete={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText("Branch condition (true / false)")).not.toBeNull();
+    fireEvent.change(screen.getByDisplayValue("Two-way (true / false)"), {
+      target: { value: "cases" },
+    });
+    const [, next] = onChangeData.mock.calls[onChangeData.mock.calls.length - 1];
+    expect(next).not.toHaveProperty("expr");
+    expect(next).toMatchObject({ gateway_type: "exclusive", cases: [] });
+  });
+
+  it("switching a multi-way gateway back to condition drops cases", () => {
+    const onChangeData = vi.fn();
+    render(
+      <NodeInspector
+        node={gatewayNode({ cases: [{ handle: "c1", label: "A", expr: null }] })}
+        onChangeData={onChangeData}
+        onDelete={vi.fn()}
+      />,
+    );
+    // Multi-way mode shows the shared cases editor.
+    expect(screen.queryByText("Add case")).not.toBeNull();
+    fireEvent.change(screen.getByDisplayValue("Multi-way (cases)"), {
+      target: { value: "condition" },
+    });
+    const [, next] = onChangeData.mock.calls[onChangeData.mock.calls.length - 1];
+    expect(next).not.toHaveProperty("cases");
+    expect(next).toMatchObject({ gateway_type: "exclusive" });
+  });
+
+  it("shows a fork/join note (no condition) for a parallel gateway", () => {
+    render(
+      <NodeInspector
+        node={gatewayNode({ gateway_type: "parallel" })}
+        onChangeData={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText(/Forks a token/i)).not.toBeNull();
+    expect(screen.queryByText("Branch condition (true / false)")).toBeNull();
+  });
+});
+
+describe("NodeInspector event fields", () => {
+  it("edits delay_seconds for a timer intermediate event", () => {
+    const onChangeData = vi.fn();
+    render(
+      <NodeInspector
+        node={eventNode({ position: "intermediate", event_type: "timer" })}
+        onChangeData={onChangeData}
+        onDelete={vi.fn()}
+      />,
+    );
+    fireEvent.change(screen.getByPlaceholderText("60"), { target: { value: "90" } });
+    expect(onChangeData).toHaveBeenCalledWith(
+      "evt1",
+      expect.objectContaining({ delay_seconds: 90 }),
+    );
+  });
+
+  it("edits error_code for an error end event", () => {
+    const onChangeData = vi.fn();
+    render(
+      <NodeInspector
+        node={eventNode({ position: "end", event_type: "error" })}
+        onChangeData={onChangeData}
+        onDelete={vi.fn()}
+      />,
+    );
+    fireEvent.change(screen.getByPlaceholderText("payment_failed"), {
+      target: { value: "boom" },
+    });
+    expect(onChangeData).toHaveBeenCalledWith(
+      "evt1",
+      expect.objectContaining({ error_code: "boom" }),
+    );
+  });
+
+  it("does not show delay_seconds for a plain end event", () => {
+    render(
+      <NodeInspector
+        node={eventNode({ position: "end", event_type: "none" })}
+        onChangeData={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText("Delay (seconds)")).toBeNull();
   });
 });
