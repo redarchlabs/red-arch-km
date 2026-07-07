@@ -41,6 +41,7 @@ from api.schemas.workflow_definition import WorkflowDefinitionModel
 from api.services.workflow.actions import ACTION_REGISTRY, ActionContext, ActionError
 from api.services.workflow.engine import TokenEngine
 from api.services.workflow.evaluator import evaluate_graph, trigger_matches
+from api.services.workflow.schedule import is_schedule_due
 
 logger = logging.getLogger(__name__)
 
@@ -623,11 +624,8 @@ class WorkflowDispatchService:
             schedule = _schedule_of(version.definition)
             if schedule is None:
                 continue
-            every_minutes = int(schedule.get("every_minutes", 0) or 0)
-            if every_minutes <= 0:
-                continue
             last = last_by_wf.get(workflow.id)
-            if last is not None and (now - last) < timedelta(minutes=every_minutes):
+            if not is_schedule_due(schedule, last, now):
                 continue
             # Non-blocking per-workflow lock (privileged session, cross-org OK).
             locked = (
@@ -641,7 +639,7 @@ class WorkflowDispatchService:
             # Re-confirm under the lock (guards against a run just committed by a
             # now-finished sweep that our grouped snapshot missed).
             last = await self._last_scheduled_run_at(workflow.org_id, workflow.id)
-            if last is not None and (now - last) < timedelta(minutes=every_minutes):
+            if not is_schedule_due(schedule, last, now):
                 continue
             try:
                 async with self._session.begin_nested():

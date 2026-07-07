@@ -140,3 +140,34 @@ async def test_scheduled_workflow_fires_when_due_and_not_before(admin_session: A
     await admin_session.commit()
     items, _ = await repo.list(limit=50)
     assert len(items) == 1
+
+
+async def test_cron_scheduled_workflow_fires_when_due(admin_session: AsyncSession) -> None:
+    """A cron trigger (every minute) fires on the first sweep (never run → due)."""
+    org = await _new_org(admin_session, "WF-CRON")
+    definition = await _make_ticket_entity(admin_session, org.id)
+    slug = definition.slug
+
+    sched_def = {
+        "nodes": [
+            {"id": "t", "type": "trigger", "data": {"operations": [], "schedule": {"cron": "* * * * *"}}},
+            {"id": "a", "type": "action",
+             "data": {"action_type": "create_record", "config": {"target_slug": slug, "values": {"title": "cronjob"}}}},
+        ],
+        "edges": [{"id": "e0", "source": "t", "target": "a"}],
+    }
+    svc = WorkflowService(admin_session, org.id)
+    wf = await svc.create_workflow(name="Cron", entity_definition_id=definition.id, description=None)
+    version = await svc.save_draft(wf.id, sched_def)
+    await svc.publish(wf.id, version.id)
+    await WorkflowRepository(admin_session, org.id).update(wf, enabled=True)
+    await admin_session.commit()
+
+    fields = await EntityFieldRepository(admin_session, org.id).list_for_definition(definition.id)
+    repo = DynamicEntityRepository(admin_session, org.id, definition, fields)
+    dispatcher = WorkflowDispatchService(admin_session, public_base_url="http://x")
+
+    await dispatcher.run_due_schedules()
+    await admin_session.commit()
+    items, _ = await repo.list(limit=50)
+    assert [i["title"] for i in items] == ["cronjob"]
