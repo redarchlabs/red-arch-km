@@ -171,6 +171,15 @@ function RunRow({ run, open, onToggle }: { run: WorkflowRun; open: boolean; onTo
         </td>
         <td className="px-3 py-2">
           <StatusPill status={run.status} />
+          {run.dead_letter ? (
+            <Badge
+              variant="destructive"
+              className="ml-2 align-middle"
+              title="Dead-lettered: retries exhausted with no catcher — needs manual replay"
+            >
+              DLQ
+            </Badge>
+          ) : null}
           {run.depth > 0 ? (
             <span className="ml-2 text-xs text-muted-foreground">depth {run.depth}</span>
           ) : null}

@@ -22,6 +22,15 @@ import {
   type TaskType,
 } from "@/components/workflows/nodes/nodeMeta";
 import { RecordFieldEditor } from "@/components/workflows/RecordFieldEditor";
+import {
+  applyContinueOnError,
+  applyRetry,
+  DEFAULT_RETRY,
+  MAX_ATTEMPTS_CAP,
+  normalizeRetry,
+  readRetry,
+  type RetryPolicy,
+} from "@/components/workflows/retryPolicy";
 import type { EntityDefinition, EntityField } from "@/lib/api/entities";
 import type { Form } from "@/lib/api/forms";
 
@@ -95,6 +104,7 @@ export function NodeInspector({ node, nodes, fields, entities, forms, onChangeDa
           nodeId={node.id}
           data={data}
           patch={patch}
+          onChangeData={onChangeData}
           entities={entities}
           forms={forms}
           triggerFields={fields}
@@ -121,6 +131,7 @@ function TaskFields({
   nodeId,
   data,
   patch,
+  onChangeData,
   entities,
   forms,
   triggerFields,
@@ -128,6 +139,8 @@ function TaskFields({
   nodeId: string;
   data: Record<string, unknown>;
   patch: (next: Record<string, unknown>) => void;
+  /** Full-replace path (store's updateNodeData) — lets the retry editor DELETE keys. */
+  onChangeData: (id: string, data: Record<string, unknown>) => void;
   entities?: EntityDefinition[];
   forms?: Form[];
   triggerFields?: EntityField[];
@@ -165,6 +178,86 @@ function TaskFields({
           triggerFields={triggerFields}
         />
       )}
+      <RetryFields data={data} onReplace={(next) => onChangeData(nodeId, next)} />
+    </div>
+  );
+}
+
+function RetryFields({
+  data,
+  onReplace,
+}: {
+  data: Record<string, unknown>;
+  /** Replace the node's whole data object (retry edits add/remove keys wholesale). */
+  onReplace: (next: Record<string, unknown>) => void;
+}) {
+  const retry = readRetry(data);
+  const enabled = retry !== null;
+  const continueOnError = data.continue_on_error === true;
+
+  const setField = (key: keyof RetryPolicy, value: string) =>
+    onReplace(applyRetry(data, normalizeRetry({ ...(retry ?? DEFAULT_RETRY), [key]: value })));
+
+  return (
+    <div className="space-y-2 border-t pt-3">
+      <label className="flex items-center gap-1.5 text-sm font-medium">
+        <input
+          type="checkbox"
+          checked={enabled}
+          onChange={(e) => onReplace(applyRetry(data, e.target.checked ? (retry ?? DEFAULT_RETRY) : null))}
+        />
+        Retry on failure
+      </label>
+
+      {enabled && retry ? (
+        <div className="space-y-2 pl-5">
+          <div>
+            <label className="text-xs font-medium text-muted-foreground">Max attempts</label>
+            <Input
+              type="number"
+              min={1}
+              max={MAX_ATTEMPTS_CAP}
+              value={retry.max_attempts}
+              onChange={(e) => setField("max_attempts", e.target.value)}
+              className="mt-1 h-9 w-24"
+            />
+          </div>
+          <div className="flex gap-2">
+            <div>
+              <label className="text-xs font-medium text-muted-foreground">Base delay (s)</label>
+              <Input
+                type="number"
+                min={0}
+                value={retry.base_delay_seconds}
+                onChange={(e) => setField("base_delay_seconds", e.target.value)}
+                className="mt-1 h-9 w-24"
+              />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground">Max delay (s)</label>
+              <Input
+                type="number"
+                min={0}
+                value={retry.max_delay_seconds}
+                onChange={(e) => setField("max_delay_seconds", e.target.value)}
+                className="mt-1 h-9 w-24"
+              />
+            </div>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Full-jitter exponential back-off between attempts, capped at the max delay.
+          </p>
+        </div>
+      ) : null}
+
+      <label className="flex items-center gap-1.5 text-sm">
+        <input
+          type="checkbox"
+          checked={continueOnError}
+          onChange={(e) => onReplace(applyContinueOnError(data, e.target.checked))}
+        />
+        Continue the workflow if this task ultimately fails
+      </label>
     </div>
   );
 }

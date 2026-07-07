@@ -20,6 +20,15 @@ function actionNode(actionType: string, config: Record<string, unknown> = {}): N
   };
 }
 
+function taskNode(data: Record<string, unknown> = {}): Node {
+  return {
+    id: "task1",
+    type: "task",
+    position: { x: 0, y: 0 },
+    data: { task_type: "service", action_type: "", config: {}, ...data },
+  };
+}
+
 describe("NodeInspector condition-node isolation (HIGH regression)", () => {
   it("does not leak raw/row mode across node selection", () => {
     const onChangeData = vi.fn();
@@ -89,5 +98,75 @@ describe("NodeInspector action config", () => {
         config: { field: "status", value: "done" },
       }),
     );
+  });
+});
+
+describe("NodeInspector retry policy", () => {
+  it("enabling retry writes a default policy through the store update path", () => {
+    const onChangeData = vi.fn();
+    render(<NodeInspector node={taskNode()} onChangeData={onChangeData} onDelete={vi.fn()} />);
+    fireEvent.click(screen.getByLabelText(/Retry on failure/i));
+    expect(onChangeData).toHaveBeenCalledWith(
+      "task1",
+      expect.objectContaining({
+        retry: { max_attempts: 3, base_delay_seconds: 1, max_delay_seconds: 300 },
+      }),
+    );
+  });
+
+  it("disabling retry DELETES the retry key (not max_attempts:1)", () => {
+    const onChangeData = vi.fn();
+    render(
+      <NodeInspector
+        node={taskNode({ retry: { max_attempts: 3, base_delay_seconds: 1, max_delay_seconds: 300 } })}
+        onChangeData={onChangeData}
+        onDelete={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByLabelText(/Retry on failure/i));
+    expect(onChangeData).toHaveBeenCalledTimes(1);
+    const [, nextData] = onChangeData.mock.calls[0];
+    expect(nextData).not.toHaveProperty("retry");
+    expect(nextData).toMatchObject({ task_type: "service" });
+  });
+
+  it("edits max_attempts through the retry editor", () => {
+    const onChangeData = vi.fn();
+    render(
+      <NodeInspector
+        node={taskNode({ retry: { max_attempts: 3, base_delay_seconds: 1, max_delay_seconds: 300 } })}
+        onChangeData={onChangeData}
+        onDelete={vi.fn()}
+      />,
+    );
+    const input = screen.getByDisplayValue("3") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "6" } });
+    expect(onChangeData).toHaveBeenCalledWith(
+      "task1",
+      expect.objectContaining({ retry: expect.objectContaining({ max_attempts: 6 }) }),
+    );
+  });
+
+  it("toggles continue_on_error on and off", () => {
+    const onChangeData = vi.fn();
+    const { rerender } = render(
+      <NodeInspector node={taskNode()} onChangeData={onChangeData} onDelete={vi.fn()} />,
+    );
+    fireEvent.click(screen.getByLabelText(/Continue the workflow/i));
+    expect(onChangeData).toHaveBeenCalledWith(
+      "task1",
+      expect.objectContaining({ continue_on_error: true }),
+    );
+
+    rerender(
+      <NodeInspector
+        node={taskNode({ continue_on_error: true })}
+        onChangeData={onChangeData}
+        onDelete={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByLabelText(/Continue the workflow/i));
+    const [, nextData] = onChangeData.mock.calls[onChangeData.mock.calls.length - 1];
+    expect(nextData).not.toHaveProperty("continue_on_error");
   });
 });

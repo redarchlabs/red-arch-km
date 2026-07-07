@@ -129,6 +129,7 @@ class WorkflowRunRead(BaseModel):
     status: str
     conditions_matched: bool
     error: str | None
+    dead_letter: bool = False
     depth: int
     started_at: datetime | None
     finished_at: datetime | None
