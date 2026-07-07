@@ -60,6 +60,12 @@ _ADMIN_ONLY_TOOLS = frozenset(
         "create_workflow",
         "create_folder",
         "update_folder",
+        # Intake forms are entirely an org-admin surface in the REST API
+        # (every /api/forms route uses require_org_admin), so mirror that here.
+        "list_forms",
+        "get_form",
+        "create_form",
+        "update_form",
     }
 )
 
@@ -131,8 +137,57 @@ _SYSTEM_PROMPT = (
     "it in one call: set the trigger `operations` from intent (e.g. 'when a customer is created' -> "
     '["create"]) and pass steps as `actions`. It saves as an unpublished draft — tell the user to open '
     "it in the builder to review, test, then Publish.\n"
+    "Intake forms: a form is a public page, bound to one entity, that people fill in via a shared "
+    "link to create or update a record. Inspect with list_forms / get_form; build one with "
+    "create_form (pick which entity fields appear via `fields`; add related-entity sections via "
+    "`sections`, using relationship_id + mode from get_entity_schema); edit with update_form. On "
+    "update, `fields`/`sections` REPLACE the whole layout, so get_form first and send the complete "
+    "new layout. Forms are org-admin only. After creating a form, tell the user to open the Forms "
+    "UI to generate a share link.\n"
     "Slugs must be lowercase snake_case. Be concise and friendly."
 )
+
+# Reused by create_form / update_form. One entity field surfaced on a form.
+_FORM_FIELD_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "slug": {"type": "string", "description": "Entity field slug to expose (from get_entity_schema)."},
+        "label": {"type": "string", "description": "Optional display-label override."},
+        "required": {"type": "boolean", "description": "Optional; override the field's own requiredness."},
+        "help_text": {"type": "string", "description": "Optional helper text shown under the field."},
+    },
+    "required": ["slug"],
+}
+
+# A related entity surfaced on a form: 1:1 inline/modal, or 1:M table.
+_FORM_SECTION_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "relationship_id": {
+            "type": "string",
+            "description": (
+                "Relationship UUID from get_entity_schema (its `relationships[].id`). Use an "
+                "OUTGOING to-one relationship for inline/modal, or an INCOMING relationship for a "
+                "1:M table."
+            ),
+        },
+        "mode": {
+            "type": "string",
+            "enum": ["inline", "modal", "table"],
+            "description": "inline/modal surface a 1:1 related record; table edits a 1:M child collection.",
+        },
+        "label": {"type": "string"},
+        "fields": {
+            "type": "array",
+            "items": _FORM_FIELD_SCHEMA,
+            "description": (
+                "Related-entity fields to expose in this section — slugs from the related entity "
+                "(get_entity_schema on `related_entity_slug`), not the root entity."
+            ),
+        },
+    },
+    "required": ["relationship_id", "mode"],
+}
 
 # OpenAI tool (function) schemas.
 TOOLS: list[dict[str, Any]] = [
@@ -188,8 +243,17 @@ TOOLS: list[dict[str, Any]] = [
                                 "field_type": {
                                     "type": "string",
                                     "enum": [
-                                        "text", "long_text", "integer", "bigint", "numeric",
-                                        "boolean", "date", "timestamptz", "uuid", "json", "picklist",
+                                        "text",
+                                        "long_text",
+                                        "integer",
+                                        "bigint",
+                                        "numeric",
+                                        "boolean",
+                                        "date",
+                                        "timestamptz",
+                                        "uuid",
+                                        "json",
+                                        "picklist",
                                     ],
                                 },
                                 "picklist_options": {"type": "array", "items": {"type": "string"}},
@@ -341,6 +405,99 @@ TOOLS: list[dict[str, Any]] = [
             },
         },
     },
+    # ---- Intake forms (org-admin) ----
+    {
+        "type": "function",
+        "function": {
+            "name": "list_forms",
+            "description": "List the intake forms defined in this workspace.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_form",
+            "description": (
+                "Get a form's full definition: name, slug, bound entity, active state, and its "
+                "complete field/section layout. Call this before update_form."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {"form_id": {"type": "string"}},
+                "required": ["form_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_form",
+            "description": (
+                "Create a public intake form bound to an entity. People open the form via a shared "
+                "link to create or update a record of that entity. Choose which entity fields appear "
+                "(and optional related-entity sections). Saved active; the user generates the share "
+                "link in the Forms UI."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "entity_slug": {
+                        "type": "string",
+                        "description": "The entity whose records this form creates/updates.",
+                    },
+                    "slug": {
+                        "type": "string",
+                        "description": "URL slug (lowercase snake_case). Defaults from the name if omitted.",
+                    },
+                    "description": {"type": "string"},
+                    "fields": {
+                        "type": "array",
+                        "items": _FORM_FIELD_SCHEMA,
+                        "description": "Root-entity fields to show on the form (from get_entity_schema).",
+                    },
+                    "sections": {
+                        "type": "array",
+                        "items": _FORM_SECTION_SCHEMA,
+                        "description": "Optional related-entity sections.",
+                    },
+                },
+                "required": ["name", "entity_slug"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_form",
+            "description": (
+                "Update an existing form. Pass only what changes. NOTE: `fields`/`sections` REPLACE "
+                "the entire layout — call get_form first, then send the COMPLETE new fields+sections "
+                "(omit both to leave the layout untouched). Use is_active to enable/disable the form."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "form_id": {"type": "string"},
+                    "name": {"type": "string"},
+                    "description": {"type": "string"},
+                    "is_active": {"type": "boolean"},
+                    "fields": {
+                        "type": "array",
+                        "items": _FORM_FIELD_SCHEMA,
+                        "description": "COMPLETE new root-field layout (replaces existing).",
+                    },
+                    "sections": {
+                        "type": "array",
+                        "items": _FORM_SECTION_SCHEMA,
+                        "description": "COMPLETE new sections layout (replaces existing).",
+                    },
+                },
+                "required": ["form_id"],
+            },
+        },
+    },
     # ---- Knowledge base: documents & folders (act as the calling user) ----
     {
         "type": "function",
@@ -389,8 +546,7 @@ TOOLS: list[dict[str, Any]] = [
         "function": {
             "name": "create_document",
             "description": (
-                "Create a document (e.g. a Markdown note) in a folder the user can see. "
-                "Pass `text` for inline content."
+                "Create a document (e.g. a Markdown note) in a folder the user can see. Pass `text` for inline content."
             ),
             "parameters": {
                 "type": "object",
@@ -646,9 +802,7 @@ class AgentService:
                     yield {"type": "tool_call", "name": name, "arguments": args}
                     result = await self._dispatch(name, args)
                     yield {"type": "tool_result", "name": name, "result": result}
-                    messages.append(
-                        {"role": "tool", "tool_call_id": tc.id, "content": json.dumps(result, default=str)}
-                    )
+                    messages.append({"role": "tool", "tool_call_id": tc.id, "content": json.dumps(result, default=str)})
             yield {"type": "delta", "content": "I've reached the step limit for this request."}
             yield {"type": "done"}
         except Exception as exc:  # noqa: BLE001 - surface any agent/LLM failure to the UI
@@ -690,9 +844,7 @@ class AgentService:
     # ------------------------------------------------------------------ #
     # Tools
     # ------------------------------------------------------------------ #
-    async def _tool_search_knowledge_base(
-        self, _session: AsyncSession, args: dict[str, Any]
-    ) -> dict[str, Any]:
+    async def _tool_search_knowledge_base(self, _session: AsyncSession, args: dict[str, Any]) -> dict[str, Any]:
         # No DB access — talks to brain-api. The (unused) session keeps the
         # dispatch signature uniform across tools.
         client = BrainAPIClient(self._settings)
@@ -704,16 +856,49 @@ class AgentService:
         return {"entities": [{"name": d.name, "slug": d.slug} for d in defs]}
 
     async def _tool_get_entity_schema(self, session: AsyncSession, args: dict[str, Any]) -> dict[str, Any]:
-        definition = await EntityDefinitionRepository(session, self._org_id).get_by_slug(args["slug"])
+        entity_repo = EntityDefinitionRepository(session, self._org_id)
+        definition = await entity_repo.get_by_slug(args["slug"])
         if definition is None:
             return {"error": "entity not found"}
         fields = await EntityFieldRepository(session, self._org_id).list_for_definition(definition.id)
-        rels = await EntityRelationshipRepository(session, self._org_id).list_for_source(definition.id)
+        rel_repo = EntityRelationshipRepository(session, self._org_id)
+        outgoing = await rel_repo.list_for_source(definition.id)
+        incoming = await rel_repo.list_targeting(definition.id)
+        defs, _ = await entity_repo.list_all()
+        slug_by_id = {d.id: d.slug for d in defs}
+
+        # Both directions can back a form section: an OUTGOING to-one FK is a 1:1
+        # inline/modal section; an INCOMING relationship (another entity points at
+        # this one) is a 1:M child "table" section. Expose the related entity's
+        # slug so the model can look up that entity's fields to build the section.
+        outgoing_ids = {r.id for r in outgoing}
+        relationships = [
+            {
+                "id": str(r.id),
+                "name": r.name,
+                "slug": r.slug,
+                "cardinality": r.cardinality,
+                "direction": "outgoing",
+                "related_entity_slug": slug_by_id.get(r.target_definition_id),
+            }
+            for r in outgoing
+        ] + [
+            {
+                "id": str(r.id),
+                "name": r.name,
+                "slug": r.slug,
+                "cardinality": r.cardinality,
+                "direction": "incoming",
+                "related_entity_slug": slug_by_id.get(r.source_definition_id),
+            }
+            for r in incoming
+            if r.id not in outgoing_ids  # a self-referential rel appears in both lists
+        ]
         return {
             "name": definition.name,
             "slug": definition.slug,
             "fields": [{"name": f.name, "slug": f.slug, "type": f.field_type} for f in fields],
-            "relationships": [{"name": r.name, "cardinality": r.cardinality} for r in rels],
+            "relationships": relationships,
         }
 
     async def _tool_create_entity(self, session: AsyncSession, args: dict[str, Any]) -> dict[str, Any]:
@@ -728,9 +913,7 @@ class AgentService:
             )
             for f in args.get("fields", [])
         ]
-        body = EntityDefinitionCreate(
-            name=args["name"], slug=args.get("slug") or _slugify(args["name"]), fields=fields
-        )
+        body = EntityDefinitionCreate(name=args["name"], slug=args.get("slug") or _slugify(args["name"]), fields=fields)
         definition = await EntityService(session, self._org_id).create_definition(body)
         return {"created": {"name": definition.name, "slug": definition.slug}}
 
@@ -772,9 +955,7 @@ class AgentService:
             return {"error": "entity not found"}
         fields = await EntityFieldRepository(session, self._org_id).list_for_definition(definition.id)
         rels = await EntityRelationshipRepository(session, self._org_id).list_for_source(definition.id)
-        repo = DynamicEntityRepository(
-            session, self._org_id, definition, fields, rels, outbox=OutboxWriter(session)
-        )
+        repo = DynamicEntityRepository(session, self._org_id, definition, fields, rels, outbox=OutboxWriter(session))
         record = await repo.create(args.get("values", {}))
         return {"created_record_id": str(record["id"])}
 
@@ -834,6 +1015,92 @@ class AgentService:
         }
 
     # ------------------------------------------------------------------ #
+    # Intake-form tools (org-admin) — mirror the /api/forms REST surface,
+    # delegating to FormService. FormError is turned into a friendly message.
+    # ------------------------------------------------------------------ #
+    async def _tool_list_forms(self, session: AsyncSession, _args: dict[str, Any]) -> dict[str, Any]:
+        from api.services.form_service import FormService
+
+        forms = await FormService(session, self._org_id).list_forms()
+        return {"forms": [{"id": str(f.id), "name": f.name, "slug": f.slug, "is_active": f.is_active} for f in forms]}
+
+    async def _tool_get_form(self, session: AsyncSession, args: dict[str, Any]) -> dict[str, Any]:
+        from api.schemas.form import FormRead
+        from api.services.form_service import FormError, FormService
+
+        form_id = _parse_uuid(args.get("form_id"))
+        if form_id is None:
+            return {"error": "form_id is required"}
+        try:
+            form = await FormService(session, self._org_id).get_form(form_id)
+        except FormError as exc:
+            return {"error": str(exc)}
+        return {"form": FormRead.model_validate(form).model_dump(mode="json")}
+
+    async def _tool_create_form(self, session: AsyncSession, args: dict[str, Any]) -> dict[str, Any]:
+        from api.schemas.form import FormConfig, FormCreate
+        from api.services.form_service import FormError, FormService
+
+        name = args.get("name")
+        entity_slug = args.get("entity_slug")
+        if not name:
+            return {"error": "name is required"}
+        if not entity_slug:
+            return {"error": "entity_slug is required"}
+        definition = await EntityDefinitionRepository(session, self._org_id).get_by_slug(entity_slug)
+        if definition is None:
+            return {"error": f"entity not found: {entity_slug!r}"}
+        config = FormConfig.model_validate({"fields": args.get("fields", []), "sections": args.get("sections", [])})
+        body = FormCreate(
+            name=name,
+            slug=args.get("slug") or _slugify(name),
+            entity_definition_id=definition.id,
+            description=args.get("description"),
+            config=config,
+        )
+        try:
+            form = await FormService(session, self._org_id).create_form(body)
+        except FormError as exc:
+            return {"error": str(exc)}
+        return {
+            "created_form": {
+                "id": str(form.id),
+                "name": form.name,
+                "slug": form.slug,
+                "entity": definition.slug,
+            },
+            "note": "Open the Forms UI to generate a shareable link for this form.",
+        }
+
+    async def _tool_update_form(self, session: AsyncSession, args: dict[str, Any]) -> dict[str, Any]:
+        from api.schemas.form import FormConfig, FormUpdate
+        from api.services.form_service import FormError, FormService
+
+        form_id = _parse_uuid(args.get("form_id"))
+        if form_id is None:
+            return {"error": "form_id is required"}
+        provided: dict[str, Any] = {k: args[k] for k in ("name", "description", "is_active") if k in args}
+        # `fields`/`sections` are a full-layout replacement; only touch config when
+        # the caller supplied at least one of them.
+        if "fields" in args or "sections" in args:
+            provided["config"] = FormConfig.model_validate(
+                {"fields": args.get("fields", []), "sections": args.get("sections", [])}
+            )
+        body = FormUpdate(**provided)
+        try:
+            form = await FormService(session, self._org_id).update_form(form_id, body)
+        except FormError as exc:
+            return {"error": str(exc)}
+        return {
+            "updated_form": {
+                "id": str(form.id),
+                "name": form.name,
+                "slug": form.slug,
+                "is_active": form.is_active,
+            }
+        }
+
+    # ------------------------------------------------------------------ #
     # Permission helpers — documents & folders act as the calling user
     # ------------------------------------------------------------------ #
     def _is_admin(self) -> bool:
@@ -851,9 +1118,7 @@ class AgentService:
 
         org = await session.get(Org, self._org_id)
         masks = (
-            calculate_user_masks_from_membership(self._ctx.membership, org.permission_number)
-            if org is not None
-            else []
+            calculate_user_masks_from_membership(self._ctx.membership, org.permission_number) if org is not None else []
         )
         folders, _ = await FolderRepository(session, self._org_id).list_visible_to_masks(user_masks=masks)
         return {f.id for f in folders}
@@ -932,9 +1197,7 @@ class AgentService:
             "content_kind": content.get("kind"),
         }
 
-    async def _tool_list_permission_dimensions(
-        self, session: AsyncSession, _args: dict[str, Any]
-    ) -> dict[str, Any]:
+    async def _tool_list_permission_dimensions(self, session: AsyncSession, _args: dict[str, Any]) -> dict[str, Any]:
         from sqlalchemy import select
 
         from api.models.org import Department, Group, Region, Role
@@ -983,9 +1246,7 @@ class AgentService:
                 return {"error": vis_err}
             provided["folder_id"] = target
         body = DocumentUpdate(**provided)
-        result = await documents_routes.update_document(
-            document_id=doc_id, body=body, ctx=self._ctx, session=session
-        )
+        result = await documents_routes.update_document(document_id=doc_id, body=body, ctx=self._ctx, session=session)
         return {"updated_document": {"id": str(result.id), "title": result.title}}
 
     async def _tool_update_document_content(self, session: AsyncSession, args: dict[str, Any]) -> dict[str, Any]:
@@ -1003,9 +1264,7 @@ class AgentService:
         result = await documents_routes.update_document_content(
             document_id=doc_id, body=body, ctx=self._ctx, session=session, settings=self._settings
         )
-        return {
-            "updated_document": {"id": str(result.id), "title": result.title, "status": result.processing_status}
-        }
+        return {"updated_document": {"id": str(result.id), "title": result.title, "status": result.processing_status}}
 
     async def _tool_create_folder(self, session: AsyncSession, args: dict[str, Any]) -> dict[str, Any]:
         from api.routers import folders as folders_routes
@@ -1039,7 +1298,5 @@ class AgentService:
         if "parent_id" in args:
             provided["parent_id"] = _parse_uuid(args.get("parent_id"))
         body = FolderUpdate(**provided)
-        result = await folders_routes.update_folder(
-            folder_id=folder_id, body=body, ctx=self._ctx, session=session
-        )
+        result = await folders_routes.update_folder(folder_id=folder_id, body=body, ctx=self._ctx, session=session)
         return {"updated_folder": {"id": str(result.id), "name": result.name, "path": result.dot_path}}
