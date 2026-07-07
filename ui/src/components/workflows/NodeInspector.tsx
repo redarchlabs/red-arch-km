@@ -11,6 +11,7 @@ import { CasesEditor, type CaseItem } from "@/components/workflows/CasesEditor";
 import { ConditionEditor } from "@/components/workflows/ConditionEditor";
 import { DecisionTableEditor } from "@/components/workflows/DecisionTableEditor";
 import { routingMode, toCasesMode, toConditionMode } from "@/components/workflows/gatewayRouting";
+import { HttpRequestFields } from "@/components/workflows/HttpRequestFields";
 import {
   EVENT_POSITIONS,
   EVENT_TYPE_LABELS,
@@ -34,6 +35,7 @@ import {
   type RetryPolicy,
 } from "@/components/workflows/retryPolicy";
 import { TransformEditor } from "@/components/workflows/TransformEditor";
+import type { Connection } from "@/lib/api/connections";
 import type { EntityDefinition, EntityField } from "@/lib/api/entities";
 import type { Form } from "@/lib/api/forms";
 
@@ -47,6 +49,8 @@ interface NodeInspectorProps {
   entities?: EntityDefinition[];
   /** Org's intake forms (picker for the send_form action). */
   forms?: Form[];
+  /** Org connections (picker for the http_request action's authenticated call). */
+  connections?: Connection[];
   onChangeData: (id: string, data: Record<string, unknown>) => void;
   onDelete: (id: string) => void;
 }
@@ -54,7 +58,7 @@ interface NodeInspectorProps {
 const OPERATIONS = ["create", "update", "delete"] as const;
 const selectClass = "h-9 w-full rounded-md border bg-background px-2 text-sm";
 
-export function NodeInspector({ node, nodes, fields, entities, forms, onChangeData, onDelete }: NodeInspectorProps) {
+export function NodeInspector({ node, nodes, fields, entities, forms, connections, onChangeData, onDelete }: NodeInspectorProps) {
   if (!node) {
     return (
       <div className="rounded-lg border bg-card p-4 text-sm text-muted-foreground">
@@ -104,6 +108,7 @@ export function NodeInspector({ node, nodes, fields, entities, forms, onChangeDa
           onChangeData={onChangeData}
           entities={entities}
           forms={forms}
+          connections={connections}
           triggerFields={fields}
         />
       ) : node.type === "gateway" ? (
@@ -115,8 +120,10 @@ export function NodeInspector({ node, nodes, fields, entities, forms, onChangeDa
           nodeId={node.id}
           data={data}
           patch={patch}
+          onChangeData={onChangeData}
           entities={entities}
           forms={forms}
+          connections={connections}
           triggerFields={fields}
         />
       )}
@@ -131,6 +138,7 @@ function TaskFields({
   onChangeData,
   entities,
   forms,
+  connections,
   triggerFields,
 }: {
   nodeId: string;
@@ -140,6 +148,7 @@ function TaskFields({
   onChangeData: (id: string, data: Record<string, unknown>) => void;
   entities?: EntityDefinition[];
   forms?: Form[];
+  connections?: Connection[];
   triggerFields?: EntityField[];
 }) {
   const taskType = ((data.task_type as string | undefined) ?? "service") as TaskType;
@@ -179,8 +188,10 @@ function TaskFields({
           nodeId={nodeId}
           data={data}
           patch={patch}
+          onChangeData={onChangeData}
           entities={entities}
           forms={forms}
+          connections={connections}
           triggerFields={triggerFields}
         />
       )}
@@ -685,15 +696,20 @@ function ActionFields({
   nodeId,
   data,
   patch,
+  onChangeData,
   entities,
   forms,
+  connections,
   triggerFields,
 }: {
   nodeId: string;
   data: Record<string, unknown>;
   patch: (next: Record<string, unknown>) => void;
+  /** Full-replace path — the http_request editor prunes emptied keys wholesale. */
+  onChangeData: (id: string, data: Record<string, unknown>) => void;
   entities?: EntityDefinition[];
   forms?: Form[];
+  connections?: Connection[];
   /** Fields of the entity the workflow fires on — the "from trigger" source. */
   triggerFields?: EntityField[];
 }) {
@@ -720,6 +736,18 @@ function ActionFields({
           ))}
         </select>
       </div>
+
+      {actionType === "http_request" ? (
+        // The connector editor prunes emptied config keys, so it must write
+        // through the store's whole-object replace — a shallow patch would
+        // re-add the very key it just removed.
+        <HttpRequestFields
+          nodeId={nodeId}
+          data={data}
+          connections={connections}
+          onReplace={(next) => onChangeData(nodeId, next)}
+        />
+      ) : null}
 
       {fields.map((field) => {
         // A json field can key its editor to the entity chosen in another field

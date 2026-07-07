@@ -1,6 +1,15 @@
 "use client";
 
-import { Activity, Pencil, Plus, Trash2, Workflow as WorkflowIcon } from "lucide-react";
+import {
+  Activity,
+  Inbox,
+  Pencil,
+  Plug,
+  Plus,
+  Trash2,
+  Webhook,
+  Workflow as WorkflowIcon,
+} from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
@@ -89,11 +98,33 @@ export default function WorkflowsPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold">Workflows</h1>
-        <p className="text-sm text-muted-foreground">
-          Rules that fire when entity records change. Design them visually, test, then publish.
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-semibold">Workflows</h1>
+          <p className="text-sm text-muted-foreground">
+            Rules that fire when entity records change. Design them visually, test, then publish.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Link href="/workflows/inbox">
+            <Button variant="outline" size="sm">
+              <Inbox className="h-4 w-4" />
+              Task inbox
+            </Button>
+          </Link>
+          <Link href="/workflows/connections">
+            <Button variant="outline" size="sm">
+              <Plug className="h-4 w-4" />
+              Connections
+            </Button>
+          </Link>
+          <Link href="/workflows/webhooks">
+            <Button variant="outline" size="sm">
+              <Webhook className="h-4 w-4" />
+              Webhooks
+            </Button>
+          </Link>
+        </div>
       </div>
 
       <Card>
