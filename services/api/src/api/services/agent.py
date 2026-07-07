@@ -81,6 +81,7 @@ _ADMIN_ONLY_TOOLS = frozenset(
         "list_workflow_runs",
         "get_workflow_run",
         "retry_workflow_run",
+        "complete_workflow_task",
     }
 )
 
@@ -162,8 +163,10 @@ _SYSTEM_PROMPT = (
     "workflow; supply a record_id for anything that emails/webhooks). Debug & monitor instances: "
     "list_workflow_runs shows recent runs and their status; get_workflow_run returns a run's steps and "
     "control-flow tokens with per-step output/error; retry_workflow_run re-runs the failed step(s) of a "
-    "failed run. Authoring/publishing/testing/monitoring are org-admin only; running honors the "
-    "workflow's run_permission.\n"
+    "failed run. When a run is 'waiting' on a human task (a user_task token in get_workflow_run), "
+    "complete_workflow_task advances it — pass `variables` for any approval decision the flow branches "
+    "on (e.g. {\"approved\": true}). Authoring/publishing/testing/monitoring are org-admin only; running "
+    "honors the workflow's run_permission.\n"
     "Intake forms: a form is a public page, bound to one entity, that people fill in via a shared "
     "link to create or update a record. Inspect with list_forms / get_form; build one with "
     "create_form (pick which entity fields appear via `fields`; add related-entity sections via "
@@ -719,6 +722,37 @@ TOOLS: list[dict[str, Any]] = [
             "parameters": {
                 "type": "object",
                 "properties": {"run_id": {"type": "string"}},
+                "required": ["run_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "complete_workflow_task",
+            "description": (
+                "Complete a human task a run is WAITING on (e.g. an approval) and advance the run. "
+                "Provide `variables` for any decision the workflow branches on (e.g. {\"approved\": true}). "
+                "Use get_workflow_run first to see which task node is waiting. Reports 'nothing to "
+                "complete' if the run isn't awaiting a task."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "run_id": {"type": "string"},
+                    "node_id": {
+                        "type": "string",
+                        "description": "Which waiting task node to complete; defaults to the first.",
+                    },
+                    "variables": {
+                        "type": "object",
+                        "description": (
+                            "Decision values merged into the run's variables so downstream gateways "
+                            'can route (e.g. {"approved": true}).'
+                        ),
+                    },
+                    "output": {"type": "object", "description": "Optional data recorded as the task's output."},
+                },
                 "required": ["run_id"],
             },
         },
@@ -1774,6 +1808,45 @@ class AgentService:
                 "reactivated": result.get("reactivated", 0),
                 "status": refreshed.status if refreshed is not None else run.status,
                 "error": refreshed.error if refreshed is not None else run.error,
+            }
+        }
+
+    async def _tool_complete_workflow_task(self, session: AsyncSession, args: dict[str, Any]) -> dict[str, Any]:
+        from api.repositories.workflow import WorkflowRunRepository, WorkflowVersionRepository
+        from api.services.email import EmailSender
+        from api.services.workflow.engine import TokenEngine
+
+        run_id = _parse_uuid(args.get("run_id"))
+        if run_id is None:
+            return {"error": "run_id is required"}
+        run_repo = WorkflowRunRepository(session, self._org_id)
+        run = await run_repo.get_by_id(run_id)
+        if run is None:
+            return {"error": "run not found"}
+        if run.status not in ("waiting", "running"):
+            return {"error": f"this run is {run.status!r}, not awaiting a task"}
+        version = await WorkflowVersionRepository(session, self._org_id).get(run.workflow_version_id)
+        if version is None:
+            return {"error": "the run's workflow version no longer exists"}
+        engine = TokenEngine(
+            session,
+            webhook_allowlist=tuple(self._settings.workflow_webhook_allowlist or ()),
+            public_base_url=self._settings.public_base_url,
+            email_sender=EmailSender(self._settings),
+        )
+        variables = args.get("variables") if isinstance(args.get("variables"), dict) else None
+        output = args.get("output") if isinstance(args.get("output"), dict) else None
+        node_id = args.get("node_id") if isinstance(args.get("node_id"), str) else None
+        signaled = await engine.signal_token(run, node_id=node_id, variables=variables, output=output)
+        if not signaled:
+            return {"error": "no human task is waiting on this run (nothing to complete)"}
+        await engine.drive_run(run)
+        refreshed = await run_repo.get_by_id(run_id)
+        return {
+            "completed_task": {
+                "run_id": str(run_id),
+                "node_id": node_id,
+                "status": refreshed.status if refreshed is not None else run.status,
             }
         }
 
