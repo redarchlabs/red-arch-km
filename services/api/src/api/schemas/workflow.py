@@ -192,3 +192,16 @@ class InboundEndpointCreated(InboundEndpointRead):
 
     token: str = ""
     url: str = ""
+
+
+class CompleteTaskRequest(BaseModel):
+    """Complete a human task a run is waiting on (e.g. an approval decision)."""
+
+    node_id: str | None = None
+    variables: dict[str, Any] = Field(default_factory=dict)
+    output: dict[str, Any] = Field(default_factory=dict)
+
+
+class CompleteTaskResult(BaseModel):
+    run_id: uuid.UUID
+    status: str
