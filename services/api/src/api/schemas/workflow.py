@@ -138,3 +138,36 @@ class WorkflowRunRead(BaseModel):
 
 class WorkflowRunDetail(WorkflowRunRead):
     steps: list[WorkflowRunStepRead] = Field(default_factory=list)
+
+
+class ConnectionCreate(BaseModel):
+    """Create a connector credential. `secret` is write-only (encrypted at rest)."""
+
+    name: str = Field(min_length=1, max_length=120)
+    kind: str = Field(default="http", max_length=32)
+    base_url: str | None = Field(default=None, max_length=500)
+    auth_type: Literal["none", "bearer", "api_key", "basic"] = "none"
+    secret: str | None = Field(default=None, max_length=4096)
+    config: dict[str, Any] = Field(default_factory=dict)
+
+
+class ConnectionUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    base_url: str | None = Field(default=None, max_length=500)
+    auth_type: Literal["none", "bearer", "api_key", "basic"] | None = None
+    secret: str | None = Field(default=None, max_length=4096)
+    config: dict[str, Any] | None = None
+
+
+class ConnectionRead(BaseModel):
+    """A connection WITHOUT its secret — only whether one is set."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    name: str
+    kind: str
+    base_url: str | None
+    auth_type: str
+    config: dict[str, Any]
+    has_secret: bool = False

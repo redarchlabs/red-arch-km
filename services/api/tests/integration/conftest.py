@@ -40,6 +40,7 @@ _RLS_TABLES = [
     "workflow_runs",
     "workflow_run_steps",
     "workflow_run_tokens",
+    "workflow_connections",
 ]
 
 

@@ -223,17 +223,32 @@ def _check_boundary_events(model: WorkflowDefinitionModel, issues: list[Issue]) 
         host_id = node.data.get("attached_to")
         if not host_id:
             issues.append(
-                Issue("error", "boundary-unattached", f"Boundary event {node.id!r} is not attached to an activity.", node_id=node.id)
+                Issue(
+                    "error",
+                    "boundary-unattached",
+                    f"Boundary event {node.id!r} is not attached to an activity.",
+                    node_id=node.id,
+                )
             )
             continue
         host = ids.get(host_id)
         if host is None:
             issues.append(
-                Issue("error", "boundary-bad-attach", f"Boundary event {node.id!r} is attached to unknown node {host_id!r}.", node_id=node.id)
+                Issue(
+                    "error",
+                    "boundary-bad-attach",
+                    f"Boundary event {node.id!r} is attached to unknown node {host_id!r}.",
+                    node_id=node.id,
+                )
             )
         elif host.type != C.NODE_TASK:
             issues.append(
-                Issue("warning", "boundary-nonactivity", f"Boundary event {node.id!r} should attach to a task, not a {host.type!r}.", node_id=node.id)
+                Issue(
+                    "warning",
+                    "boundary-nonactivity",
+                    f"Boundary event {node.id!r} should attach to a task, not a {host.type!r}.",
+                    node_id=node.id,
+                )
             )
 
 
