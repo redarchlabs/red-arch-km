@@ -8,11 +8,12 @@ versions, runs) are added alongside the dispatcher.
 
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import date, datetime
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,6 +22,7 @@ from api.models.workflow import (
     WorkflowOutbox,
     WorkflowRun,
     WorkflowRunStep,
+    WorkflowRunToken,
     WorkflowVersion,
 )
 
@@ -258,6 +260,22 @@ class WorkflowRunRepository:
         )
         return result.scalar_one_or_none()
 
+    async def get_by_id(self, run_id: uuid.UUID) -> WorkflowRun | None:
+        """Fetch a run by id alone (no partition key).
+
+        The composite PK is ``(id, created_at)``, but callers that only hold a
+        run id (the AI assistant's monitor/debug tools, which never see the
+        partition key) need a by-id lookup. ``id`` is a UUID so this resolves at
+        most one row; RLS + the explicit ``org_id`` keep it tenant-scoped.
+        """
+        result = await self._session.execute(
+            select(WorkflowRun).where(
+                WorkflowRun.id == run_id,
+                WorkflowRun.org_id == self._org_id,
+            )
+        )
+        return result.scalar_one_or_none()
+
     async def list_for_workflow(self, workflow_id: uuid.UUID, *, limit: int = 50) -> list[WorkflowRun]:
         result = await self._session.execute(
             select(WorkflowRun)
@@ -282,6 +300,7 @@ class WorkflowRunRepository:
         node_id: str,
         action_type: str,
         step_index: int,
+        token_id: uuid.UUID | None = None,
     ) -> WorkflowRunStep:
         step = WorkflowRunStep(
             org_id=self._org_id,
@@ -290,9 +309,183 @@ class WorkflowRunRepository:
             node_id=node_id,
             action_type=action_type,
             step_index=step_index,
+            token_id=token_id,
             status="pending",
             started_at=func.now(),
         )
         self._session.add(step)
         await self._session.flush()
         return step
+
+    async def allocate_step_index(self, run: WorkflowRun) -> int:
+        """Atomically bump the run's monotonic step counter and return the new
+        value. Called under the per-run advisory lock so concurrent tokens get
+        distinct, ordered ``step_index`` values (and the run-wide step budget is
+        enforced against a single counter regardless of branch fan-out)."""
+        result = await self._session.execute(
+            text(
+                "UPDATE workflow_runs SET step_seq = step_seq + 1 "
+                "WHERE id = :id AND created_at = :ca AND org_id = :org RETURNING step_seq"
+            ),
+            {"id": run.id, "ca": run.created_at, "org": self._org_id},
+        )
+        value = int(result.scalar_one())
+        # Keep the in-memory ORM object in step with the DB counter (the raw
+        # UPDATE bypasses the identity map) so the engine's step-budget check
+        # reads a live value across advances.
+        run.step_seq = value
+        return value
+
+    async def set_variables(self, run: WorkflowRun, updates: dict[str, Any]) -> None:
+        """Merge ``updates`` into the run's variables at the DB level (jsonb ||)
+        so parallel tokens writing different keys don't clobber each other."""
+        if not updates:
+            return
+        safe = json_safe(updates)
+        await self._session.execute(
+            text(
+                "UPDATE workflow_runs SET variables = coalesce(variables, '{}'::jsonb) || cast(:patch AS jsonb) "
+                "WHERE id = :id AND created_at = :ca AND org_id = :org"
+            ),
+            {"patch": json.dumps(safe), "id": run.id, "ca": run.created_at, "org": self._org_id},
+        )
+        # Sync the in-memory ORM object (the raw UPDATE bypasses the identity map,
+        # and sessions run with expire_on_commit=False) so a later token advance
+        # in the same session sees the new variables.
+        run.variables = {**(run.variables or {}), **safe}
+
+
+class WorkflowTokenRepository:
+    """Durable control-flow tokens for the BPMN token engine.
+
+    ``created_at`` is pinned to the owning run's ``created_at`` (the partition
+    key), so a run's tokens co-locate in one partition and every join/settle
+    query stays partition-local.
+    """
+
+    def __init__(self, session: AsyncSession, org_id: uuid.UUID) -> None:
+        self._session = session
+        self._org_id = org_id
+
+    async def create(
+        self,
+        *,
+        run: WorkflowRun,
+        node_id: str,
+        arrived_from_node_id: str | None = None,
+        arrived_via_handle: str | None = None,
+        parent_token_id: uuid.UUID | None = None,
+        created_by_node: str | None = None,
+        depth: int = 0,
+        status: str = "active",
+    ) -> WorkflowRunToken:
+        token = WorkflowRunToken(
+            org_id=self._org_id,
+            run_id=run.id,
+            run_created_at=run.created_at,
+            node_id=node_id,
+            arrived_from_node_id=arrived_from_node_id,
+            arrived_via_handle=arrived_via_handle,
+            parent_token_id=parent_token_id,
+            created_by_node=created_by_node,
+            depth=depth,
+            status=status,
+            started_at=func.now(),
+        )
+        self._session.add(token)
+        await self._session.flush()
+        return token
+
+    async def get(self, token_id: uuid.UUID, created_at: datetime) -> WorkflowRunToken | None:
+        result = await self._session.execute(
+            select(WorkflowRunToken).where(
+                WorkflowRunToken.id == token_id,
+                WorkflowRunToken.created_at == created_at,
+                WorkflowRunToken.org_id == self._org_id,
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def list_for_run(self, run_id: uuid.UUID) -> list[WorkflowRunToken]:
+        result = await self._session.execute(
+            select(WorkflowRunToken)
+            .where(WorkflowRunToken.run_id == run_id, WorkflowRunToken.org_id == self._org_id)
+            .order_by(WorkflowRunToken.seq)
+        )
+        return list(result.scalars().all())
+
+    async def live_count(self, run_id: uuid.UUID) -> int:
+        """Tokens that could still advance the run (active/running/waiting)."""
+        result = await self._session.execute(
+            select(func.count())
+            .select_from(WorkflowRunToken)
+            .where(
+                WorkflowRunToken.run_id == run_id,
+                WorkflowRunToken.org_id == self._org_id,
+                WorkflowRunToken.status.in_(("active", "running", "waiting")),
+            )
+        )
+        return int(result.scalar_one())
+
+    async def token_count(self, run_id: uuid.UUID) -> int:
+        result = await self._session.execute(
+            select(func.count())
+            .select_from(WorkflowRunToken)
+            .where(WorkflowRunToken.run_id == run_id, WorkflowRunToken.org_id == self._org_id)
+        )
+        return int(result.scalar_one())
+
+    async def buffered_at(self, run_id: uuid.UUID, node_id: str, wait_kind: str = "join") -> list[WorkflowRunToken]:
+        """Tokens parked (``waiting``) at a converging node — the join buffer."""
+        result = await self._session.execute(
+            select(WorkflowRunToken).where(
+                WorkflowRunToken.run_id == run_id,
+                WorkflowRunToken.org_id == self._org_id,
+                WorkflowRunToken.node_id == node_id,
+                WorkflowRunToken.status == "waiting",
+                WorkflowRunToken.wait_kind == wait_kind,
+            )
+        )
+        return list(result.scalars().all())
+
+    async def kill_all(self, run_id: uuid.UUID) -> None:
+        """Terminate every live token of a run (terminate end event)."""
+        await self._session.execute(
+            text(
+                "UPDATE workflow_run_tokens SET status='dead', finished_at=now() "
+                "WHERE run_id=:run AND org_id=:org AND status IN ('active','running','waiting')"
+            ),
+            {"run": run_id, "org": self._org_id},
+        )
+
+    async def reactivate_dead(self, run_id: uuid.UUID) -> int:
+        """Return a run's ``dead`` tokens to ``active`` so the engine re-drives
+        them — the durable primitive behind retrying a failed run.
+
+        Each reactivated token re-enters the node it died on (its ``node_id`` is
+        unchanged), which re-dispatches that step: a genuine retry, not a replay.
+        Lease/timer/finish bookkeeping is cleared so the token looks freshly
+        arrived. Returns the number of tokens reactivated (0 = nothing to retry).
+
+        PRECONDITION (like the raw UPDATEs in ``allocate_step_index`` /
+        ``set_variables``): this raw SQL bypasses the identity map, so a caller
+        that has already loaded this run's ``WorkflowRunToken`` rows into the
+        session would see stale ``status='dead'`` afterward. The only caller
+        (``TokenEngine.retry_run``) loads no token rows before this, and
+        ``drive_run`` re-``SELECT``s tokens fresh — so no resync is needed here.
+        A future caller that pre-loads tokens must ``expire``/re-select them.
+        """
+        result = await self._session.execute(
+            text(
+                "UPDATE workflow_run_tokens "
+                "SET status='active', lease_owner=NULL, leased_at=NULL, "
+                "    resume_at=NULL, finished_at=NULL "
+                "WHERE run_id=:run AND org_id=:org AND status='dead' "
+                "RETURNING id"
+            ),
+            {"run": run_id, "org": self._org_id},
+        )
+        # RETURNING + len(rows) rather than .rowcount: the async Result type
+        # doesn't expose rowcount, and this matches the RETURNING style used by
+        # allocate_step_index.
+        return len(result.fetchall())
