@@ -6,9 +6,19 @@ import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
  * session. `auth.protect()` redirects unauthenticated users to the configured
  * sign-in URL (/login).
  */
-// `/intake/*` is the public, unauthenticated intake-form page: an external user
-// (holding only a form-link token) fills it in without a Clerk session.
-const isPublicRoute = createRouteMatcher(["/login(.*)", "/sign-up(.*)", "/intake(.*)"]);
+// Public, unauthenticated surface:
+// - `/` and `/help/*` are the marketing/informational pages a logged-out
+//   visitor sees before signing in (the root page redirects signed-in users
+//   to /documents itself).
+// - `/intake/*` is the public intake-form page: an external user (holding only
+//   a form-link token) fills it in without a Clerk session.
+const isPublicRoute = createRouteMatcher([
+  "/",
+  "/help(.*)",
+  "/login(.*)",
+  "/sign-up(.*)",
+  "/intake(.*)",
+]);
 
 export default clerkMiddleware(async (auth, req) => {
   if (!isPublicRoute(req)) {
