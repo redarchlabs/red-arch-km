@@ -60,6 +60,10 @@ MAX_TOKEN_DEPTH = 32
 # A 'running' (leased) token older than this is presumed crashed and requeued.
 LEASE_TTL_SECONDS = 300
 
+# Wait kinds that an external signal (human completion / message / form submit)
+# may resume. Timer/boundary/retry/join resume on their own schedule, not by signal.
+_SIGNALABLE_WAIT_KINDS = ("user_task", "receive", "subprocess", "event_based")
+
 
 @dataclass
 class NodeOutcome:
@@ -181,6 +185,49 @@ class TokenEngine:
         totals = await self.drive_run(run)
         totals["reactivated"] = reactivated
         return totals
+
+    async def signal_token(
+        self,
+        run: WorkflowRun,
+        *,
+        node_id: str | None = None,
+        correlation_key: str | None = None,
+        variables: dict[str, Any] | None = None,
+        output: dict[str, Any] | None = None,
+    ) -> bool:
+        """Complete a parked wait-state token — the primitive behind human task
+        completion, message/receive correlation, and form-submission resume.
+
+        Finds one parked wait token for this run (optionally narrowed by
+        ``node_id`` or ``correlation_key``), merges ``variables`` into the run's
+        variables (so downstream gateways can route on the outcome, e.g. an
+        approval decision), stamps a ``_completed`` marker + ``output`` on the
+        token, and reactivates it. The next :meth:`drive_run` advances it past the
+        task (see the wait-state branch of ``_dispatch_task``). Returns ``True`` if
+        a token was signaled. Caller owns the transaction + tenant scope.
+        """
+        tokens = WorkflowTokenRepository(self._session, run.org_id)
+        waiting = [
+            t
+            for t in await tokens.list_for_run(run.id)
+            if t.status == "waiting" and t.wait_kind in _SIGNALABLE_WAIT_KINDS
+        ]
+        if node_id is not None:
+            waiting = [t for t in waiting if t.node_id == node_id]
+        if correlation_key is not None:
+            waiting = [t for t in waiting if t.correlation_key == correlation_key]
+        if not waiting:
+            return False
+        token = waiting[0]
+        if variables:
+            await WorkflowRunRepository(self._session, run.org_id).set_variables(run, variables)
+        token.data = {**(token.data or {}), "_completed": True, "_completion_output": output or {}}
+        token.status = "active"
+        token.wait_kind = None
+        token.lease_owner = None
+        token.leased_at = None
+        await self._session.flush()
+        return True
 
     # ---- the sweep ------------------------------------------------------- #
     async def advance_tokens(self, *, limit: int = 100) -> dict[str, int]:
@@ -354,10 +401,18 @@ class TokenEngine:
         runs: WorkflowRunRepository,
     ) -> NodeOutcome:
         task_type = node.task_type
-        # Wait-state tasks park a token until an external signal (completion API
-        # / correlated message / child run). Full handling lands in later phases;
-        # parking here is already correct.
+        # Wait-state tasks (human task / receive / call / manual) block on an
+        # external signal. On first arrival the token PARKS; signal_token() sets a
+        # `_completed` marker + reactivates it, and the re-dispatch below advances
+        # past the task (recording the completion), consuming the marker. This
+        # mirrors the timer `_timer_armed` pattern.
         if task_type in C.WAIT_TASK_TYPES:
+            data = token.data or {}
+            if data.get("_completed"):
+                output = data.get("_completion_output") or {"completed": True}
+                cleaned = {k: v for k, v in data.items() if k not in ("_completed", "_completion_output")}
+                await self._record_step(run, node, token, status="succeeded", output=output)
+                return NodeOutcome("advance", targets=_out_edges(model, node.id), token_data=cleaned)
             wait_kind = {
                 C.TASK_USER: "user_task",
                 C.TASK_RECEIVE: "receive",
