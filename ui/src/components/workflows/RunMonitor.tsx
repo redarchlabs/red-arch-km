@@ -6,6 +6,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { UserTaskActions } from "@/components/workflows/UserTaskActions";
 import { cn } from "@/lib/utils";
 import { getApiErrorMessage } from "@/lib/api/errors";
 import {
@@ -136,6 +137,7 @@ export function RunMonitor({ workflowId }: { workflowId: string }) {
                   run={run}
                   open={expanded === run.id}
                   onToggle={() => setExpanded(expanded === run.id ? null : run.id)}
+                  onActed={() => void load(true)}
                 />
               ))}
             </tbody>
@@ -146,7 +148,18 @@ export function RunMonitor({ workflowId }: { workflowId: string }) {
   );
 }
 
-function RunRow({ run, open, onToggle }: { run: WorkflowRun; open: boolean; onToggle: () => void }) {
+function RunRow({
+  run,
+  open,
+  onToggle,
+  onActed,
+}: {
+  run: WorkflowRun;
+  open: boolean;
+  onToggle: () => void;
+  /** Refresh the run list after a human task is completed from this row. */
+  onActed: () => void;
+}) {
   const [steps, setSteps] = useState<WorkflowRunStep[] | null>(null);
   const [loadingSteps, setLoadingSteps] = useState(false);
 
@@ -183,6 +196,11 @@ function RunRow({ run, open, onToggle }: { run: WorkflowRun; open: boolean; onTo
           {run.depth > 0 ? (
             <span className="ml-2 text-xs text-muted-foreground">depth {run.depth}</span>
           ) : null}
+          {run.status === "waiting" ? (
+            <span className="ml-2 text-xs font-medium text-violet-600 dark:text-violet-400">
+              action needed
+            </span>
+          ) : null}
         </td>
         <td className="px-3 py-2">{run.trigger_operation}</td>
         <td className="px-3 py-2 text-muted-foreground">
@@ -195,6 +213,14 @@ function RunRow({ run, open, onToggle }: { run: WorkflowRun; open: boolean; onTo
           <td />
           <td colSpan={4} className="px-3 py-2">
             {run.error ? <p className="mb-2 text-xs text-destructive">Error: {run.error}</p> : null}
+            {run.status === "waiting" ? (
+              <div className="mb-2 rounded-md border border-violet-500/30 bg-violet-500/10 p-2">
+                <p className="mb-1.5 text-xs font-medium text-violet-700 dark:text-violet-300">
+                  Parked awaiting a human task — approve or reject to advance the run.
+                </p>
+                <UserTaskActions runId={run.id} onCompleted={onActed} />
+              </div>
+            ) : null}
             {loadingSteps ? (
               <Skeleton className="h-10 w-full" />
             ) : steps && steps.length > 0 ? (

@@ -2,6 +2,7 @@ import { type Node } from "@xyflow/react";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import type { Connection } from "@/lib/api/connections";
 import { ACTION_CONFIG_FIELDS, ACTION_TYPES } from "./actionTypes";
 import { NodeInspector } from "./NodeInspector";
 
@@ -340,5 +341,61 @@ describe("NodeInspector event fields", () => {
       />,
     );
     expect(screen.queryByText("Delay (seconds)")).toBeNull();
+  });
+});
+
+describe("NodeInspector http_request connector", () => {
+  const CONN: Connection = {
+    id: "c1",
+    name: "Stripe",
+    kind: "http",
+    base_url: "https://api.stripe.com",
+    auth_type: "bearer",
+    config: {},
+    has_secret: true,
+  };
+
+  it("renders the connector fields for an http_request task", () => {
+    render(
+      <NodeInspector
+        node={taskNode({ action_type: "http_request" })}
+        onChangeData={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText("Connection")).not.toBeNull();
+    expect(screen.queryByText("Method")).not.toBeNull();
+    expect(screen.queryByText("Capture response as")).not.toBeNull();
+  });
+
+  it("prunes an emptied field through the full-replace path (not a shallow merge)", () => {
+    const onChangeData = vi.fn();
+    render(
+      <NodeInspector
+        node={taskNode({ action_type: "http_request", config: { connection: "Stripe", method: "GET" } })}
+        onChangeData={onChangeData}
+        onDelete={vi.fn()}
+      />,
+    );
+    // No connections passed → the connection is a free-text input showing "Stripe".
+    fireEvent.change(screen.getByDisplayValue("Stripe"), { target: { value: "" } });
+    const [, next] = onChangeData.mock.calls[onChangeData.mock.calls.length - 1];
+    // The key is GONE (a shallow {...data, ...patch} merge would have kept it).
+    expect(next.config).not.toHaveProperty("connection");
+    expect(next.config).toMatchObject({ method: "GET" });
+    expect(next).toMatchObject({ task_type: "service", action_type: "http_request" });
+  });
+
+  it("offers a saved-connection picker when connections are provided", () => {
+    render(
+      <NodeInspector
+        node={taskNode({ action_type: "http_request" })}
+        connections={[CONN]}
+        onChangeData={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+    const option = screen.getByRole("option", { name: /Stripe/ }) as HTMLOptionElement;
+    expect(option.value).toBe("Stripe");
   });
 });

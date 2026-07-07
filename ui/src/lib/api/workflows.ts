@@ -191,3 +191,30 @@ export async function listRuns(id: string, limit = 50): Promise<WorkflowRun[]> {
 export async function listRunSteps(runId: string): Promise<WorkflowRunStep[]> {
   return (await apiClient.get<WorkflowRunStep[]>(`/workflows/runs/${runId}/steps`)).data;
 }
+
+/** Input for completing a human task a run is parked on (the inbox action). */
+export interface CompleteTaskInput {
+  /** Which waiting token to signal; omit to signal the run's single user task. */
+  node_id?: string;
+  /** Decision variables the flow branches on (e.g. `{ approved: true }`). */
+  variables?: Record<string, unknown>;
+  /** Optional structured output stored on the completed step. */
+  output?: Record<string, unknown>;
+}
+
+export interface CompleteTaskResult {
+  run_id: string;
+  status: RunStatus;
+}
+
+/**
+ * Complete a human task a `waiting` run is parked on — reactivates the wait token
+ * (merging any decision `variables`) and drives the run forward. Returns the
+ * run's status after advancing.
+ */
+export async function completeTask(
+  runId: string,
+  input: CompleteTaskInput = {},
+): Promise<CompleteTaskResult> {
+  return (await apiClient.post<CompleteTaskResult>(`/workflows/runs/${runId}/complete-task`, input)).data;
+}
