@@ -46,6 +46,17 @@ class ProcessingStatus(StrEnum):
     FAILED = "FAILED"
     CANCELLED = "CANCELLED"
 
+    @classmethod
+    def terminal(cls) -> frozenset["ProcessingStatus"]:
+        """States a document rests in once ingestion has concluded.
+
+        These are **sticky** against the worker's status callback: a duplicate
+        or redelivered task execution (Celery ``acks_late`` can run concurrent
+        copies) must not revert CANCELLED/SUCCESS/FAILED back to PROCESSING. Only
+        an explicit reprocess re-opens the document, via a separate PENDING write.
+        """
+        return frozenset({cls.SUCCESS, cls.FAILED, cls.CANCELLED})
+
 
 class Folder(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "folders"
