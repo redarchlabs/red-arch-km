@@ -17,7 +17,7 @@ import { ArrowDown, ArrowUp, Trash2 } from "lucide-react";
 
 import { Input } from "@/components/ui/input";
 import type { EntityField } from "@/lib/api/entities";
-import type { FieldWidth, FormFieldConfig } from "@/lib/api/forms";
+import type { FieldDisplay, FieldWidth, FormFieldConfig } from "@/lib/api/forms";
 
 interface FormFieldsEditorProps {
   entityFields: EntityField[];
@@ -133,6 +133,21 @@ export function FormFieldsEditor({ entityFields, fields, onChange }: FormFieldsE
                       <option value="half">Half</option>
                     </select>
                   </label>
+                  {meta?.field_type === "picklist" ? (
+                    <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                      Display as
+                      <select
+                        value={field.display ?? "dropdown"}
+                        onChange={(e) =>
+                          updateAt(index, { display: e.target.value as FieldDisplay })
+                        }
+                        className={selectClass}
+                      >
+                        <option value="dropdown">Dropdown</option>
+                        <option value="radio">Radio</option>
+                      </select>
+                    </label>
+                  ) : null}
                 </div>
 
                 <Input

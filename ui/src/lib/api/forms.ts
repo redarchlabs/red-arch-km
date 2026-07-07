@@ -13,6 +13,10 @@ export type SectionMode = "inline" | "modal" | "table";
 // shares a row with the adjacent half-width field (two columns).
 export type FieldWidth = "full" | "half";
 
+// How a picklist field is rendered — purely presentational (the submitted value
+// is one of the field's options either way). Ignored for non-picklist fields.
+export type FieldDisplay = "dropdown" | "radio";
+
 export interface FormFieldConfig {
   slug: string;
   label?: string | null;
@@ -21,6 +25,7 @@ export interface FormFieldConfig {
   placeholder?: string | null;
   width?: FieldWidth | null;
   heading?: string | null; // group heading rendered above this field
+  display?: FieldDisplay | null; // picklist render style (dropdown/radio)
 }
 
 export interface FormSectionConfig {
@@ -127,6 +132,7 @@ export interface PublicFormField {
   placeholder?: string | null;
   width?: FieldWidth | null;
   heading?: string | null;
+  display?: FieldDisplay | null;
 }
 
 export interface PublicFormSection {

@@ -242,6 +242,7 @@ function Section(props: SectionProps) {
                   <Field
                     key={f.slug}
                     field={f}
+                    name={`${section.key}-${idx}-${f.slug}`}
                     value={row[f.slug]}
                     onChange={(v) => props.onRowChange(idx, f.slug, v)}
                   />
@@ -288,6 +289,7 @@ function Section(props: SectionProps) {
                   <Field
                     key={f.slug}
                     field={f}
+                    name={`${section.key}-${f.slug}`}
                     value={props.inlineValues[f.slug]}
                     onChange={(v) => props.onInlineChange(f.slug, v)}
                   />
@@ -315,6 +317,7 @@ function Section(props: SectionProps) {
         <Field
           key={f.slug}
           field={f}
+          name={`${section.key}-${f.slug}`}
           value={props.inlineValues[f.slug]}
           onChange={(v) => props.onInlineChange(f.slug, v)}
         />
@@ -327,12 +330,17 @@ function Field({
   field,
   value,
   onChange,
+  name,
 }: {
   field: PublicFormField;
   value: unknown;
   onChange: (v: unknown) => void;
+  // Radio-group name. Must be unique per field *instance* — the same picklist
+  // repeats across 1:M table rows, so callers scope this by section/row.
+  name?: string;
 }) {
   const str = value == null ? "" : String(value);
+  const groupName = name ?? field.slug;
   const placeholder = field.placeholder ?? undefined;
   const labelText = (
     <>
@@ -367,6 +375,25 @@ function Field({
       case "timestamptz":
         return <input type="datetime-local" className={inputClass} required={field.required} value={str} onChange={(e) => onChange(e.target.value)} />;
       case "picklist":
+        if (field.display === "radio") {
+          return (
+            <div className="space-y-1.5">
+              {field.options.map((o) => (
+                <label key={o} className="flex items-center gap-2 text-sm">
+                  <input
+                    type="radio"
+                    name={groupName}
+                    required={field.required}
+                    checked={str === o}
+                    value={o}
+                    onChange={(e) => onChange(e.target.value)}
+                  />
+                  {o}
+                </label>
+              ))}
+            </div>
+          );
+        }
         return (
           <select className={inputClass} required={field.required} value={str} onChange={(e) => onChange(e.target.value || null)}>
             <option value="">Select…</option>
