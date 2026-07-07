@@ -108,6 +108,7 @@ def _public_fields(
                 placeholder=fc.placeholder,
                 width=fc.width,
                 heading=fc.heading,
+                display=fc.display,
             )
         )
     return out

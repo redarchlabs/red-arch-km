@@ -1,13 +1,20 @@
 "use client";
 
-import { ArrowLeft, Copy, LinkIcon } from "lucide-react";
+import { ArrowLeft, Copy, Eye, LinkIcon } from "lucide-react";
 import Link from "next/link";
-import { use, useCallback, useEffect, useState } from "react";
+import { use, useCallback, useEffect, useMemo, useState } from "react";
 
 import { FormFieldsEditor } from "@/components/forms/FormFieldsEditor";
+import { FormPreview } from "@/components/forms/FormPreview";
 import { FormSectionsEditor } from "@/components/forms/FormSectionsEditor";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -55,6 +62,7 @@ export default function FormBuilderPage({ params }: { params: Promise<{ id: stri
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [showPreview, setShowPreview] = useState(false);
 
   // Link generation.
   const [targetRecordId, setTargetRecordId] = useState("");
@@ -133,6 +141,21 @@ export default function FormBuilderPage({ params }: { params: Promise<{ id: stri
     }
   };
 
+  // Preview reflects the current (possibly unsaved) editor state so the author
+  // sees their edits before saving. Owning entity first so FormPreview resolves
+  // field types even if listEntities() came back empty.
+  const previewForm = useMemo<Form | null>(
+    () => (form ? { ...form, config: { ...form.config, fields, sections } } : null),
+    [form, fields, sections],
+  );
+  const previewEntities = useMemo<EntityDefinition[]>(
+    () =>
+      entity
+        ? [entity, ...allEntities.filter((e) => e.id !== entity.id)]
+        : allEntities,
+    [entity, allEntities],
+  );
+
   if (loading) return <Skeleton className="h-96 w-full" />;
   if (!form || !entity) return <p className="text-sm text-destructive">{error ?? "Form not found."}</p>;
 
@@ -144,12 +167,16 @@ export default function FormBuilderPage({ params }: { params: Promise<{ id: stri
         <Link href="/forms" className="text-muted-foreground hover:text-foreground">
           <ArrowLeft className="h-5 w-5" />
         </Link>
-        <div>
+        <div className="flex-1">
           <h1 className="text-2xl font-semibold">{form.name}</h1>
           <p className="text-sm text-muted-foreground">
             Collects into <span className="font-medium">{entity.name}</span> · updates the emailed record
           </p>
         </div>
+        <Button type="button" variant="outline" onClick={() => setShowPreview(true)}>
+          <Eye className="h-4 w-4" />
+          Preview
+        </Button>
       </div>
 
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
@@ -273,6 +300,32 @@ export default function FormBuilderPage({ params }: { params: Promise<{ id: stri
           </CardContent>
         </Card>
       </div>
+
+      <Dialog
+        open={showPreview}
+        onClose={() => setShowPreview(false)}
+        className="max-w-xl"
+      >
+        {previewForm ? (
+          <>
+            <DialogHeader>
+              <DialogTitle>{previewForm.name}</DialogTitle>
+              <DialogDescription>
+                {saved
+                  ? "Preview of the saved form as the recipient sees it."
+                  : "Preview reflects your current edits — save to publish them."}
+              </DialogDescription>
+            </DialogHeader>
+            <div className="max-h-[70vh] overflow-y-auto pr-1">
+              <FormPreview
+                form={previewForm}
+                entities={previewEntities}
+                relationships={[...outgoing, ...incoming]}
+              />
+            </div>
+          </>
+        ) : null}
+      </Dialog>
     </div>
   );
 }

@@ -21,6 +21,13 @@ SectionMode = Literal["inline", "modal", "table"]
 #   half — shares a row with the adjacent half-width field (two columns)
 FieldWidth = Literal["full", "half"]
 
+# How a picklist field is rendered. Purely presentational: the submitted value is
+# still one of the entity field's own options either way, so validation/coercion
+# is unaffected. Ignored for non-picklist fields.
+#   dropdown — a <select> (default)
+#   radio    — a radio-button group
+FieldDisplay = Literal["dropdown", "radio"]
+
 
 class FormFieldConfig(BaseModel):
     """One entity field exposed on the form, with optional presentation overrides.
@@ -39,6 +46,7 @@ class FormFieldConfig(BaseModel):
     placeholder: str | None = None  # hint text shown inside the empty input
     width: FieldWidth | None = None  # column width in the responsive grid
     heading: str | None = None  # group heading rendered above this field
+    display: FieldDisplay | None = None  # picklist render style (dropdown/radio)
 
 
 class FormSectionConfig(BaseModel):
@@ -148,6 +156,7 @@ class PublicFormField(BaseModel):
     placeholder: str | None = None  # presentational hint text
     width: FieldWidth | None = None  # column width in the responsive grid
     heading: str | None = None  # group heading rendered above this field
+    display: FieldDisplay | None = None  # picklist render style (dropdown/radio)
 
 
 class PublicFormSection(BaseModel):

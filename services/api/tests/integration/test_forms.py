@@ -78,6 +78,12 @@ async def _make_entity(admin_session: AsyncSession, org: Org) -> uuid.UUID:
             fields=[
                 EntityFieldCreate(name="Name", slug="name", field_type="text"),
                 EntityFieldCreate(name="Phone", slug="phone", field_type="text"),
+                EntityFieldCreate(
+                    name="Status",
+                    slug="status",
+                    field_type="picklist",
+                    picklist_options=["new", "active", "closed"],
+                ),
             ],
         )
     )
@@ -216,6 +222,9 @@ class TestPublicFormFlow:
                             heading="Contact details",
                         ),
                         FormFieldConfig(slug="name", width="half"),
+                        # display is purely presentational (dropdown vs radio) —
+                        # it must echo through and never enter the writable set.
+                        FormFieldConfig(slug="status", display="radio"),
                     ]
                 ),
             )
@@ -232,13 +241,18 @@ class TestPublicFormFlow:
             await ps.commit()
 
         # Order preserved from config (phone first), presentation echoed through.
-        assert [f.slug for f in read.fields] == ["phone", "name"]
+        assert [f.slug for f in read.fields] == ["phone", "name", "status"]
         phone = read.fields[0]
         assert phone.placeholder == "(555) 555-5555"
         assert phone.width == "half"
         assert phone.heading == "Contact details"
+        assert phone.display is None
         assert read.fields[1].width == "half"
         assert read.fields[1].placeholder is None
+        # Picklist render style survives; options resolve from the entity catalog.
+        status = read.fields[2]
+        assert status.display == "radio"
+        assert status.options == ["new", "active", "closed"]
 
     async def test_expired_link_rejected(
         self, admin_session: AsyncSession, session: AsyncSession, engine: AsyncEngine

@@ -2,8 +2,10 @@
 
 import { Plus, Trash2 } from "lucide-react";
 
+import { FormFieldsEditor } from "@/components/forms/FormFieldsEditor";
+import { Input } from "@/components/ui/input";
 import type { EntityDefinition, EntityRelationship } from "@/lib/api/entities";
-import type { FormSectionConfig, SectionMode } from "@/lib/api/forms";
+import type { FormFieldConfig, FormSectionConfig, SectionMode } from "@/lib/api/forms";
 
 interface Props {
   allEntities: EntityDefinition[];
@@ -44,14 +46,8 @@ export function FormSectionsEditor({ allEntities, outgoing, incoming, sections, 
   const patchSection = (relId: string, patch: Partial<FormSectionConfig>) =>
     onChange(sections.map((s) => (s.relationship_id === relId ? { ...s, ...patch } : s)));
 
-  const toggleField = (relId: string, slug: string) => {
-    const s = sectionFor(relId);
-    if (!s) return;
-    const has = s.fields.some((f) => f.slug === slug);
-    patchSection(relId, {
-      fields: has ? s.fields.filter((f) => f.slug !== slug) : [...s.fields, { slug }],
-    });
-  };
+  const setSectionFields = (relId: string, fields: FormFieldConfig[]) =>
+    patchSection(relId, { fields });
 
   if (candidates.length === 0) {
     return (
@@ -101,7 +97,18 @@ export function FormSectionsEditor({ allEntities, outgoing, incoming, sections, 
             </div>
 
             {section ? (
-              <div className="mt-3 space-y-2 border-t pt-2">
+              <div className="mt-3 space-y-3 border-t pt-3">
+                <label className="block space-y-1 text-xs text-muted-foreground">
+                  Section header
+                  <Input
+                    value={section.label ?? ""}
+                    onChange={(e) =>
+                      patchSection(c.rel.id, { label: e.target.value || null })
+                    }
+                    placeholder={entity?.name ?? "Related records"}
+                    className="h-8 text-sm"
+                  />
+                </label>
                 {!c.isTable ? (
                   <div className="flex items-center gap-2 text-xs">
                     <span className="text-muted-foreground">Show as</span>
@@ -117,18 +124,11 @@ export function FormSectionsEditor({ allEntities, outgoing, incoming, sections, 
                     ))}
                   </div>
                 ) : null}
-                <div className="flex flex-wrap gap-2">
-                  {(entity?.fields ?? []).map((f) => (
-                    <label key={f.slug} className="flex items-center gap-1 text-xs">
-                      <input
-                        type="checkbox"
-                        checked={section.fields.some((sf) => sf.slug === f.slug)}
-                        onChange={() => toggleField(c.rel.id, f.slug)}
-                      />
-                      {f.name}
-                    </label>
-                  ))}
-                </div>
+                <FormFieldsEditor
+                  entityFields={entity?.fields ?? []}
+                  fields={section.fields}
+                  onChange={(fields) => setSectionFields(c.rel.id, fields)}
+                />
               </div>
             ) : null}
           </div>
