@@ -5,18 +5,30 @@ import { useEffect, useRef, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
-import type { Document } from "@/types";
+import type { Document, ProcessingDetails } from "@/types";
 
 import type { ExplorerItem } from "./explorerItem";
 
-/** Compact status badge shown in the file browser; nothing once ready. */
-export function StatusBadge({ status }: { status: Document["processing_status"] }) {
+/**
+ * Compact status badge shown in the file browser; nothing once ready. While
+ * processing it surfaces the coarse ingest percent (from processing_details)
+ * so the explorer shows live progress, not just a spinner.
+ */
+export function StatusBadge({
+  status,
+  details,
+}: {
+  status: Document["processing_status"];
+  details?: ProcessingDetails | null;
+}) {
   if (status === "SUCCESS") return null;
   if (status === "FAILED") return <Badge variant="destructive">Failed</Badge>;
+  if (status === "CANCELLED") return <Badge variant="outline">Cancelled</Badge>;
+  const percent = typeof details?.percent === "number" ? Math.round(details.percent) : null;
   return (
     <Badge variant="secondary" className="gap-1">
       <Loader2 className="h-3 w-3 animate-spin" />
-      Processing
+      {percent != null ? `Processing ${percent}%` : "Processing"}
     </Badge>
   );
 }

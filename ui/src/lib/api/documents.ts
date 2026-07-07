@@ -124,6 +124,47 @@ export async function deleteDocument(id: string): Promise<void> {
   await apiClient.delete(`/documents/${id}`);
 }
 
+/**
+ * Cancel an in-progress ingest. Authorised for the document's uploader or an
+ * org admin (the server 403s otherwise, 409s if the doc isn't processing).
+ * Returns the document with its status flipped to CANCELLED.
+ */
+export async function cancelDocumentIngest(id: string): Promise<Document> {
+  const response = await apiClient.post<Document>(`/documents/${id}/cancel`);
+  return response.data;
+}
+
+/**
+ * Re-run ingestion for an existing document from its stored original. Works for
+ * any document type (unlike updateDocumentContent, which is text-only). The
+ * server purges the prior index before re-dispatching, so the re-ingest
+ * replaces rather than appends. Authorised for the uploader or an org admin
+ * (403 otherwise); 409 if an ingest is already in flight. Returns the document
+ * with status flipped to PENDING.
+ */
+export async function reprocessDocument(id: string): Promise<Document> {
+  const response = await apiClient.post<Document>(`/documents/${id}/reprocess`);
+  return response.data;
+}
+
+export interface JobLogEntry {
+  ts: string | null;
+  level: string | null;
+  stage: string | null;
+  message: string | null;
+}
+
+export interface JobLogsResponse {
+  document_id: string;
+  events: JobLogEntry[];
+}
+
+/** Fetch the ingest job's log lines for a document (oldest first). */
+export async function getDocumentLogs(id: string): Promise<JobLogsResponse> {
+  const response = await apiClient.get<JobLogsResponse>(`/documents/${id}/logs`);
+  return response.data;
+}
+
 export interface DocumentChunk {
   id: string;
   text: string;

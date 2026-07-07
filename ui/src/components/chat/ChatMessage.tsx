@@ -36,17 +36,36 @@ function sanitize(text: string): string {
 }
 
 /**
- * Collapse sources to one entry per document and assign a stable 1-based
- * number. The backend already dedupes and numbers, but older persisted
- * messages may still carry per-chunk duplicates — so we dedupe defensively.
+ * Deep-link to the cited passage: the document reader anchors each indexed
+ * chunk as `#chunk-<order>`. Falls back to the document top when the source
+ * carries no chunk_order (older persisted messages predate passage-level
+ * citations).
+ */
+function passageHref(src: ChatSource): string {
+  const base = `/documents/${src.document_key}`;
+  return src.chunk_order != null ? `${base}#chunk-${src.chunk_order}` : base;
+}
+
+/** Human label for a source: document title, plus the section when known. */
+function sourceLabel(src: ChatSource): string {
+  const title = src.document_title || src.document_key;
+  return src.section ? `${title} — ${src.section}` : title;
+}
+
+/**
+ * De-duplicate sources to one entry per *passage* (document + chunk) and assign
+ * a stable 1-based number. The backend already numbers per passage, but we
+ * dedupe defensively. Sources without a chunk_order (older persisted messages)
+ * key on the document alone, preserving the old one-per-document behaviour.
  */
 function dedupeSources(sources: ChatSource[]): ChatSource[] {
-  const byId = new Map<string, ChatSource>();
+  const byKey = new Map<string, ChatSource>();
   for (const s of sources) {
-    const key = s.document_id || s.document_key;
-    if (!byId.has(key)) byId.set(key, s);
+    const docKey = s.document_id || s.document_key;
+    const key = s.chunk_order != null ? `${docKey}#${s.chunk_order}` : docKey;
+    if (!byKey.has(key)) byKey.set(key, s);
   }
-  return [...byId.values()].map((s, i) => ({ ...s, number: s.number ?? i + 1 }));
+  return [...byKey.values()].map((s, i) => ({ ...s, number: s.number ?? i + 1 }));
 }
 
 /**
@@ -74,8 +93,8 @@ function renderWithCitations(text: string, sources: ChatSource[]): React.ReactNo
       nodes.push(
         <Link
           key={`c${k}`}
-          href={`/documents/${src.document_key}`}
-          title={src.document_title || src.document_key}
+          href={passageHref(src)}
+          title={src.snippet ? `${sourceLabel(src)} — "${src.snippet}"` : sourceLabel(src)}
           className="mx-0.5 rounded bg-primary/10 px-1 text-xs font-medium text-primary no-underline hover:bg-primary/20"
         >
           [{n}]
@@ -129,16 +148,22 @@ export function ChatMessage({ message }: ChatMessageProps) {
         {sources.length > 0 ? (
           <div className="mt-3 border-t pt-2">
             <p className="mb-1 text-xs font-medium text-muted-foreground">Sources</p>
-            <ol className="space-y-1">
+            <ol className="space-y-1.5">
               {sources.map((src) => (
-                <li key={src.document_id || src.document_key} className="text-xs">
+                <li
+                  key={`${src.document_id || src.document_key}-${src.chunk_order ?? src.number}`}
+                  className="text-xs"
+                >
                   <Link
-                    href={`/documents/${src.document_key}`}
-                    className="inline-flex items-center gap-1.5 text-muted-foreground hover:text-foreground hover:underline"
+                    href={passageHref(src)}
+                    className="inline-flex items-baseline gap-1.5 text-muted-foreground hover:text-foreground hover:underline"
                   >
                     <span className="font-medium text-primary">[{src.number}]</span>
-                    <span>{src.document_title || src.document_key}</span>
+                    <span>{sourceLabel(src)}</span>
                   </Link>
+                  {src.snippet ? (
+                    <p className="mt-0.5 pl-6 italic text-muted-foreground/80">“{src.snippet}”</p>
+                  ) : null}
                 </li>
               ))}
             </ol>

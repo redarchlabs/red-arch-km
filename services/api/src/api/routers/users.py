@@ -7,6 +7,7 @@ profile, and user CREATE / DELETE flows through the identity provider.
 
 from __future__ import annotations
 
+import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
@@ -18,7 +19,7 @@ from api.dependencies import get_db, get_tenant_db
 from api.repositories.org import OrgRepository
 from api.repositories.user import UserRepository
 from api.schemas.common import PaginatedResponse, PaginationParams, make_page
-from api.schemas.user import CurrentUserRead, UserRead
+from api.schemas.user import CurrentUserRead, OrgSummary, UserRead
 
 router = APIRouter()
 
@@ -39,16 +40,22 @@ async def get_me(
     """Return the current user along with their accessible orgs."""
     org_repo = OrgRepository(session)
     if user.is_site_admin:
+        # Site admins administer every org (synthetic membership at the API layer).
         orgs, _ = await org_repo.list_all(limit=10_000)
+        admin_org_ids: set[uuid.UUID] = {o.id for o in orgs}
     else:
         orgs, _ = await org_repo.list_for_user(user.profile_id, limit=10_000)
+        admin_org_ids = await org_repo.admin_org_ids(user.profile_id)
 
     return CurrentUserRead(
         id=user.profile_id,
         username=user.username,
         email=user.email,
         is_site_admin=user.is_site_admin,
-        orgs=[{"id": str(o.id), "name": o.name} for o in orgs],
+        orgs=[
+            OrgSummary(id=str(o.id), name=o.name, is_admin=o.id in admin_org_ids)
+            for o in orgs
+        ],
     )
 
 

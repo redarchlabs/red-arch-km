@@ -96,6 +96,42 @@ class TestIngestService:
         assert all("summary" in r.payload for r in records)
         assert all(r.payload["summary"].startswith("summary-") for r in records)
 
+    def test_section_stored_in_chunk_payload(self, mock_stores: MagicMock) -> None:
+        """Each chunk payload carries its heading path in `section`.
+
+        Prose with no headings must still carry the key (as None) so retrieval
+        can rely on it being present.
+        """
+        service = IngestService(mock_stores)
+        service.ingest_document(
+            tenant_id="t1",
+            document_key="dk1",
+            title="Doc",
+            text="# Overview\nHello world. This is a test.",
+            tags=[],
+            access_keys=[],
+            use_knowledge_graph=False,
+        )
+        chunk_call = mock_stores.vector.upsert_vectors.call_args_list[0]
+        records = chunk_call.args[1]
+        assert all("section" in r.payload for r in records)
+        assert all(r.payload["section"] == "Overview" for r in records)
+
+    def test_section_is_none_for_unstructured_text(self, mock_stores: MagicMock) -> None:
+        service = IngestService(mock_stores)
+        service.ingest_document(
+            tenant_id="t1",
+            document_key="dk1",
+            title="Doc",
+            text="Hello world. This is a test.",
+            tags=[],
+            access_keys=[],
+            use_knowledge_graph=False,
+        )
+        chunk_call = mock_stores.vector.upsert_vectors.call_args_list[0]
+        records = chunk_call.args[1]
+        assert all(r.payload["section"] is None for r in records)
+
     def test_document_summary_uses_hierarchical(self, mock_stores: MagicMock) -> None:
         """The service should call the hierarchical variant that also yields a tree."""
         service = IngestService(mock_stores)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import json
 import logging
 import os
 import uuid
@@ -12,13 +13,14 @@ from typing import Annotated, Any
 import httpx
 import mammoth
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
+from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth.dependencies import OrgContext, require_org_access
 from api.config import Settings, get_settings
-from api.dependencies import get_tenant_db
-from api.models.document import Tag
+from api.dependencies import get_redis, get_tenant_db
+from api.models.document import ProcessingStatus, Tag
 from api.models.org import Org
 from api.repositories.document import DocumentRepository
 from api.repositories.folder import FolderRepository
@@ -28,13 +30,26 @@ from api.schemas.document import (
     DocumentCreate,
     DocumentRead,
     DocumentUpdate,
+    JobLogEntry,
+    JobLogsRead,
     UploadBatchRead,
 )
 from api.services.brain_client import BrainAPIClient
 from api.services.folder_service import compute_folder_masks
 from api.services.permission_config import calculate_user_masks_from_membership
 from api.services.storage import StorageClient
+from api.tasks.celery_app import celery_app
 from api.tasks.ingest import dispatch_extract_ingest, dispatch_ingest, dispatch_metadata_update
+
+# Redis key formats mirrored from the worker's ``tasks/_job.py`` — keep in sync.
+# Cancel flag keys on the Celery task id (unique per ingest, survives redelivery);
+# job logs key on the document id (a document's ingest history for the reader).
+_INGEST_CANCEL_KEY = "ingest:cancel:{task_id}"
+_JOB_LOG_KEY = "job:logs:{document_id}"
+# How long a cancel flag lingers so a slow/redelivered worker still sees it.
+_CANCEL_FLAG_TTL_SECONDS = 3600
+# Ingest states that can still be cancelled (terminal states cannot).
+_CANCELLABLE_STATUSES: frozenset[str] = frozenset({ProcessingStatus.PENDING, ProcessingStatus.PROCESSING})
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -223,6 +238,11 @@ async def create_document(
                     "metadata": doc.metadata_ or {},
                 }
             )
+            # Persist the task id so this ingest can be cancelled + its logs
+            # correlated. The row was already committed above and the RLS role
+            # reset with it; this dirty attribute is flushed by get_tenant_db's
+            # final commit (privileged connection, targeting a known PK).
+            doc.celery_task_id = task_id
             logger.info("Document %s queued for ingestion (task %s)", doc.id, task_id)
         except Exception:
             logger.exception(
@@ -503,6 +523,7 @@ async def upload_document(
     for doc, payload in staged:
         try:
             task_id = dispatch_extract_ingest(payload)
+            doc.celery_task_id = task_id  # persist for cancel + job-log correlation
             logger.info("Upload %s queued for extraction+ingestion (task %s)", doc.id, task_id)
         except Exception:
             logger.exception(
@@ -711,6 +732,102 @@ async def delete_document(
     logger.info("Deleted document %s in org %s", document_id, ctx.org_id)
 
 
+@router.post("/{document_id}/cancel", response_model=DocumentRead)
+async def cancel_document_ingest(
+    document_id: uuid.UUID,
+    ctx: Annotated[OrgContext, Depends(require_org_access)],
+    session: Annotated[AsyncSession, Depends(get_tenant_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
+    redis: Annotated[Redis, Depends(get_redis)],
+) -> DocumentRead:
+    """Cancel an in-progress ingest for a document.
+
+    Authorised for the document's uploader or an org admin. Only a PENDING /
+    PROCESSING document is cancellable; a terminal one 409s. Cancellation is
+    belt-and-suspenders: we (1) set a Redis flag the worker checks at every
+    stage boundary — so even a redelivered task (Celery's in-memory revoke set
+    is lost on worker restart) aborts — and (2) revoke+terminate the running
+    task to stop it immediately. The row is then marked CANCELLED and any
+    partial vectors written before the abort are purged best-effort.
+    """
+    repo = DocumentRepository(session, ctx.org_id)
+    doc = await repo.get(document_id)
+    if doc is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
+
+    is_owner = doc.uploaded_by_id is not None and doc.uploaded_by_id == ctx.user.profile_id
+    if not (is_owner or ctx.is_org_admin):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the document's uploader or an org admin can cancel its ingest",
+        )
+
+    if doc.processing_status not in _CANCELLABLE_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Document is not being processed (status: {doc.processing_status})",
+        )
+
+    if doc.celery_task_id:
+        # (1) Flag first so a task mid-flight (or redelivered) aborts at its next
+        # stage boundary even if the revoke broadcast is missed.
+        try:
+            await redis.set(
+                _INGEST_CANCEL_KEY.format(task_id=doc.celery_task_id),
+                "1",
+                ex=_CANCEL_FLAG_TTL_SECONDS,
+            )
+        except Exception:  # noqa: BLE001 — a broker hiccup must not block the cancel
+            logger.warning("Failed to set cancel flag for document %s", document_id)
+        # (2) Revoke + terminate the running task process. Fire-and-forget
+        # broadcast; a failure here is covered by the flag above.
+        try:
+            celery_app.control.revoke(doc.celery_task_id, terminate=True, signal="SIGTERM")
+        except Exception:  # noqa: BLE001
+            logger.warning("Celery revoke failed for task %s (document %s)", doc.celery_task_id, document_id)
+
+    doc.processing_status = ProcessingStatus.CANCELLED
+    doc.processing_details = {"stage": "cancelled"}
+    await session.flush()
+
+    # Purge any partial vectors/claims written before the abort (ingest is not
+    # idempotent; a mid-flight kill can leave a partial set). Best-effort.
+    await _purge_brain_vectors(settings, str(ctx.org_id), doc.document_key)
+    logger.info("Cancelled ingest for document %s in org %s", document_id, ctx.org_id)
+    return DocumentRead.model_validate(doc)
+
+
+@router.get("/{document_id}/logs", response_model=JobLogsRead)
+async def get_document_logs(
+    document_id: uuid.UUID,
+    ctx: Annotated[OrgContext, Depends(require_org_access)],
+    session: Annotated[AsyncSession, Depends(get_tenant_db)],
+    redis: Annotated[Redis, Depends(get_redis)],
+) -> JobLogsRead:
+    """Return the ingest job's log lines for a document (newest last).
+
+    The worker appends structured lines to a capped, TTL'd Redis list as it runs
+    each stage. Empty when nothing has run yet, the TTL expired, or the doc was
+    created before this feature. Scoped to the caller's org via RLS.
+    """
+    repo = DocumentRepository(session, ctx.org_id)
+    doc = await repo.get(document_id)
+    if doc is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
+
+    try:
+        raw = list(await redis.lrange(_JOB_LOG_KEY.format(document_id=document_id), 0, -1))  # type: ignore[misc]
+    except Exception:  # noqa: BLE001 — a broker hiccup must not 500 the reader
+        raw = []
+    events: list[JobLogEntry] = []
+    for item in raw:
+        try:
+            events.append(JobLogEntry(**json.loads(item)))
+        except (ValueError, TypeError):
+            continue
+    return JobLogsRead(document_id=document_id, events=events)
+
+
 # Text-based originals we can return verbatim for formatted reading.
 _TEXT_ORIGINAL_EXTENSIONS: dict[str, str] = {
     ".md": "markdown",
@@ -907,7 +1024,7 @@ async def update_document_content(
         await session.commit()
         await _purge_brain_vectors(settings, str(ctx.org_id), doc.document_key)
         try:
-            dispatch_extract_ingest(
+            doc.celery_task_id = dispatch_extract_ingest(
                 {
                     "document_id": str(doc.id),
                     "tenant_id": str(ctx.org_id),
@@ -935,7 +1052,7 @@ async def update_document_content(
         await session.commit()
         await _purge_brain_vectors(settings, str(ctx.org_id), doc.document_key)
         try:
-            dispatch_ingest(
+            doc.celery_task_id = dispatch_ingest(
                 {
                     "document_id": str(doc.id),
                     "tenant_id": str(ctx.org_id),
@@ -957,6 +1074,129 @@ async def update_document_content(
         await _purge_brain_vectors(settings, str(ctx.org_id), doc.document_key)
         logger.info("Document %s content cleared; skipping re-ingest", doc.id)
 
+    return DocumentRead.model_validate(doc)
+
+
+def _redispatch_ingest(
+    *,
+    doc: Any,
+    tenant_id: str,
+    tag_names: list[str],
+    access_keys: list[int],
+    use_kg: bool,
+) -> str | None:
+    """Enqueue a re-ingest for an already-stored document; return the task id.
+
+    Chooses the extract+ingest path for a storage-backed original (the worker
+    re-downloads and re-extracts it) or the text-only path for inline authored
+    text. Returns ``None`` when the doc has neither an original nor text to
+    ingest. Callers MUST purge existing vectors first — ingest is not
+    idempotent (see :func:`_purge_brain_vectors`).
+    """
+    if doc.document_url:
+        return dispatch_extract_ingest(
+            {
+                "document_id": str(doc.id),
+                "tenant_id": tenant_id,
+                "document_key": doc.document_key,
+                "document_url": doc.document_url,
+                "filename": os.path.basename(doc.document_url),
+                "title": doc.title,
+                # translation_method isn't persisted on the row; the original
+                # upload default (OCR) is the right fallback for re-extraction.
+                "translation_method": (doc.metadata_ or {}).get("translation_method", "ocr"),
+                "tags": tag_names,
+                "access_keys": access_keys,
+                "use_knowledge_graph": use_kg,
+                "metadata": doc.metadata_ or {},
+            }
+        )
+    if doc.text:
+        return dispatch_ingest(
+            {
+                "document_id": str(doc.id),
+                "tenant_id": tenant_id,
+                "document_key": doc.document_key,
+                "title": doc.title,
+                "text": doc.text,
+                "tags": tag_names,
+                "access_keys": access_keys,
+                "use_knowledge_graph": use_kg,
+                "metadata": doc.metadata_ or {},
+            }
+        )
+    return None
+
+
+@router.post("/{document_id}/reprocess", response_model=DocumentRead)
+async def reprocess_document(
+    document_id: uuid.UUID,
+    ctx: Annotated[OrgContext, Depends(require_org_access)],
+    session: Annotated[AsyncSession, Depends(get_tenant_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> DocumentRead:
+    """Re-run ingestion for an existing document from its stored original.
+
+    Unlike ``PUT /content`` (editable text only), this re-dispatches the same
+    extract+ingest the original upload used, re-reading the file from object
+    storage — so it works for every document type, including PDF/image/Word.
+    Use it to pick up pipeline improvements (e.g. new chunking/citation
+    metadata) or to recover a FAILED/CANCELLED document without re-uploading.
+
+    Authorised for the document's uploader or an org admin. Refuses while an
+    ingest is already in flight (cancel it first). Purges the existing
+    vectors/graph/facts before re-dispatching so the re-ingest replaces rather
+    than appends (ingest is not idempotent). The row is committed PENDING before
+    the broker enqueue, so a broker outage leaves it PENDING for a later retry
+    rather than turning the request into a 500.
+    """
+    repo = DocumentRepository(session, ctx.org_id)
+    folder_repo = FolderRepository(session, ctx.org_id)
+    doc = await repo.get(document_id)
+    if doc is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
+
+    is_owner = doc.uploaded_by_id is not None and doc.uploaded_by_id == ctx.user.profile_id
+    if not (is_owner or ctx.is_org_admin):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the document's uploader or an org admin can reprocess it",
+        )
+
+    if doc.processing_status in _CANCELLABLE_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Document is already being processed (status: {doc.processing_status}); cancel it first",
+        )
+
+    if not doc.document_url and not doc.text:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Document has no stored original or text to reprocess",
+        )
+
+    tag_names, access_keys = await _derive_ingest_scoping(folder_repo, doc)
+    use_kg = doc.use_knowledge_graph if doc.use_knowledge_graph is not None else True
+
+    doc.processing_status = ProcessingStatus.PENDING
+    doc.processing_details = {"stage": "queued"}
+    await session.commit()
+
+    # Purge the prior index before re-dispatch so the re-ingest replaces rather
+    # than appends (ingest is not idempotent). Best-effort — a brain-api outage
+    # logs but leaves the doc PENDING for a retry.
+    await _purge_brain_vectors(settings, str(ctx.org_id), doc.document_key)
+    try:
+        doc.celery_task_id = _redispatch_ingest(
+            doc=doc,
+            tenant_id=str(ctx.org_id),
+            tag_names=tag_names,
+            access_keys=access_keys,
+            use_kg=use_kg,
+        )
+    except Exception:
+        logger.exception("Reprocess enqueue failed for %s; left PENDING", doc.id)
+    logger.info("Reprocessing document %s in org %s", document_id, ctx.org_id)
     return DocumentRead.model_validate(doc)
 
 

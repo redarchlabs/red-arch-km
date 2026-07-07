@@ -84,7 +84,7 @@ function IconCell({
       >
         <ItemIcon item={item} className="h-4 w-4 shrink-0" />
         <span className="truncate">{item.name}</span>
-        {item.status ? <StatusBadge status={item.status} /> : null}
+        {item.status ? <StatusBadge status={item.status} details={item.doc?.processing_details} /> : null}
         {menu}
       </button>
     );
@@ -98,7 +98,9 @@ function IconCell({
     >
       <ItemIcon item={item} className={large ? "h-12 w-12" : "h-8 w-8"} />
       <span className={cn("w-full truncate", large ? "text-sm" : "text-xs")}>{item.name}</span>
-      {item.status && item.status !== "SUCCESS" ? <StatusBadge status={item.status} /> : null}
+      {item.status && item.status !== "SUCCESS" ? (
+        <StatusBadge status={item.status} details={item.doc?.processing_details} />
+      ) : null}
       {menu}
     </button>
   );

@@ -38,6 +38,20 @@ export interface Folder {
   contributor_permissions_config: PermissionRule[] | null;
 }
 
+/**
+ * Ingest detail blob (documents.processing_details). Shape varies by phase:
+ * during PROCESSING the worker writes `stage` + `percent`; on SUCCESS
+ * `chunks`/`triplets`; on FAILED an `error`. All fields optional.
+ */
+export interface ProcessingDetails {
+  stage?: string;
+  percent?: number;
+  chunks?: number;
+  triplets?: number;
+  error?: string;
+  [key: string]: unknown;
+}
+
 export interface Document {
   id: string;
   title: string;
@@ -45,7 +59,10 @@ export interface Document {
   document_key: string;
   // Canonical values written by the worker status callback. Must match
   // api ProcessingStatus enum (services/api/src/api/models/document.py).
-  processing_status: "PENDING" | "PROCESSING" | "SUCCESS" | "FAILED";
+  processing_status: "PENDING" | "PROCESSING" | "SUCCESS" | "FAILED" | "CANCELLED";
+  // Structured ingest detail. While PROCESSING the worker writes {stage, percent};
+  // on SUCCESS {chunks, triplets}; on FAILED {error, ...}. Nullable/loose by design.
+  processing_details: ProcessingDetails | null;
   folder_id: string | null;
   org_id: string;
   size_bytes: number | null;

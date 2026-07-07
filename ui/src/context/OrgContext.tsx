@@ -9,6 +9,7 @@ import { useAuth } from "./AuthContext";
 interface OrgSummary {
   id: string;
   name: string;
+  is_admin: boolean;
 }
 
 interface OrgState {
@@ -16,6 +17,8 @@ interface OrgState {
   currentOrgId: string | null;
   currentOrg: OrgSummary | null;
   isSiteAdmin: boolean;
+  /** True if the user administers the current org (site admins: always true). */
+  isOrgAdmin: boolean;
   isLoading: boolean;
   setCurrentOrgId: (id: string) => void;
   refresh: () => Promise<void>;
@@ -97,10 +100,12 @@ export function OrgProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const currentOrg = orgs.find((o) => o.id === currentOrgId) ?? null;
+  // Site admins administer every org; otherwise defer to the current org's flag.
+  const isOrgAdmin = isSiteAdmin || (currentOrg?.is_admin ?? false);
 
   return (
     <OrgContext.Provider
-      value={{ orgs, currentOrgId, currentOrg, isSiteAdmin, isLoading, setCurrentOrgId, refresh }}
+      value={{ orgs, currentOrgId, currentOrg, isSiteAdmin, isOrgAdmin, isLoading, setCurrentOrgId, refresh }}
     >
       {children}
     </OrgContext.Provider>

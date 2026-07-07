@@ -20,10 +20,12 @@ _tracer = get_tracer("brain_api.search")
 
 _RAG_SYSTEM_PROMPT = """\
 You are the organization's knowledge-base assistant. Answer questions ONLY \
-from the provided context (document excerpts and knowledge-graph facts).
+from the provided context (document passages and knowledge-graph facts).
 
-Each source in the context is prefixed with a bracketed number, like [1] or \
-[2]. When a statement in your answer comes from a source, cite it inline by \
+Each source in the context is a specific passage prefixed with a bracketed \
+number, like [1] or [2]. Two passages from the same document have DIFFERENT \
+numbers — cite the exact passage a statement came from, not just the document. \
+When a statement in your answer comes from a source, cite it inline by \
 appending that source's number in brackets right after the statement — e.g. \
 "Migrations run before app services [2]." Cite every claim you can, and cite \
 multiple sources together when relevant, e.g. "[1][3]". Only use the numbers \
@@ -37,6 +39,30 @@ organization's knowledge base has no relevant documents for their question, \
 and suggest uploading or pointing you at relevant documents. You may still \
 respond naturally to greetings and questions about how to use this assistant.
 """
+
+# Max characters of passage text surfaced to the UI as a citation preview.
+# Long enough to show the sentence a citation came from, short enough to keep
+# the sources list compact and the SSE payload small.
+_SNIPPET_MAX_CHARS = 240
+
+
+def _snippet(text: str, max_chars: int = _SNIPPET_MAX_CHARS) -> str:
+    """Trim passage text to a short preview, breaking on a word boundary.
+
+    Collapses internal whitespace/newlines to single spaces so the preview
+    renders cleanly in a one/two-line list item, and appends an ellipsis when
+    the passage was truncated.
+    """
+    collapsed = " ".join(text.split())
+    if len(collapsed) <= max_chars:
+        return collapsed
+    cut = collapsed[:max_chars]
+    # Prefer the last space so we don't slice a word in half; fall back to a
+    # hard cut if there's no space in range.
+    space = cut.rfind(" ")
+    if space > 0:
+        cut = cut[:space]
+    return cut.rstrip() + "…"
 
 
 class SearchService:
@@ -133,9 +159,9 @@ class SearchService:
             except Exception as e:
                 logger.warning("Graph search failed: %s", e)
 
-        # 3. Build LLM prompt (sources deduped to unique documents & numbered)
-        sources = self._dedupe_document_sources(hits)
-        context_blocks = self._format_context(hits, graph_context, sources)
+        # 3. Build LLM prompt (one numbered source per retrieved passage)
+        sources = self._passage_sources(hits)
+        context_blocks = self._format_context(hits, graph_context)
         messages = cast(
             "list[ChatCompletionMessageParam]",
             self._build_messages(query, chat_history or [], context_blocks),
@@ -193,9 +219,9 @@ class SearchService:
             yield {"type": "error", "message": "Retrieval failed"}
             return
 
-        # Collapse chunk hits to unique, numbered documents so the UI shows each
-        # source once and the answer's inline [n] citations line up with them.
-        sources = self._dedupe_document_sources(hits)
+        # One numbered source per retrieved passage so the answer's inline [n]
+        # citations point at the specific passage, not the whole document.
+        sources = self._passage_sources(hits)
         yield {"type": "sources", "sources": sources}
 
         # 2. Optional graph context
@@ -213,7 +239,7 @@ class SearchService:
         yield {"type": "graph", "triplets": graph_context}
 
         # 3. Stream LLM completion
-        context_blocks = self._format_context(hits, graph_context, sources)
+        context_blocks = self._format_context(hits, graph_context)
         messages = cast(
             "list[ChatCompletionMessageParam]",
             self._build_messages(query, chat_history or [], context_blocks),
@@ -241,57 +267,52 @@ class SearchService:
         yield {"type": "done"}
 
     @staticmethod
-    def _dedupe_document_sources(hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Collapse chunk-level hits into unique documents, numbered [1..N].
+    def _passage_sources(hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Turn each retrieved chunk into its own numbered passage-level source.
 
-        A single document usually matches several chunks, which previously
-        surfaced as several identical "Sources" rows. We keep one entry per
-        document (first appearance wins its position; best score is retained)
-        and assign a stable ``number`` so the answer's inline ``[n]`` citations
-        map 1:1 to the sources the UI renders.
+        Retrieval already returns distinct chunks in rank order, so we keep them
+        1:1 (no document-level collapse): source ``number`` == the passage's
+        position in the context, letting the answer's inline ``[n]`` cite the
+        exact passage. Each source carries the passage's ``section`` (heading
+        path) and a trimmed ``snippet`` so the UI can show *where* in the
+        document the citation came from and deep-link to that chunk.
         """
-        by_key: dict[str, dict[str, Any]] = {}
-        ordered: list[dict[str, Any]] = []
-        for hit in hits:
+        sources: list[dict[str, Any]] = []
+        for number, hit in enumerate(hits, 1):
             payload = hit["payload"]
-            key = payload.get("document_key") or payload.get("document_id") or ""
-            existing = by_key.get(key)
-            if existing is not None:
-                existing["score"] = max(existing["score"], hit["score"])
-                continue
-            source = {
-                "document_id": payload.get("document_id", ""),
-                "document_key": payload.get("document_key", ""),
-                "document_title": payload.get("document_title", ""),
-                "score": hit["score"],
-            }
-            by_key[key] = source
-            ordered.append(source)
-        for number, source in enumerate(ordered, 1):
-            source["number"] = number
-        return ordered
+            sources.append(
+                {
+                    "document_id": payload.get("document_id", ""),
+                    "document_key": payload.get("document_key", ""),
+                    "document_title": payload.get("document_title", ""),
+                    "section": payload.get("section"),
+                    "chunk_order": payload.get("chunk_order"),
+                    "snippet": _snippet(payload.get("text", "")),
+                    "score": hit["score"],
+                    "number": number,
+                }
+            )
+        return sources
 
     def _format_context(
         self,
         hits: list[dict[str, Any]],
         graph_context: list[dict[str, Any]],
-        sources: list[dict[str, Any]],
     ) -> str:
         parts: list[str] = []
 
-        # Map each document to its source number so every excerpt of the same
-        # document is labelled with the SAME [n] the UI shows.
-        number_by_key = {s["document_key"]: s["number"] for s in sources}
-
+        # One numbered block per passage — the number matches the source's
+        # `number` from `_passage_sources` (both enumerate `hits` in order), so
+        # the model's inline [n] lines up with the passage the UI renders.
         if hits:
-            parts.append("### Document Excerpts\n")
-            for hit in hits:
+            parts.append("### Document Passages\n")
+            for number, hit in enumerate(hits, 1):
                 payload = hit["payload"]
-                key = payload.get("document_key", "")
-                number = number_by_key.get(key, "?")
                 title = payload.get("document_title", "Untitled")
+                section = payload.get("section")
+                label = f"{title} — {section}" if section else title
                 text = payload.get("text", "")
-                parts.append(f"[{number}] {title}\n{text}\n")
+                parts.append(f"[{number}] {label}\n{text}\n")
 
         if graph_context:
             parts.append("\n### Knowledge Graph Relationships\n")

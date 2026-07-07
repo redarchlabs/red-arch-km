@@ -1,13 +1,15 @@
 "use client";
 
-import { MoreVertical, Settings2, SquareArrowOutUpRight, Trash2 } from "lucide-react";
+import { Ban, MoreVertical, RefreshCw, Settings2, SquareArrowOutUpRight, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 import { DocumentProperties } from "@/components/documents/DocumentProperties";
+import { IngestProgress } from "@/components/documents/IngestProgress";
 import { type MenuItem, useRowMenu } from "@/components/common/ActionMenu";
-import { deleteEntry } from "@/components/folders/entryActions";
+import { cancelIngestEntry, deleteEntry, reprocessEntry } from "@/components/folders/entryActions";
+import { isProcessing } from "@/components/folders/explorerItem";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { formatDate } from "@/lib/format";
@@ -30,6 +32,7 @@ export function DocumentRow({ doc, folders, onChanged }: DocumentRowProps) {
   const router = useRouter();
   const [propsOpen, setPropsOpen] = useState(false);
 
+  const processing = isProcessing(doc.processing_status);
   const items: MenuItem[] = [
     {
       label: "Open",
@@ -41,6 +44,24 @@ export function DocumentRow({ doc, folders, onChanged }: DocumentRowProps) {
       icon: <Settings2 className="h-4 w-4" />,
       onSelect: () => setPropsOpen(true),
     },
+    // Only in-flight ingests can be cancelled (server enforces owner/admin).
+    ...(processing
+      ? [
+          {
+            label: "Cancel ingest",
+            icon: <Ban className="h-4 w-4" />,
+            onSelect: () => void cancelIngestEntry(doc.id, doc.title, onChanged),
+          } satisfies MenuItem,
+        ]
+      : [
+          // Terminal docs (SUCCESS/FAILED/CANCELLED) can be reprocessed — rebuilds
+          // the index from the stored original (server enforces owner/admin).
+          {
+            label: "Reprocess",
+            icon: <RefreshCw className="h-4 w-4" />,
+            onSelect: () => void reprocessEntry(doc.id, doc.title, onChanged),
+          } satisfies MenuItem,
+        ]),
     {
       label: "Delete",
       icon: <Trash2 className="h-4 w-4" />,
@@ -62,6 +83,13 @@ export function DocumentRow({ doc, folders, onChanged }: DocumentRowProps) {
                 <p className="mt-0.5 truncate text-sm text-muted-foreground">{doc.description}</p>
               ) : null}
               <p className="mt-1 text-xs text-muted-foreground">{formatDate(doc.created_at)}</p>
+              {processing ? (
+                <IngestProgress
+                  status={doc.processing_status}
+                  details={doc.processing_details}
+                  className="mt-2 max-w-xs"
+                />
+              ) : null}
             </div>
             <div className="flex shrink-0 items-center gap-2">
               <Badge variant={statusVariant(doc.processing_status)}>{doc.processing_status}</Badge>

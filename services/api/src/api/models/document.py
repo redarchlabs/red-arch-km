@@ -44,6 +44,7 @@ class ProcessingStatus(StrEnum):
     PROCESSING = "PROCESSING"
     SUCCESS = "SUCCESS"
     FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
 
 
 class Folder(Base, UUIDMixin, TimestampMixin):
@@ -96,6 +97,11 @@ class Document(Base, UUIDMixin, TimestampMixin):
     size_bytes: Mapped[int | None] = mapped_column(BIGINT, nullable=True)
     processing_status: Mapped[str] = mapped_column(String(20), default="PENDING")
     processing_details: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True, default=dict)
+    # Celery task id of the in-flight (or most recent) ingest job. Persisted at
+    # dispatch so the ingest can be cancelled (revoked) and so its per-job logs
+    # can be correlated. NULL for rows that never dispatched (broker outage) or
+    # predate this column.
+    celery_task_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     metadata_: Mapped[dict[str, Any] | None] = mapped_column("metadata", JSONB, nullable=True, default=dict)
     use_knowledge_graph: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
 

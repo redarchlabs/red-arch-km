@@ -85,7 +85,9 @@ function DetailsRow({
         <span className="truncate">{item.name}</span>
         {menu}
       </span>
-      <span className="px-3">{item.status ? <StatusBadge status={item.status} /> : null}</span>
+      <span className="px-3">
+        {item.status ? <StatusBadge status={item.status} details={item.doc?.processing_details} /> : null}
+      </span>
       <span className="truncate px-3 text-muted-foreground">{item.type}</span>
       <span className="truncate px-3 text-muted-foreground">
         {item.modified ? formatDate(item.modified) : "—"}

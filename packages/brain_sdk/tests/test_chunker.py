@@ -2,7 +2,9 @@
 
 import pytest
 from brain_sdk.chunking.chunker import (
+    SectionedChunk,
     chunk_text,
+    create_sectioned_chunks,
     create_sentence_based_overlapping_chunks,
     text_to_tokens,
     tokens_to_text,
@@ -63,6 +65,64 @@ class TestChunking:
         text = "First. Second. Third. Fourth. Fifth."
         chunks = chunk_text(text, desired_chunk_size=1000)
         assert len(chunks) >= 1
+
+
+class TestSectionedChunks:
+    def test_empty_text_returns_empty(self) -> None:
+        assert create_sectioned_chunks("", 100, 20) == []
+
+    def test_no_headings_yields_none_section(self) -> None:
+        text = "First sentence. Second sentence. Third sentence."
+        chunks = create_sectioned_chunks(text, 1000, 10)
+        assert len(chunks) == 1
+        assert isinstance(chunks[0], SectionedChunk)
+        assert chunks[0].section is None
+        assert "First sentence" in chunks[0].text
+
+    def test_no_headings_matches_plain_chunk_text(self) -> None:
+        """With no headings, chunk text must match the plain chunker exactly."""
+        sentences = [f"Sentence number {i} has some content." for i in range(40)]
+        text = " ".join(sentences)
+        plain = create_sentence_based_overlapping_chunks(text, 50, 10)
+        sectioned = create_sectioned_chunks(text, 50, 10)
+        assert [c.text for c in sectioned] == plain
+        assert all(c.section is None for c in sectioned)
+
+    def test_heading_labels_its_chunks(self) -> None:
+        text = "# Introduction\nThis is the intro. It has content."
+        chunks = create_sectioned_chunks(text, 1000, 10)
+        assert all(c.section == "Introduction" for c in chunks)
+        # The heading text stays in the body so retrieval still sees it.
+        assert any("Introduction" in c.text for c in chunks)
+
+    def test_nested_headings_build_path(self) -> None:
+        text = (
+            "# Chapter One\nIntro prose here.\n"
+            "## Section A\nDetails about A follow here.\n"
+            "## Section B\nDetails about B follow here."
+        )
+        chunks = create_sectioned_chunks(text, 1000, 10)
+        sections = {c.section for c in chunks}
+        assert "Chapter One" in sections
+        assert "Chapter One › Section A" in sections
+        assert "Chapter One › Section B" in sections
+
+    def test_deeper_then_shallower_heading_resets_path(self) -> None:
+        text = (
+            "# A\nAlpha text here.\n"
+            "## B\nBravo text here.\n"
+            "# C\nCharlie text here."
+        )
+        chunks = create_sectioned_chunks(text, 1000, 10)
+        by_body = {c.section for c in chunks if "Charlie" in c.text}
+        # The second H1 must not nest under the earlier H2.
+        assert by_body == {"C"}
+
+    def test_text_before_first_heading_has_none_section(self) -> None:
+        text = "Preamble prose with no heading yet.\n# Later\nBody under later."
+        chunks = create_sectioned_chunks(text, 1000, 10)
+        assert any(c.section is None and "Preamble" in c.text for c in chunks)
+        assert any(c.section == "Later" for c in chunks)
 
 
 class TestLongSentence:

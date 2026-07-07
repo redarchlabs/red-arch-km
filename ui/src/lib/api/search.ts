@@ -24,6 +24,12 @@ export interface ChatSource {
   score: number;
   /** 1-based citation number; inline [n] markers in the answer map to this. */
   number?: number;
+  /** Heading path of the cited passage (e.g. "Chapter 1 › Intro"); null/absent for unstructured text. */
+  section?: string | null;
+  /** Index of the cited chunk within the document; used to deep-link to the passage. */
+  chunk_order?: number | null;
+  /** Trimmed preview of the passage the citation came from. */
+  snippet?: string;
 }
 
 export interface StreamEvent {

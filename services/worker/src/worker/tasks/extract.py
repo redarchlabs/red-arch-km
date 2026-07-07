@@ -23,6 +23,16 @@ from worker.config import WorkerSettings
 from worker.extract import extract_text
 from worker.storage import StorageClient
 from worker.tasks._ingest_common import post_to_brain_and_report, report_status
+from worker.tasks._job import (
+    STAGE_DOWNLOADING,
+    STAGE_EXTRACTING,
+    STAGE_INGESTING,
+    STAGE_QUEUED,
+    IngestCancelled,
+    job_log,
+    raise_if_cancelled,
+    report_progress,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -69,17 +79,31 @@ def task_extract_and_ingest(self: Any, data: dict[str, Any]) -> dict[str, Any]:
     object_key = data.get("document_url", "")
     filename = data.get("filename", "")
     method = data.get("translation_method", "ocr")
+    # Task id keys the cancel flag (preserved across redelivery); persisted on
+    # the document at dispatch so the API's cancel endpoint targets the same key.
+    task_id = self.request.id or ""
 
     logger.info("Extracting %s (method=%s) for tenant %s", filename, method, tenant_id)
-    report_status(settings, document_id, tenant_id, "PROCESSING")
+    report_progress(
+        settings, document_id, tenant_id, STAGE_QUEUED, message=f"queued: {filename} (method={method})"
+    )
 
     # --- Extraction (runs exactly once; failures are terminal, not retried) ---
     try:
+        raise_if_cancelled(settings, document_id, tenant_id, task_id)
+        report_progress(settings, document_id, tenant_id, STAGE_DOWNLOADING, message="downloading original")
         raw = StorageClient(settings).get_object(object_key)
+
+        raise_if_cancelled(settings, document_id, tenant_id, task_id)
+        report_progress(settings, document_id, tenant_id, STAGE_EXTRACTING, message=f"extracting text ({method})")
         openai_key = _resolve_openai_key(settings, tenant_id) if method == "ai" else None
         text = extract_text(raw, filename, method, openai_key)
+    except IngestCancelled:
+        # Cancellation already reported CANCELLED + logged; end quietly.
+        return {"status": "cancelled", "document_key": document_key}
     except Exception as e:
         logger.exception("Extraction failed for %s (%s)", document_key, filename)
+        job_log(document_id, f"extraction failed: {e}", level="error", stage="extraction")
         report_status(
             settings,
             document_id,
@@ -95,6 +119,7 @@ def task_extract_and_ingest(self: Any, data: dict[str, Any]) -> dict[str, Any]:
         # sneak through and be reported SUCCESS for a doc with no content.
         # Treat it as a terminal extraction failure instead.
         logger.warning("Extraction produced empty text for %s (%s)", document_key, filename)
+        job_log(document_id, "extraction produced empty text", level="error", stage="extraction")
         report_status(
             settings,
             document_id,
@@ -114,7 +139,14 @@ def task_extract_and_ingest(self: Any, data: dict[str, Any]) -> dict[str, Any]:
         except Exception:
             logger.warning("Failed to store .doc text sidecar for %s", document_key)
 
+    # Last cancellation gate before the paid brain-api work.
+    try:
+        raise_if_cancelled(settings, document_id, tenant_id, task_id)
+    except IngestCancelled:
+        return {"status": "cancelled", "document_key": document_key}
+
     # --- Brain ingest (text-only payload; brain contract unchanged) ---
+    report_progress(settings, document_id, tenant_id, STAGE_INGESTING, message="sending extracted text to brain-api")
     brain_payload = {
         "document_id": document_id,
         "tenant_id": tenant_id,
@@ -132,4 +164,5 @@ def task_extract_and_ingest(self: Any, data: dict[str, Any]) -> dict[str, Any]:
         document_id=document_id,
         document_key=document_key,
         tenant_id=tenant_id,
+        task_id=task_id,
     )
