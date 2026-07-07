@@ -98,6 +98,10 @@ export interface WorkflowRun {
   started_at: string | null;
   finished_at: string | null;
   created_at: string;
+  // Set when the run terminated with an uncaught error that exhausted retries and
+  // hit no catcher — surfaced as a dead-letter/DLQ badge for manual replay.
+  // Optional: only populated once the backend run schema serializes it.
+  dead_letter?: boolean;
 }
 
 export interface WorkflowRunStep {
