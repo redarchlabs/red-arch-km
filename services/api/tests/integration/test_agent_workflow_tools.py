@@ -461,3 +461,62 @@ async def test_run_workflow_honors_run_permission_not_admin(engine: AsyncEngine,
         "run_workflow", {"workflow_id": wf_id, "record_id": record_id, "operation": "update"}
     )
     assert ok["run"]["status"] == "succeeded", ok
+
+
+_APPROVAL_GRAPH = {
+    "schema_version": 2,
+    "nodes": [
+        {"id": "start", "type": "trigger", "data": {"operations": ["update"]}},
+        {"id": "approve", "type": "task", "data": {"task_type": "user", "label": "Approve"}},
+        {"id": "gw", "type": "gateway",
+         "data": {"gateway_type": "exclusive", "expr": {"var": "vars.approved"}}},
+        {"id": "yes", "type": "task",
+         "data": {"task_type": "service", "action_type": "log", "config": {"message": "approved"}}},
+        {"id": "no", "type": "task",
+         "data": {"task_type": "service", "action_type": "log", "config": {"message": "rejected"}}},
+        {"id": "end", "type": "event", "data": {"position": "end", "event_type": "none"}},
+    ],
+    "edges": [
+        {"id": "e0", "source": "start", "target": "approve"},
+        {"id": "e1", "source": "approve", "target": "gw"},
+        {"id": "e2", "source": "gw", "target": "yes", "source_handle": "true"},
+        {"id": "e3", "source": "gw", "target": "no", "source_handle": "false"},
+        {"id": "e4", "source": "yes", "target": "end"},
+        {"id": "e5", "source": "no", "target": "end"},
+    ],
+}
+
+
+async def test_agent_completes_a_waiting_human_task(engine: AsyncEngine, admin_session: AsyncSession) -> None:
+    org = await _org(admin_session)
+    agent = _agent(engine, org.id)
+    await _seed_ticket_entity(agent)
+    created = await agent._dispatch("create_workflow", {"name": "Approval", "entity_slug": "ticket"})
+    wf_id = created["created_workflow"]["id"]
+    await agent._dispatch("save_workflow_definition", {"workflow_id": wf_id, "definition": _APPROVAL_GRAPH})
+    await agent._dispatch("publish_workflow", {"workflow_id": wf_id})
+
+    # Running it parks at the user task → run is waiting.
+    run = await agent._dispatch("run_workflow", {"workflow_id": wf_id, "operation": "update"})
+    assert run["run"]["status"] == "waiting", run
+    run_id = run["run"]["id"]
+    detail = await agent._dispatch("get_workflow_run", {"run_id": run_id})
+    assert any(t["wait_kind"] == "user_task" and t["node_id"] == "approve" for t in detail["tokens"])
+
+    # Completing it with an approval decision advances + routes the approved path.
+    done = await agent._dispatch(
+        "complete_workflow_task", {"run_id": run_id, "node_id": "approve", "variables": {"approved": True}}
+    )
+    assert done["completed_task"]["status"] == "succeeded", done
+    after = await agent._dispatch("get_workflow_run", {"run_id": run_id})
+    statuses = {s["node_id"]: s["status"] for s in after["steps"]}
+    assert statuses.get("approve") == "succeeded"
+    assert statuses.get("yes") == "succeeded"
+    assert "no" not in statuses
+
+
+async def test_agent_complete_task_rejects_non_waiting_run(engine: AsyncEngine, admin_session: AsyncSession) -> None:
+    org = await _org(admin_session)
+    agent = _agent(engine, org.id)
+    result = await agent._dispatch("complete_workflow_task", {"run_id": str(uuid.uuid4())})
+    assert result == {"error": "run not found"}
