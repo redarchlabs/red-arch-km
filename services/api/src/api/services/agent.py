@@ -1695,6 +1695,7 @@ class AgentService:
             webhook_allowlist=tuple(self._settings.workflow_webhook_allowlist or ()),
             public_base_url=self._settings.public_base_url,
             email_sender=EmailSender(self._settings),
+            org_encryption_key=self._settings.org_encryption_key.get_secret_value(),
         )
         # SECURITY (mirrors POST /workflows/{id}/run): never trust client record
         # data. With a record_id, load real before/after server-side; without one,
@@ -1797,6 +1798,7 @@ class AgentService:
             webhook_allowlist=tuple(self._settings.workflow_webhook_allowlist or ()),
             public_base_url=self._settings.public_base_url,
             email_sender=EmailSender(self._settings),
+            org_encryption_key=self._settings.org_encryption_key.get_secret_value(),
         )
         result = await engine.retry_run(run, version.definition)
         if result.get("reactivated", 0) == 0:
@@ -1833,6 +1835,7 @@ class AgentService:
             webhook_allowlist=tuple(self._settings.workflow_webhook_allowlist or ()),
             public_base_url=self._settings.public_base_url,
             email_sender=EmailSender(self._settings),
+            org_encryption_key=self._settings.org_encryption_key.get_secret_value(),
         )
         variables = args.get("variables") if isinstance(args.get("variables"), dict) else None
         output = args.get("output") if isinstance(args.get("output"), dict) else None

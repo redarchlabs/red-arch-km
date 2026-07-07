@@ -325,6 +325,36 @@ class WorkflowRunToken(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+CONNECTION_AUTH_TYPES = ("none", "bearer", "api_key", "basic")
+
+
+class WorkflowConnection(Base, UUIDMixin, TimestampMixin):
+    """A reusable, org-scoped credential for the ``http_request`` connector task.
+
+    The secret (bearer token / api key / basic password) is stored Fernet-encrypted
+    (services/crypto.py, keyed by ORG_ENCRYPTION_KEY) and is decrypted only at
+    execute time — it never rides the definition, a step output, an input snapshot,
+    or a log. FORCE RLS keeps a connection strictly inside its org.
+    """
+
+    __tablename__ = "workflow_connections"
+    __table_args__ = (UniqueConstraint("org_id", "name", name="uq_workflow_connection_name_per_org"),)
+
+    name: Mapped[str] = mapped_column(String(120))
+    kind: Mapped[str] = mapped_column(String(32), default="http", server_default="http")
+    base_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    auth_type: Mapped[str] = mapped_column(String(20), default="none", server_default="none")
+    # Fernet ciphertext of the secret credential; NULL for auth_type 'none'.
+    secret_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Non-secret auth/config: api-key header name, basic username, static headers.
+    config: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True
+    )
+    org: Mapped[Org] = relationship()
+
+
 # Every partitioned parent needs at least one partition to accept inserts. A
 # DEFAULT partition guarantees rows always land somewhere (belt-and-suspenders
 # against a missing month partition) and makes create_all/tests work out of the

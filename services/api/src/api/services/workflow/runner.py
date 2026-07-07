@@ -47,11 +47,15 @@ class ActionExecutor:
         webhook_allowlist: tuple[str, ...] = (),
         public_base_url: str = "",
         email_sender: Any = None,
+        org_encryption_key: str = "",
     ) -> None:
         self._session = session
         self._webhook_allowlist = webhook_allowlist
         self._public_base_url = public_base_url
         self._email_sender = email_sender
+        # Key for decrypting connection secrets at execute time. Empty = connector
+        # tasks can't resolve secrets (dry-run / unconfigured paths).
+        self._org_encryption_key = org_encryption_key
 
     async def execute(
         self,
@@ -97,6 +101,7 @@ class ActionExecutor:
             webhook_allowlist=self._webhook_allowlist,
             mint_form_link=lambda form_id, rid, email: self._mint_form_link(org_id, form_id, rid, email),
             send_email=self._send_email,
+            resolve_connection=lambda name: self._resolve_connection(org_id, name),
         )
         try:
             output = await handler.execute(ctx)
@@ -105,6 +110,32 @@ class ActionExecutor:
             return ActionResult(ok=False, error=str(exc))
 
     # ---- collaborators (mirror WorkflowDispatchService's wiring) --------- #
+    async def _resolve_connection(self, org_id: uuid.UUID, name: str) -> Any:
+        """Load a named connection (org-scoped) and decrypt its secret. Returns a
+        ResolvedConnection or None. The plaintext secret exists only here + in the
+        handler call — never persisted."""
+        from api.repositories.workflow import WorkflowConnectionRepository
+        from api.services.crypto import decrypt_secret
+        from api.services.workflow.actions import ResolvedConnection
+
+        if not self._org_encryption_key:
+            return None
+        conn = await WorkflowConnectionRepository(self._session, org_id).get_by_name(name)
+        if conn is None:
+            return None
+        secret = (
+            decrypt_secret(conn.secret_encrypted, self._org_encryption_key)
+            if conn.secret_encrypted
+            else None
+        )
+        return ResolvedConnection(
+            name=conn.name,
+            base_url=conn.base_url,
+            auth_type=conn.auth_type,
+            secret=secret,
+            config=conn.config or {},
+        )
+
     async def _send_email(self, to: str, subject: str, body: str) -> bool:
         if self._email_sender is None or not self._email_sender.is_configured():
             return False

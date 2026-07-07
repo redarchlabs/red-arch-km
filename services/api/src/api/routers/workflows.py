@@ -16,8 +16,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.auth.dependencies import OrgContext, require_org_access, require_org_admin
 from api.config import Settings, get_settings
 from api.dependencies import get_db
-from api.repositories.workflow import WorkflowRepository, WorkflowVersionRepository
+from api.repositories.workflow import (
+    WorkflowConnectionRepository,
+    WorkflowRepository,
+    WorkflowVersionRepository,
+)
 from api.schemas.workflow import (
+    ConnectionCreate,
+    ConnectionRead,
+    ConnectionUpdate,
     ManualRunRequest,
     ManualRunResult,
     VersionSaveRequest,
@@ -77,6 +84,93 @@ async def create_workflow(
     except WorkflowNotFoundError as exc:
         _raise(exc)
     return WorkflowRead.model_validate(wf)
+
+
+# --------------------------------------------------------------------------- #
+# Connector credentials (org-admin) — secrets encrypted at rest, never returned
+# --------------------------------------------------------------------------- #
+def _conn_read(conn: object) -> ConnectionRead:
+    read = ConnectionRead.model_validate(conn)
+    read.has_secret = bool(getattr(conn, "secret_encrypted", None))
+    return read
+
+
+@router.get("/connections", response_model=list[ConnectionRead])
+async def list_connections(
+    ctx: Annotated[OrgContext, Depends(require_org_admin)],
+    session: Annotated[AsyncSession, Depends(get_db)],
+) -> list[ConnectionRead]:
+    conns = await WorkflowConnectionRepository(session, ctx.org_id).list_all()
+    return [_conn_read(c) for c in conns]
+
+
+@router.post("/connections", response_model=ConnectionRead, status_code=status.HTTP_201_CREATED)
+async def create_connection(
+    body: ConnectionCreate,
+    ctx: Annotated[OrgContext, Depends(require_org_admin)],
+    session: Annotated[AsyncSession, Depends(get_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> ConnectionRead:
+    from api.services.crypto import encrypt_secret
+
+    secret_encrypted = (
+        encrypt_secret(body.secret, settings.org_encryption_key.get_secret_value())
+        if body.secret
+        else None
+    )
+    conn = await WorkflowConnectionRepository(session, ctx.org_id).create(
+        name=body.name,
+        kind=body.kind,
+        base_url=body.base_url,
+        auth_type=body.auth_type,
+        secret_encrypted=secret_encrypted,
+        config=body.config,
+    )
+    return _conn_read(conn)
+
+
+@router.patch("/connections/{connection_id}", response_model=ConnectionRead)
+async def update_connection(
+    connection_id: uuid.UUID,
+    body: ConnectionUpdate,
+    ctx: Annotated[OrgContext, Depends(require_org_admin)],
+    session: Annotated[AsyncSession, Depends(get_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> ConnectionRead:
+    from api.services.crypto import encrypt_secret
+
+    repo = WorkflowConnectionRepository(session, ctx.org_id)
+    conn = await repo.get(connection_id)
+    if conn is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="connection not found")
+    # Only re-encrypt when a new secret is supplied; omitting it keeps the old one.
+    secret_encrypted = (
+        encrypt_secret(body.secret, settings.org_encryption_key.get_secret_value())
+        if body.secret
+        else None
+    )
+    await repo.update(
+        conn,
+        name=body.name,
+        base_url=body.base_url,
+        auth_type=body.auth_type,
+        secret_encrypted=secret_encrypted,
+        config=body.config,
+    )
+    return _conn_read(conn)
+
+
+@router.delete("/connections/{connection_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_connection(
+    connection_id: uuid.UUID,
+    ctx: Annotated[OrgContext, Depends(require_org_admin)],
+    session: Annotated[AsyncSession, Depends(get_db)],
+) -> None:
+    repo = WorkflowConnectionRepository(session, ctx.org_id)
+    conn = await repo.get(connection_id)
+    if conn is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="connection not found")
+    await repo.delete(conn)
 
 
 @router.get("/{workflow_id}", response_model=WorkflowRead)
@@ -148,6 +242,7 @@ async def run_workflow(
         webhook_allowlist=allowlist,
         public_base_url=settings.public_base_url,
         email_sender=EmailSender(settings),
+        org_encryption_key=settings.org_encryption_key.get_secret_value(),
     )
 
     # SECURITY: never trust client-supplied record data for a manual run.

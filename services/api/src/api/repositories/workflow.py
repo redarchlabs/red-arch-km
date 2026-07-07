@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.models.workflow import (
     Workflow,
+    WorkflowConnection,
     WorkflowOutbox,
     WorkflowRun,
     WorkflowRunStep,
@@ -489,3 +490,90 @@ class WorkflowTokenRepository:
         # doesn't expose rowcount, and this matches the RETURNING style used by
         # allocate_step_index.
         return len(result.fetchall())
+
+
+class WorkflowConnectionRepository:
+    """Org-scoped CRUD for connector credentials (RLS-enforced).
+
+    Stores/returns the secret Fernet-encrypted; decryption is the caller's job at
+    execute time (the repo never holds the encryption key), so a secret is only
+    ever plaintext inside the connector handler.
+    """
+
+    def __init__(self, session: AsyncSession, org_id: uuid.UUID) -> None:
+        self._session = session
+        self._org_id = org_id
+
+    async def get(self, connection_id: uuid.UUID) -> WorkflowConnection | None:
+        result = await self._session.execute(
+            select(WorkflowConnection).where(
+                WorkflowConnection.id == connection_id, WorkflowConnection.org_id == self._org_id
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def get_by_name(self, name: str) -> WorkflowConnection | None:
+        result = await self._session.execute(
+            select(WorkflowConnection).where(
+                WorkflowConnection.name == name, WorkflowConnection.org_id == self._org_id
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def list_all(self) -> list[WorkflowConnection]:
+        result = await self._session.execute(
+            select(WorkflowConnection)
+            .where(WorkflowConnection.org_id == self._org_id)
+            .order_by(WorkflowConnection.name)
+        )
+        return list(result.scalars().all())
+
+    async def create(
+        self,
+        *,
+        name: str,
+        kind: str = "http",
+        base_url: str | None = None,
+        auth_type: str = "none",
+        secret_encrypted: str | None = None,
+        config: dict[str, Any] | None = None,
+    ) -> WorkflowConnection:
+        conn = WorkflowConnection(
+            org_id=self._org_id,
+            name=name,
+            kind=kind,
+            base_url=base_url,
+            auth_type=auth_type,
+            secret_encrypted=secret_encrypted,
+            config=config or {},
+        )
+        self._session.add(conn)
+        await self._session.flush()
+        return conn
+
+    async def update(
+        self,
+        conn: WorkflowConnection,
+        *,
+        name: str | None = None,
+        base_url: str | None = None,
+        auth_type: str | None = None,
+        secret_encrypted: str | None = None,
+        config: dict[str, Any] | None = None,
+    ) -> WorkflowConnection:
+        if name is not None:
+            conn.name = name
+        if base_url is not None:
+            conn.base_url = base_url
+        if auth_type is not None:
+            conn.auth_type = auth_type
+        if secret_encrypted is not None:
+            conn.secret_encrypted = secret_encrypted
+        if config is not None:
+            conn.config = config
+        await self._session.flush()
+        return conn
+
+    async def delete(self, conn: WorkflowConnection) -> None:
+        await self._session.delete(conn)
+        await self._session.flush()

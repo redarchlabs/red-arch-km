@@ -88,6 +88,7 @@ class TokenEngine:
         webhook_allowlist: tuple[str, ...] = (),
         public_base_url: str = "",
         email_sender: Any = None,
+        org_encryption_key: str = "",
         worker_id: str | None = None,
     ) -> None:
         self._session = session
@@ -96,6 +97,7 @@ class TokenEngine:
             webhook_allowlist=webhook_allowlist,
             public_base_url=public_base_url,
             email_sender=email_sender,
+            org_encryption_key=org_encryption_key,
         )
         self._worker_id = worker_id or f"engine-{uuid.uuid4().hex[:8]}"
 
@@ -461,7 +463,15 @@ class TokenEngine:
             # loop back through this node re-arms a fresh retry budget.
             cleared = clear_attempts(token.data, node.id)
             token_data = cleared if cleared is not token.data else None
-            return NodeOutcome("advance", targets=_out_edges(model, node.id), token_data=token_data)
+            # Optional capture: publish this task's output as a run variable so a
+            # downstream gateway/task can use it (e.g. an http_request response).
+            variables = None
+            capture = node.data.get("capture")
+            if isinstance(capture, str) and capture:
+                variables = {capture: result.output}
+            return NodeOutcome(
+                "advance", targets=_out_edges(model, node.id), token_data=token_data, variables=variables
+            )
 
         # Failure. Retry is opt-in via node.data.retry; without a policy this is a
         # 1-attempt no-op and the behaviour matches the legacy walker exactly.

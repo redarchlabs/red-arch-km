@@ -37,6 +37,7 @@ def _settings() -> SimpleNamespace:
         public_base_url="http://x",
         smtp_host="",
         smtp_from="",
+        org_encryption_key=SimpleNamespace(get_secret_value=lambda: "test-key"),
     )
 
 

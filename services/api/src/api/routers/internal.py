@@ -174,6 +174,7 @@ async def dispatch_workflows(
                 webhook_allowlist=allowlist,
                 public_base_url=settings.public_base_url,
                 email_sender=EmailSender(settings),
+            org_encryption_key=settings.org_encryption_key.get_secret_value(),
             )
             counters = await service.process_pending(limit=limit)
             await session.commit()
@@ -220,6 +221,7 @@ async def run_workflow_timers(
                 webhook_allowlist=allowlist,
                 public_base_url=settings.public_base_url,
                 email_sender=EmailSender(settings),
+            org_encryption_key=settings.org_encryption_key.get_secret_value(),
             )
             counters = await service.process_timers()
             await session.commit()
@@ -268,6 +270,7 @@ async def advance_workflow_tokens(
                 webhook_allowlist=allowlist,
                 public_base_url=settings.public_base_url,
                 email_sender=EmailSender(settings),
+            org_encryption_key=settings.org_encryption_key.get_secret_value(),
             )
             resumed = await engine.resume_due_tokens(limit=limit)
             await session.commit()

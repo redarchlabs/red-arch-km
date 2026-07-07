@@ -92,12 +92,14 @@ class WorkflowDispatchService:
         webhook_allowlist: tuple[str, ...] = (),
         public_base_url: str = "",
         email_sender: Any = None,
+        org_encryption_key: str = "",
         token_engine_enabled: bool = True,
     ) -> None:
         self._session = session
         self._webhook_allowlist = webhook_allowlist
         self._public_base_url = public_base_url
         self._email_sender = email_sender
+        self._org_encryption_key = org_encryption_key
         self._token_engine_enabled = token_engine_enabled
 
     # ---- dual-engine selection ------------------------------------------ #
@@ -117,6 +119,7 @@ class WorkflowDispatchService:
             webhook_allowlist=self._webhook_allowlist,
             public_base_url=self._public_base_url,
             email_sender=self._email_sender,
+            org_encryption_key=self._org_encryption_key,
         )
 
     async def _run_token_engine(self, run: WorkflowRun, definition: dict[str, Any]) -> int:
