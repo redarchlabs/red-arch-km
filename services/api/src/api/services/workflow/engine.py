@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -38,6 +39,7 @@ from api.repositories.workflow import (
 from api.schemas.workflow_definition import WorkflowDefinitionModel, WorkflowNode
 from api.services.workflow import compat
 from api.services.workflow import constants as C
+from api.services.workflow.decision import evaluate_decision_table
 from api.services.workflow.jsonlogic import json_logic
 from api.services.workflow.retry import (
     attempts_so_far,
@@ -365,6 +367,9 @@ class TokenEngine:
             }[task_type]
             return NodeOutcome("park", wait_kind=wait_kind)
 
+        if task_type == C.TASK_BUSINESS_RULE:
+            return await self._dispatch_decision(node, token, run, model, runs)
+
         action_type = node.data.get("action_type")
         if not action_type:
             # A script/business-rule/service task without a wired handler yet:
@@ -456,6 +461,27 @@ class TokenEngine:
         run.dead_letter = True
         return NodeOutcome("fail", error=result.error)
 
+    async def _dispatch_decision(
+        self,
+        node: WorkflowNode,
+        token: WorkflowRunToken,
+        run: WorkflowRun,
+        model: WorkflowDefinitionModel,
+        runs: WorkflowRunRepository,
+    ) -> NodeOutcome:
+        """A businessRule (decision-table) task: derive output values from the run
+        context and publish them as run variables so a downstream gateway can route
+        on them. Side-effect-free (pure jsonlogic), so it never fails the run."""
+        if run.step_seq >= MAX_RUN_STEPS:
+            return NodeOutcome("fail", error=f"max run steps {MAX_RUN_STEPS} exceeded")
+        outputs = evaluate_decision_table(node.data.get("decision_table"), _expr_context(run))
+        await self._record_step(run, node, token, status="succeeded", output=outputs)
+        return NodeOutcome(
+            "advance",
+            targets=_out_edges(model, node.id),
+            variables=outputs or None,
+        )
+
     async def _dispatch_gateway(
         self,
         node: WorkflowNode,
@@ -469,10 +495,16 @@ class TokenEngine:
 
         # Converging parallel/inclusive gateway (>=2 incoming) = a JOIN.
         if gateway_type in C.FORKING_GATEWAY_TYPES and len(incoming) >= 2:
+            if gateway_type == C.GATEWAY_INCLUSIVE:
+                # OR-join: fire once no other live token can still reach us (dead-
+                # path aware), so it converges correctly after an exclusive split.
+                return await self._inclusive_join(node, token, run, model, tokens)
             return await self._parallel_join(node, token, run, model, tokens, incoming)
 
         if gateway_type in C.FORKING_GATEWAY_TYPES:
-            # Diverging fork: emit a token on every outgoing edge.
+            # Diverging fork: emit a token on every outgoing edge. (An inclusive
+            # fork with per-branch conditions is a later refinement; emit-all is a
+            # safe superset — the reachability OR-join still converges correctly.)
             return NodeOutcome("advance", targets=_out_edges(model, node.id))
 
         # Exclusive (and event-based routing / condition / switch / passthrough).
@@ -531,6 +563,48 @@ class TokenEngine:
             return NodeOutcome("noop")  # still waiting on other branches
 
         # Fire: consume the whole buffer, emit one token on each outgoing edge.
+        for buffered_token in buffered:
+            buffered_token.status = "dead"
+            buffered_token.finished_at = func.now()
+        await self._session.flush()
+        return NodeOutcome("emit", targets=_out_edges(model, node.id))
+
+    async def _inclusive_join(
+        self,
+        node: WorkflowNode,
+        token: WorkflowRunToken,
+        run: WorkflowRun,
+        model: WorkflowDefinitionModel,
+        tokens: WorkflowTokenRepository,
+    ) -> NodeOutcome:
+        """Reachability (dead-path-aware) OR-join: buffer the arriving token, then
+        fire once NO other live token in the run can still reach this join.
+
+        Unlike the AND-join it does not wait for every incoming edge — only for the
+        branches that actually carry a token. This makes it converge correctly
+        after an exclusive split (where some incoming edges never fire), which an
+        AND-join would deadlock on. Runs under the per-run advisory lock, so the
+        live-token snapshot is race-free.
+        """
+        token.status = "waiting"
+        token.wait_kind = "join"
+        token.finished_at = None
+        await self._session.flush()
+
+        # Live tokens that are NOT already buffered at this join. If any of them can
+        # still reach this join node, more tokens may yet arrive — keep waiting.
+        others = [
+            t
+            for t in await tokens.list_for_run(run.id)
+            if t.status in ("active", "running", "waiting")
+            and not (t.node_id == node.id and t.wait_kind == "join")
+        ]
+        reachable = _forward_reachable_nodes(model, {t.node_id for t in others})
+        if node.id in reachable:
+            return NodeOutcome("noop")
+
+        # No more tokens can arrive: fire with whatever converged.
+        buffered = await tokens.buffered_at(run.id, node.id, "join")
         for buffered_token in buffered:
             buffered_token.status = "dead"
             buffered_token.finished_at = func.now()
@@ -744,6 +818,24 @@ class TokenEngine:
 # --------------------------------------------------------------------------- #
 def _out_edges(model: WorkflowDefinitionModel, node_id: str) -> list[tuple[str, str | None]]:
     return [(e.target, e.source_handle) for e in model.edges if e.source == node_id]
+
+
+def _forward_reachable_nodes(model: WorkflowDefinitionModel, start_ids: set[str]) -> set[str]:
+    """Node ids reachable from any start id by following outgoing edges (BFS over
+    the static graph). Used by the inclusive OR-join to decide whether any live
+    token could still arrive. Graphs are tiny, so this is cheap."""
+    adjacency: dict[str, list[str]] = {}
+    for edge in model.edges:
+        adjacency.setdefault(edge.source, []).append(edge.target)
+    seen: set[str] = set()
+    queue: deque[str] = deque(start_ids)
+    while queue:
+        current = queue.popleft()
+        if current in seen:
+            continue
+        seen.add(current)
+        queue.extend(adjacency.get(current, []))
+    return seen
 
 
 def _error_boundary_for(
