@@ -39,6 +39,7 @@ from api.routers import (
     setup,
     tags,
     users,
+    views,
     workflows,
 )
 from api.services.setup_token import ensure_setup_token
@@ -179,6 +180,7 @@ def create_app() -> FastAPI:
     app.include_router(entity_records.router, prefix="/api/entities", tags=["custom-entities"])
     app.include_router(workflows.router, prefix="/api/workflows", tags=["workflows"])
     app.include_router(forms.router, prefix="/api/forms", tags=["forms"])
+    app.include_router(views.router, prefix="/api/views", tags=["views"])
     # Public, unauthenticated form rendering + submission (org resolved from token).
     app.include_router(forms.public_router, prefix="/api/public/forms", tags=["forms-public"])
     # Public, token-authenticated inbound webhooks that start a workflow run.

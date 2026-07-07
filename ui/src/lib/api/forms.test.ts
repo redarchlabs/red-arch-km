@@ -125,7 +125,7 @@ describe("public forms client (unauthenticated fetch)", () => {
 
   it("submits via POST with a JSON body", async () => {
     fetchMock.mockResolvedValue({ ok: true, json: async () => ({}) });
-    const body = { values: { a: 1 }, sections: {} };
+    const body = { values: { a: 1 }, related: {} };
 
     await submitPublicForm("tok", body);
 
@@ -142,6 +142,6 @@ describe("public forms client (unauthenticated fetch)", () => {
       json: async () => ({ detail: "name is required" }),
     });
 
-    await expect(submitPublicForm("tok", { values: {} })).rejects.toThrow("name is required");
+    await expect(submitPublicForm("tok", { values: {}, related: {} })).rejects.toThrow("name is required");
   });
 });

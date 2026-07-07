@@ -71,6 +71,12 @@ class FormLinkRepository:
         )
         return list(result.scalars().all())
 
+    async def get(self, link_id: uuid.UUID) -> FormLink | None:
+        result = await self._session.execute(
+            select(FormLink).where(FormLink.id == link_id, FormLink.org_id == self._org_id)
+        )
+        return result.scalar_one_or_none()
+
     async def create(self, link: FormLink) -> FormLink:
         link.org_id = self._org_id
         self._session.add(link)

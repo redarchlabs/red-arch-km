@@ -117,7 +117,12 @@ async def _grant_app_user(engine: AsyncEngine) -> None:
 @pytest_asyncio.fixture(scope="session")
 async def engine(database_url: str) -> AsyncGenerator[AsyncEngine]:
     os.environ["DATABASE_URL"] = database_url
-    engine = create_async_engine(database_url, echo=False)
+    # Mirror the app engine's Decimal/datetime-safe JSONB serializer so writes of
+    # numeric entity fields (e.g. a calculated total) into workflow_outbox.after_data
+    # don't raise 'Decimal is not JSON serializable' in tests.
+    from api.db import json_serializer
+
+    engine = create_async_engine(database_url, echo=False, json_serializer=json_serializer)
 
     await _ensure_app_user_role(engine)
 

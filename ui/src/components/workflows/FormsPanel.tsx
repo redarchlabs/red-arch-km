@@ -104,7 +104,7 @@ export function FormsPanel({ forms, entities }: FormsPanelProps) {
               ) : null}
             </DialogHeader>
             <div className="max-h-[70vh] overflow-y-auto pr-1">
-              <FormPreview form={preview} entities={entities} />
+              <FormPreview formId={preview.id} />
             </div>
           </>
         ) : null}

@@ -7,6 +7,7 @@ from api.models.document import Document, DocumentAccess, DocumentAttributeDefin
 from api.models.form import Form, FormLink
 from api.models.org import Department, Group, Org, Region, Role
 from api.models.user import UserOrgMembership, UserProfile
+from api.models.view import View
 from api.models.workflow import (
     Workflow,
     WorkflowOutbox,
@@ -35,6 +36,7 @@ __all__ = [
     "Tag",
     "UserOrgMembership",
     "UserProfile",
+    "View",
     "Workflow",
     "WorkflowOutbox",
     "WorkflowRun",
