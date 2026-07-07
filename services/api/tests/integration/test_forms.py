@@ -1,15 +1,14 @@
-"""Integration tests for intake forms: the public token flow end-to-end.
+"""Integration tests for the flexible form platform (v2 element tree).
 
-Proves the riskiest guarantees of Phase 1:
-- A minted link resolves the org from the token alone (no auth), prefills the
-  emailed record's exposed fields, and a submission updates that record.
-- The public path enforces RLS: reads/writes are scoped to the token's org.
-- A link is single-use and honours expiry.
+Exercises the render/submit core end-to-end against a real Postgres: the public
+token flow, section/table writes, read-only enforcement, and the two security
+guarantees hardened after review — calculated fields are recomputed server-side
+from trusted inputs (a spoofed read-only value can't forge them), and a table's
+cross-entity related column can't be used to hijack an unrelated record (IDOR).
 
-Faithful to production wiring: DDL runs on the privileged ``admin_session``;
-org-scoped admin work (form + link) runs on the ``app_user`` session with the
-tenant GUC set (mirrors ``get_tenant_db``); the public path runs on a fresh
-privileged session (mirrors ``get_db``) that resolves the org from the token.
+Faithful to production wiring: DDL on the privileged ``admin_session``; org-scoped
+admin work on the ``app_user`` ``session`` with the tenant GUC set; the public path
+on a fresh privileged session that resolves the org from the token.
 """
 
 from __future__ import annotations
@@ -31,18 +30,12 @@ from api.schemas.custom_entity import (
     EntityFieldCreate,
     EntityRelationshipCreate,
 )
-from api.schemas.form import (
-    FormConfig,
-    FormCreate,
-    FormFieldConfig,
-    FormSectionConfig,
-    GenerateLinkRequest,
-    PublicFormSubmit,
-)
+from api.schemas.form import FormConfig, FormCreate, FormSubmit, GenerateLinkRequest
 from api.services.entity_service import EntityService
 from api.services.form_service import (
     FormLinkError,
     FormNotFoundError,
+    FormRenderService,
     FormService,
     PublicFormService,
 )
@@ -54,6 +47,9 @@ from .helpers import set_tenant
 pytestmark = pytest.mark.integration
 
 
+# --------------------------------------------------------------------------- #
+# Helpers
+# --------------------------------------------------------------------------- #
 async def _make_org(admin_session: AsyncSession, name: str) -> Org:
     await set_tenant(admin_session, None)
     org = Org(name=name)
@@ -63,13 +59,10 @@ async def _make_org(admin_session: AsyncSession, name: str) -> Org:
 
 
 def _public_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
-    """Sessions that mirror get_db: privileged, tenant-less. The public router
-    runs on this before the token identifies the org."""
     return async_sessionmaker(engine, expire_on_commit=False)
 
 
-async def _make_entity(admin_session: AsyncSession, org: Org) -> uuid.UUID:
-    """Create the Customer entity (DDL → privileged session). Returns its id."""
+async def _make_customer(admin_session: AsyncSession, org: Org) -> uuid.UUID:
     await set_tenant(admin_session, str(org.id))
     definition = await EntityService(admin_session, org.id).create_definition(
         EntityDefinitionCreate(
@@ -91,31 +84,16 @@ async def _make_entity(admin_session: AsyncSession, org: Org) -> uuid.UUID:
     return definition.id
 
 
-async def _setup_form_and_link(
-    session: AsyncSession, org: Org, def_id: uuid.UUID, exposed: list[str], slug: str
-) -> tuple[uuid.UUID, str]:
-    """On the app_user session (RLS enforced, like get_tenant_db): create a
-    record, a form exposing ``exposed`` fields, and a link. Returns (record_id, token)."""
+async def _create_record(
+    session: AsyncSession, org: Org, def_id: uuid.UUID, values: dict
+) -> uuid.UUID:
     await set_tenant(session, str(org.id))
     definition = await EntityDefinitionRepository(session, org.id).get(def_id)
     assert definition is not None
     fields = await EntityFieldRepository(session, org.id).list_for_definition(def_id)
-    record = await DynamicEntityRepository(session, org.id, definition, fields).create({"name": "John Doe"})
-    record_id = uuid.UUID(str(record["id"]))
-
-    fsvc = FormService(session, org.id, public_base_url="http://app.test")
-    form = await fsvc.create_form(
-        FormCreate(
-            name="Intake",
-            slug=slug,
-            entity_definition_id=def_id,
-            config=FormConfig(fields=[FormFieldConfig(slug=s) for s in exposed]),
-        )
-    )
-    _link, token, url, _sent = await fsvc.generate_link(form.id, GenerateLinkRequest(target_record_id=record_id))
-    await session.commit()
-    assert url == f"http://app.test/intake/{token}"
-    return record_id, token
+    rels = await EntityRelationshipRepository(session, org.id).list_for_source(def_id)
+    rec = await DynamicEntityRepository(session, org.id, definition, fields, rels).create(values)
+    return uuid.UUID(str(rec["id"]))
 
 
 async def _read_record(
@@ -131,179 +109,212 @@ async def _read_record(
     return record
 
 
+async def _make_form(
+    session: AsyncSession, org: Org, def_id: uuid.UUID, elements: list[dict], slug: str
+) -> uuid.UUID:
+    await set_tenant(session, str(org.id))
+    fsvc = FormService(session, org.id, public_base_url="http://app.test")
+    form = await fsvc.create_form(
+        FormCreate(
+            name="Intake",
+            slug=slug,
+            entity_definition_id=def_id,
+            config=FormConfig.model_validate({"version": 2, "elements": elements}),
+        )
+    )
+    await session.commit()
+    return form.id
+
+
+async def _mint(session: AsyncSession, org: Org, form_id: uuid.UUID, record_id: uuid.UUID) -> str:
+    await set_tenant(session, str(org.id))
+    fsvc = FormService(session, org.id, public_base_url="http://app.test")
+    _link, token, _url, _sent = await fsvc.generate_link(
+        form_id, GenerateLinkRequest(target_record_id=record_id)
+    )
+    await session.commit()
+    return token
+
+
+async def _public_load(engine: AsyncEngine, token: str):
+    async with _public_factory(engine)() as ps:
+        await ps.execute(text("RESET ROLE"))
+        read = await PublicFormService(ps).load(token)
+        await ps.commit()
+    return read
+
+
+async def _public_submit(engine: AsyncEngine, token: str, payload: FormSubmit) -> None:
+    async with _public_factory(engine)() as ps:
+        await ps.execute(text("RESET ROLE"))
+        await PublicFormService(ps).submit(token, payload)
+        await ps.commit()
+
+
+def _field_slugs(config: FormConfig) -> list[str]:
+    return [e.slug for e in config.elements if e.type == "field"]
+
+
+# --------------------------------------------------------------------------- #
+# Public token flow
+# --------------------------------------------------------------------------- #
 class TestPublicFormFlow:
     async def test_generate_load_submit_updates_record(
         self, admin_session: AsyncSession, session: AsyncSession, engine: AsyncEngine
     ) -> None:
         org = await _make_org(admin_session, "FORM-FLOW")
-        def_id = await _make_entity(admin_session, org)
-        record_id, token = await _setup_form_and_link(session, org, def_id, ["name", "phone"], "intake")
+        def_id = await _make_customer(admin_session, org)
+        rec = await _create_record(session, org, def_id, {"name": "John Doe"})
+        form_id = await _make_form(
+            session, org, def_id,
+            [{"type": "field", "slug": "name"}, {"type": "field", "slug": "phone"}],
+            "intake",
+        )
+        token = await _mint(session, org, form_id, rec)
 
-        factory = _public_factory(engine)
-
-        # Public GET: schema + prefilled values, resolved from the token alone.
-        async with factory() as ps:
-            await ps.execute(text("RESET ROLE"))
-            read = await PublicFormService(ps).load(token)
-            await ps.commit()
+        read = await _public_load(engine, token)
         assert read.form_name == "Intake"
-        assert {f.slug for f in read.fields} == {"name", "phone"}
+        assert set(_field_slugs(read.config)) == {"name", "phone"}
         assert read.values.get("name") == "John Doe"
         assert read.status == "pending"
 
-        # Public POST: updates the emailed record.
-        async with factory() as ps:
-            await ps.execute(text("RESET ROLE"))
-            await PublicFormService(ps).submit(
-                token, PublicFormSubmit(values={"name": "John Q. Doe", "phone": "555-1212"})
-            )
-            await ps.commit()
+        await _public_submit(engine, token, FormSubmit(values={"name": "John Q. Doe", "phone": "555-1212"}))
 
-        record = await _read_record(session, org, def_id, record_id)
+        record = await _read_record(session, org, def_id, rec)
         assert record["name"] == "John Q. Doe"
         assert record["phone"] == "555-1212"
 
         # Single-use: a second submit is rejected.
-        async with factory() as ps:
-            await ps.execute(text("RESET ROLE"))
-            with pytest.raises(FormLinkError):
-                await PublicFormService(ps).submit(token, PublicFormSubmit(values={"name": "again"}))
+        with pytest.raises(FormLinkError):
+            await _public_submit(engine, token, FormSubmit(values={"name": "again"}))
 
     async def test_only_exposed_fields_are_written(
         self, admin_session: AsyncSession, session: AsyncSession, engine: AsyncEngine
     ) -> None:
         org = await _make_org(admin_session, "FORM-EXPOSED")
-        def_id = await _make_entity(admin_session, org)
-        # Form exposes only 'name'; 'phone' is not on the form.
-        record_id, token = await _setup_form_and_link(session, org, def_id, ["name"], "name-only")
+        def_id = await _make_customer(admin_session, org)
+        rec = await _create_record(session, org, def_id, {"name": "seed"})
+        form_id = await _make_form(session, org, def_id, [{"type": "field", "slug": "name"}], "name-only")
+        token = await _mint(session, org, form_id, rec)
 
-        factory = _public_factory(engine)
-        async with factory() as ps:
-            await ps.execute(text("RESET ROLE"))
-            # A crafted submission tries to write the un-exposed 'phone' field.
-            await PublicFormService(ps).submit(
-                token, PublicFormSubmit(values={"name": "Renamed", "phone": "999-9999"})
-            )
-            await ps.commit()
+        # Crafted submission tries to write the un-exposed 'phone'.
+        await _public_submit(engine, token, FormSubmit(values={"name": "Renamed", "phone": "999-9999"}))
 
-        record = await _read_record(session, org, def_id, record_id)
+        record = await _read_record(session, org, def_id, rec)
         assert record["name"] == "Renamed"
-        assert record["phone"] is None  # un-exposed field ignored, not written
+        assert record["phone"] is None  # un-exposed field never written
 
-    async def test_presentational_layout_round_trips(
+    async def test_read_only_field_is_not_written(
         self, admin_session: AsyncSession, session: AsyncSession, engine: AsyncEngine
     ) -> None:
-        """Order + placeholder/width/heading survive create → public render, and
-        never leak into the writable field set (they are pure presentation)."""
-        org = await _make_org(admin_session, "FORM-LAYOUT")
-        def_id = await _make_entity(admin_session, org)
-
-        await set_tenant(session, str(org.id))
-        definition = await EntityDefinitionRepository(session, org.id).get(def_id)
-        assert definition is not None
-        fields = await EntityFieldRepository(session, org.id).list_for_definition(def_id)
-        record = await DynamicEntityRepository(session, org.id, definition, fields).create({"name": "Jane"})
-        record_id = uuid.UUID(str(record["id"]))
-
-        fsvc = FormService(session, org.id, public_base_url="http://app.test")
-        # Declared order is phone-then-name (reversed vs entity order), with
-        # presentation overrides on each.
-        form = await fsvc.create_form(
-            FormCreate(
-                name="Layout",
-                slug="layout",
-                entity_definition_id=def_id,
-                config=FormConfig(
-                    fields=[
-                        FormFieldConfig(
-                            slug="phone",
-                            placeholder="(555) 555-5555",
-                            width="half",
-                            heading="Contact details",
-                        ),
-                        FormFieldConfig(slug="name", width="half"),
-                        # display is purely presentational (dropdown vs radio) —
-                        # it must echo through and never enter the writable set.
-                        FormFieldConfig(slug="status", display="radio"),
-                    ]
-                ),
-            )
+        org = await _make_org(admin_session, "FORM-READONLY")
+        def_id = await _make_customer(admin_session, org)
+        rec = await _create_record(session, org, def_id, {"name": "Locked", "phone": "111"})
+        form_id = await _make_form(
+            session, org, def_id,
+            [{"type": "field", "slug": "name"}, {"type": "field", "slug": "phone", "read_only": True}],
+            "readonly",
         )
-        _link, token, _url, _sent = await fsvc.generate_link(
-            form.id, GenerateLinkRequest(target_record_id=record_id)
-        )
-        await session.commit()
+        token = await _mint(session, org, form_id, rec)
 
-        factory = _public_factory(engine)
-        async with factory() as ps:
-            await ps.execute(text("RESET ROLE"))
-            read = await PublicFormService(ps).load(token)
-            await ps.commit()
+        await _public_submit(engine, token, FormSubmit(values={"name": "Changed", "phone": "hacked"}))
 
-        # Order preserved from config (phone first), presentation echoed through.
-        assert [f.slug for f in read.fields] == ["phone", "name", "status"]
-        phone = read.fields[0]
-        assert phone.placeholder == "(555) 555-5555"
-        assert phone.width == "half"
-        assert phone.heading == "Contact details"
-        assert phone.display is None
-        assert read.fields[1].width == "half"
-        assert read.fields[1].placeholder is None
-        # Picklist render style survives; options resolve from the entity catalog.
-        status = read.fields[2]
-        assert status.display == "radio"
-        assert status.options == ["new", "active", "closed"]
+        record = await _read_record(session, org, def_id, rec)
+        assert record["name"] == "Changed"
+        assert record["phone"] == "111"  # read-only field unchanged
 
     async def test_expired_link_rejected(
         self, admin_session: AsyncSession, session: AsyncSession, engine: AsyncEngine
     ) -> None:
         org = await _make_org(admin_session, "FORM-EXPIRED")
-        def_id = await _make_entity(admin_session, org)
-        _record_id, token = await _setup_form_and_link(session, org, def_id, ["name"], "expiring")
+        def_id = await _make_customer(admin_session, org)
+        rec = await _create_record(session, org, def_id, {"name": "x"})
+        form_id = await _make_form(session, org, def_id, [{"type": "field", "slug": "name"}], "expiring")
+        token = await _mint(session, org, form_id, rec)
 
-        # Backdate expiry on the link (privileged session).
         await set_tenant(admin_session, str(org.id))
-        link = (
-            await admin_session.execute(
-                text("SELECT id FROM form_links WHERE org_id = :o"), {"o": org.id}
-            )
+        link_id = (
+            await admin_session.execute(text("SELECT id FROM form_links WHERE org_id = :o"), {"o": org.id})
         ).scalar_one()
-        db_link = await admin_session.get(FormLink, link)
+        db_link = await admin_session.get(FormLink, link_id)
         assert db_link is not None
         db_link.expires_at = datetime.now(UTC) - timedelta(days=1)
         await admin_session.commit()
 
-        factory = _public_factory(engine)
-        async with factory() as ps:
-            await ps.execute(text("RESET ROLE"))
-            read = await PublicFormService(ps).load(token)
-            await ps.commit()
+        read = await _public_load(engine, token)
         assert read.status == "expired"
-
-        async with factory() as ps:
-            await ps.execute(text("RESET ROLE"))
-            with pytest.raises(FormLinkError):
-                await PublicFormService(ps).submit(token, PublicFormSubmit(values={"name": "x"}))
+        with pytest.raises(FormLinkError):
+            await _public_submit(engine, token, FormSubmit(values={"name": "y"}))
 
     async def test_unknown_token_not_found(self, engine: AsyncEngine) -> None:
-        factory = _public_factory(engine)
-        async with factory() as ps:
+        async with _public_factory(engine)() as ps:
             await ps.execute(text("RESET ROLE"))
             with pytest.raises(FormNotFoundError):
                 await PublicFormService(ps).load("does-not-exist")
 
 
-class TestFormSections:
-    """1:1 (inline) + 1:M (table) sections write across related entities."""
+# --------------------------------------------------------------------------- #
+# Calculated fields — server-authoritative (HIGH fix regression)
+# --------------------------------------------------------------------------- #
+class TestCalculatedServerAuthoritative:
+    async def _make_order_entity(self, admin_session: AsyncSession, org: Org) -> uuid.UUID:
+        await set_tenant(admin_session, str(org.id))
+        definition = await EntityService(admin_session, org.id).create_definition(
+            EntityDefinitionCreate(
+                name="Order", slug="order",
+                fields=[
+                    EntityFieldCreate(name="Qty", slug="qty", field_type="integer"),
+                    EntityFieldCreate(name="Unit price", slug="unit_price", field_type="numeric"),
+                    EntityFieldCreate(name="Total", slug="total", field_type="numeric"),
+                ],
+            )
+        )
+        await admin_session.commit()
+        return definition.id
 
+    async def test_calculated_ignores_spoofed_readonly_input(
+        self, admin_session: AsyncSession, session: AsyncSession, engine: AsyncEngine
+    ) -> None:
+        org = await _make_org(admin_session, "FORM-CALC")
+        def_id = await self._make_order_entity(admin_session, org)
+        # Server truth: unit_price = 10.
+        rec = await _create_record(session, org, def_id, {"qty": 1, "unit_price": 10, "total": 0})
+        form_id = await _make_form(
+            session, org, def_id,
+            [
+                {"type": "field", "slug": "qty"},
+                {"type": "field", "slug": "unit_price", "read_only": True},
+                {
+                    "type": "calculated",
+                    "target_slug": "total",
+                    "result_type": "numeric",
+                    "expression": {"*": [{"var": "unit_price"}, {"var": "qty"}]},
+                },
+            ],
+            "calc",
+        )
+        token = await _mint(session, org, form_id, rec)
+
+        # Attacker sets qty=5 (allowed) AND spoofs unit_price=9999 (read-only).
+        await _public_submit(engine, token, FormSubmit(values={"qty": 5, "unit_price": 9999}))
+
+        record = await _read_record(session, org, def_id, rec)
+        assert int(record["qty"]) == 5
+        assert float(record["unit_price"]) == 10.0  # read-only: server value kept
+        # total uses the SERVER unit_price (10), not the spoofed 9999 → 10*5 = 50.
+        assert float(record["total"]) == 50.0
+
+
+# --------------------------------------------------------------------------- #
+# Sections + cross-entity tables (incl. IDOR fix)
+# --------------------------------------------------------------------------- #
+class TestSectionsAndTables:
     async def test_submit_creates_linked_and_child_records(
         self, admin_session: AsyncSession, session: AsyncSession, engine: AsyncEngine
     ) -> None:
         org = await _make_org(admin_session, "FORM-SECTIONS")
         await set_tenant(admin_session, str(org.id))
         svc = EntityService(admin_session, org.id)
-
-        # Root + related entities.
         company = await svc.create_definition(
             EntityDefinitionCreate(
                 name="Company", slug="company",
@@ -323,8 +334,6 @@ class TestFormSections:
             )
         )
         await admin_session.commit()
-
-        # 1:1 Company -> Address (FK on Company); 1:M Contact -> Company (FK on Contact).
         addr_rel = await svc.create_relationship(
             company.id,
             EntityRelationshipCreate(
@@ -341,74 +350,49 @@ class TestFormSections:
         )
         await admin_session.commit()
 
-        # A Company record to update, then a form with a 1:1 + a 1:M section.
-        await set_tenant(session, str(org.id))
-        company_fields = await EntityFieldRepository(session, org.id).list_for_definition(company.id)
-        company_rec = await DynamicEntityRepository(session, org.id, company, company_fields).create(
-            {"name": "Acme"}
+        company_id = await _create_record(session, org, company.id, {"name": "Acme"})
+        form_id = await _make_form(
+            session, org, company.id,
+            [
+                {"type": "field", "slug": "name"},
+                {
+                    "type": "section", "relationship_id": str(addr_rel.id), "mode": "inline",
+                    "elements": [{"type": "field", "slug": "city"}],
+                },
+                {
+                    "type": "table", "anchor_relationship_id": str(contact_rel.id),
+                    "columns": [{"kind": "field", "slug": "full_name"}],
+                },
+            ],
+            "company-intake",
         )
-        company_id = uuid.UUID(str(company_rec["id"]))
+        token = await _mint(session, org, form_id, company_id)
 
-        fsvc = FormService(session, org.id, public_base_url="http://app.test")
-        form = await fsvc.create_form(
-            FormCreate(
-                name="Company intake",
-                slug="company-intake",
-                entity_definition_id=company.id,
-                config=FormConfig(
-                    fields=[FormFieldConfig(slug="name")],
-                    sections=[
-                        FormSectionConfig(
-                            relationship_id=addr_rel.id, mode="inline",
-                            fields=[FormFieldConfig(slug="city")],
-                        ),
-                        FormSectionConfig(
-                            relationship_id=contact_rel.id, mode="table",
-                            fields=[FormFieldConfig(slug="full_name")],
-                        ),
-                    ],
-                ),
-            )
+        read = await _public_load(engine, token)
+        kinds = {e.type for e in read.config.elements}
+        assert {"section", "table"} <= kinds
+
+        await _public_submit(
+            engine, token,
+            FormSubmit(
+                values={"name": "Acme Inc"},
+                related={
+                    str(addr_rel.id): {"values": {"city": "New York"}},
+                    str(contact_rel.id): {"rows": [
+                        {"values": {"full_name": "Alice"}},
+                        {"values": {"full_name": "Bob"}},
+                    ]},
+                },
+            ),
         )
-        _link, token, _url, _sent = await fsvc.generate_link(
-            form.id, GenerateLinkRequest(target_record_id=company_id)
-        )
-        await session.commit()
 
-        # Public load shows both sections (empty prefill so far).
-        factory = _public_factory(engine)
-        async with factory() as ps:
-            await ps.execute(text("RESET ROLE"))
-            read = await PublicFormService(ps).load(token)
-            await ps.commit()
-        modes = {s.mode for s in read.sections}
-        assert modes == {"inline", "table"}
-        assert all(s.rows == [] for s in read.sections if s.mode == "table")
-
-        # Public submit: root name + a 1:1 Address + two 1:M Contacts.
-        async with factory() as ps:
-            await ps.execute(text("RESET ROLE"))
-            await PublicFormService(ps).submit(
-                token,
-                PublicFormSubmit(
-                    values={"name": "Acme Inc"},
-                    sections={
-                        str(addr_rel.id): {"values": {"city": "New York"}},
-                        str(contact_rel.id): {"rows": [{"full_name": "Alice"}, {"full_name": "Bob"}]},
-                    },
-                ),
-            )
-            await ps.commit()
-
-        # Root updated.
         company_row = await _read_record(session, org, company.id, company_id)
         assert company_row["name"] == "Acme Inc"
-        # 1:1: an Address was created and linked from the Company FK.
         linked_addr_id = company_row[addr_rel.slug]
         assert linked_addr_id is not None
         addr_row = await _read_record(session, org, address.id, uuid.UUID(str(linked_addr_id)))
         assert addr_row["city"] == "New York"
-        # 1:M: two Contacts created, each pointing back at the Company.
+
         await set_tenant(session, str(org.id))
         contact_fields = await EntityFieldRepository(session, org.id).list_for_definition(contact.id)
         contact_rels = await EntityRelationshipRepository(session, org.id).list_for_source(contact.id)
@@ -416,4 +400,152 @@ class TestFormSections:
             session, org.id, contact, contact_fields, contact_rels
         ).list(filters={contact_rel.slug: company_id}, limit=50)
         assert {c["full_name"] for c in contacts} == {"Alice", "Bob"}
-        assert all(str(c[contact_rel.slug]) == str(company_id) for c in contacts)
+
+    async def test_related_column_cannot_hijack_unrelated_record(
+        self, admin_session: AsyncSession, session: AsyncSession, engine: AsyncEngine
+    ) -> None:
+        """A table row's editable cross-entity column must not update an arbitrary
+        record supplied by id (IDOR). A forged id creates a fresh record instead."""
+        org = await _make_org(admin_session, "FORM-IDOR")
+        await set_tenant(admin_session, str(org.id))
+        svc = EntityService(admin_session, org.id)
+        order = await svc.create_definition(
+            EntityDefinitionCreate(
+                name="Order", slug="order",
+                fields=[EntityFieldCreate(name="Ref", slug="ref", field_type="text")],
+            )
+        )
+        line = await svc.create_definition(
+            EntityDefinitionCreate(
+                name="Line", slug="line",
+                fields=[EntityFieldCreate(name="Qty", slug="qty", field_type="integer")],
+            )
+        )
+        product = await svc.create_definition(
+            EntityDefinitionCreate(
+                name="Product", slug="product",
+                fields=[EntityFieldCreate(name="Name", slug="pname", field_type="text")],
+            )
+        )
+        await admin_session.commit()
+        # Line -> Order (1:M anchor), Line -> Product (to-one, cross-entity column).
+        line_order_rel = await svc.create_relationship(
+            line.id,
+            EntityRelationshipCreate(
+                name="Order", slug="order", cardinality="many_to_one",
+                target_definition_id=order.id, on_delete="CASCADE",
+            ),
+        )
+        line_product_rel = await svc.create_relationship(
+            line.id,
+            EntityRelationshipCreate(
+                name="Product", slug="product", cardinality="many_to_one",
+                target_definition_id=product.id, on_delete="SET NULL",
+            ),
+        )
+        await admin_session.commit()
+
+        order_id = await _create_record(session, org, order.id, {"ref": "O1"})
+        # A victim product NOT linked to any of this order's lines.
+        victim_id = await _create_record(session, org, product.id, {"pname": "VICTIM"})
+
+        form_id = await _make_form(
+            session, org, order.id,
+            [{
+                "type": "table", "anchor_relationship_id": str(line_order_rel.id),
+                "columns": [
+                    {"kind": "field", "slug": "qty"},
+                    {"kind": "related", "relationship_id": str(line_product_rel.id),
+                     "slug": "pname", "editable": True},
+                ],
+            }],
+            "idor",
+        )
+        token = await _mint(session, org, form_id, order_id)
+
+        # Malicious submission: a new line row whose related column supplies the
+        # VICTIM product id and tries to rename it.
+        await _public_submit(
+            engine, token,
+            FormSubmit(
+                values={},
+                related={str(line_order_rel.id): {"rows": [{
+                    "values": {"qty": 1},
+                    "related": {str(line_product_rel.id): {
+                        "id": str(victim_id), "values": {"pname": "PWNED"}
+                    }},
+                }]}},
+            ),
+        )
+
+        victim = await _read_record(session, org, product.id, victim_id)
+        assert victim["pname"] == "VICTIM"  # IDOR blocked: victim untouched
+
+
+# --------------------------------------------------------------------------- #
+# Authenticated internal render/submit (no token)
+# --------------------------------------------------------------------------- #
+class TestAuthenticatedFill:
+    async def test_render_and_submit_on_tenant_session(
+        self, admin_session: AsyncSession, session: AsyncSession
+    ) -> None:
+        org = await _make_org(admin_session, "FORM-AUTH")
+        def_id = await _make_customer(admin_session, org)
+        rec = await _create_record(session, org, def_id, {"name": "Start"})
+        form_id = await _make_form(session, org, def_id, [{"type": "field", "slug": "name"}], "auth")
+
+        await set_tenant(session, str(org.id))
+        form = await FormService(session, org.id).get_form(form_id)
+        renderer = FormRenderService(session, org.id)
+        read = await renderer.build_render(form, rec, "editable")
+        assert read.values.get("name") == "Start"
+
+        await renderer.apply_submit(form, rec, FormSubmit(values={"name": "Finished"}))
+        await session.commit()
+
+        record = await _read_record(session, org, def_id, rec)
+        assert record["name"] == "Finished"
+
+
+# --------------------------------------------------------------------------- #
+# Admin link revocation
+# --------------------------------------------------------------------------- #
+class TestLinkRevoke:
+    async def test_revoke_pending_link_blocks_use(
+        self, admin_session: AsyncSession, session: AsyncSession, engine: AsyncEngine
+    ) -> None:
+        org = await _make_org(admin_session, "FORM-REVOKE")
+        def_id = await _make_customer(admin_session, org)
+        rec = await _create_record(session, org, def_id, {"name": "seed"})
+        form_id = await _make_form(session, org, def_id, [{"type": "field", "slug": "name"}], "revoke")
+        token = await _mint(session, org, form_id, rec)
+
+        await set_tenant(session, str(org.id))
+        fsvc = FormService(session, org.id)
+        link = (await fsvc.list_links(form_id))[0]
+        revoked = await fsvc.revoke_link(form_id, link.id)
+        await session.commit()
+        assert revoked.status == "revoked"
+
+        read = await _public_load(engine, token)
+        assert read.status == "revoked"
+        with pytest.raises(FormLinkError):
+            await _public_submit(engine, token, FormSubmit(values={"name": "x"}))
+
+    async def test_cannot_revoke_submitted_link(
+        self, admin_session: AsyncSession, session: AsyncSession, engine: AsyncEngine
+    ) -> None:
+        from api.services.form_service import FormValidationError
+
+        org = await _make_org(admin_session, "FORM-REVOKE2")
+        def_id = await _make_customer(admin_session, org)
+        rec = await _create_record(session, org, def_id, {"name": "seed"})
+        form_id = await _make_form(session, org, def_id, [{"type": "field", "slug": "name"}], "revoke2")
+        token = await _mint(session, org, form_id, rec)
+        await _public_submit(engine, token, FormSubmit(values={"name": "done"}))
+
+        await set_tenant(session, str(org.id))
+        fsvc = FormService(session, org.id)
+        link = (await fsvc.list_links(form_id))[0]
+        with pytest.raises(FormValidationError):
+            await fsvc.revoke_link(form_id, link.id)

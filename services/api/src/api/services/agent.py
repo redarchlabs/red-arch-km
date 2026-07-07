@@ -66,6 +66,13 @@ _ADMIN_ONLY_TOOLS = frozenset(
         "get_form",
         "create_form",
         "update_form",
+        "delete_form",
+        # Views: composable screens (same element tree) — full lifecycle.
+        "list_views",
+        "get_view",
+        "create_view",
+        "update_view",
+        "delete_view",
         # Workflow listing, authoring, publishing, dry-run testing, monitoring
         # and retry all mirror require_org_admin REST routes (GET /workflows/ is
         # itself admin-only). `run_workflow` is the one exception — it is gated on
@@ -167,57 +174,19 @@ _SYSTEM_PROMPT = (
     "complete_workflow_task advances it — pass `variables` for any approval decision the flow branches "
     "on (e.g. {\"approved\": true}). Authoring/publishing/testing/monitoring are org-admin only; running "
     "honors the workflow's run_permission.\n"
-    "Intake forms: a form is a public page, bound to one entity, that people fill in via a shared "
-    "link to create or update a record. Inspect with list_forms / get_form; build one with "
-    "create_form (pick which entity fields appear via `fields`; add related-entity sections via "
-    "`sections`, using relationship_id + mode from get_entity_schema); edit with update_form. On "
-    "update, `fields`/`sections` REPLACE the whole layout, so get_form first and send the complete "
-    "new layout. Forms are org-admin only. After creating a form, tell the user to open the Forms "
-    "UI to generate a share link.\n"
+    "Forms & views: a form binds to one entity and is filled internally (Forms UI) or via a public "
+    "share link to create/update a record; a view is a composable screen that arranges forms "
+    "(form_ref), action buttons and layout, optionally bound to an entity. Both use the SAME v2 "
+    "element tree in `config` = {version:2, elements:[...]} — element `type` is field/label/"
+    "calculated/button/section/table/block/tab_group/panel/accordion/columns (views add form_ref). "
+    "Bind fields by entity-field slug (get_entity_schema); calculated elements use a JsonLogic "
+    "`expression` and may persist via `target_slug`; tables support cross-entity related columns; "
+    "buttons can run a workflow. Inspect with list_forms/get_form (or list_views/get_view), build "
+    "with create_form/create_view, edit with update_form/update_view (config REPLACES the whole tree "
+    "— get first, modify, send the complete tree), remove with delete_form/delete_view. Org-admin "
+    "only. Invalid trees are rejected with a clear error to repair from.\n"
     "Slugs must be lowercase snake_case. Be concise and friendly."
 )
-
-# Reused by create_form / update_form. One entity field surfaced on a form.
-_FORM_FIELD_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "slug": {"type": "string", "description": "Entity field slug to expose (from get_entity_schema)."},
-        "label": {"type": "string", "description": "Optional display-label override."},
-        "required": {"type": "boolean", "description": "Optional; override the field's own requiredness."},
-        "help_text": {"type": "string", "description": "Optional helper text shown under the field."},
-    },
-    "required": ["slug"],
-}
-
-# A related entity surfaced on a form: 1:1 inline/modal, or 1:M table.
-_FORM_SECTION_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "relationship_id": {
-            "type": "string",
-            "description": (
-                "Relationship UUID from get_entity_schema (its `relationships[].id`). Use an "
-                "OUTGOING to-one relationship for inline/modal, or an INCOMING relationship for a "
-                "1:M table."
-            ),
-        },
-        "mode": {
-            "type": "string",
-            "enum": ["inline", "modal", "table"],
-            "description": "inline/modal surface a 1:1 related record; table edits a 1:M child collection.",
-        },
-        "label": {"type": "string"},
-        "fields": {
-            "type": "array",
-            "items": _FORM_FIELD_SCHEMA,
-            "description": (
-                "Related-entity fields to expose in this section — slugs from the related entity "
-                "(get_entity_schema on `related_entity_slug`), not the root entity."
-            ),
-        },
-    },
-    "required": ["relationship_id", "mode"],
-}
 
 # A full BPMN 2.0 workflow graph, as authored by save_workflow_definition /
 # validated by validate_workflow. Kept deliberately lenient (data is free-form)
@@ -772,7 +741,8 @@ TOOLS: list[dict[str, Any]] = [
             "name": "get_form",
             "description": (
                 "Get a form's full definition: name, slug, bound entity, active state, and its "
-                "complete field/section layout. Call this before update_form."
+                "complete v2 layout tree (`config.elements`). Call this before update_form to see "
+                "the exact element shapes, then send a modified tree back."
             ),
             "parameters": {
                 "type": "object",
@@ -786,10 +756,14 @@ TOOLS: list[dict[str, Any]] = [
         "function": {
             "name": "create_form",
             "description": (
-                "Create a public intake form bound to an entity. People open the form via a shared "
-                "link to create or update a record of that entity. Choose which entity fields appear "
-                "(and optional related-entity sections). Saved active; the user generates the share "
-                "link in the Forms UI."
+                "Create a form bound to an entity, using the flexible v2 layout tree. `config` is "
+                "`{version:2, elements:[...]}` where each element has a `type`: field (bind an entity "
+                "field by slug; supports read_only/required/width/display), label, calculated "
+                "(JsonLogic `expression` + optional `target_slug` to persist), button "
+                "(submit/run_workflow/link), section (1:1 related record), table (1:M grid with "
+                "field + cross-entity related columns), block (repeating 1:M), and layout containers "
+                "(tab_group, panel, accordion, columns). Omit `config` for an empty form. Fill via the "
+                "Forms UI (internal) or a shared link (public)."
             ),
             "parameters": {
                 "type": "object",
@@ -804,15 +778,13 @@ TOOLS: list[dict[str, Any]] = [
                         "description": "URL slug (lowercase snake_case). Defaults from the name if omitted.",
                     },
                     "description": {"type": "string"},
-                    "fields": {
-                        "type": "array",
-                        "items": _FORM_FIELD_SCHEMA,
-                        "description": "Root-entity fields to show on the form (from get_entity_schema).",
-                    },
-                    "sections": {
-                        "type": "array",
-                        "items": _FORM_SECTION_SCHEMA,
-                        "description": "Optional related-entity sections.",
+                    "config": {
+                        "type": "object",
+                        "description": (
+                            "The v2 layout tree {version:2, elements:[...]}. Bound field slugs must "
+                            "exist on the entity (use get_entity_schema). Invalid trees are rejected "
+                            "with a clear error."
+                        ),
                     },
                 },
                 "required": ["name", "entity_slug"],
@@ -824,9 +796,9 @@ TOOLS: list[dict[str, Any]] = [
         "function": {
             "name": "update_form",
             "description": (
-                "Update an existing form. Pass only what changes. NOTE: `fields`/`sections` REPLACE "
-                "the entire layout — call get_form first, then send the COMPLETE new fields+sections "
-                "(omit both to leave the layout untouched). Use is_active to enable/disable the form."
+                "Update a form. Pass only what changes. NOTE: `config` REPLACES the entire layout tree "
+                "— call get_form first, modify the returned `config`, and send the COMPLETE new tree "
+                "(omit `config` to leave the layout untouched). Use is_active to enable/disable."
             ),
             "parameters": {
                 "type": "object",
@@ -835,18 +807,106 @@ TOOLS: list[dict[str, Any]] = [
                     "name": {"type": "string"},
                     "description": {"type": "string"},
                     "is_active": {"type": "boolean"},
-                    "fields": {
-                        "type": "array",
-                        "items": _FORM_FIELD_SCHEMA,
-                        "description": "COMPLETE new root-field layout (replaces existing).",
-                    },
-                    "sections": {
-                        "type": "array",
-                        "items": _FORM_SECTION_SCHEMA,
-                        "description": "COMPLETE new sections layout (replaces existing).",
+                    "config": {
+                        "type": "object",
+                        "description": "COMPLETE new v2 layout tree {version:2, elements:[...]} (replaces existing).",
                     },
                 },
                 "required": ["form_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_form",
+            "description": "Delete a form. Existing share links stop working. Irreversible.",
+            "parameters": {
+                "type": "object",
+                "properties": {"form_id": {"type": "string"}},
+                "required": ["form_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_views",
+            "description": "List the views (composable screens) in this workspace.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_view",
+            "description": "Get a view's full definition incl. its v2 layout tree. Call before update_view.",
+            "parameters": {
+                "type": "object",
+                "properties": {"view_id": {"type": "string"}},
+                "required": ["view_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_view",
+            "description": (
+                "Create a view — a composable screen using the same v2 element tree as forms, plus "
+                "`form_ref` widgets that embed a form and buttons that run workflows. Omit "
+                "`entity_slug` for a standalone view (only labels/buttons/form_ref/layout allowed); "
+                "supply it to bind the view to an entity record (then fields/tables/calculated work too)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "slug": {"type": "string", "description": "URL slug; defaults from name."},
+                    "entity_slug": {
+                        "type": "string",
+                        "description": "Optional entity binding. Omit for a standalone dashboard view.",
+                    },
+                    "description": {"type": "string"},
+                    "config": {
+                        "type": "object",
+                        "description": "The v2 layout tree {version:2, elements:[...]}.",
+                    },
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_view",
+            "description": (
+                "Update a view. `config` REPLACES the whole layout tree — call get_view first, modify, "
+                "and send the complete tree. Use is_active to enable/disable."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "view_id": {"type": "string"},
+                    "name": {"type": "string"},
+                    "description": {"type": "string"},
+                    "is_active": {"type": "boolean"},
+                    "config": {"type": "object", "description": "COMPLETE new v2 layout tree."},
+                },
+                "required": ["view_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_view",
+            "description": "Delete a view. Irreversible.",
+            "parameters": {
+                "type": "object",
+                "properties": {"view_id": {"type": "string"}},
+                "required": ["view_id"],
             },
         },
     },
@@ -1889,7 +1949,7 @@ class AgentService:
         definition = await EntityDefinitionRepository(session, self._org_id).get_by_slug(entity_slug)
         if definition is None:
             return {"error": f"entity not found: {entity_slug!r}"}
-        config = FormConfig.model_validate({"fields": args.get("fields", []), "sections": args.get("sections", [])})
+        config = FormConfig.model_validate(args.get("config") or {})
         body = FormCreate(
             name=name,
             slug=args.get("slug") or _slugify(name),
@@ -1908,7 +1968,7 @@ class AgentService:
                 "slug": form.slug,
                 "entity": definition.slug,
             },
-            "note": "Open the Forms UI to generate a shareable link for this form.",
+            "note": "Open the Forms UI to generate a shareable link, or fill it at /forms/{id}/fill.",
         }
 
     async def _tool_update_form(self, session: AsyncSession, args: dict[str, Any]) -> dict[str, Any]:
@@ -1919,12 +1979,9 @@ class AgentService:
         if form_id is None:
             return {"error": "form_id is required"}
         provided: dict[str, Any] = {k: args[k] for k in ("name", "description", "is_active") if k in args}
-        # `fields`/`sections` are a full-layout replacement; only touch config when
-        # the caller supplied at least one of them.
-        if "fields" in args or "sections" in args:
-            provided["config"] = FormConfig.model_validate(
-                {"fields": args.get("fields", []), "sections": args.get("sections", [])}
-            )
+        # `config` is a full-layout replacement; only touch it when supplied.
+        if "config" in args:
+            provided["config"] = FormConfig.model_validate(args["config"] or {})
         body = FormUpdate(**provided)
         try:
             form = await FormService(session, self._org_id).update_form(form_id, body)
@@ -1938,6 +1995,103 @@ class AgentService:
                 "is_active": form.is_active,
             }
         }
+
+    async def _tool_delete_form(self, session: AsyncSession, args: dict[str, Any]) -> dict[str, Any]:
+        from api.services.form_service import FormError, FormService
+
+        form_id = _parse_uuid(args.get("form_id"))
+        if form_id is None:
+            return {"error": "form_id is required"}
+        try:
+            await FormService(session, self._org_id).delete_form(form_id)
+        except FormError as exc:
+            return {"error": str(exc)}
+        return {"deleted_form": str(form_id)}
+
+    # ---- Views (org-admin) ----
+    async def _tool_list_views(self, session: AsyncSession, _args: dict[str, Any]) -> dict[str, Any]:
+        from api.services.view_service import ViewService
+
+        views = await ViewService(session, self._org_id).list_views()
+        return {
+            "views": [
+                {"id": str(v.id), "name": v.name, "slug": v.slug, "is_active": v.is_active}
+                for v in views
+            ]
+        }
+
+    async def _tool_get_view(self, session: AsyncSession, args: dict[str, Any]) -> dict[str, Any]:
+        from api.schemas.view import ViewRead
+        from api.services.form_service import FormError
+        from api.services.view_service import ViewService
+
+        view_id = _parse_uuid(args.get("view_id"))
+        if view_id is None:
+            return {"error": "view_id is required"}
+        try:
+            view = await ViewService(session, self._org_id).get_view(view_id)
+        except FormError as exc:
+            return {"error": str(exc)}
+        return {"view": ViewRead.model_validate(view).model_dump(mode="json")}
+
+    async def _tool_create_view(self, session: AsyncSession, args: dict[str, Any]) -> dict[str, Any]:
+        from api.schemas.form import FormConfig
+        from api.schemas.view import ViewCreate
+        from api.services.form_service import FormError
+        from api.services.view_service import ViewService
+
+        name = args.get("name")
+        if not name:
+            return {"error": "name is required"}
+        entity_id = None
+        if args.get("entity_slug"):
+            definition = await EntityDefinitionRepository(session, self._org_id).get_by_slug(args["entity_slug"])
+            if definition is None:
+                return {"error": f"entity not found: {args['entity_slug']!r}"}
+            entity_id = definition.id
+        body = ViewCreate(
+            name=name,
+            slug=args.get("slug") or _slugify(name),
+            description=args.get("description"),
+            entity_definition_id=entity_id,
+            config=FormConfig.model_validate(args.get("config") or {}),
+        )
+        try:
+            view = await ViewService(session, self._org_id).create_view(body)
+        except FormError as exc:
+            return {"error": str(exc)}
+        return {"created_view": {"id": str(view.id), "name": view.name, "slug": view.slug}}
+
+    async def _tool_update_view(self, session: AsyncSession, args: dict[str, Any]) -> dict[str, Any]:
+        from api.schemas.form import FormConfig
+        from api.schemas.view import ViewUpdate
+        from api.services.form_service import FormError
+        from api.services.view_service import ViewService
+
+        view_id = _parse_uuid(args.get("view_id"))
+        if view_id is None:
+            return {"error": "view_id is required"}
+        provided: dict[str, Any] = {k: args[k] for k in ("name", "description", "is_active") if k in args}
+        if "config" in args:
+            provided["config"] = FormConfig.model_validate(args["config"] or {})
+        try:
+            view = await ViewService(session, self._org_id).update_view(view_id, ViewUpdate(**provided))
+        except FormError as exc:
+            return {"error": str(exc)}
+        return {"updated_view": {"id": str(view.id), "name": view.name, "is_active": view.is_active}}
+
+    async def _tool_delete_view(self, session: AsyncSession, args: dict[str, Any]) -> dict[str, Any]:
+        from api.services.form_service import FormError
+        from api.services.view_service import ViewService
+
+        view_id = _parse_uuid(args.get("view_id"))
+        if view_id is None:
+            return {"error": "view_id is required"}
+        try:
+            await ViewService(session, self._org_id).delete_view(view_id)
+        except FormError as exc:
+            return {"error": str(exc)}
+        return {"deleted_view": str(view_id)}
 
     # ------------------------------------------------------------------ #
     # Permission helpers — documents & folders act as the calling user
