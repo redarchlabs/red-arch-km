@@ -1,20 +1,11 @@
 "use client";
 
-import {
-  addEdge,
-  applyEdgeChanges,
-  applyNodeChanges,
-  type Connection,
-  type Edge,
-  type EdgeChange,
-  type Node,
-  type NodeChange,
-} from "@xyflow/react";
 import { ArrowLeft, Rocket, Save } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { useStore } from "zustand";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -23,15 +14,10 @@ import { FormsPanel } from "@/components/workflows/FormsPanel";
 import { NodeInspector } from "@/components/workflows/NodeInspector";
 import { RunPanel } from "@/components/workflows/RunPanel";
 import { TestPanel } from "@/components/workflows/TestPanel";
-import { WorkflowCanvas, type AddableNodeType } from "@/components/workflows/WorkflowCanvas";
-import {
-  checkGraphIntegrity,
-  newNodeId,
-  normalizeForSave,
-  starterGraph,
-  toDefinition,
-  toReactFlow,
-} from "@/components/workflows/graphSerde";
+import { WorkflowDesigner } from "@/components/workflows/designer/WorkflowDesigner";
+import { useDesignerStore } from "@/components/workflows/designer/store";
+import { normalizeForSave, starterGraph, toDefinition, toReactFlow } from "@/components/workflows/graphSerde";
+import { hasErrors, validateGraph, type Issue } from "@/components/workflows/validation";
 import { listEntities, type EntityDefinition, type EntityField } from "@/lib/api/entities";
 import { getApiErrorMessage } from "@/lib/api/errors";
 import { listForms, type Form } from "@/lib/api/forms";
@@ -55,18 +41,25 @@ export default function WorkflowDesignPage() {
   const [entityFields, setEntityFields] = useState<EntityField[]>([]);
   const [entities, setEntities] = useState<EntityDefinition[]>([]);
   const [forms, setForms] = useState<Form[]>([]);
-  const [nodes, setNodes] = useState<Node[]>([]);
-  const [edges, setEdges] = useState<Edge[]>([]);
   const [baseVersion, setBaseVersion] = useState<WorkflowVersion | null>(null);
   const [savedVersion, setSavedVersion] = useState<WorkflowVersion | null>(null);
-  const [dirty, setDirty] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [testResult, setTestResult] = useState<WorkflowTestResult | null>(null);
   const [testing, setTesting] = useState(false);
+  const [issues, setIssues] = useState<Issue[]>([]);
 
-  const selected = useMemo(() => nodes.find((n) => n.selected) ?? null, [nodes]);
+  // Graph state (nodes/edges/selection/history) lives in the designer store, so
+  // the palette/canvas/keymap/command-palette share one source of truth.
+  const selected = useDesignerStore((s) => s.nodes.find((n) => n.selected) ?? null);
+  const allNodes = useDesignerStore((s) => s.nodes);
+  // "Unsaved changes" = the graph's structural signature moved since the last
+  // save/load reset the undo baseline (selection/measurement don't count).
+  const dirty = useStore(useDesignerStore.temporal, (t) => t.pastStates.length > 0);
+
+  const errorCount = issues.filter((i) => i.severity === "error").length;
+  const warningCount = issues.filter((i) => i.severity === "warning").length;
 
   // Monotonic request id: the App Router reuses this component across `id`
   // changes, so a slow load for an old id must not overwrite a newer one.
@@ -104,13 +97,13 @@ export default function WorkflowDesignPage() {
       }
       const latest = versions[0] ?? null;
       const graph = latest ? toReactFlow(latest.definition) : starterGraph();
-      setNodes(graph.nodes);
-      setEdges(graph.edges);
+      useDesignerStore.getState().setGraph(graph.nodes, graph.edges);
+      // Reset the undo baseline so a freshly-loaded graph reads as "not dirty".
+      useDesignerStore.temporal.getState().clear();
       setBaseVersion(latest);
       // If the latest version is an unpublished draft, we keep editing it;
       // editing a published version forks a fresh draft on save.
       setSavedVersion(latest && latest.status === "draft" ? latest : null);
-      setDirty(false);
     } catch (e: unknown) {
       if (reqId !== loadReq.current) return;
       setError(getApiErrorMessage(e, "Failed to load workflow"));
@@ -123,76 +116,44 @@ export default function WorkflowDesignPage() {
     void load();
   }, [load]);
 
-  const markDirty = (changes: { type: string }[]) => {
-    if (changes.some((c) => c.type !== "select" && c.type !== "dimensions")) setDirty(true);
-  };
-
-  const onNodesChange = useCallback((changes: NodeChange[]) => {
-    setNodes((nds) => applyNodeChanges(changes, nds));
-    markDirty(changes);
-  }, []);
-
-  const onEdgesChange = useCallback((changes: EdgeChange[]) => {
-    setEdges((eds) => applyEdgeChanges(changes, eds));
-    markDirty(changes);
-  }, []);
-
-  const onConnect = useCallback((connection: Connection) => {
-    const edge: Edge = {
-      ...connection,
-      id: newNodeId("e"),
-      style: connection.sourceHandle === "false" ? { stroke: "#f43f5e" } : undefined,
+  // Clear the shared store when leaving the designer so the next workflow that
+  // mounts doesn't briefly show this one's graph.
+  useEffect(() => {
+    return () => {
+      useDesignerStore.getState().reset();
+      useDesignerStore.temporal.getState().clear();
     };
-    setEdges((eds) => addEdge(edge, eds));
-    setDirty(true);
-  }, []);
-
-  const addNode = useCallback((type: AddableNodeType) => {
-    const dataByType: Record<AddableNodeType, Record<string, unknown>> = {
-      condition: { expr: null },
-      action: { action_type: "", config: {} },
-      switch: { cases: [] },
-      delay: { delay_amount: 30, delay_unit: "minutes", delay_seconds: 1800 },
-    };
-    const node: Node = {
-      id: newNodeId(type),
-      type,
-      position: { x: 200 + Math.random() * 120, y: 200 + Math.random() * 160 },
-      data: dataByType[type],
-    };
-    setNodes((nds) => [...nds, node]);
-    setDirty(true);
   }, []);
 
   const updateNodeData = useCallback((nodeId: string, data: Record<string, unknown>) => {
-    setNodes((nds) => nds.map((n) => (n.id === nodeId ? { ...n, data } : n)));
-    setDirty(true);
+    useDesignerStore.getState().updateNodeData(nodeId, data);
   }, []);
 
   const deleteNode = useCallback((nodeId: string) => {
-    setNodes((nds) => nds.filter((n) => n.id !== nodeId));
-    setEdges((eds) => eds.filter((e) => e.source !== nodeId && e.target !== nodeId));
-    setDirty(true);
+    useDesignerStore.getState().deleteNodes([nodeId]);
   }, []);
 
   const ensureSaved = useCallback(async (): Promise<WorkflowVersion> => {
     if (savedVersion && !dirty) return savedVersion;
+    const { nodes, edges } = useDesignerStore.getState();
     const definition = normalizeForSave(toDefinition(nodes, edges));
-    // Block structurally broken graphs (cycles, edges to deleted nodes); warn
-    // about unreachable nodes but let the save proceed.
-    const { errors, warnings } = checkGraphIntegrity(definition);
-    if (errors.length > 0) {
-      throw new Error(errors.join(" "));
+    // Block save/publish only on hard errors (no trigger, dangling edge,
+    // unattached boundary); surface warnings (unreachable, no end) but proceed.
+    const problems = validateGraph(definition);
+    if (hasErrors(problems)) {
+      throw new Error(problems.filter((p) => p.severity === "error").map((p) => p.message).join(" "));
     }
+    const warnings = problems.filter((p) => p.severity === "warning");
     if (warnings.length > 0) {
-      toast.warning(warnings.join(" "));
+      toast.warning(warnings.map((p) => p.message).join(" "));
     }
     const version = await saveDraft(id, definition);
     setSavedVersion(version);
     setBaseVersion(version);
-    setDirty(false);
+    // The saved graph is the new clean baseline.
+    useDesignerStore.temporal.getState().clear();
     return version;
-  }, [savedVersion, dirty, nodes, edges, id]);
+  }, [savedVersion, dirty, id]);
 
   const handleSave = async () => {
     setBusy(true);
@@ -240,6 +201,32 @@ export default function WorkflowDesignPage() {
     return <Skeleton className="h-[80vh] w-full" />;
   }
 
+  const inspector = (
+    <>
+      <NodeInspector
+        node={selected}
+        nodes={allNodes}
+        fields={entityFields}
+        entities={entities}
+        forms={forms}
+        onChangeData={updateNodeData}
+        onDelete={deleteNode}
+      />
+      <FormsPanel forms={forms} entities={entities} />
+      <TestPanel running={testing} result={testResult} fields={entityFields} onRun={handleTest} />
+      {workflow ? (
+        <RunPanel
+          workflowId={workflow.id}
+          entitySlug={entitySlug}
+          fields={entityFields}
+          runPermission={workflow.run_permission}
+          onPermissionSaved={(p) => setWorkflow({ ...workflow, run_permission: p })}
+          canRun={baseVersion?.status === "published" || workflow.active_version_id != null}
+        />
+      ) : null}
+    </>
+  );
+
   return (
     <div className="flex min-h-[calc(100vh-7rem)] flex-col gap-3 lg:h-[calc(100vh-7rem)] lg:min-h-0">
       <div className="flex flex-wrap items-center gap-2">
@@ -256,9 +243,18 @@ export default function WorkflowDesignPage() {
             ) : null}
           </div>
           <p className="text-xs text-muted-foreground">
-            Drag from a node handle to connect. Green = true branch, red = false.
+            Drag from the palette to add a node · ⌘K for commands · drag a handle to connect.
           </p>
         </div>
+        {errorCount > 0 ? (
+          <Badge variant="destructive" title="Errors block save and publish">
+            {errorCount} error{errorCount > 1 ? "s" : ""}
+          </Badge>
+        ) : warningCount > 0 ? (
+          <Badge variant="outline" title="Warnings don't block save">
+            {warningCount} warning{warningCount > 1 ? "s" : ""}
+          </Badge>
+        ) : null}
         {baseVersion ? (
           <Badge variant="outline">
             v{baseVersion.version_number} · {baseVersion.status}
@@ -279,39 +275,8 @@ export default function WorkflowDesignPage() {
 
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
 
-      <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 lg:grid-cols-[1fr_360px]">
-        <div className="h-[60vh] min-h-[360px] lg:h-auto">
-          <WorkflowCanvas
-            nodes={nodes}
-            edges={edges}
-            onNodesChange={onNodesChange}
-            onEdgesChange={onEdgesChange}
-            onConnect={onConnect}
-            onAddNode={addNode}
-          />
-        </div>
-        <div className="min-h-0 space-y-3 overflow-y-auto">
-          <NodeInspector
-            node={selected}
-            fields={entityFields}
-            entities={entities}
-            forms={forms}
-            onChangeData={updateNodeData}
-            onDelete={deleteNode}
-          />
-          <FormsPanel forms={forms} entities={entities} />
-          <TestPanel running={testing} result={testResult} fields={entityFields} onRun={handleTest} />
-          {workflow ? (
-            <RunPanel
-              workflowId={workflow.id}
-              entitySlug={entitySlug}
-              fields={entityFields}
-              runPermission={workflow.run_permission}
-              onPermissionSaved={(p) => setWorkflow({ ...workflow, run_permission: p })}
-              canRun={baseVersion?.status === "published" || workflow.active_version_id != null}
-            />
-          ) : null}
-        </div>
+      <div className="min-h-0 flex-1">
+        <WorkflowDesigner inspector={inspector} onIssuesChange={setIssues} />
       </div>
     </div>
   );

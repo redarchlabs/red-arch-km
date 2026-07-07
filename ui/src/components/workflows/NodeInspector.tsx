@@ -9,6 +9,18 @@ import { Textarea } from "@/components/ui/textarea";
 import { ACTION_CONFIG_FIELDS, ACTION_LABELS, ACTION_TYPES } from "@/components/workflows/actionTypes";
 import { ConditionEditor } from "@/components/workflows/ConditionEditor";
 import { newNodeId } from "@/components/workflows/graphSerde";
+import {
+  EVENT_POSITIONS,
+  EVENT_TYPE_LABELS,
+  EVENT_TYPES,
+  GATEWAY_LABELS,
+  GATEWAY_TYPES,
+  subtypeLabel,
+  TASK_LABELS,
+  TASK_TYPES,
+  WAIT_TASK_TYPES,
+  type TaskType,
+} from "@/components/workflows/nodes/nodeMeta";
 import { RecordFieldEditor } from "@/components/workflows/RecordFieldEditor";
 import type { EntityDefinition, EntityField } from "@/lib/api/entities";
 import type { Form } from "@/lib/api/forms";
@@ -21,6 +33,8 @@ interface SwitchCase {
 
 interface NodeInspectorProps {
   node: Node | null;
+  /** All canvas nodes — powers the boundary event's host (attached_to) picker. */
+  nodes?: Node[];
   /** Fields of the entity this workflow fires on (condition + trigger pickers). */
   fields?: EntityField[];
   /** All entities in the org (target picker for the create_record action). */
@@ -34,7 +48,7 @@ interface NodeInspectorProps {
 const OPERATIONS = ["create", "update", "delete"] as const;
 const selectClass = "h-9 w-full rounded-md border bg-background px-2 text-sm";
 
-export function NodeInspector({ node, fields, entities, forms, onChangeData, onDelete }: NodeInspectorProps) {
+export function NodeInspector({ node, nodes, fields, entities, forms, onChangeData, onDelete }: NodeInspectorProps) {
   if (!node) {
     return (
       <div className="rounded-lg border bg-card p-4 text-sm text-muted-foreground">
@@ -50,7 +64,7 @@ export function NodeInspector({ node, fields, entities, forms, onChangeData, onD
   return (
     <div className="space-y-4 rounded-lg border bg-card p-4">
       <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold capitalize">{node.type} node</h3>
+        <h3 className="text-sm font-semibold">{subtypeLabel({ type: node.type, data })}</h3>
         {node.type !== "trigger" ? (
           <Button variant="ghost" size="icon" onClick={() => onDelete(node.id)} aria-label="Delete node">
             <Trash2 className="h-4 w-4" />
@@ -76,6 +90,19 @@ export function NodeInspector({ node, fields, entities, forms, onChangeData, onD
         <SwitchFields data={data} patch={patch} fields={fields} />
       ) : node.type === "delay" ? (
         <DelayFields data={data} patch={patch} />
+      ) : node.type === "task" ? (
+        <TaskFields
+          nodeId={node.id}
+          data={data}
+          patch={patch}
+          entities={entities}
+          forms={forms}
+          triggerFields={fields}
+        />
+      ) : node.type === "gateway" ? (
+        <GatewayFields nodeId={node.id} data={data} patch={patch} fields={fields} />
+      ) : node.type === "event" ? (
+        <EventFields data={data} patch={patch} nodes={nodes} />
       ) : (
         <ActionFields
           nodeId={node.id}
@@ -86,6 +113,186 @@ export function NodeInspector({ node, fields, entities, forms, onChangeData, onD
           triggerFields={fields}
         />
       )}
+    </div>
+  );
+}
+
+function TaskFields({
+  nodeId,
+  data,
+  patch,
+  entities,
+  forms,
+  triggerFields,
+}: {
+  nodeId: string;
+  data: Record<string, unknown>;
+  patch: (next: Record<string, unknown>) => void;
+  entities?: EntityDefinition[];
+  forms?: Form[];
+  triggerFields?: EntityField[];
+}) {
+  const taskType = ((data.task_type as string | undefined) ?? "service") as TaskType;
+  const isWait = WAIT_TASK_TYPES.includes(taskType);
+  return (
+    <div className="space-y-3">
+      <div>
+        <label className="text-xs font-medium text-muted-foreground">Task type</label>
+        <select
+          value={taskType}
+          onChange={(e) => patch({ task_type: e.target.value })}
+          className={`${selectClass} mt-1`}
+        >
+          {TASK_TYPES.map((t) => (
+            <option key={t} value={t}>
+              {TASK_LABELS[t]}
+            </option>
+          ))}
+        </select>
+      </div>
+      {isWait ? (
+        <p className="text-xs text-muted-foreground">
+          A wait-state task — the run parks here until an external signal (a user completes it, a
+          message arrives, or a called flow finishes).
+        </p>
+      ) : (
+        <ActionFields
+          nodeId={nodeId}
+          data={data}
+          patch={patch}
+          entities={entities}
+          forms={forms}
+          triggerFields={triggerFields}
+        />
+      )}
+    </div>
+  );
+}
+
+function GatewayFields({
+  nodeId,
+  data,
+  patch,
+  fields,
+}: {
+  nodeId: string;
+  data: Record<string, unknown>;
+  patch: (next: Record<string, unknown>) => void;
+  fields?: EntityField[];
+}) {
+  const gatewayType = (data.gateway_type as string | undefined) ?? "exclusive";
+  return (
+    <div className="space-y-3">
+      <div>
+        <label className="text-xs font-medium text-muted-foreground">Gateway type</label>
+        <select
+          value={gatewayType}
+          onChange={(e) => patch({ gateway_type: e.target.value })}
+          className={`${selectClass} mt-1`}
+        >
+          {GATEWAY_TYPES.map((g) => (
+            <option key={g} value={g}>
+              {GATEWAY_LABELS[g]}
+            </option>
+          ))}
+        </select>
+      </div>
+      {gatewayType === "exclusive" ? (
+        <div className="space-y-1">
+          <label className="text-xs font-medium text-muted-foreground">
+            Branch condition (true / false)
+          </label>
+          <ConditionEditor key={nodeId} expr={data.expr} fields={fields} onChange={(expr) => patch({ expr })} />
+          <p className="text-xs text-muted-foreground">
+            Leave empty and use per-case handles for a multi-way switch. Add a default branch so an
+            unmatched token doesn&rsquo;t stop here.
+          </p>
+        </div>
+      ) : gatewayType === "event_based" ? (
+        <p className="text-xs text-muted-foreground">
+          Waits, then routes to whichever catch event or receive task fires first.
+        </p>
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          Forks a token down every outgoing branch (and joins when ≥2 branches arrive).
+        </p>
+      )}
+    </div>
+  );
+}
+
+function EventFields({
+  data,
+  patch,
+  nodes,
+}: {
+  data: Record<string, unknown>;
+  patch: (next: Record<string, unknown>) => void;
+  nodes?: Node[];
+}) {
+  const position = (data.position as string | undefined) ?? "intermediate";
+  const eventType = (data.event_type as string | undefined) ?? "none";
+  const hostCandidates = (nodes ?? []).filter((n) => n.type === "task");
+  return (
+    <div className="space-y-3">
+      <div>
+        <label className="text-xs font-medium text-muted-foreground">Position</label>
+        <select
+          value={position}
+          onChange={(e) => patch({ position: e.target.value })}
+          className={`${selectClass} mt-1`}
+        >
+          {EVENT_POSITIONS.map((p) => (
+            <option key={p} value={p}>
+              {p}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div>
+        <label className="text-xs font-medium text-muted-foreground">Event type</label>
+        <select
+          value={eventType}
+          onChange={(e) => patch({ event_type: e.target.value })}
+          className={`${selectClass} mt-1`}
+        >
+          {EVENT_TYPES.map((t) => (
+            <option key={t} value={t}>
+              {EVENT_TYPE_LABELS[t]}
+            </option>
+          ))}
+        </select>
+      </div>
+      {position === "boundary" ? (
+        <>
+          <div>
+            <label className="text-xs font-medium text-muted-foreground">Attached to</label>
+            <select
+              value={(data.attached_to as string | undefined) ?? ""}
+              onChange={(e) => patch({ attached_to: e.target.value || undefined })}
+              className={`${selectClass} mt-1`}
+            >
+              <option value="">Choose a task…</option>
+              {hostCandidates.map((n) => (
+                <option key={n.id} value={n.id}>
+                  {subtypeLabel({ type: n.type, data: n.data as Record<string, unknown> })} ({n.id})
+                </option>
+              ))}
+            </select>
+          </div>
+          <label className="flex items-center gap-1.5 text-sm">
+            <input
+              type="checkbox"
+              checked={data.interrupting !== false}
+              onChange={(e) => patch({ interrupting: e.target.checked })}
+            />
+            Interrupting (cancels the host task when it fires)
+          </label>
+          <p className="text-xs text-muted-foreground">
+            The attachment (and its position on the host) applies after you save and reload.
+          </p>
+        </>
+      ) : null}
     </div>
   );
 }
