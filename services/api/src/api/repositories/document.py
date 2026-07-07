@@ -9,7 +9,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from api.models.document import Document, Tag
+from api.models.document import Document, ProcessingStatus, Tag
 
 
 class DocumentRepository:
@@ -137,6 +137,14 @@ class DocumentRepository:
         doc = await self.get(document_id)
         if doc is None:
             return None
+        # Terminal states are sticky. A redelivered/duplicate task execution
+        # (Celery acks_late runs concurrent copies of a long ingest) must not
+        # revert a CANCELLED/SUCCESS/FAILED document back to PROCESSING — that's
+        # what made the banner show "89% processing" after the log said the job
+        # was cancelled. Reprocess re-opens the doc through a separate PENDING
+        # write (see routers/documents.py), not this worker callback.
+        if doc.processing_status in ProcessingStatus.terminal():
+            return doc
         doc.processing_status = status
         if details is not None:
             doc.processing_details = details

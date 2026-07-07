@@ -12,10 +12,10 @@ import io
 import logging
 from typing import TYPE_CHECKING
 
-from pdf2image import convert_from_bytes
 from PIL import Image
 
 from worker.config import WorkerSettings
+from worker.extract._pdf import iter_pdf_pages
 
 if TYPE_CHECKING:
     from openai import OpenAI
@@ -77,18 +77,17 @@ def extract(data: bytes, filename: str, api_key: str, *, model: str | None = Non
     client = OpenAI(api_key=api_key)
 
     if filename.lower().endswith(".pdf"):
-        # Cap pages so a many-page PDF can't OOM the worker or run up unbounded
-        # per-page vision billing. Pages past the cap are skipped with a warning.
-        max_pages = settings.max_ocr_pages
-        images = convert_from_bytes(data, last_page=max_pages)
-        if len(images) >= max_pages:
-            logger.warning("PDF exceeds max_ocr_pages=%d; transcribing only the first %d pages", max_pages, max_pages)
+        # Render in bounded batches (see iter_pdf_pages) so a many-page PDF can't
+        # OOM the worker; max_ocr_pages still caps total pages (and per-page
+        # vision billing), skipping the overflow with a warning.
         pages: list[str] = []
-        for i, image in enumerate(images, start=1):
+        for page_no, image in iter_pdf_pages(
+            data, max_pages=settings.max_ocr_pages, batch_size=settings.ocr_page_batch_size
+        ):
             buffer = io.BytesIO()
             image.save(buffer, format="PNG")
-            pages.append(_transcribe_png(client, resolved_model, buffer.getvalue(), i))
-            logger.debug("AI transcribed PDF page %d/%d", i, len(images))
+            pages.append(_transcribe_png(client, resolved_model, buffer.getvalue(), page_no))
+            logger.debug("AI transcribed PDF page %d", page_no)
         return "\n\n".join(pages)
 
     return _transcribe_png(client, resolved_model, _image_to_png(data), 1)

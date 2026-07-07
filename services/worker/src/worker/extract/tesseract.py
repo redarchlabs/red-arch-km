@@ -11,26 +11,27 @@ import io
 import logging
 
 import pytesseract
-from pdf2image import convert_from_bytes
 from PIL import Image
 
 from worker.config import WorkerSettings
+from worker.extract._pdf import iter_pdf_pages
 
 logger = logging.getLogger(__name__)
 
 
 def extract_pdf(data: bytes) -> str:
-    """OCR up to ``max_ocr_pages`` pages of a PDF and return concatenated text."""
-    max_pages = WorkerSettings().max_ocr_pages
-    # `last_page` caps rendering at poppler level so we never rasterize the whole
-    # document into memory just to throw pages away.
-    images = convert_from_bytes(data, last_page=max_pages)
-    if len(images) >= max_pages:
-        logger.warning("PDF exceeds max_ocr_pages=%d; OCR'ing only the first %d pages", max_pages, max_pages)
+    """OCR up to ``max_ocr_pages`` pages of a PDF and return concatenated text.
+
+    Pages are rendered in bounded batches (see ``iter_pdf_pages``) so a very
+    large document never rasterizes wholesale into memory.
+    """
+    settings = WorkerSettings()
     pages: list[str] = []
-    for i, image in enumerate(images, start=1):
+    for page_no, image in iter_pdf_pages(
+        data, max_pages=settings.max_ocr_pages, batch_size=settings.ocr_page_batch_size
+    ):
         pages.append(pytesseract.image_to_string(image))
-        logger.debug("Tesseract OCR'd PDF page %d/%d", i, len(images))
+        logger.debug("Tesseract OCR'd PDF page %d", page_no)
     return "\n".join(pages)
 
 

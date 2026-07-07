@@ -34,13 +34,30 @@ app.conf.update(
     worker_prefetch_multiplier=1,
     task_default_retry_delay=30,
     task_max_retries=3,
+    # A redelivered task (acks_late) is only redelivered once the broker's
+    # visibility timeout elapses. It MUST exceed task_time_limit, or the broker
+    # hands a still-running long task to a second worker — concurrent duplicate
+    # executions that re-OCR and re-ingest (brain-api ingest is not idempotent).
+    # The Redis default is 3600s (1h); raise it well past the hard time limit.
+    broker_transport_options={
+        "visibility_timeout": int(os.environ.get("CELERY_VISIBILITY_TIMEOUT", "28800")),  # 8h
+    },
     # Backstop so a runaway extraction (e.g. a pathological PDF) can't hang a
     # worker slot forever. The soft limit raises SoftTimeLimitExceeded inside the
     # task (caught by task_extract_and_ingest to report FAILED); the hard limit
-    # SIGKILLs the child as a last resort. Generous enough not to trip a
-    # legitimately slow brain-api ingest + its bounded in-process retries.
-    task_soft_time_limit=int(os.environ.get("TASK_SOFT_TIME_LIMIT", "1740")),
-    task_time_limit=int(os.environ.get("TASK_TIME_LIMIT", "1800")),
+    # SIGKILLs the child as a last resort.
+    #
+    # INVARIANT: visibility_timeout > task_time_limit > task_soft_time_limit
+    # > brain_ingest_max_wait_seconds (default 14400s/4h) + the OCR/extract
+    # budget. If the hard limit is *below* the ingest poll ceiling — as it was
+    # (1800s vs 5400s) — any ingest longer than the hard limit is SIGKILLed
+    # mid-flight and, with acks_late, redelivered to restart from scratch,
+    # looping forever without ever completing (the "can't ingest a big doc" bug).
+    # These values let a very large document (whole book, full knowledge phase)
+    # run its complete OCR + submit + poll budget on one worker slot. A big doc
+    # holds a slot for hours by design — scale worker concurrency, not this down.
+    task_soft_time_limit=int(os.environ.get("TASK_SOFT_TIME_LIMIT", "16080")),  # 268m
+    task_time_limit=int(os.environ.get("TASK_TIME_LIMIT", "16200")),  # 270m / 4.5h
 )
 
 app.autodiscover_tasks(["worker.tasks"])
