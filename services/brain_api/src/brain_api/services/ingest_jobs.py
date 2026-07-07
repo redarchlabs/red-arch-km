@@ -37,6 +37,11 @@ class IngestJob:
     chunks: int = 0
     triplets: int = 0
     error: str | None = None
+    # Coarse sub-phase label + 0..1 fraction of the ingest pipeline, updated as
+    # the background job advances so the poller (worker) can move its progress
+    # bar instead of sitting frozen while a long document is processed.
+    phase: str = ""
+    progress: float = 0.0
     updated_at: float = field(default_factory=time.monotonic)
 
 
@@ -60,6 +65,24 @@ class IngestJobRegistry:
         with self._lock:
             self._evict_locked()
             self._jobs[self._key(tenant_id, document_key)] = IngestJob(state="running")
+
+    def mark_progress(self, tenant_id: str, document_key: str, *, phase: str, progress: float) -> None:
+        """Update the running job's sub-phase/fraction. No-op if it isn't running.
+
+        Progress is monotonic and clamped to ``[0, 1]`` — a stray lower value
+        (e.g. a coarse phase report arriving after a finer one) never rewinds the
+        bar. Best-effort telemetry, so a missing/finished job is simply ignored.
+        """
+        with self._lock:
+            job = self._jobs.get(self._key(tenant_id, document_key))
+            if job is None or job.state != "running":
+                return
+            clamped = max(0.0, min(1.0, progress))
+            if clamped < job.progress:
+                clamped = job.progress
+            job.phase = phase
+            job.progress = clamped
+            job.updated_at = time.monotonic()
 
     def mark_done(self, tenant_id: str, document_key: str, *, chunks: int, triplets: int) -> None:
         with self._lock:

@@ -24,6 +24,7 @@ import concurrent.futures
 import logging
 import time
 import uuid
+from collections.abc import Callable
 from typing import Any
 
 from brain_sdk.chunking.chunker import create_sectioned_chunks
@@ -81,10 +82,26 @@ class IngestService:
         access_keys: list[int],
         use_knowledge_graph: bool = True,
         metadata: dict[str, Any] | None = None,
+        progress_cb: Callable[[str, float], None] | None = None,
     ) -> dict[str, Any]:
-        """Run the full ingestion pipeline for a document."""
+        """Run the full ingestion pipeline for a document.
+
+        ``progress_cb(phase, fraction)`` — when supplied — is called at each
+        pipeline boundary (and per-chunk during fact extraction) with a coarse
+        phase label and a 0..1 fraction, so the caller can report live progress
+        while this otherwise-blocking pipeline runs. Best-effort: it must never
+        break ingestion.
+        """
         metrics = get_metrics()
         start = time.perf_counter()
+
+        def _emit(phase: str, fraction: float) -> None:
+            if progress_cb is None:
+                return
+            try:
+                progress_cb(phase, fraction)
+            except Exception as exc:  # noqa: BLE001 - progress must never abort ingest
+                logger.debug("ingest progress_cb raised (ignored): %s", exc)
 
         with _tracer.start_as_current_span(
             "ingest_document",
@@ -125,6 +142,7 @@ class IngestService:
 
             # Embedding and summarisation are independent and network-bound,
             # so we run them concurrently.
+            _emit("embedding", 0.1)
             with (
                 _tracer.start_as_current_span("embed_and_summarize") as span,
                 concurrent.futures.ThreadPoolExecutor(max_workers=2) as exe,
@@ -172,6 +190,7 @@ class IngestService:
             with _tracer.start_as_current_span("purge_existing"):
                 self.remove_document(tenant_id, document_key)
 
+            _emit("summarizing", 0.4)
             with _tracer.start_as_current_span("upsert_chunks"):
                 self._stores.vector.upsert_vectors(tenant_id, chunk_records, collection_type="chunks")
 
@@ -200,6 +219,10 @@ class IngestService:
             )
             self._stores.vector.upsert_vectors(tenant_id, [doc_record], collection_type="documents")
 
+            # Fact/graph extraction is the long pole: a per-chunk LLM pass over the
+            # whole document. It spans the 0.5→1.0 band; the fact path reports
+            # per-chunk so the bar keeps moving instead of freezing.
+            _emit("knowledge", 0.5)
             triplet_count = 0
             if use_knowledge_graph and not self._stores.settings.use_fact_engine:
                 with _tracer.start_as_current_span("extract_and_store_triplets") as span:
@@ -217,6 +240,11 @@ class IngestService:
             # claims before re-inserting.
             if use_knowledge_graph and self._stores.settings.use_fact_engine:
                 with _tracer.start_as_current_span("extract_and_store_facts") as span:
+                    # Map per-chunk fact progress into the 0.5→0.98 band.
+                    def _fact_progress(done: int, total: int) -> None:
+                        frac = 0.5 + 0.48 * (done / total) if total else 0.98
+                        _emit("knowledge", frac)
+
                     facts = self._extract_and_store_facts(
                         tenant_id=tenant_id,
                         document_key=document_key,
@@ -225,6 +253,7 @@ class IngestService:
                         tags=tags,
                         access_keys=access_keys,
                         metadata=metadata,
+                        progress_cb=_fact_progress,
                     )
                     triplet_count = facts.get("claims_extracted", 0)
                     span.set_attribute("claim_count", triplet_count)
@@ -342,6 +371,7 @@ class IngestService:
         tags: list[str],
         access_keys: list[int],
         metadata: dict[str, Any] | None = None,
+        progress_cb: Callable[[int, int], None] | None = None,
     ) -> dict[str, int]:
         """Run the reified-claim fact pipeline over a document's chunks.
 
@@ -349,6 +379,9 @@ class IngestService:
         per-document brief) so structured, high-value docs (directories,
         contracts, policies) yield the claims that make them queryable rather
         than being treated as undifferentiated prose.
+
+        ``progress_cb(done, total)`` is forwarded to the pipeline's per-chunk
+        loop so long extractions can report live progress.
         """
         self._stores.ensure_fact_schema()
         fact_chunks = [Chunk(chunk_id=f"{document_key}#{idx}", text=text) for idx, text in enumerate(chunks)]
@@ -361,6 +394,7 @@ class IngestService:
                 tags=tuple(tags),
                 access_keys=tuple(access_keys),
                 profile=profile,
+                progress_cb=progress_cb,
             )
         except Exception as e:
             logger.error("Fact ingest failed for %s: %s", document_key, e)

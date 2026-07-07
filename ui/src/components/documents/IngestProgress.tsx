@@ -6,6 +6,10 @@ const STAGE_LABEL: Record<string, string> = {
   downloading: "Downloading",
   extracting: "Extracting text",
   ingesting: "Indexing",
+  // brain-api pipeline sub-phases (reported while state=running), 60→97%.
+  embedding: "Embedding",
+  summarizing: "Summarizing",
+  knowledge: "Extracting knowledge",
   done: "Done",
   cancelled: "Cancelled",
 };

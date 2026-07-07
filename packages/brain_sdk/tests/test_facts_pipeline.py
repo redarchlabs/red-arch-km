@@ -96,6 +96,27 @@ class TestPipeline:
         pipe.ingest_document("t1", "docC", [Chunk("docC#0", "x")], replace=False)
         assert store.purged == []
 
+    def test_progress_cb_called_once_per_chunk(self) -> None:
+        store = FakeStore()
+        pipe = _pipeline(FakeExtractor({}), FakeResolver(), store)
+        seen: list[tuple[int, int]] = []
+        chunks = [Chunk("docP#0", "a"), Chunk("docP#1", "b"), Chunk("docP#2", "c")]
+        pipe.ingest_document("t1", "docP", chunks, progress_cb=lambda done, total: seen.append((done, total)))
+        # One monotonic (done, total) callback per chunk, in order.
+        assert seen == [(1, 3), (2, 3), (3, 3)]
+
+    def test_progress_cb_error_does_not_abort_ingest(self) -> None:
+        store = FakeStore()
+        pipe = _pipeline(FakeExtractor({}), FakeResolver(), store)
+
+        def _boom(_done: int, _total: int) -> None:
+            raise RuntimeError("progress sink down")
+
+        # A raising progress sink must not break ingestion.
+        counts = pipe.ingest_document("t1", "docQ", [Chunk("docQ#0", "x")], progress_cb=_boom)
+        assert counts["claims_extracted"] == 0
+        assert store.purged == ["docQ"]
+
 
 class _BoomExtractor:
     """Raises on the listed chunk texts, extracts nothing otherwise."""
