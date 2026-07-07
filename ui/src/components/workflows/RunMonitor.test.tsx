@@ -100,4 +100,23 @@ describe("RunMonitor polling", () => {
     });
     expect(screen.queryByText(/No runs yet/)).not.toBeNull();
   });
+
+  it("flags a dead-lettered run with a DLQ badge", async () => {
+    listRuns.mockResolvedValue([{ ...makeRun("failed"), dead_letter: true }]);
+
+    await act(async () => {
+      render(<RunMonitor workflowId="w1" />);
+    });
+    expect(screen.queryByText("DLQ")).not.toBeNull();
+  });
+
+  it("shows no DLQ badge for an ordinary failed run", async () => {
+    listRuns.mockResolvedValue([makeRun("failed")]);
+
+    await act(async () => {
+      render(<RunMonitor workflowId="w1" />);
+    });
+    expect(screen.queryByText("failed")).not.toBeNull();
+    expect(screen.queryByText("DLQ")).toBeNull();
+  });
 });

@@ -64,6 +64,14 @@ class Settings(BaseSettings):
         default="", validation_alias="WORKFLOW_WEBHOOK_ALLOWLIST"
     )
 
+    # Global kill-switch for the BPMN token engine. When true (default),
+    # schema_version-2 workflows (or any using the new node vocabulary) run on the
+    # token engine; legacy v1 workflows always run on the walker regardless. Turn
+    # off only to pause v2 execution in an emergency.
+    workflow_token_engine_enabled: bool = Field(
+        default=True, validation_alias="WORKFLOW_TOKEN_ENGINE_ENABLED"
+    )
+
     # Internal API key for service-to-service callbacks (worker → api).
     # Separate from brain_api_key so compromise of one doesn't grant the other.
     internal_api_key: str = Field(default="", validation_alias="INTERNAL_API_KEY")

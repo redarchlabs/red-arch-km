@@ -1,32 +1,56 @@
 "use client";
 
 import { type Node } from "@xyflow/react";
-import { Plus, Trash2 } from "lucide-react";
+import { Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { ACTION_CONFIG_FIELDS, ACTION_LABELS, ACTION_TYPES } from "@/components/workflows/actionTypes";
+import { CasesEditor, type CaseItem } from "@/components/workflows/CasesEditor";
 import { ConditionEditor } from "@/components/workflows/ConditionEditor";
-import { newNodeId } from "@/components/workflows/graphSerde";
+import { DecisionTableEditor } from "@/components/workflows/DecisionTableEditor";
+import { routingMode, toCasesMode, toConditionMode } from "@/components/workflows/gatewayRouting";
+import { HttpRequestFields } from "@/components/workflows/HttpRequestFields";
+import {
+  EVENT_POSITIONS,
+  EVENT_TYPE_LABELS,
+  EVENT_TYPES,
+  GATEWAY_LABELS,
+  GATEWAY_TYPES,
+  subtypeLabel,
+  TASK_LABELS,
+  TASK_TYPES,
+  WAIT_TASK_TYPES,
+  type TaskType,
+} from "@/components/workflows/nodes/nodeMeta";
 import { RecordFieldEditor } from "@/components/workflows/RecordFieldEditor";
+import {
+  applyContinueOnError,
+  applyRetry,
+  DEFAULT_RETRY,
+  MAX_ATTEMPTS_CAP,
+  normalizeRetry,
+  readRetry,
+  type RetryPolicy,
+} from "@/components/workflows/retryPolicy";
+import { TransformEditor } from "@/components/workflows/TransformEditor";
+import type { Connection } from "@/lib/api/connections";
 import type { EntityDefinition, EntityField } from "@/lib/api/entities";
 import type { Form } from "@/lib/api/forms";
 
-interface SwitchCase {
-  handle: string;
-  label: string;
-  expr: unknown;
-}
-
 interface NodeInspectorProps {
   node: Node | null;
+  /** All canvas nodes — powers the boundary event's host (attached_to) picker. */
+  nodes?: Node[];
   /** Fields of the entity this workflow fires on (condition + trigger pickers). */
   fields?: EntityField[];
   /** All entities in the org (target picker for the create_record action). */
   entities?: EntityDefinition[];
   /** Org's intake forms (picker for the send_form action). */
   forms?: Form[];
+  /** Org connections (picker for the http_request action's authenticated call). */
+  connections?: Connection[];
   onChangeData: (id: string, data: Record<string, unknown>) => void;
   onDelete: (id: string) => void;
 }
@@ -34,7 +58,7 @@ interface NodeInspectorProps {
 const OPERATIONS = ["create", "update", "delete"] as const;
 const selectClass = "h-9 w-full rounded-md border bg-background px-2 text-sm";
 
-export function NodeInspector({ node, fields, entities, forms, onChangeData, onDelete }: NodeInspectorProps) {
+export function NodeInspector({ node, nodes, fields, entities, forms, connections, onChangeData, onDelete }: NodeInspectorProps) {
   if (!node) {
     return (
       <div className="rounded-lg border bg-card p-4 text-sm text-muted-foreground">
@@ -50,7 +74,7 @@ export function NodeInspector({ node, fields, entities, forms, onChangeData, onD
   return (
     <div className="space-y-4 rounded-lg border bg-card p-4">
       <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold capitalize">{node.type} node</h3>
+        <h3 className="text-sm font-semibold">{subtypeLabel({ type: node.type, data })}</h3>
         {node.type !== "trigger" ? (
           <Button variant="ghost" size="icon" onClick={() => onDelete(node.id)} aria-label="Delete node">
             <Trash2 className="h-4 w-4" />
@@ -76,16 +100,423 @@ export function NodeInspector({ node, fields, entities, forms, onChangeData, onD
         <SwitchFields data={data} patch={patch} fields={fields} />
       ) : node.type === "delay" ? (
         <DelayFields data={data} patch={patch} />
+      ) : node.type === "task" ? (
+        <TaskFields
+          nodeId={node.id}
+          data={data}
+          patch={patch}
+          onChangeData={onChangeData}
+          entities={entities}
+          forms={forms}
+          connections={connections}
+          triggerFields={fields}
+        />
+      ) : node.type === "gateway" ? (
+        <GatewayFields nodeId={node.id} data={data} patch={patch} onChangeData={onChangeData} fields={fields} />
+      ) : node.type === "event" ? (
+        <EventFields data={data} patch={patch} nodes={nodes} />
       ) : (
         <ActionFields
           nodeId={node.id}
           data={data}
           patch={patch}
+          onChangeData={onChangeData}
           entities={entities}
           forms={forms}
+          connections={connections}
           triggerFields={fields}
         />
       )}
+    </div>
+  );
+}
+
+function TaskFields({
+  nodeId,
+  data,
+  patch,
+  onChangeData,
+  entities,
+  forms,
+  connections,
+  triggerFields,
+}: {
+  nodeId: string;
+  data: Record<string, unknown>;
+  patch: (next: Record<string, unknown>) => void;
+  /** Full-replace path (store's updateNodeData) — lets the retry editor DELETE keys. */
+  onChangeData: (id: string, data: Record<string, unknown>) => void;
+  entities?: EntityDefinition[];
+  forms?: Form[];
+  connections?: Connection[];
+  triggerFields?: EntityField[];
+}) {
+  const taskType = ((data.task_type as string | undefined) ?? "service") as TaskType;
+  const isWait = WAIT_TASK_TYPES.includes(taskType);
+  return (
+    <div className="space-y-3">
+      <div>
+        <label className="text-xs font-medium text-muted-foreground">Task type</label>
+        <select
+          value={taskType}
+          onChange={(e) => patch({ task_type: e.target.value })}
+          className={`${selectClass} mt-1`}
+        >
+          {TASK_TYPES.map((t) => (
+            <option key={t} value={t}>
+              {TASK_LABELS[t]}
+            </option>
+          ))}
+        </select>
+      </div>
+      {isWait ? (
+        <>
+          <p className="text-xs text-muted-foreground">
+            A wait-state task — the run parks here until an external signal (a user completes it, a
+            message arrives, or a called flow finishes).
+          </p>
+          {taskType === "user" || taskType === "manual" ? (
+            <UserTaskFields data={data} patch={patch} />
+          ) : null}
+        </>
+      ) : taskType === "businessRule" ? (
+        <DecisionTableEditor key={nodeId} data={data} patch={patch} fields={triggerFields} />
+      ) : taskType === "script" ? (
+        <TransformEditor key={nodeId} data={data} patch={patch} />
+      ) : (
+        <ActionFields
+          nodeId={nodeId}
+          data={data}
+          patch={patch}
+          onChangeData={onChangeData}
+          entities={entities}
+          forms={forms}
+          connections={connections}
+          triggerFields={triggerFields}
+        />
+      )}
+      <RetryFields data={data} onReplace={(next) => onChangeData(nodeId, next)} />
+    </div>
+  );
+}
+
+function UserTaskFields({
+  data,
+  patch,
+}: {
+  data: Record<string, unknown>;
+  patch: (next: Record<string, unknown>) => void;
+}) {
+  const label = (data.label as string | undefined) ?? "";
+  const assignee = (data.assignee as string | undefined) ?? "";
+  return (
+    <div className="space-y-2">
+      <div>
+        <label className="text-xs font-medium text-muted-foreground">Label</label>
+        <Input
+          value={label}
+          onChange={(e) => patch({ label: e.target.value || undefined })}
+          placeholder="Approve request"
+          className="mt-1"
+        />
+      </div>
+      <div>
+        <label className="text-xs font-medium text-muted-foreground">Assignee</label>
+        <Input
+          value={assignee}
+          onChange={(e) => patch({ assignee: e.target.value || undefined })}
+          placeholder="user@example.com or a role"
+          className="mt-1"
+        />
+        <p className="mt-1 text-xs text-muted-foreground">
+          Who this task is presented to (an email, user id, or role — resolved by the run engine).
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function RetryFields({
+  data,
+  onReplace,
+}: {
+  data: Record<string, unknown>;
+  /** Replace the node's whole data object (retry edits add/remove keys wholesale). */
+  onReplace: (next: Record<string, unknown>) => void;
+}) {
+  const retry = readRetry(data);
+  const enabled = retry !== null;
+  const continueOnError = data.continue_on_error === true;
+
+  const setField = (key: keyof RetryPolicy, value: string) =>
+    onReplace(applyRetry(data, normalizeRetry({ ...(retry ?? DEFAULT_RETRY), [key]: value })));
+
+  return (
+    <div className="space-y-2 border-t pt-3">
+      <label className="flex items-center gap-1.5 text-sm font-medium">
+        <input
+          type="checkbox"
+          checked={enabled}
+          onChange={(e) => onReplace(applyRetry(data, e.target.checked ? (retry ?? DEFAULT_RETRY) : null))}
+        />
+        Retry on failure
+      </label>
+
+      {enabled && retry ? (
+        <div className="space-y-2 pl-5">
+          <div>
+            <label className="text-xs font-medium text-muted-foreground">Max attempts</label>
+            <Input
+              type="number"
+              min={1}
+              max={MAX_ATTEMPTS_CAP}
+              value={retry.max_attempts}
+              onChange={(e) => setField("max_attempts", e.target.value)}
+              className="mt-1 h-9 w-24"
+            />
+          </div>
+          <div className="flex gap-2">
+            <div>
+              <label className="text-xs font-medium text-muted-foreground">Base delay (s)</label>
+              <Input
+                type="number"
+                min={0}
+                value={retry.base_delay_seconds}
+                onChange={(e) => setField("base_delay_seconds", e.target.value)}
+                className="mt-1 h-9 w-24"
+              />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground">Max delay (s)</label>
+              <Input
+                type="number"
+                min={0}
+                value={retry.max_delay_seconds}
+                onChange={(e) => setField("max_delay_seconds", e.target.value)}
+                className="mt-1 h-9 w-24"
+              />
+            </div>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Full-jitter exponential back-off between attempts, capped at the max delay.
+          </p>
+        </div>
+      ) : null}
+
+      <label className="flex items-center gap-1.5 text-sm">
+        <input
+          type="checkbox"
+          checked={continueOnError}
+          onChange={(e) => onReplace(applyContinueOnError(data, e.target.checked))}
+        />
+        Continue the workflow if this task ultimately fails
+      </label>
+    </div>
+  );
+}
+
+function GatewayFields({
+  nodeId,
+  data,
+  patch,
+  onChangeData,
+  fields,
+}: {
+  nodeId: string;
+  data: Record<string, unknown>;
+  patch: (next: Record<string, unknown>) => void;
+  /** Full-replace path — routing-mode switches DELETE the stale expr/cases key. */
+  onChangeData: (id: string, data: Record<string, unknown>) => void;
+  fields?: EntityField[];
+}) {
+  const gatewayType = (data.gateway_type as string | undefined) ?? "exclusive";
+  return (
+    <div className="space-y-3">
+      <div>
+        <label className="text-xs font-medium text-muted-foreground">Gateway type</label>
+        <select
+          value={gatewayType}
+          onChange={(e) => patch({ gateway_type: e.target.value })}
+          className={`${selectClass} mt-1`}
+        >
+          {GATEWAY_TYPES.map((g) => (
+            <option key={g} value={g}>
+              {GATEWAY_LABELS[g]}
+            </option>
+          ))}
+        </select>
+      </div>
+      {gatewayType === "exclusive" ? (
+        <ExclusiveRouting
+          nodeId={nodeId}
+          data={data}
+          patch={patch}
+          onReplace={(next) => onChangeData(nodeId, next)}
+          fields={fields}
+        />
+      ) : gatewayType === "event_based" ? (
+        <p className="text-xs text-muted-foreground">
+          Waits, then routes to whichever catch event or receive task fires first.
+        </p>
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          Forks a token down every outgoing branch (and joins when ≥2 branches arrive). No condition —
+          the split/join is structural.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function ExclusiveRouting({
+  nodeId,
+  data,
+  patch,
+  onReplace,
+  fields,
+}: {
+  nodeId: string;
+  data: Record<string, unknown>;
+  patch: (next: Record<string, unknown>) => void;
+  onReplace: (next: Record<string, unknown>) => void;
+  fields?: EntityField[];
+}) {
+  const mode = routingMode(data);
+  const cases = (data.cases as CaseItem[] | undefined) ?? [];
+  return (
+    <div className="space-y-2">
+      <div>
+        <label className="text-xs font-medium text-muted-foreground">Routing</label>
+        <select
+          value={mode}
+          onChange={(e) => onReplace(e.target.value === "cases" ? toCasesMode(data) : toConditionMode(data))}
+          className={`${selectClass} mt-1`}
+        >
+          <option value="condition">Two-way (true / false)</option>
+          <option value="cases">Multi-way (cases)</option>
+        </select>
+      </div>
+      {mode === "condition" ? (
+        <div className="space-y-1">
+          <label className="text-xs font-medium text-muted-foreground">
+            Branch condition (true / false)
+          </label>
+          <ConditionEditor key={nodeId} expr={data.expr} fields={fields} onChange={(expr) => patch({ expr })} />
+          <p className="text-xs text-muted-foreground">
+            The true branch runs when the condition holds; wire a false branch for everything else.
+          </p>
+        </div>
+      ) : (
+        <CasesEditor cases={cases} fields={fields} onChange={(next) => patch({ cases: next })} />
+      )}
+    </div>
+  );
+}
+
+function EventFields({
+  data,
+  patch,
+  nodes,
+}: {
+  data: Record<string, unknown>;
+  patch: (next: Record<string, unknown>) => void;
+  nodes?: Node[];
+}) {
+  const position = (data.position as string | undefined) ?? "intermediate";
+  const eventType = (data.event_type as string | undefined) ?? "none";
+  const hostCandidates = (nodes ?? []).filter((n) => n.type === "task");
+  return (
+    <div className="space-y-3">
+      <div>
+        <label className="text-xs font-medium text-muted-foreground">Position</label>
+        <select
+          value={position}
+          onChange={(e) => patch({ position: e.target.value })}
+          className={`${selectClass} mt-1`}
+        >
+          {EVENT_POSITIONS.map((p) => (
+            <option key={p} value={p}>
+              {p}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div>
+        <label className="text-xs font-medium text-muted-foreground">Event type</label>
+        <select
+          value={eventType}
+          onChange={(e) => patch({ event_type: e.target.value })}
+          className={`${selectClass} mt-1`}
+        >
+          {EVENT_TYPES.map((t) => (
+            <option key={t} value={t}>
+              {EVENT_TYPE_LABELS[t]}
+            </option>
+          ))}
+        </select>
+      </div>
+      {eventType === "timer" && position === "intermediate" ? (
+        <div>
+          <label className="text-xs font-medium text-muted-foreground">Delay (seconds)</label>
+          <Input
+            type="number"
+            min={0}
+            value={Number(data.delay_seconds ?? 0) || ""}
+            onChange={(e) => patch({ delay_seconds: Math.max(0, Math.floor(Number(e.target.value) || 0)) })}
+            placeholder="60"
+            className="mt-1 h-9 w-32"
+          />
+          <p className="mt-1 text-xs text-muted-foreground">
+            The token waits here for this long, then continues from the next node.
+          </p>
+        </div>
+      ) : null}
+      {eventType === "error" && (position === "boundary" || position === "end") ? (
+        <div>
+          <label className="text-xs font-medium text-muted-foreground">Error code (optional)</label>
+          <Input
+            value={(data.error_code as string | undefined) ?? ""}
+            onChange={(e) => patch({ error_code: e.target.value || undefined })}
+            placeholder="payment_failed"
+            className="mt-1"
+          />
+          <p className="mt-1 text-xs text-muted-foreground">
+            {position === "boundary"
+              ? "Only catches errors thrown with this code; blank catches any error."
+              : "Ends the flow by throwing this error code for a matching boundary catcher."}
+          </p>
+        </div>
+      ) : null}
+      {position === "boundary" ? (
+        <>
+          <div>
+            <label className="text-xs font-medium text-muted-foreground">Attached to</label>
+            <select
+              value={(data.attached_to as string | undefined) ?? ""}
+              onChange={(e) => patch({ attached_to: e.target.value || undefined })}
+              className={`${selectClass} mt-1`}
+            >
+              <option value="">Choose a task…</option>
+              {hostCandidates.map((n) => (
+                <option key={n.id} value={n.id}>
+                  {subtypeLabel({ type: n.type, data: n.data as Record<string, unknown> })} ({n.id})
+                </option>
+              ))}
+            </select>
+          </div>
+          <label className="flex items-center gap-1.5 text-sm">
+            <input
+              type="checkbox"
+              checked={data.interrupting !== false}
+              onChange={(e) => patch({ interrupting: e.target.checked })}
+            />
+            Interrupting (cancels the host task when it fires)
+          </label>
+          <p className="text-xs text-muted-foreground">
+            The attachment (and its position on the host) applies after you save and reload.
+          </p>
+        </>
+      ) : null}
     </div>
   );
 }
@@ -213,43 +644,8 @@ function SwitchFields({
   patch: (next: Record<string, unknown>) => void;
   fields?: EntityField[];
 }) {
-  const cases = (data.cases as SwitchCase[] | undefined) ?? [];
-
-  const setCases = (next: SwitchCase[]) => patch({ cases: next });
-  const addCase = () =>
-    setCases([...cases, { handle: newNodeId("case"), label: `Case ${cases.length + 1}`, expr: null }]);
-  const updateCase = (i: number, p: Partial<SwitchCase>) =>
-    setCases(cases.map((c, idx) => (idx === i ? { ...c, ...p } : c)));
-  const removeCase = (i: number) => setCases(cases.filter((_, idx) => idx !== i));
-
-  return (
-    <div className="space-y-3">
-      <p className="text-xs text-muted-foreground">
-        Routes to the first matching case (top to bottom). Anything that matches no case follows the
-        <span className="font-medium"> default</span> handle. Connect each case handle to a branch.
-      </p>
-      {cases.map((c, i) => (
-        <div key={c.handle} className="space-y-1 rounded-md border p-2">
-          <div className="flex items-center gap-2">
-            <Input
-              value={c.label}
-              onChange={(e) => updateCase(i, { label: e.target.value })}
-              placeholder={`Case ${i + 1}`}
-              className="h-8 flex-1"
-            />
-            <Button variant="ghost" size="icon" onClick={() => removeCase(i)} aria-label="Remove case">
-              <Trash2 className="h-4 w-4" />
-            </Button>
-          </div>
-          <ConditionEditor expr={c.expr} fields={fields} onChange={(expr) => updateCase(i, { expr })} />
-        </div>
-      ))}
-      <Button variant="outline" size="sm" onClick={addCase}>
-        <Plus className="h-4 w-4" />
-        Add case
-      </Button>
-    </div>
-  );
+  const cases = (data.cases as CaseItem[] | undefined) ?? [];
+  return <CasesEditor cases={cases} fields={fields} onChange={(next) => patch({ cases: next })} />;
 }
 
 const DELAY_UNITS: Record<string, number> = { minutes: 60, hours: 3600, days: 86400 };
@@ -300,15 +696,20 @@ function ActionFields({
   nodeId,
   data,
   patch,
+  onChangeData,
   entities,
   forms,
+  connections,
   triggerFields,
 }: {
   nodeId: string;
   data: Record<string, unknown>;
   patch: (next: Record<string, unknown>) => void;
+  /** Full-replace path — the http_request editor prunes emptied keys wholesale. */
+  onChangeData: (id: string, data: Record<string, unknown>) => void;
   entities?: EntityDefinition[];
   forms?: Form[];
+  connections?: Connection[];
   /** Fields of the entity the workflow fires on — the "from trigger" source. */
   triggerFields?: EntityField[];
 }) {
@@ -335,6 +736,18 @@ function ActionFields({
           ))}
         </select>
       </div>
+
+      {actionType === "http_request" ? (
+        // The connector editor prunes emptied config keys, so it must write
+        // through the store's whole-object replace — a shallow patch would
+        // re-add the very key it just removed.
+        <HttpRequestFields
+          nodeId={nodeId}
+          data={data}
+          connections={connections}
+          onReplace={(next) => onChangeData(nodeId, next)}
+        />
+      ) : null}
 
       {fields.map((field) => {
         // A json field can key its editor to the entity chosen in another field

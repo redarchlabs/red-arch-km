@@ -39,6 +39,9 @@ _RLS_TABLES = [
     "workflow_outbox",
     "workflow_runs",
     "workflow_run_steps",
+    "workflow_run_tokens",
+    "workflow_connections",
+    "workflow_inbound_endpoints",
 ]
 
 

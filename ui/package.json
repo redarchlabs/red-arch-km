@@ -28,6 +28,7 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "dompurify": "3.2.0",
+    "elkjs": "^0.11.1",
     "lucide-react": "^0.468.0",
     "marked": "^18.0.5",
     "next": "^15.5.19",
@@ -37,7 +38,8 @@
     "sonner": "^2.0.7",
     "tailwind-merge": "^2.6.0",
     "turndown": "^7.2.4",
-    "zod": "3.24.0"
+    "zod": "3.24.0",
+    "zundo": "^2.3.0"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.3.5",
