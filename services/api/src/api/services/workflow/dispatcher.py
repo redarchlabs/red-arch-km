@@ -95,9 +95,11 @@ class WorkflowDispatchService:
         email_sender: Any = None,
         org_encryption_key: str = "",
         token_engine_enabled: bool = True,
+        trusted_local_hosts: tuple[str, ...] = (),
     ) -> None:
         self._session = session
         self._webhook_allowlist = webhook_allowlist
+        self._trusted_local_hosts = trusted_local_hosts
         self._public_base_url = public_base_url
         self._email_sender = email_sender
         self._org_encryption_key = org_encryption_key
@@ -118,6 +120,7 @@ class WorkflowDispatchService:
         return TokenEngine(
             self._session,
             webhook_allowlist=self._webhook_allowlist,
+            trusted_local_hosts=self._trusted_local_hosts,
             public_base_url=self._public_base_url,
             email_sender=self._email_sender,
             org_encryption_key=self._org_encryption_key,
@@ -414,6 +417,7 @@ class WorkflowDispatchService:
                 trigger_repo=_trigger_repo,
                 repo_for_slug=_repo_for_slug,
                 webhook_allowlist=self._webhook_allowlist,
+                trusted_local_hosts=self._trusted_local_hosts,
                 mint_form_link=lambda form_id, rid, email: self._mint_form_link(org_id, form_id, rid, email),
                 send_email=self._send_email,
             )

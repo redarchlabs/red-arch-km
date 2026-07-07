@@ -64,6 +64,15 @@ class Settings(BaseSettings):
         default="", validation_alias="WORKFLOW_WEBHOOK_ALLOWLIST"
     )
 
+    # Local hosts the workflow HTTP actions may reach even though they resolve to
+    # a private/loopback address — e.g. a robot-control bridge on localhost/LAN.
+    # A host listed here passes the allow-list check AND bypasses the private-IP
+    # SSRF guard; it is matched EXACTLY against the request host. Comma-separated;
+    # empty (default) keeps the strict deny-by-default guard for every host.
+    workflow_trusted_local_hosts_raw: str = Field(
+        default="", validation_alias="WORKFLOW_TRUSTED_LOCAL_HOSTS"
+    )
+
     # Global kill-switch for the BPMN token engine. When true (default),
     # schema_version-2 workflows (or any using the new node vocabulary) run on the
     # token engine; legacy v1 workflows always run on the walker regardless. Turn
@@ -146,6 +155,11 @@ class Settings(BaseSettings):
     def workflow_webhook_allowlist(self) -> tuple[str, ...]:
         """Allow-listed hosts for workflow webhooks (empty tuple = disabled)."""
         return tuple(p.strip() for p in self.workflow_webhook_allowlist_raw.split(",") if p.strip())
+
+    @property
+    def workflow_trusted_local_hosts(self) -> tuple[str, ...]:
+        """Local hosts allowed to bypass the private-IP SSRF guard (empty = none)."""
+        return tuple(p.strip() for p in self.workflow_trusted_local_hosts_raw.split(",") if p.strip())
 
     @model_validator(mode="after")
     def _require_azp_when_clerk_enabled(self) -> "Settings":
