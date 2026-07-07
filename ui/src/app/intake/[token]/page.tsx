@@ -133,14 +133,22 @@ export default function IntakeFormPage({ params }: { params: Promise<{ token: st
             ) : null}
           </header>
 
-          <div className="space-y-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             {form.fields.map((field) => (
-              <Field
-                key={field.slug}
-                field={field}
-                value={values[field.slug]}
-                onChange={(v) => setField(field.slug, v)}
-              />
+              <div key={field.slug} className="contents">
+                {field.heading ? (
+                  <h2 className="border-b pb-1 text-base font-semibold sm:col-span-2">
+                    {field.heading}
+                  </h2>
+                ) : null}
+                <div className={field.width === "half" ? "sm:col-span-1" : "sm:col-span-2"}>
+                  <Field
+                    field={field}
+                    value={values[field.slug]}
+                    onChange={(v) => setField(field.slug, v)}
+                  />
+                </div>
+              </div>
             ))}
           </div>
 
@@ -325,6 +333,7 @@ function Field({
   onChange: (v: unknown) => void;
 }) {
   const str = value == null ? "" : String(value);
+  const placeholder = field.placeholder ?? undefined;
   const labelText = (
     <>
       {field.label}
@@ -336,7 +345,7 @@ function Field({
     switch (field.field_type) {
       case "long_text":
         return (
-          <textarea className={inputClass} rows={4} required={field.required} value={str} onChange={(e) => onChange(e.target.value)} />
+          <textarea className={inputClass} rows={4} required={field.required} placeholder={placeholder} value={str} onChange={(e) => onChange(e.target.value)} />
         );
       case "boolean":
         return <input type="checkbox" checked={Boolean(value)} onChange={(e) => onChange(e.target.checked)} />;
@@ -348,6 +357,7 @@ function Field({
             type="number"
             className={inputClass}
             required={field.required}
+            placeholder={placeholder}
             value={str}
             onChange={(e) => onChange(e.target.value === "" ? null : Number(e.target.value))}
           />
@@ -368,7 +378,7 @@ function Field({
           </select>
         );
       default:
-        return <input type="text" className={inputClass} required={field.required} value={str} onChange={(e) => onChange(e.target.value)} />;
+        return <input type="text" className={inputClass} required={field.required} placeholder={placeholder} value={str} onChange={(e) => onChange(e.target.value)} />;
     }
   };
 

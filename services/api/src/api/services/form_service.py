@@ -105,6 +105,9 @@ def _public_fields(
                 required=fc.required if fc.required is not None else field.is_required,
                 help_text=fc.help_text,
                 options=list(field.picklist_options or []),
+                placeholder=fc.placeholder,
+                width=fc.width,
+                heading=fc.heading,
             )
         )
     return out

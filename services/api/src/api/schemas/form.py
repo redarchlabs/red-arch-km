@@ -16,9 +16,19 @@ from api.services.email import is_valid_email
 #   table   — a 1:M child collection edited as an add/remove-row table
 SectionMode = Literal["inline", "modal", "table"]
 
+# How wide a field sits in the form's responsive grid:
+#   full — spans the whole row (default)
+#   half — shares a row with the adjacent half-width field (two columns)
+FieldWidth = Literal["full", "half"]
+
 
 class FormFieldConfig(BaseModel):
-    """One entity field exposed on the form, with optional presentation overrides."""
+    """One entity field exposed on the form, with optional presentation overrides.
+
+    Only ``slug`` selects the underlying entity field; every other attribute is
+    presentational and never affects submission validation or coercion (which
+    key off the entity's own field type).
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -26,6 +36,9 @@ class FormFieldConfig(BaseModel):
     label: str | None = None
     required: bool | None = None  # override the entity field's own requiredness
     help_text: str | None = None
+    placeholder: str | None = None  # hint text shown inside the empty input
+    width: FieldWidth | None = None  # column width in the responsive grid
+    heading: str | None = None  # group heading rendered above this field
 
 
 class FormSectionConfig(BaseModel):
@@ -132,6 +145,9 @@ class PublicFormField(BaseModel):
     required: bool
     help_text: str | None = None
     options: list[str] = Field(default_factory=list)  # picklist choices
+    placeholder: str | None = None  # presentational hint text
+    width: FieldWidth | None = None  # column width in the responsive grid
+    heading: str | None = None  # group heading rendered above this field
 
 
 class PublicFormSection(BaseModel):

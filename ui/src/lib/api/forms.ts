@@ -9,11 +9,18 @@ const PUBLIC_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/ap
 
 export type SectionMode = "inline" | "modal" | "table";
 
+// Column width in the form's responsive grid: "full" spans the row, "half"
+// shares a row with the adjacent half-width field (two columns).
+export type FieldWidth = "full" | "half";
+
 export interface FormFieldConfig {
   slug: string;
   label?: string | null;
   required?: boolean | null;
   help_text?: string | null;
+  placeholder?: string | null;
+  width?: FieldWidth | null;
+  heading?: string | null; // group heading rendered above this field
 }
 
 export interface FormSectionConfig {
@@ -117,6 +124,9 @@ export interface PublicFormField {
   required: boolean;
   help_text: string | null;
   options: string[];
+  placeholder?: string | null;
+  width?: FieldWidth | null;
+  heading?: string | null;
 }
 
 export interface PublicFormSection {
