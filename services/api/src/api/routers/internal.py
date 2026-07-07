@@ -172,6 +172,7 @@ async def dispatch_workflows(
             service = WorkflowDispatchService(
                 session,
                 webhook_allowlist=allowlist,
+                trusted_local_hosts=tuple(settings.workflow_trusted_local_hosts or ()),
                 public_base_url=settings.public_base_url,
                 email_sender=EmailSender(settings),
             org_encryption_key=settings.org_encryption_key.get_secret_value(),
@@ -219,6 +220,7 @@ async def run_workflow_timers(
             service = WorkflowDispatchService(
                 session,
                 webhook_allowlist=allowlist,
+                trusted_local_hosts=tuple(settings.workflow_trusted_local_hosts or ()),
                 public_base_url=settings.public_base_url,
                 email_sender=EmailSender(settings),
             org_encryption_key=settings.org_encryption_key.get_secret_value(),
@@ -268,6 +270,7 @@ async def advance_workflow_tokens(
             engine = TokenEngine(
                 session,
                 webhook_allowlist=allowlist,
+                trusted_local_hosts=tuple(settings.workflow_trusted_local_hosts or ()),
                 public_base_url=settings.public_base_url,
                 email_sender=EmailSender(settings),
             org_encryption_key=settings.org_encryption_key.get_secret_value(),

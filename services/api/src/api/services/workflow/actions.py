@@ -56,6 +56,10 @@ class ActionContext:
     repo_for_slug: Callable[[str], Awaitable[DynamicEntityRepository]]
     # Allow-listed webhook hosts (SSRF guard).
     webhook_allowlist: tuple[str, ...] = ()
+    # Hosts explicitly trusted to reach a private/loopback address (e.g. a
+    # robot-control bridge on localhost/LAN). A host here passes the allow-list
+    # check AND bypasses the private-address rejection. Matched EXACTLY.
+    trusted_local_hosts: tuple[str, ...] = ()
     # Mints an intake-form link bound to (form_id, record_id) and emails the
     # recipient if given + SMTP configured. Returns (url, email_sent). None when
     # form links aren't wired (e.g. the dry-run test path).
@@ -286,15 +290,9 @@ class SendWebhook:
             raise ActionError("send_webhook requires url")
         parsed = urlparse(url)
         host = parsed.hostname or ""
-        # Deny-by-default: webhooks are disabled unless the host is explicitly
-        # allow-listed (WORKFLOW_WEBHOOK_ALLOWLIST). An empty allow-list means no
-        # outbound webhooks — this closes SSRF to internal services/metadata.
-        if parsed.scheme not in ("http", "https") or host not in ctx.webhook_allowlist:
-            raise ActionError(f"webhook host not allow-listed: {host or url!r}")
-        # Defense in depth: reject a literal internal/loopback/link-local address
-        # even if it were allow-listed (guards against a rebinding mistake).
-        if _is_private_host(host):
-            raise ActionError(f"webhook host resolves to a private address: {host}")
+        # Deny-by-default SSRF guard: host must be allow-listed (or a trusted
+        # local host) and must not resolve to a private address unless trusted.
+        _check_outbound_host(host, parsed.scheme, ctx, action="webhook")
         # Deferred import: httpx is only needed when a webhook actually fires,
         # keeping it off the hot import path for the common no-webhook workflow.
         import httpx
@@ -339,10 +337,7 @@ class HttpRequest:
         url = ctx.config.get("url") or (base.rstrip("/") + "/" + str(ctx.config.get("path", "")).lstrip("/"))
         parsed = urlparse(url)
         host = parsed.hostname or ""
-        if parsed.scheme not in ("http", "https") or host not in ctx.webhook_allowlist:
-            raise ActionError(f"http_request host not allow-listed: {host or url!r}")
-        if _is_private_host(host):
-            raise ActionError(f"http_request host resolves to a private address: {host}")
+        _check_outbound_host(host, parsed.scheme, ctx, action="http_request")
 
         method = str(ctx.config.get("method", "GET")).upper()
         headers: dict[str, str] = {}
@@ -412,6 +407,23 @@ def _is_private_host(host: str) -> bool:
     except ValueError:
         return False  # a hostname; allow-list already gates it
     return ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
+
+
+def _check_outbound_host(host: str, scheme: str, ctx: ActionContext, *, action: str) -> None:
+    """Shared deny-by-default SSRF guard for outbound HTTP actions.
+
+    A host may be reached when it is EITHER allow-listed OR listed as a trusted
+    local host. Trusted local hosts additionally bypass the private/loopback-IP
+    rejection — they exist precisely to reach a bridge on localhost/LAN (e.g. a
+    robot-control server). Every other host must still not resolve to a private
+    address, even if allow-listed (guards against a rebinding mistake). Raises
+    :class:`ActionError` when the host is not permitted.
+    """
+    trusted = host in ctx.trusted_local_hosts
+    if scheme not in ("http", "https") or (host not in ctx.webhook_allowlist and not trusted):
+        raise ActionError(f"{action} host not allow-listed: {host or scheme!r}")
+    if not trusted and _is_private_host(host):
+        raise ActionError(f"{action} host resolves to a private address: {host}")
 
 
 def _require(config: dict[str, Any], *keys: str) -> list[Any]:

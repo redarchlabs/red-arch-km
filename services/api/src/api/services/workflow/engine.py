@@ -89,6 +89,7 @@ class TokenEngine:
         session: AsyncSession,
         *,
         webhook_allowlist: tuple[str, ...] = (),
+        trusted_local_hosts: tuple[str, ...] = (),
         public_base_url: str = "",
         email_sender: Any = None,
         org_encryption_key: str = "",
@@ -98,6 +99,7 @@ class TokenEngine:
         self._executor = ActionExecutor(
             session,
             webhook_allowlist=webhook_allowlist,
+            trusted_local_hosts=trusted_local_hosts,
             public_base_url=public_base_url,
             email_sender=email_sender,
             org_encryption_key=org_encryption_key,

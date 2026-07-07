@@ -34,6 +34,7 @@ def _ctx() -> OrgContext:
 def _settings() -> SimpleNamespace:
     return SimpleNamespace(
         workflow_webhook_allowlist=(),
+        workflow_trusted_local_hosts=(),
         public_base_url="http://x",
         smtp_host="",
         smtp_from="",

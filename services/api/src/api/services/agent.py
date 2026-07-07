@@ -1693,6 +1693,7 @@ class AgentService:
         dispatcher = WorkflowDispatchService(
             session,
             webhook_allowlist=tuple(self._settings.workflow_webhook_allowlist or ()),
+            trusted_local_hosts=tuple(self._settings.workflow_trusted_local_hosts or ()),
             public_base_url=self._settings.public_base_url,
             email_sender=EmailSender(self._settings),
             org_encryption_key=self._settings.org_encryption_key.get_secret_value(),
@@ -1796,6 +1797,7 @@ class AgentService:
         engine = TokenEngine(
             session,
             webhook_allowlist=tuple(self._settings.workflow_webhook_allowlist or ()),
+            trusted_local_hosts=tuple(self._settings.workflow_trusted_local_hosts or ()),
             public_base_url=self._settings.public_base_url,
             email_sender=EmailSender(self._settings),
             org_encryption_key=self._settings.org_encryption_key.get_secret_value(),
@@ -1833,6 +1835,7 @@ class AgentService:
         engine = TokenEngine(
             session,
             webhook_allowlist=tuple(self._settings.workflow_webhook_allowlist or ()),
+            trusted_local_hosts=tuple(self._settings.workflow_trusted_local_hosts or ()),
             public_base_url=self._settings.public_base_url,
             email_sender=EmailSender(self._settings),
             org_encryption_key=self._settings.org_encryption_key.get_secret_value(),
