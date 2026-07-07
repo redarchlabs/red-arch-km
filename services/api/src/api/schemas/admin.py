@@ -119,3 +119,52 @@ class JobLogsRead(BaseModel):
 
     document_id: str
     events: list[JobLogEntry]
+
+
+class SentEmailAddress(BaseModel):
+    """One From/To/Cc/Bcc participant of a captured message."""
+
+    name: str | None = None
+    address: str
+
+
+class SentEmailSummary(BaseModel):
+    """One captured message as shown in the console list (headers + snippet)."""
+
+    id: str
+    # ``from_addr`` rather than ``from`` — the latter is a Python keyword.
+    from_addr: SentEmailAddress | None = None
+    to: list[SentEmailAddress] = []
+    subject: str
+    created: str | None = None
+    size: int | None = None
+    attachments: int = 0
+    snippet: str | None = None
+
+
+class SentEmailListRead(BaseModel):
+    """Captured messages, or an ``available=False`` marker when Mailpit isn't running.
+
+    Mailpit is a dev/staging container; production has no capture, so an
+    unreachable API is a normal, non-error state the console renders as such.
+    """
+
+    available: bool
+    total: int = 0
+    messages: list[SentEmailSummary] = []
+    detail: str | None = None
+
+
+class SentEmailDetailRead(BaseModel):
+    """One captured message's full headers + body (text and/or HTML)."""
+
+    id: str
+    from_addr: SentEmailAddress | None = None
+    to: list[SentEmailAddress] = []
+    cc: list[SentEmailAddress] = []
+    bcc: list[SentEmailAddress] = []
+    subject: str
+    date: str | None = None
+    text: str | None = None
+    html: str | None = None
+    attachments: list[str] = []
