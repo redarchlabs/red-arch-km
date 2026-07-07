@@ -355,6 +355,29 @@ class WorkflowConnection(Base, UUIDMixin, TimestampMixin):
     org: Mapped[Org] = relationship()
 
 
+class WorkflowInboundEndpoint(Base, UUIDMixin, TimestampMixin):
+    """A public webhook URL that starts a workflow run when POSTed to.
+
+    The URL carries an opaque token; only its SHA-256 hash is stored (like intake
+    form links), so a leaked DB row can't be replayed. The public receiver looks
+    the endpoint up by hash on a privileged session, then downgrades to the
+    endpoint's org for the RLS-scoped run creation.
+    """
+
+    __tablename__ = "workflow_inbound_endpoints"
+    __table_args__ = (UniqueConstraint("token_hash", name="uq_wf_inbound_token_hash"),)
+
+    name: Mapped[str] = mapped_column(String(120))
+    token_hash: Mapped[str] = mapped_column(String(64), index=True)
+    workflow_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
+
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True
+    )
+    org: Mapped[Org] = relationship()
+
+
 # Every partitioned parent needs at least one partition to accept inserts. A
 # DEFAULT partition guarantees rows always land somewhere (belt-and-suspenders
 # against a missing month partition) and makes create_all/tests work out of the

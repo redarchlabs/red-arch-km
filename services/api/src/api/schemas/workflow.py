@@ -171,3 +171,24 @@ class ConnectionRead(BaseModel):
     auth_type: str
     config: dict[str, Any]
     has_secret: bool = False
+
+
+class InboundEndpointCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    workflow_id: uuid.UUID
+
+
+class InboundEndpointRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    name: str
+    workflow_id: uuid.UUID
+    enabled: bool
+
+
+class InboundEndpointCreated(InboundEndpointRead):
+    """Returned once on creation — carries the plaintext token (never stored)."""
+
+    token: str = ""
+    url: str = ""

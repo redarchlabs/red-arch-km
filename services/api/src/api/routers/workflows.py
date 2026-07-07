@@ -18,6 +18,7 @@ from api.config import Settings, get_settings
 from api.dependencies import get_db
 from api.repositories.workflow import (
     WorkflowConnectionRepository,
+    WorkflowInboundEndpointRepository,
     WorkflowRepository,
     WorkflowVersionRepository,
 )
@@ -25,6 +26,9 @@ from api.schemas.workflow import (
     ConnectionCreate,
     ConnectionRead,
     ConnectionUpdate,
+    InboundEndpointCreate,
+    InboundEndpointCreated,
+    InboundEndpointRead,
     ManualRunRequest,
     ManualRunResult,
     VersionSaveRequest,
@@ -171,6 +175,57 @@ async def delete_connection(
     if conn is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="connection not found")
     await repo.delete(conn)
+
+
+# --------------------------------------------------------------------------- #
+# Inbound webhook endpoints (org-admin) — public URLs that start a workflow run
+# --------------------------------------------------------------------------- #
+@router.get("/inbound-endpoints", response_model=list[InboundEndpointRead])
+async def list_inbound_endpoints(
+    ctx: Annotated[OrgContext, Depends(require_org_admin)],
+    session: Annotated[AsyncSession, Depends(get_db)],
+) -> list[InboundEndpointRead]:
+    items = await WorkflowInboundEndpointRepository(session, ctx.org_id).list_all()
+    return [InboundEndpointRead.model_validate(e) for e in items]
+
+
+@router.post("/inbound-endpoints", response_model=InboundEndpointCreated, status_code=status.HTTP_201_CREATED)
+async def create_inbound_endpoint(
+    body: InboundEndpointCreate,
+    ctx: Annotated[OrgContext, Depends(require_org_admin)],
+    session: Annotated[AsyncSession, Depends(get_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> InboundEndpointCreated:
+    import secrets
+
+    from api.services.workflow.inbound import hash_token
+
+    wf = await WorkflowRepository(session, ctx.org_id).get(body.workflow_id)
+    if wf is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="workflow not found")
+    token = secrets.token_urlsafe(32)
+    endpoint = await WorkflowInboundEndpointRepository(session, ctx.org_id).create(
+        name=body.name, workflow_id=body.workflow_id, token_hash=hash_token(token)
+    )
+    # The token is shown ONCE (only its hash is stored). Build the callable URL.
+    url = f"{settings.public_base_url.rstrip('/')}/api/inbound/{token}"
+    read = InboundEndpointCreated.model_validate(endpoint)
+    read.token = token
+    read.url = url
+    return read
+
+
+@router.delete("/inbound-endpoints/{endpoint_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_inbound_endpoint(
+    endpoint_id: uuid.UUID,
+    ctx: Annotated[OrgContext, Depends(require_org_admin)],
+    session: Annotated[AsyncSession, Depends(get_db)],
+) -> None:
+    repo = WorkflowInboundEndpointRepository(session, ctx.org_id)
+    endpoint = await repo.get(endpoint_id)
+    if endpoint is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="inbound endpoint not found")
+    await repo.delete(endpoint)
 
 
 @router.get("/{workflow_id}", response_model=WorkflowRead)
