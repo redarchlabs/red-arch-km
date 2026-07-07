@@ -17,6 +17,7 @@ vi.mock("./client", () => ({
 }));
 
 import {
+  completeTask,
   createWorkflow,
   getWorkflow,
   listRunSteps,
@@ -88,6 +89,20 @@ describe("workflows API client", () => {
     get.mockResolvedValue({ data: [] });
     await listRunSteps("r1");
     expect(get).toHaveBeenCalledWith("/workflows/runs/r1/steps");
+  });
+
+  it("completes a human task via POST with the decision variables", async () => {
+    post.mockResolvedValue({ data: { run_id: "r1", status: "running" } });
+    await completeTask("r1", { variables: { approved: true } });
+    expect(post).toHaveBeenCalledWith("/workflows/runs/r1/complete-task", {
+      variables: { approved: true },
+    });
+  });
+
+  it("completes a task with an empty body when no decision is passed", async () => {
+    post.mockResolvedValue({ data: { run_id: "r1", status: "succeeded" } });
+    await completeTask("r1");
+    expect(post).toHaveBeenCalledWith("/workflows/runs/r1/complete-task", {});
   });
 
   it("propagates client errors to the caller", async () => {

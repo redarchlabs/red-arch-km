@@ -66,6 +66,22 @@ _ADMIN_ONLY_TOOLS = frozenset(
         "get_form",
         "create_form",
         "update_form",
+        # Workflow listing, authoring, publishing, dry-run testing, monitoring
+        # and retry all mirror require_org_admin REST routes (GET /workflows/ is
+        # itself admin-only). `run_workflow` is the one exception — it is gated on
+        # the workflow's own run_permission via can_run(), NOT on org-admin, so it
+        # is deliberately absent here.
+        "list_workflows",
+        "get_workflow",
+        "update_workflow",
+        "save_workflow_definition",
+        "validate_workflow",
+        "publish_workflow",
+        "test_workflow",
+        "list_workflow_runs",
+        "get_workflow_run",
+        "retry_workflow_run",
+        "complete_workflow_task",
     }
 )
 
@@ -137,6 +153,20 @@ _SYSTEM_PROMPT = (
     "it in one call: set the trigger `operations` from intent (e.g. 'when a customer is created' -> "
     '["create"]) and pass steps as `actions`. It saves as an unpublished draft — tell the user to open '
     "it in the builder to review, test, then Publish.\n"
+    "Workflow lifecycle: browse with list_workflows; inspect one fully (versions + the active graph) "
+    "with get_workflow. Author/repair a graph with save_workflow_definition — it takes a full BPMN "
+    "graph ({nodes, edges}) and is validated before saving as a new draft; if it returns issues, fix "
+    "them and resend. Check any graph without saving via validate_workflow. Change name/enabled/"
+    "run-permission with update_workflow. Publish a reviewed draft with publish_workflow (blocked if "
+    "the graph has validation errors). Dry-run a version with NO side effects via test_workflow before "
+    "publishing. Run the published workflow for real with run_workflow (needs run permission on that "
+    "workflow; supply a record_id for anything that emails/webhooks). Debug & monitor instances: "
+    "list_workflow_runs shows recent runs and their status; get_workflow_run returns a run's steps and "
+    "control-flow tokens with per-step output/error; retry_workflow_run re-runs the failed step(s) of a "
+    "failed run. When a run is 'waiting' on a human task (a user_task token in get_workflow_run), "
+    "complete_workflow_task advances it — pass `variables` for any approval decision the flow branches "
+    "on (e.g. {\"approved\": true}). Authoring/publishing/testing/monitoring are org-admin only; running "
+    "honors the workflow's run_permission.\n"
     "Intake forms: a form is a public page, bound to one entity, that people fill in via a shared "
     "link to create or update a record. Inspect with list_forms / get_form; build one with "
     "create_form (pick which entity fields appear via `fields`; add related-entity sections via "
@@ -187,6 +217,76 @@ _FORM_SECTION_SCHEMA: dict[str, Any] = {
         },
     },
     "required": ["relationship_id", "mode"],
+}
+
+# A full BPMN 2.0 workflow graph, as authored by save_workflow_definition /
+# validated by validate_workflow. Kept deliberately lenient (data is free-form)
+# — the server validates structure (schemas/workflow_definition.py) and BPMN
+# semantics (services/workflow/validation.py) and returns precise issues, so the
+# model can author freely and repair from feedback rather than satisfy a rigid
+# schema up front.
+_WORKFLOW_DEFINITION_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "description": (
+        "A workflow graph. schema_version 2 uses the BPMN vocabulary below. Node `type` is the BPMN "
+        "category; the concrete subtype lives in `data`."
+    ),
+    "properties": {
+        "schema_version": {"type": "integer", "enum": [2], "description": "Use 2 for BPMN graphs."},
+        "nodes": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "description": "Unique, [A-Za-z0-9_-], <=64 chars."},
+                    "type": {
+                        "type": "string",
+                        "enum": ["trigger", "task", "gateway", "event"],
+                        "description": (
+                            "trigger=start; task=work step; gateway=branch/fork/join; event=intermediate/"
+                            "end/boundary catch/throw."
+                        ),
+                    },
+                    "data": {
+                        "type": "object",
+                        "description": (
+                            "Subtype + config. trigger: {operations:[create|update|delete], field_filter:[slug]}. "
+                            "task: {task_type: service|send|script|businessRule|user|receive|call|subProcess|"
+                            "manual, action_type, config}. gateway: {gateway_type: exclusive|parallel|inclusive|"
+                            "event_based, expr, cases}. event: {position: intermediate|end|boundary, event_type: "
+                            "timer|message|signal|error|escalation|terminate|none, attached_to (boundary host id)}."
+                        ),
+                    },
+                    "position": {
+                        "type": "object",
+                        "properties": {"x": {"type": "number"}, "y": {"type": "number"}},
+                        "description": "Optional canvas coords; auto-arranged if omitted.",
+                    },
+                },
+                "required": ["id", "type"],
+            },
+        },
+        "edges": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "source": {"type": "string", "description": "Source node id."},
+                    "target": {"type": "string", "description": "Target node id."},
+                    "source_handle": {
+                        "type": "string",
+                        "description": (
+                            "Which branch the edge leaves the source by: true/false (condition), default, "
+                            "error (from a boundary error event), case-<id>, or omit for the sole out-edge."
+                        ),
+                    },
+                },
+                "required": ["source", "target"],
+            },
+        },
+    },
+    "required": ["nodes", "edges"],
 }
 
 # OpenAI tool (function) schemas.
@@ -402,6 +502,258 @@ TOOLS: list[dict[str, Any]] = [
                     },
                 },
                 "required": ["name", "entity_slug"],
+            },
+        },
+    },
+    # ---- Workflow lifecycle: author / run / debug / monitor (org-admin,
+    #      except run_workflow which honors the workflow's run_permission) ----
+    {
+        "type": "function",
+        "function": {
+            "name": "get_workflow",
+            "description": (
+                "Get a workflow's full detail: id, bound entity, enabled state, run permission, its "
+                "versions (with status), and the active (or latest) graph as {nodes, edges}. Call this "
+                "before save_workflow_definition or publish_workflow so you edit/publish the right graph."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {"workflow_id": {"type": "string"}},
+                "required": ["workflow_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_workflow",
+            "description": (
+                "Update a workflow's metadata: name, description, enabled (on/off), and who may run it "
+                "(run_permission). Does not touch the graph — use save_workflow_definition for that."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "workflow_id": {"type": "string"},
+                    "name": {"type": "string"},
+                    "description": {"type": "string"},
+                    "enabled": {"type": "boolean", "description": "Whether the workflow fires on its trigger."},
+                    "run_permission": {
+                        "type": "object",
+                        "description": (
+                            "Who may manually run it. {mode: 'org_admin'|'any_member'|'roles', role_ids:[uuid], "
+                            "group_ids:[uuid]}. org admins can always run."
+                        ),
+                    },
+                },
+                "required": ["workflow_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "save_workflow_definition",
+            "description": (
+                "Save a full BPMN graph as a new DRAFT version of an existing workflow. The graph is "
+                "validated first; if it has errors nothing is saved and the issues are returned for you "
+                "to fix and resend. Warnings do not block saving. Publish separately with "
+                "publish_workflow once reviewed."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "workflow_id": {"type": "string"},
+                    "definition": _WORKFLOW_DEFINITION_SCHEMA,
+                },
+                "required": ["workflow_id", "definition"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "validate_workflow",
+            "description": (
+                "Validate a workflow graph WITHOUT saving — returns structural + BPMN semantic issues "
+                "(errors block publish; warnings are advisory). Pass a `definition` to check a draft you "
+                "are composing, or a `workflow_id` to check its active/latest saved graph."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "definition": _WORKFLOW_DEFINITION_SCHEMA,
+                    "workflow_id": {
+                        "type": "string",
+                        "description": "Validate this workflow's active/latest graph instead.",
+                    },
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "publish_workflow",
+            "description": (
+                "Publish a draft version, making it the live graph that fires on the trigger and that "
+                "run_workflow executes. Refuses if the graph has validation errors. Omit version_id to "
+                "publish the latest draft."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "workflow_id": {"type": "string"},
+                    "version_id": {
+                        "type": "string",
+                        "description": "Draft to publish; defaults to the latest draft.",
+                    },
+                },
+                "required": ["workflow_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "test_workflow",
+            "description": (
+                "Dry-run a workflow version against sample record data with NO side effects (actions are "
+                "simulated, never executed). Returns which conditions matched and each step's simulated "
+                "output — use this to debug branching before publishing. Omit version_id to test the "
+                "active/latest version."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "workflow_id": {"type": "string"},
+                    "version_id": {"type": "string"},
+                    "operation": {
+                        "type": "string",
+                        "enum": ["create", "update", "delete"],
+                        "description": "Defaults to update.",
+                    },
+                    "before": {
+                        "type": "object",
+                        "description": "Record field values BEFORE the change (field slug -> value).",
+                    },
+                    "after": {"type": "object", "description": "Record field values AFTER the change."},
+                },
+                "required": ["workflow_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_workflow",
+            "description": (
+                "Run a workflow's PUBLISHED version for REAL (records a run, performs side effects). "
+                "Honors the workflow's run permission. For any workflow that emails/webhooks/sends a "
+                "form, pass a record_id so it runs against a real record (its data is loaded server-side; "
+                "client-supplied before/after is refused for those). Use test_workflow first if unsure."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "workflow_id": {"type": "string"},
+                    "record_id": {
+                        "type": "string",
+                        "description": "Id of a real record of the workflow's entity to run against.",
+                    },
+                    "operation": {
+                        "type": "string",
+                        "enum": ["create", "update", "delete"],
+                        "description": "Defaults to update.",
+                    },
+                    "before": {
+                        "type": "object",
+                        "description": "Only used (and only for non-side-effecting graphs) when no record_id is given.",
+                    },
+                    "after": {"type": "object"},
+                },
+                "required": ["workflow_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_workflow_runs",
+            "description": (
+                "List recent runs (instances) of a workflow, newest first — id, status, trigger "
+                "operation, timestamps, and error. Use to monitor what a workflow has been doing."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "workflow_id": {"type": "string"},
+                    "limit": {"type": "integer", "description": "How many runs to return (default 20, max 100)."},
+                },
+                "required": ["workflow_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_workflow_run",
+            "description": (
+                "Get one run's full detail for debugging: status/error, every step (node, status, "
+                "attempts, output, error) and the control-flow tokens (node, status, wait reason). "
+                "Use after list_workflow_runs to see why a run failed or is waiting."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {"run_id": {"type": "string"}},
+                "required": ["run_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "retry_workflow_run",
+            "description": (
+                "Retry a FAILED run: reactivates its failed step(s) and re-drives the run from where it "
+                "died (not a full replay). Returns the new status. Only works on runs that failed on the "
+                "token engine; a run with nothing retryable is reported as such."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {"run_id": {"type": "string"}},
+                "required": ["run_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "complete_workflow_task",
+            "description": (
+                "Complete a human task a run is WAITING on (e.g. an approval) and advance the run. "
+                "Provide `variables` for any decision the workflow branches on (e.g. {\"approved\": true}). "
+                "Use get_workflow_run first to see which task node is waiting. Reports 'nothing to "
+                "complete' if the run isn't awaiting a task."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "run_id": {"type": "string"},
+                    "node_id": {
+                        "type": "string",
+                        "description": "Which waiting task node to complete; defaults to the first.",
+                    },
+                    "variables": {
+                        "type": "object",
+                        "description": (
+                            "Decision values merged into the run's variables so downstream gateways "
+                            'can route (e.g. {"approved": true}).'
+                        ),
+                    },
+                    "output": {"type": "object", "description": "Optional data recorded as the task's output."},
+                },
+                "required": ["run_id"],
             },
         },
     },
@@ -692,6 +1044,109 @@ def _slugify(name: str) -> str:
     return s if re.match(r"^[a-z]", s) else f"e_{s}"
 
 
+def _iso(value: Any) -> str | None:
+    """Serialize a datetime (or None) to an ISO string for tool JSON output."""
+    return value.isoformat() if value is not None else None
+
+
+_EMPTY_GRAPH: dict[str, Any] = {"schema_version": 2, "nodes": [], "edges": []}
+
+# The trigger operations a manual run / dry-run may claim (mirrors ManualRunRequest).
+_MANUAL_RUN_OPERATIONS = frozenset({"create", "update", "delete"})
+
+
+def _version_summary(version: Any) -> dict[str, Any]:
+    return {
+        "id": str(version.id),
+        "version_number": version.version_number,
+        "status": version.status,
+        "published_at": _iso(version.published_at),
+    }
+
+
+def _active_or_latest(versions: list[Any], active_version_id: Any) -> Any | None:
+    """The version an author is looking at: the active (published) one if set,
+    else the newest (``list_for_workflow`` returns version_number-desc)."""
+    active = next((v for v in versions if v.id == active_version_id), None)
+    return active or (versions[0] if versions else None)
+
+
+def _run_summary(run: Any) -> dict[str, Any]:
+    """Compact run row for list_workflow_runs / the header of get_workflow_run."""
+    return {
+        "id": str(run.id),
+        "status": run.status,
+        "operation": run.trigger_operation,
+        "record_id": str(run.record_id) if run.record_id else None,
+        "conditions_matched": bool(run.conditions_matched),
+        "error": run.error,
+        "started_at": _iso(run.started_at),
+        "finished_at": _iso(run.finished_at),
+        "created_at": _iso(run.created_at),
+    }
+
+
+def _step_summary(step: Any) -> dict[str, Any]:
+    return {
+        "node_id": step.node_id,
+        "action_type": step.action_type,
+        "status": step.status,
+        "attempts": step.attempts,
+        "output": step.output,
+        "error": step.error,
+    }
+
+
+def _token_summary(token: Any) -> dict[str, Any]:
+    return {
+        "node_id": token.node_id,
+        "status": token.status,
+        "wait_kind": token.wait_kind,
+        "resume_at": _iso(token.resume_at),
+    }
+
+
+def _prepare_authored_definition(raw: Any) -> dict[str, Any]:
+    """Normalize an LLM-authored graph into a storable definition.
+
+    Fills the ergonomic gaps a model tends to leave — schema_version, missing
+    node positions (a simple vertical cascade so the graph is legible when the
+    user opens it), and edge ids — WITHOUT touching semantics. Returns a plain
+    dict; structural + BPMN validation happens afterwards on the caller side.
+    """
+    if not isinstance(raw, dict):
+        return {"schema_version": 2, "nodes": [], "edges": []}
+    raw_nodes = raw.get("nodes")
+    nodes = raw_nodes if isinstance(raw_nodes, list) else []
+    raw_edges = raw.get("edges")
+    edges = raw_edges if isinstance(raw_edges, list) else []
+    out_nodes: list[dict[str, Any]] = []
+    for index, node in enumerate(nodes):
+        if not isinstance(node, dict):
+            continue
+        node = dict(node)
+        pos = node.get("position")
+        if not isinstance(pos, dict) or "x" not in pos or "y" not in pos:
+            node["position"] = {"x": 240.0, "y": 40.0 + 140.0 * index}
+        out_nodes.append(node)
+    out_edges: list[dict[str, Any]] = []
+    for index, edge in enumerate(edges):
+        if not isinstance(edge, dict):
+            continue
+        edge = dict(edge)
+        if not edge.get("id"):
+            edge["id"] = f"e_{index}_{uuid.uuid4().hex[:6]}"
+        out_edges.append(edge)
+    version = raw.get("schema_version")
+    # `bool` is an `int` subclass — exclude it so a stray `true` doesn't store as 1.
+    valid_version = isinstance(version, int) and not isinstance(version, bool) and version >= 1
+    return {
+        "schema_version": version if valid_version else 2,
+        "nodes": out_nodes,
+        "edges": out_edges,
+    }
+
+
 async def apply_tenant_scope(session: AsyncSession, org_id: uuid.UUID) -> None:
     """Set the tenant GUC on a session, matching the original agent session role.
 
@@ -963,7 +1418,19 @@ class AgentService:
         from api.repositories.workflow import WorkflowRepository
 
         items = await WorkflowRepository(session, self._org_id).list_all()
-        return {"workflows": [{"name": w.name, "enabled": w.enabled} for w in items]}
+        # Include the id (needed by every other workflow tool) and whether a
+        # published version exists (only those are runnable / fire on triggers).
+        return {
+            "workflows": [
+                {
+                    "id": str(w.id),
+                    "name": w.name,
+                    "enabled": w.enabled,
+                    "has_published_version": w.active_version_id is not None,
+                }
+                for w in items
+            ]
+        }
 
     async def _tool_create_workflow(self, session: AsyncSession, args: dict[str, Any]) -> dict[str, Any]:
         entity_repo = EntityDefinitionRepository(session, self._org_id)
@@ -1012,6 +1479,378 @@ class AgentService:
                 "Saved as an unpublished draft. Open it in the workflow builder to review and "
                 "test, then click Publish to make it live."
             ),
+        }
+
+    # ------------------------------------------------------------------ #
+    # Workflow lifecycle tools — author / run / debug / monitor. Authoring,
+    # publishing, dry-run testing and monitoring mirror the org-admin REST
+    # routes (gated in _dispatch via _ADMIN_ONLY_TOOLS); run_workflow honors the
+    # workflow's own run_permission via can_run().
+    # ------------------------------------------------------------------ #
+    async def _tool_get_workflow(self, session: AsyncSession, args: dict[str, Any]) -> dict[str, Any]:
+        from api.repositories.workflow import WorkflowRepository, WorkflowVersionRepository
+
+        wf_id = _parse_uuid(args.get("workflow_id"))
+        if wf_id is None:
+            return {"error": "workflow_id is required"}
+        wf = await WorkflowRepository(session, self._org_id).get(wf_id)
+        if wf is None:
+            return {"error": "workflow not found"}
+        versions = await WorkflowVersionRepository(session, self._org_id).list_for_workflow(wf.id)
+        graph_version = _active_or_latest(versions, wf.active_version_id)
+        entity = await EntityDefinitionRepository(session, self._org_id).get(wf.entity_definition_id)
+        return {
+            "workflow": {
+                "id": str(wf.id),
+                "name": wf.name,
+                "description": wf.description,
+                "enabled": wf.enabled,
+                "entity": entity.slug if entity is not None else None,
+                "run_permission": wf.run_permission,
+                "active_version_id": str(wf.active_version_id) if wf.active_version_id else None,
+                "versions": [_version_summary(v) for v in versions],
+                "definition": graph_version.definition if graph_version is not None else _EMPTY_GRAPH,
+                "definition_version": graph_version.version_number if graph_version is not None else None,
+            }
+        }
+
+    async def _tool_update_workflow(self, session: AsyncSession, args: dict[str, Any]) -> dict[str, Any]:
+        from api.repositories.workflow import WorkflowRepository
+
+        wf_id = _parse_uuid(args.get("workflow_id"))
+        if wf_id is None:
+            return {"error": "workflow_id is required"}
+        repo = WorkflowRepository(session, self._org_id)
+        wf = await repo.get(wf_id)
+        if wf is None:
+            return {"error": "workflow not found"}
+        fields = ("name", "description", "enabled", "run_permission")
+        updates: dict[str, Any] = {k: args[k] for k in fields if k in args}
+        await repo.update(wf, **updates)
+        return {
+            "updated_workflow": {
+                "id": str(wf.id),
+                "name": wf.name,
+                "enabled": wf.enabled,
+                "run_permission": wf.run_permission,
+            }
+        }
+
+    async def _tool_save_workflow_definition(self, session: AsyncSession, args: dict[str, Any]) -> dict[str, Any]:
+        from api.services.workflow.validation import has_errors, validate_definition
+
+        wf_id = _parse_uuid(args.get("workflow_id"))
+        if wf_id is None:
+            return {"error": "workflow_id is required"}
+        service = WorkflowService(session, self._org_id)
+        try:
+            await service.get_workflow(wf_id)  # 404s via WorkflowError if absent
+        except WorkflowError as exc:
+            return {"error": str(exc)}
+        definition = _prepare_authored_definition(args.get("definition"))
+        # Validate BEFORE mutating: a bad graph must never leave a half-saved draft.
+        issues = validate_definition(definition)
+        if has_errors(issues):
+            return {
+                "error": "the workflow graph has validation errors and was not saved",
+                "issues": [i.as_dict() for i in issues],
+            }
+        version = await service.save_draft(wf_id, definition)
+        return {
+            "saved_draft": {
+                "workflow_id": str(wf_id),
+                "version_id": str(version.id),
+                "version_number": version.version_number,
+            },
+            "warnings": [i.as_dict() for i in issues if i.severity == "warning"],
+            "note": "Saved as a draft. Review/test it, then publish_workflow to make it live.",
+        }
+
+    async def _tool_validate_workflow(self, session: AsyncSession, args: dict[str, Any]) -> dict[str, Any]:
+        from api.repositories.workflow import WorkflowRepository, WorkflowVersionRepository
+        from api.services.workflow.validation import has_errors, validate_definition
+
+        if args.get("definition") is not None:
+            definition = _prepare_authored_definition(args.get("definition"))
+        else:
+            wf_id = _parse_uuid(args.get("workflow_id"))
+            if wf_id is None:
+                return {"error": "pass a definition to validate, or a workflow_id to validate its saved graph"}
+            wf = await WorkflowRepository(session, self._org_id).get(wf_id)
+            if wf is None:
+                return {"error": "workflow not found"}
+            versions = await WorkflowVersionRepository(session, self._org_id).list_for_workflow(wf.id)
+            graph_version = _active_or_latest(versions, wf.active_version_id)
+            if graph_version is None:
+                return {"error": "workflow has no versions to validate"}
+            definition = graph_version.definition
+        issues = validate_definition(definition)
+        return {
+            "valid": not has_errors(issues),
+            "errors": [i.as_dict() for i in issues if i.severity == "error"],
+            "warnings": [i.as_dict() for i in issues if i.severity == "warning"],
+        }
+
+    async def _tool_publish_workflow(self, session: AsyncSession, args: dict[str, Any]) -> dict[str, Any]:
+        from api.repositories.workflow import WorkflowVersionRepository
+        from api.services.workflow.validation import has_errors, validate_definition
+
+        wf_id = _parse_uuid(args.get("workflow_id"))
+        if wf_id is None:
+            return {"error": "workflow_id is required"}
+        service = WorkflowService(session, self._org_id)
+        try:
+            await service.get_workflow(wf_id)
+        except WorkflowError as exc:
+            return {"error": str(exc)}
+        ver_repo = WorkflowVersionRepository(session, self._org_id)
+        version_id = _parse_uuid(args.get("version_id"))
+        if version_id is None:
+            drafts = [v for v in await ver_repo.list_for_workflow(wf_id) if v.status == "draft"]
+            if not drafts:
+                return {"error": "no draft version to publish"}
+            version_id = drafts[0].id  # list is newest-first
+        version = await ver_repo.get(version_id)
+        if version is None or version.workflow_id != wf_id:
+            return {"error": "version not found"}
+        # Refuse to publish a graph with hard errors (validation.errors block publish).
+        issues = validate_definition(version.definition)
+        if has_errors(issues):
+            return {
+                "error": "the graph has validation errors and cannot be published",
+                "issues": [i.as_dict() for i in issues if i.severity == "error"],
+            }
+        try:
+            published = await service.publish(wf_id, version_id)
+        except WorkflowError as exc:
+            return {"error": str(exc)}
+        return {
+            "published": {
+                "workflow_id": str(wf_id),
+                "version_id": str(published.id),
+                "version_number": published.version_number,
+            },
+            "note": "This version is now live and will run on its trigger.",
+        }
+
+    async def _tool_test_workflow(self, session: AsyncSession, args: dict[str, Any]) -> dict[str, Any]:
+        from api.repositories.workflow import WorkflowRepository, WorkflowVersionRepository
+
+        wf_id = _parse_uuid(args.get("workflow_id"))
+        if wf_id is None:
+            return {"error": "workflow_id is required"}
+        operation = args.get("operation", "update")
+        if operation not in _MANUAL_RUN_OPERATIONS:
+            return {"error": f"operation must be one of {sorted(_MANUAL_RUN_OPERATIONS)}"}
+        wf = await WorkflowRepository(session, self._org_id).get(wf_id)
+        if wf is None:
+            return {"error": "workflow not found"}
+        ver_repo = WorkflowVersionRepository(session, self._org_id)
+        version_id = _parse_uuid(args.get("version_id"))
+        if version_id is None:
+            versions = await ver_repo.list_for_workflow(wf.id)
+            graph_version = _active_or_latest(versions, wf.active_version_id)
+            if graph_version is None:
+                return {"error": "workflow has no versions to test"}
+            version_id = graph_version.id
+        try:
+            result = await WorkflowService(session, self._org_id).test_version(
+                version_id,
+                operation=operation,
+                before=args.get("before"),
+                after=args.get("after"),
+            )
+        except WorkflowError as exc:
+            return {"error": str(exc)}
+        return {"test_result": result}
+
+    async def _tool_run_workflow(self, session: AsyncSession, args: dict[str, Any]) -> dict[str, Any]:
+        from api.repositories.workflow import WorkflowRepository, WorkflowVersionRepository
+        from api.services.email import EmailSender
+        from api.services.workflow.actions import SIDE_EFFECTING_ACTIONS
+        from api.services.workflow.dispatcher import WorkflowDispatchService
+        from api.services.workflow.permissions import can_run
+
+        wf_id = _parse_uuid(args.get("workflow_id"))
+        if wf_id is None:
+            return {"error": "workflow_id is required"}
+        operation = args.get("operation", "update")
+        if operation not in _MANUAL_RUN_OPERATIONS:
+            return {"error": f"operation must be one of {sorted(_MANUAL_RUN_OPERATIONS)}"}
+        wf = await WorkflowRepository(session, self._org_id).get(wf_id)
+        if wf is None:
+            return {"error": "workflow not found"}
+        # run_workflow is NOT admin-gated: honor the workflow's run_permission.
+        # A None OrgContext (unit tests) is treated as admin, matching _is_admin().
+        if self._ctx is not None and not can_run(self._ctx, wf.run_permission):
+            return {"error": "You don't have permission to run this workflow."}
+        if wf.active_version_id is None:
+            return {"error": "workflow has no published version"}
+        version = await WorkflowVersionRepository(session, self._org_id).get(wf.active_version_id)
+        if version is None or version.status != "published":
+            return {"error": "workflow has no published version"}
+
+        dispatcher = WorkflowDispatchService(
+            session,
+            webhook_allowlist=tuple(self._settings.workflow_webhook_allowlist or ()),
+            public_base_url=self._settings.public_base_url,
+            email_sender=EmailSender(self._settings),
+            org_encryption_key=self._settings.org_encryption_key.get_secret_value(),
+        )
+        # SECURITY (mirrors POST /workflows/{id}/run): never trust client record
+        # data. With a record_id, load real before/after server-side; without one,
+        # refuse any side-effecting action on fabricated data.
+        before: dict[str, Any] | None
+        after: dict[str, Any] | None
+        record_id = _parse_uuid(args.get("record_id"))
+        if record_id is not None:
+            record = await dispatcher.load_trigger_record(self._org_id, wf.entity_definition_id, record_id)
+            if record is None:
+                return {"error": "record not found for this workflow's entity"}
+            before = after = record
+        else:
+            # Collect action_type from BOTH legacy `action` nodes and v2 `task`
+            # nodes (a send task carries the same action_type) so a side-effecting
+            # step in either vocabulary is caught before running on fabricated data.
+            action_types = {
+                node.get("data", {}).get("action_type")
+                for node in version.definition.get("nodes", [])
+                if node.get("type") in ("action", "task")
+            }
+            if action_types & SIDE_EFFECTING_ACTIONS:
+                return {
+                    "error": (
+                        "This workflow performs external actions (email/webhook/form). Provide a "
+                        "record_id so it runs against a real record."
+                    )
+                }
+            before, after = args.get("before"), args.get("after")
+
+        actor = self._ctx.user.profile_id if self._ctx is not None else None
+        run, executed = await dispatcher.run_version_manually(
+            self._org_id,
+            wf,
+            version,
+            operation=operation,
+            record_id=record_id,
+            before=before,
+            after=after,
+            actor_user_id=actor,
+        )
+        return {
+            "run": {
+                "id": str(run.id),
+                "status": run.status,
+                "conditions_matched": bool(run.conditions_matched),
+                "actions_executed": executed,
+                "error": run.error,
+            }
+        }
+
+    async def _tool_list_workflow_runs(self, session: AsyncSession, args: dict[str, Any]) -> dict[str, Any]:
+        wf_id = _parse_uuid(args.get("workflow_id"))
+        if wf_id is None:
+            return {"error": "workflow_id is required"}
+        limit = max(1, min(int(args.get("limit") or 20), 100))
+        try:
+            runs = await WorkflowService(session, self._org_id).runs(wf_id, limit=limit)
+        except WorkflowError as exc:
+            return {"error": str(exc)}
+        return {"runs": [_run_summary(r) for r in runs]}
+
+    async def _tool_get_workflow_run(self, session: AsyncSession, args: dict[str, Any]) -> dict[str, Any]:
+        from api.repositories.workflow import WorkflowRunRepository, WorkflowTokenRepository
+
+        run_id = _parse_uuid(args.get("run_id"))
+        if run_id is None:
+            return {"error": "run_id is required"}
+        run_repo = WorkflowRunRepository(session, self._org_id)
+        run = await run_repo.get_by_id(run_id)
+        if run is None:
+            return {"error": "run not found"}
+        steps = await run_repo.steps_for_run(run.id)
+        tokens = await WorkflowTokenRepository(session, self._org_id).list_for_run(run.id)
+        return {
+            "run": _run_summary(run),
+            "steps": [_step_summary(s) for s in steps],
+            "tokens": [_token_summary(t) for t in tokens],
+        }
+
+    async def _tool_retry_workflow_run(self, session: AsyncSession, args: dict[str, Any]) -> dict[str, Any]:
+        from api.repositories.workflow import WorkflowRunRepository, WorkflowVersionRepository
+        from api.services.email import EmailSender
+        from api.services.workflow.engine import TokenEngine
+
+        run_id = _parse_uuid(args.get("run_id"))
+        if run_id is None:
+            return {"error": "run_id is required"}
+        run_repo = WorkflowRunRepository(session, self._org_id)
+        run = await run_repo.get_by_id(run_id)
+        if run is None:
+            return {"error": "run not found"}
+        if run.status != "failed":
+            return {"error": f"only failed runs can be retried (this run is {run.status!r})"}
+        version = await WorkflowVersionRepository(session, self._org_id).get(run.workflow_version_id)
+        if version is None:
+            return {"error": "the run's workflow version no longer exists"}
+        engine = TokenEngine(
+            session,
+            webhook_allowlist=tuple(self._settings.workflow_webhook_allowlist or ()),
+            public_base_url=self._settings.public_base_url,
+            email_sender=EmailSender(self._settings),
+            org_encryption_key=self._settings.org_encryption_key.get_secret_value(),
+        )
+        result = await engine.retry_run(run, version.definition)
+        if result.get("reactivated", 0) == 0:
+            return {"error": "nothing to retry on this run (no failed token — it may predate the token engine)"}
+        refreshed = await run_repo.get_by_id(run_id)
+        return {
+            "retried_run": {
+                "id": str(run_id),
+                "reactivated": result.get("reactivated", 0),
+                "status": refreshed.status if refreshed is not None else run.status,
+                "error": refreshed.error if refreshed is not None else run.error,
+            }
+        }
+
+    async def _tool_complete_workflow_task(self, session: AsyncSession, args: dict[str, Any]) -> dict[str, Any]:
+        from api.repositories.workflow import WorkflowRunRepository, WorkflowVersionRepository
+        from api.services.email import EmailSender
+        from api.services.workflow.engine import TokenEngine
+
+        run_id = _parse_uuid(args.get("run_id"))
+        if run_id is None:
+            return {"error": "run_id is required"}
+        run_repo = WorkflowRunRepository(session, self._org_id)
+        run = await run_repo.get_by_id(run_id)
+        if run is None:
+            return {"error": "run not found"}
+        if run.status not in ("waiting", "running"):
+            return {"error": f"this run is {run.status!r}, not awaiting a task"}
+        version = await WorkflowVersionRepository(session, self._org_id).get(run.workflow_version_id)
+        if version is None:
+            return {"error": "the run's workflow version no longer exists"}
+        engine = TokenEngine(
+            session,
+            webhook_allowlist=tuple(self._settings.workflow_webhook_allowlist or ()),
+            public_base_url=self._settings.public_base_url,
+            email_sender=EmailSender(self._settings),
+            org_encryption_key=self._settings.org_encryption_key.get_secret_value(),
+        )
+        variables = args.get("variables") if isinstance(args.get("variables"), dict) else None
+        output = args.get("output") if isinstance(args.get("output"), dict) else None
+        node_id = args.get("node_id") if isinstance(args.get("node_id"), str) else None
+        signaled = await engine.signal_token(run, node_id=node_id, variables=variables, output=output)
+        if not signaled:
+            return {"error": "no human task is waiting on this run (nothing to complete)"}
+        await engine.drive_run(run)
+        refreshed = await run_repo.get_by_id(run_id)
+        return {
+            "completed_task": {
+                "run_id": str(run_id),
+                "node_id": node_id,
+                "status": refreshed.status if refreshed is not None else run.status,
+            }
         }
 
     # ------------------------------------------------------------------ #

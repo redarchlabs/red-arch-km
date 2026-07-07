@@ -6,11 +6,16 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { RunOverlayCanvas } from "@/components/workflows/RunOverlayCanvas";
+import { UserTaskActions } from "@/components/workflows/UserTaskActions";
 import { cn } from "@/lib/utils";
 import { getApiErrorMessage } from "@/lib/api/errors";
 import {
+  getWorkflow,
   listRunSteps,
   listRuns,
+  listVersions,
+  type WorkflowDefinition,
   type WorkflowRun,
   type WorkflowRunStep,
 } from "@/lib/api/workflows";
@@ -48,6 +53,7 @@ export function RunMonitor({ workflowId }: { workflowId: string }) {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [definition, setDefinition] = useState<WorkflowDefinition | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Monotonic request id: a slow earlier response with a stale id is ignored so
   // it can't overwrite the result of a newer request.
@@ -95,6 +101,25 @@ export function RunMonitor({ workflowId }: { workflowId: string }) {
     };
   }, [load]);
 
+  // Load the published graph once so a run row can overlay live state on it.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const wf = await getWorkflow(workflowId);
+        if (!wf.active_version_id) return;
+        const versions = await listVersions(workflowId);
+        const active = versions.find((v) => v.id === wf.active_version_id);
+        if (!cancelled && active) setDefinition(active.definition);
+      } catch {
+        // No overlay if the definition can't be loaded — the step list still works.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [workflowId]);
+
   if (isLoading) return <Skeleton className="h-40 w-full" />;
 
   return (
@@ -136,6 +161,8 @@ export function RunMonitor({ workflowId }: { workflowId: string }) {
                   run={run}
                   open={expanded === run.id}
                   onToggle={() => setExpanded(expanded === run.id ? null : run.id)}
+                  onActed={() => void load(true)}
+                  definition={definition}
                 />
               ))}
             </tbody>
@@ -146,9 +173,24 @@ export function RunMonitor({ workflowId }: { workflowId: string }) {
   );
 }
 
-function RunRow({ run, open, onToggle }: { run: WorkflowRun; open: boolean; onToggle: () => void }) {
+function RunRow({
+  run,
+  open,
+  onToggle,
+  onActed,
+  definition,
+}: {
+  run: WorkflowRun;
+  open: boolean;
+  onToggle: () => void;
+  /** Refresh the run list after a human task is completed from this row. */
+  onActed: () => void;
+  /** The published graph, for the live diagram overlay (null while loading). */
+  definition: WorkflowDefinition | null;
+}) {
   const [steps, setSteps] = useState<WorkflowRunStep[] | null>(null);
   const [loadingSteps, setLoadingSteps] = useState(false);
+  const [showDiagram, setShowDiagram] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -171,8 +213,22 @@ function RunRow({ run, open, onToggle }: { run: WorkflowRun; open: boolean; onTo
         </td>
         <td className="px-3 py-2">
           <StatusPill status={run.status} />
+          {run.dead_letter ? (
+            <Badge
+              variant="destructive"
+              className="ml-2 align-middle"
+              title="Dead-lettered: retries exhausted with no catcher — needs manual replay"
+            >
+              DLQ
+            </Badge>
+          ) : null}
           {run.depth > 0 ? (
             <span className="ml-2 text-xs text-muted-foreground">depth {run.depth}</span>
+          ) : null}
+          {run.status === "waiting" ? (
+            <span className="ml-2 text-xs font-medium text-violet-600 dark:text-violet-400">
+              action needed
+            </span>
           ) : null}
         </td>
         <td className="px-3 py-2">{run.trigger_operation}</td>
@@ -186,6 +242,14 @@ function RunRow({ run, open, onToggle }: { run: WorkflowRun; open: boolean; onTo
           <td />
           <td colSpan={4} className="px-3 py-2">
             {run.error ? <p className="mb-2 text-xs text-destructive">Error: {run.error}</p> : null}
+            {run.status === "waiting" ? (
+              <div className="mb-2 rounded-md border border-violet-500/30 bg-violet-500/10 p-2">
+                <p className="mb-1.5 text-xs font-medium text-violet-700 dark:text-violet-300">
+                  Parked awaiting a human task — approve or reject to advance the run.
+                </p>
+                <UserTaskActions runId={run.id} onCompleted={onActed} />
+              </div>
+            ) : null}
             {loadingSteps ? (
               <Skeleton className="h-10 w-full" />
             ) : steps && steps.length > 0 ? (
@@ -199,6 +263,18 @@ function RunRow({ run, open, onToggle }: { run: WorkflowRun; open: boolean; onTo
                 No action steps{run.conditions_matched ? "" : " (conditions did not match)"}.
               </p>
             )}
+            {definition ? (
+              <div className="mt-3">
+                <Button variant="ghost" size="sm" onClick={() => setShowDiagram((v) => !v)}>
+                  {showDiagram ? "Hide diagram" : "Show live diagram"}
+                </Button>
+                {showDiagram ? (
+                  <div className="mt-2 h-80">
+                    <RunOverlayCanvas definition={definition} runId={run.id} active={open && showDiagram} />
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
           </td>
         </tr>
       ) : null}

@@ -129,6 +129,7 @@ class WorkflowRunRead(BaseModel):
     status: str
     conditions_matched: bool
     error: str | None
+    dead_letter: bool = False
     depth: int
     started_at: datetime | None
     finished_at: datetime | None
@@ -137,3 +138,70 @@ class WorkflowRunRead(BaseModel):
 
 class WorkflowRunDetail(WorkflowRunRead):
     steps: list[WorkflowRunStepRead] = Field(default_factory=list)
+
+
+class ConnectionCreate(BaseModel):
+    """Create a connector credential. `secret` is write-only (encrypted at rest)."""
+
+    name: str = Field(min_length=1, max_length=120)
+    kind: str = Field(default="http", max_length=32)
+    base_url: str | None = Field(default=None, max_length=500)
+    auth_type: Literal["none", "bearer", "api_key", "basic"] = "none"
+    secret: str | None = Field(default=None, max_length=4096)
+    config: dict[str, Any] = Field(default_factory=dict)
+
+
+class ConnectionUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    base_url: str | None = Field(default=None, max_length=500)
+    auth_type: Literal["none", "bearer", "api_key", "basic"] | None = None
+    secret: str | None = Field(default=None, max_length=4096)
+    config: dict[str, Any] | None = None
+
+
+class ConnectionRead(BaseModel):
+    """A connection WITHOUT its secret — only whether one is set."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    name: str
+    kind: str
+    base_url: str | None
+    auth_type: str
+    config: dict[str, Any]
+    has_secret: bool = False
+
+
+class InboundEndpointCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    workflow_id: uuid.UUID
+
+
+class InboundEndpointRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    name: str
+    workflow_id: uuid.UUID
+    enabled: bool
+
+
+class InboundEndpointCreated(InboundEndpointRead):
+    """Returned once on creation — carries the plaintext token (never stored)."""
+
+    token: str = ""
+    url: str = ""
+
+
+class CompleteTaskRequest(BaseModel):
+    """Complete a human task a run is waiting on (e.g. an approval decision)."""
+
+    node_id: str | None = None
+    variables: dict[str, Any] = Field(default_factory=dict)
+    output: dict[str, Any] = Field(default_factory=dict)
+
+
+class CompleteTaskResult(BaseModel):
+    run_id: uuid.UUID
+    status: str

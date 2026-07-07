@@ -81,6 +81,14 @@ app.conf.beat_schedule = {
         "schedule": float(os.environ.get("WORKFLOW_TIMER_INTERVAL", "30")),
         "options": {"expires": 60},
     },
+    # BPMN token engine: reactivate parked tokens (timers/retries) + drain the
+    # active token queue. Most v2 runs finish synchronously in dispatch; this
+    # sweep resumes waits and makes progress after any interruption.
+    "workflow-advance-tokens": {
+        "task": "worker.tasks.workflow.advance_tokens",
+        "schedule": float(os.environ.get("WORKFLOW_TOKEN_INTERVAL", "10")),
+        "options": {"expires": 30},
+    },
     # Liveness beacon for the site-admin console: proves beat -> broker -> worker
     # is healthy. A stale/absent heartbeat there means beat is down.
     "beat-heartbeat": {

@@ -21,6 +21,7 @@ export const ACTION_LABELS: Record<string, string> = {
   send_form: "Email an intake form for the changed record",
   send_email: "Send an email",
   send_webhook: "Send a webhook (HTTP POST)",
+  http_request: "Call a connected API (HTTP request)",
   log: "Log a message (no side effect)",
 };
 
@@ -70,6 +71,11 @@ export const ACTION_CONFIG_FIELDS: Record<string, ActionConfigField[]> = {
     { key: "url", label: "Webhook URL", type: "text", placeholder: "https://example.com/hook" },
     { key: "body", label: "Extra body (JSON)", type: "json", placeholder: "{ }" },
   ],
+  // Rendered by the bespoke <HttpRequestFields> inspector (connection picker,
+  // method/path/url, headers/body maps, capture) rather than the generic loop —
+  // that editor needs the full-replace data path to prune emptied keys, so it
+  // has no entries here.
+  http_request: [],
   log: [{ key: "message", label: "Message", type: "text", placeholder: "note" }],
 };
 

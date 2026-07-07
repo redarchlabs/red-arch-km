@@ -26,6 +26,21 @@ WEBHOOK_TIMEOUT_SECONDS = 10.0
 
 
 @dataclass
+class ResolvedConnection:
+    """A connector credential resolved (and DECRYPTED) at execute time.
+
+    Never serialized: the plaintext ``secret`` exists only for the duration of one
+    handler call and must never land in a step output, input snapshot, or log.
+    """
+
+    name: str
+    base_url: str | None
+    auth_type: str
+    secret: str | None
+    config: dict[str, Any]
+
+
+@dataclass
 class ActionContext:
     """Everything an action needs, bound to the current run + tenant session."""
 
@@ -50,6 +65,10 @@ class ActionContext:
     # Sends a plain email (to, subject, body). Returns True if actually sent
     # (SMTP configured), False otherwise. None on the dry-run test path.
     send_email: Callable[[str, str, str], Awaitable[bool]] | None = None
+    # Resolves a named connection to a decrypted ResolvedConnection (or None if
+    # absent). Built by the runner from the org's connections + encryption key;
+    # None on the dry-run test path (so simulate() never touches secrets).
+    resolve_connection: Callable[[str], Awaitable[ResolvedConnection | None]] | None = None
 
 
 class ActionHandler(Protocol):
@@ -65,7 +84,9 @@ ACTION_REGISTRY: dict[str, ActionHandler] = {}
 # Actions that reach OUTSIDE the workspace (email/webhook/form invite). A manual
 # run may only execute these when its inputs were loaded server-side from a real
 # record — never against free-form, client-supplied ``before``/``after`` data.
-SIDE_EFFECTING_ACTIONS: frozenset[str] = frozenset({"send_email", "send_webhook", "send_form"})
+SIDE_EFFECTING_ACTIONS: frozenset[str] = frozenset(
+    {"send_email", "send_webhook", "send_form", "http_request"}
+)
 
 
 def register(cls: type[ActionHandler]) -> type[ActionHandler]:
@@ -288,6 +309,87 @@ class SendWebhook:
             "would_post": ctx.config.get("url"),
             "body": {"before": ctx.before, "after": ctx.after, **ctx.config.get("body", {})},
         }
+
+
+@register
+class HttpRequest:
+    """Authenticated HTTP call via a reusable connection (the connector task).
+
+    Resolves ``config.connection`` to a ResolvedConnection, injects its auth
+    (bearer / api-key header / basic), and calls ``base_url + config.path`` (or a
+    literal ``config.url``). The same deny-by-default SSRF guard as send_webhook
+    applies — the target host must be allow-listed and must not be a private IP.
+    The parsed response is returned as the step output (and can be captured into a
+    run variable via the task's ``capture``); the secret is NEVER echoed back.
+    """
+
+    type = "http_request"
+
+    async def execute(self, ctx: ActionContext) -> dict[str, Any]:
+        conn: ResolvedConnection | None = None
+        name = ctx.config.get("connection")
+        if name:
+            if ctx.resolve_connection is None:
+                raise ActionError("connections are not available in this context")
+            conn = await ctx.resolve_connection(str(name))
+            if conn is None:
+                raise ActionError(f"connection not found: {name!r}")
+
+        base = (conn.base_url if conn and conn.base_url else "") or ""
+        url = ctx.config.get("url") or (base.rstrip("/") + "/" + str(ctx.config.get("path", "")).lstrip("/"))
+        parsed = urlparse(url)
+        host = parsed.hostname or ""
+        if parsed.scheme not in ("http", "https") or host not in ctx.webhook_allowlist:
+            raise ActionError(f"http_request host not allow-listed: {host or url!r}")
+        if _is_private_host(host):
+            raise ActionError(f"http_request host resolves to a private address: {host}")
+
+        method = str(ctx.config.get("method", "GET")).upper()
+        headers: dict[str, str] = {}
+        for key, value in (ctx.config.get("headers") or {}).items():
+            headers[str(key)] = str(value)
+        headers.update(_auth_headers(conn))
+        body = ctx.config.get("body")
+
+        import httpx
+
+        async with httpx.AsyncClient(timeout=WEBHOOK_TIMEOUT_SECONDS) as client:
+            resp = await client.request(
+                method, url, headers=headers, json=body if body is not None else None
+            )
+        try:
+            parsed_body: Any = resp.json()
+        except Exception:  # noqa: BLE001 - any non-JSON body falls back to text
+            parsed_body = resp.text
+        return {"status_code": resp.status_code, "ok": resp.is_success, "body": parsed_body}
+
+    def simulate(self, ctx: ActionContext) -> dict[str, Any]:
+        # Never resolve/echo the secret in a dry run.
+        return {
+            "would_request": {
+                "method": str(ctx.config.get("method", "GET")).upper(),
+                "connection": ctx.config.get("connection"),
+                "url": ctx.config.get("url") or ctx.config.get("path"),
+            }
+        }
+
+
+def _auth_headers(conn: ResolvedConnection | None) -> dict[str, str]:
+    """Build auth headers from a resolved connection. Secret used here only."""
+    if conn is None or conn.auth_type == "none" or not conn.secret:
+        return {}
+    if conn.auth_type == "bearer":
+        return {"Authorization": f"Bearer {conn.secret}"}
+    if conn.auth_type == "api_key":
+        header_name = str(conn.config.get("header", "X-API-Key"))
+        return {header_name: conn.secret}
+    if conn.auth_type == "basic":
+        import base64
+
+        username = str(conn.config.get("username", ""))
+        token = base64.b64encode(f"{username}:{conn.secret}".encode()).decode()
+        return {"Authorization": f"Basic {token}"}
+    return {}
 
 
 @register

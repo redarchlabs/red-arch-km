@@ -37,8 +37,11 @@ from api.repositories.workflow import (
     WorkflowVersionRepository,
     json_safe,
 )
+from api.schemas.workflow_definition import WorkflowDefinitionModel
 from api.services.workflow.actions import ACTION_REGISTRY, ActionContext, ActionError
+from api.services.workflow.engine import TokenEngine
 from api.services.workflow.evaluator import evaluate_graph, trigger_matches
+from api.services.workflow.schedule import is_schedule_due
 
 logger = logging.getLogger(__name__)
 
@@ -90,11 +93,44 @@ class WorkflowDispatchService:
         webhook_allowlist: tuple[str, ...] = (),
         public_base_url: str = "",
         email_sender: Any = None,
+        org_encryption_key: str = "",
+        token_engine_enabled: bool = True,
     ) -> None:
         self._session = session
         self._webhook_allowlist = webhook_allowlist
         self._public_base_url = public_base_url
         self._email_sender = email_sender
+        self._org_encryption_key = org_encryption_key
+        self._token_engine_enabled = token_engine_enabled
+
+    # ---- dual-engine selection ------------------------------------------ #
+    def _use_token_engine(self, definition: dict[str, Any]) -> bool:
+        """v2 graphs (schema_version >= 2 or any new node type) run on the token
+        engine; legacy v1 graphs stay on the walker. The flag is a kill-switch."""
+        if not self._token_engine_enabled:
+            return False
+        try:
+            return WorkflowDefinitionModel.parse(definition).is_v2
+        except Exception:  # noqa: BLE001 - a malformed v2 def still shouldn't crash the sweep
+            return False
+
+    def _token_engine(self) -> TokenEngine:
+        return TokenEngine(
+            self._session,
+            webhook_allowlist=self._webhook_allowlist,
+            public_base_url=self._public_base_url,
+            email_sender=self._email_sender,
+            org_encryption_key=self._org_encryption_key,
+        )
+
+    async def _run_token_engine(self, run: WorkflowRun, definition: dict[str, Any]) -> int:
+        """Seed + drive a v2 run to quiescence within the caller's tenant scope;
+        returns the number of task steps that ran (for the dispatch counters)."""
+        engine = self._token_engine()
+        await engine.start_run(run, definition)
+        await engine.drive_run(run)
+        steps = await WorkflowRunRepository(self._session, run.org_id).steps_for_run(run.id)
+        return sum(1 for step in steps if step.status == "succeeded")
 
     # ---- per-tenant RLS downgrade ---------------------------------------- #
     async def _enter_tenant(self, org_id: uuid.UUID) -> None:
@@ -215,6 +251,10 @@ class WorkflowDispatchService:
                 delta["skipped"] += 1
                 continue
 
+            if self._use_token_engine(version.definition):
+                delta["actions"] += await self._run_token_engine(run, version.definition)
+                continue
+
             result = evaluate_graph(version.definition, context)
             if result.error is not None:
                 await self._finish_run(run, status="failed", error=result.error, matched=False)
@@ -281,6 +321,10 @@ class WorkflowDispatchService:
         )
         if run is None:  # extraordinarily unlikely (fresh uuid) — treat as a conflict
             raise ActionError("could not create manual run")
+
+        if self._use_token_engine(version.definition):
+            executed = await self._run_token_engine(run, version.definition)
+            return run, executed
 
         result = evaluate_graph(version.definition, {"before": before, "after": after})
         if result.error is not None:
@@ -580,11 +624,8 @@ class WorkflowDispatchService:
             schedule = _schedule_of(version.definition)
             if schedule is None:
                 continue
-            every_minutes = int(schedule.get("every_minutes", 0) or 0)
-            if every_minutes <= 0:
-                continue
             last = last_by_wf.get(workflow.id)
-            if last is not None and (now - last) < timedelta(minutes=every_minutes):
+            if not is_schedule_due(schedule, last, now):
                 continue
             # Non-blocking per-workflow lock (privileged session, cross-org OK).
             locked = (
@@ -598,7 +639,7 @@ class WorkflowDispatchService:
             # Re-confirm under the lock (guards against a run just committed by a
             # now-finished sweep that our grouped snapshot missed).
             last = await self._last_scheduled_run_at(workflow.org_id, workflow.id)
-            if last is not None and (now - last) < timedelta(minutes=every_minutes):
+            if not is_schedule_due(schedule, last, now):
                 continue
             try:
                 async with self._session.begin_nested():
