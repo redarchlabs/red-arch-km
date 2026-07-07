@@ -211,6 +211,50 @@ def _submit_ingest(
             return {"status": "failed", "document_key": document_key, "error": str(e)}
 
 
+# Brain-api ingest progress (0..1) maps into this worker-side percent band. 60 is
+# STAGE_INGESTING (reported before the brain call); the ceiling stays below 100 so
+# only the terminal SUCCESS callback shows a completed bar.
+_INGEST_BAND_START = 60
+_INGEST_BAND_END = 97
+
+
+def _relay_progress(
+    settings: WorkerSettings,
+    body: dict[str, Any],
+    *,
+    document_id: str,
+    tenant_id: str,
+    last_percent: int,
+    last_phase: str,
+) -> tuple[int, str]:
+    """Translate a running brain-api poll into a PROCESSING status update.
+
+    Maps ``progress`` (0..1) into the ingest percent band and reports it only
+    when the percent advances or the phase changes, so a long-running ingest
+    keeps its bar moving without flooding the status endpoint. Returns the
+    (percent, phase) to carry into the next poll. Best-effort — a bad/missing
+    field just leaves the bar where it was.
+    """
+    from worker.tasks._job import job_log
+
+    raw = body.get("progress")
+    fraction = raw if isinstance(raw, (int, float)) else 0.0
+    fraction = max(0.0, min(1.0, float(fraction)))
+    phase = body.get("phase") or "ingesting"
+    percent = _INGEST_BAND_START + round(fraction * (_INGEST_BAND_END - _INGEST_BAND_START))
+    percent = max(last_percent, min(_INGEST_BAND_END, percent))
+
+    if percent == last_percent and phase == last_phase:
+        return last_percent, last_phase
+
+    # Stage carries the sub-phase so both the document view and the site-admin
+    # console show what's happening (they fall back to the raw stage string).
+    report_status(settings, document_id, tenant_id, "PROCESSING", {"stage": phase, "percent": percent})
+    if phase != last_phase:
+        job_log(document_id, f"{phase} ({percent}%)", stage=phase)
+    return percent, phase
+
+
 def _poll_until_complete(
     settings: WorkerSettings,
     *,
@@ -230,6 +274,12 @@ def _poll_until_complete(
     deadline = time.monotonic() + settings.brain_ingest_max_wait_seconds
     error_streak = 0
     unknown_streak = 0
+    # STAGE_INGESTING is 60% up front; brain-api's pipeline progress (0..1) maps
+    # into the 60→97 band so the bar climbs while the background job runs instead
+    # of sitting frozen at 60. Track the last-reported values to avoid redundant
+    # status callbacks (and log spam) between unchanged polls.
+    last_percent = 60
+    last_phase = ""
 
     while True:
         try:
@@ -289,5 +339,13 @@ def _poll_until_complete(
                 return {"status": "failed", "document_key": document_key, "error": "job_lost"}
         else:
             unknown_streak = 0  # still running
+            last_percent, last_phase = _relay_progress(
+                settings,
+                body,
+                document_id=document_id,
+                tenant_id=tenant_id,
+                last_percent=last_percent,
+                last_phase=last_phase,
+            )
 
         time.sleep(settings.brain_ingest_poll_interval_seconds)

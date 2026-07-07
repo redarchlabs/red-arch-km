@@ -89,6 +89,11 @@ async def ingest_document(
     # ahead of the registry (and never sees a spurious "unknown").
     jobs.mark_running(body.tenant_id, body.document_key)
 
+    def _on_progress(phase: str, fraction: float) -> None:
+        # Runs in the ingest worker thread; the registry is lock-guarded so a
+        # concurrent status read is safe.
+        jobs.mark_progress(body.tenant_id, body.document_key, phase=phase, progress=fraction)
+
     async def _run() -> None:
         try:
             result = await asyncio.to_thread(
@@ -101,6 +106,7 @@ async def ingest_document(
                 access_keys=body.access_keys,
                 use_knowledge_graph=body.use_knowledge_graph,
                 metadata=body.metadata,
+                progress_cb=_on_progress,
             )
             jobs.mark_done(
                 body.tenant_id,
@@ -135,8 +141,16 @@ async def ingest_status(
     """
     job = jobs.get(tenant_id, document_key)
     if job is None:
-        return {"state": "unknown", "chunks": 0, "triplets": 0, "error": None}
-    return {"state": job.state, "chunks": job.chunks, "triplets": job.triplets, "error": job.error}
+        return {"state": "unknown", "chunks": 0, "triplets": 0, "error": None, "phase": "", "progress": 0.0}
+    return {
+        "state": job.state,
+        "chunks": job.chunks,
+        "triplets": job.triplets,
+        "error": job.error,
+        # Coarse sub-phase + 0..1 fraction so the poller can advance its bar.
+        "phase": job.phase,
+        "progress": job.progress,
+    }
 
 
 @router.post("/remove-document")

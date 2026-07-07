@@ -13,7 +13,7 @@ unchanged document is skipped entirely.)
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 from brain_sdk.facts.doc_profiles import DocumentProfile
@@ -81,12 +81,17 @@ class FactIngestPipeline:
         access_keys: tuple[int, ...] = (),
         replace: bool = True,
         profile: DocumentProfile | None = None,
+        progress_cb: Callable[[int, int], None] | None = None,
     ) -> dict[str, int]:
         """Extract, resolve, and store all claims for one document.
 
         ``replace=True`` purges the document's existing claims first (idempotent
         re-ingest). ``profile`` conditions extraction on the document's type and
         brief (see :mod:`brain_sdk.facts.doc_profiles`); ``None`` = generic.
+
+        ``progress_cb(done, total)`` is invoked after each chunk (best-effort;
+        exceptions are swallowed) so a caller can surface per-chunk progress for
+        the otherwise-opaque, long-running extraction loop.
         """
         if replace:
             self._store.delete_by_document_key(tenant_id, document_key)
@@ -95,7 +100,8 @@ class FactIngestPipeline:
         chunks_failed = 0
         claims_failed = 0
         structured_claims = 0
-        for chunk in chunks:
+        total_chunks = len(chunks)
+        for done, chunk in enumerate(chunks, start=1):
             candidates, extract_failed = self._safe_extract(chunk, profile)
             if extract_failed:
                 chunks_failed += 1
@@ -110,10 +116,15 @@ class FactIngestPipeline:
                 else:
                     claims_failed += 1
 
+            if progress_cb is not None:
+                try:
+                    progress_cb(done, total_chunks)
+                except Exception as exc:  # noqa: BLE001 - progress reporting must never abort ingest
+                    logger.debug("Fact ingest progress_cb raised (ignored): %s", exc)
+
         # A total extraction wipeout (every chunk raised) is almost certainly an
         # LLM outage, not an empty document. Surface it loudly rather than let it
         # masquerade as a successful ingest with zero claims.
-        total_chunks = len(chunks)
         if total_chunks and chunks_failed == total_chunks:
             logger.error(
                 "Fact ingest for %s (tenant %s): ALL %d chunk(s) failed extraction — "

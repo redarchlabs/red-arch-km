@@ -92,6 +92,53 @@ def test_submit_then_poll_to_done_reports_success(
     assert _terminal_status(captured) == "SUCCESS"
 
 
+def test_running_polls_relay_progress_into_percent_band(
+    captured: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A running job reporting brain-api pipeline progress should emit PROCESSING
+    # updates whose percent climbs within the 60→97 band, then SUCCESS at the end.
+    monkeypatch.setattr(ic.httpx, "post", lambda *a, **k: _Resp(json_data={"status": "accepted"}, status_code=202))
+    states = iter(
+        [
+            _Resp(json_data={"state": "running", "phase": "embedding", "progress": 0.1}),
+            _Resp(json_data={"state": "running", "phase": "knowledge", "progress": 0.5}),
+            _Resp(json_data={"state": "running", "phase": "knowledge", "progress": 1.0}),
+            _Resp(json_data={"state": "done", "chunks": 3, "triplets": 2}),
+        ]
+    )
+    monkeypatch.setattr(ic.httpx, "get", lambda *a, **k: next(states))
+
+    result = _run()
+    assert result["status"] == "success"
+
+    processing = [d for s, d in captured["statuses"] if s == "PROCESSING"]
+    percents = [d["percent"] for d in processing]
+    # 60 + round(f*37): 0.1→64, 0.5→78 (banker's rounding of 18.5), 1.0→97
+    assert percents == [64, 78, 97]
+    assert processing[0]["stage"] == "embedding"
+    assert processing[-1]["stage"] == "knowledge"
+    assert _terminal_status(captured) == "SUCCESS"
+
+
+def test_running_progress_does_not_report_when_unchanged(
+    captured: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Two identical running polls must not produce duplicate PROCESSING updates.
+    monkeypatch.setattr(ic.httpx, "post", lambda *a, **k: _Resp(json_data={"status": "accepted"}, status_code=202))
+    states = iter(
+        [
+            _Resp(json_data={"state": "running", "phase": "knowledge", "progress": 0.5}),
+            _Resp(json_data={"state": "running", "phase": "knowledge", "progress": 0.5}),
+            _Resp(json_data={"state": "done", "chunks": 1, "triplets": 0}),
+        ]
+    )
+    monkeypatch.setattr(ic.httpx, "get", lambda *a, **k: next(states))
+
+    _run()
+    processing = [d for s, d in captured["statuses"] if s == "PROCESSING"]
+    assert len(processing) == 1  # second identical poll is suppressed
+
+
 def test_poll_failed_reports_failed(captured: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ic.httpx, "post", lambda *a, **k: _Resp(json_data={"status": "accepted"}, status_code=202))
     monkeypatch.setattr(ic.httpx, "get", lambda *a, **k: _Resp(json_data={"state": "failed", "error": "kaboom"}))
