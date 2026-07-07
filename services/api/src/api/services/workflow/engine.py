@@ -410,7 +410,7 @@ class TokenEngine:
             step.error = result.error
             step.attempts = attempt + 1
             step.max_attempts = policy.max_attempts
-            step.next_retry_at = resume_at  # type: ignore[assignment]
+            step.next_retry_at = resume_at
             step.finished_at = func.now()
             await self._session.flush()
             logger.info(
@@ -432,11 +432,27 @@ class TokenEngine:
         step.finished_at = func.now()
         await self._session.flush()
         logger.info("workflow task failed (run=%s node=%s): %s", run.id, node.id, result.error)
+        # BPMN try/catch: if an error boundary event is attached to this task, the
+        # failure is CAUGHT — route the token to the boundary node (which then
+        # follows its error path) instead of failing the run. The error context
+        # travels on the token so the handler branch can read it.
+        # error_code is not surfaced by handlers yet, so today every error boundary
+        # is a catch-all; the plumbing is ready for code-specific catches.
+        error_code = getattr(result, "error_code", None)
+        boundary = _error_boundary_for(model, node.id, error_code)
+        if boundary is not None:
+            error_ctx = {"node": node.id, "message": result.error, "code": error_code}
+            logger.info("workflow error caught by boundary %s (run=%s node=%s)", boundary.id, run.id, node.id)
+            return NodeOutcome(
+                "advance",
+                targets=[(boundary.id, C.HANDLE_BOUNDARY)],
+                token_data={**(token.data or {}), "_error": error_ctx},
+            )
         # continue_on_error swallows the failure and follows the normal out-edge.
         if node.data.get("continue_on_error", False):
             return NodeOutcome("advance", targets=_out_edges(model, node.id))
-        # Exhausted and not continuing → dead-letter the run so it surfaces in the
-        # DLQ view and can be replayed via retry_workflow_run.
+        # Exhausted, uncaught, not continuing → dead-letter the run so it surfaces
+        # in the DLQ view and can be replayed via retry_workflow_run.
         run.dead_letter = True
         return NodeOutcome("fail", error=result.error)
 
@@ -531,6 +547,12 @@ class TokenEngine:
             end_type = data.get("end_type") or data.get("event_type") or C.EVENT_NONE
             if end_type == C.EVENT_TERMINATE:
                 return NodeOutcome("terminate")
+            if end_type == C.EVENT_ERROR:
+                # Throw an error end: in a flat graph (no enclosing scope to catch
+                # it yet — subprocess propagation is a later phase) this fails the
+                # run with the modeled error code.
+                code = data.get("error_code") or "error"
+                return NodeOutcome("fail", error=f"error end event ({code})")
             return NodeOutcome("complete")
 
         if position == C.EVENT_INTERMEDIATE:
@@ -553,9 +575,11 @@ class TokenEngine:
             # Throw / none intermediate: pass through.
             return NodeOutcome("advance", targets=_out_edges(model, node.id))
 
-        # Boundary events are armed by their host activity (error-handling phase);
-        # a stray boundary token just ends.
-        return NodeOutcome("complete")
+        # A boundary event only receives a token when its host activity fired it
+        # (e.g. an error boundary caught a task failure — see _dispatch_task). When
+        # reached, follow its outgoing (error/timeout-handling) path. Boundaries
+        # have no normal incoming edges, so this is only hit via that routing.
+        return NodeOutcome("advance", targets=_out_edges(model, node.id))
 
     # ---- apply an outcome ------------------------------------------------ #
     async def _apply(
@@ -720,6 +744,32 @@ class TokenEngine:
 # --------------------------------------------------------------------------- #
 def _out_edges(model: WorkflowDefinitionModel, node_id: str) -> list[tuple[str, str | None]]:
     return [(e.target, e.source_handle) for e in model.edges if e.source == node_id]
+
+
+def _error_boundary_for(
+    model: WorkflowDefinitionModel, node_id: str, error_code: str | None = None
+) -> WorkflowNode | None:
+    """The error boundary event attached to ``node_id`` that catches this failure.
+
+    A boundary with a specific ``error_code`` catches only that code; a boundary
+    with no code is a catch-all. A catch-all is preferred only if no code-specific
+    boundary matches, so authors can special-case codes and still have a fallback.
+    """
+    catch_all: WorkflowNode | None = None
+    for node in model.nodes:
+        data = node.data or {}
+        if (
+            node.type == C.NODE_EVENT
+            and data.get("position") == C.EVENT_BOUNDARY
+            and data.get("event_type") == C.EVENT_ERROR
+            and data.get("attached_to") == node_id
+        ):
+            boundary_code = data.get("error_code")
+            if boundary_code and error_code and str(boundary_code) == str(error_code):
+                return node
+            if not boundary_code and catch_all is None:
+                catch_all = node
+    return catch_all
 
 
 def _incoming_edges(model: WorkflowDefinitionModel, node_id: str) -> list[tuple[str, str | None]]:
