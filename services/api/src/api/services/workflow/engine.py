@@ -20,6 +20,7 @@ connectors layer on in later phases without changing this core.
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from collections import deque
@@ -32,9 +33,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.models.workflow import WorkflowRun, WorkflowRunStep, WorkflowRunToken
 from api.repositories.workflow import (
+    WorkflowRepository,
     WorkflowRunRepository,
     WorkflowTokenRepository,
     WorkflowVersionRepository,
+    json_safe,
 )
 from api.schemas.workflow_definition import WorkflowDefinitionModel, WorkflowNode
 from api.services.workflow import compat
@@ -415,12 +418,19 @@ class TokenEngine:
                 output = data.get("_completion_output") or {"completed": True}
                 cleaned = {k: v for k, v in data.items() if k not in ("_completed", "_completion_output")}
                 await self._record_step(run, node, token, status="succeeded", output=output)
-                return NodeOutcome("advance", targets=_out_edges(model, node.id), token_data=cleaned)
+                variables = None
+                capture = node.data.get("capture")
+                if isinstance(capture, str) and capture:
+                    variables = {capture: output}
+                return NodeOutcome(
+                    "advance", targets=_out_edges(model, node.id), token_data=cleaned, variables=variables
+                )
+            # Call activity / sub-process: run a child workflow (not a passive wait).
+            if task_type in (C.TASK_CALL, C.TASK_SUBPROCESS):
+                return await self._dispatch_call(node, token, run, model, runs)
             wait_kind = {
                 C.TASK_USER: "user_task",
                 C.TASK_RECEIVE: "receive",
-                C.TASK_CALL: "subprocess",
-                C.TASK_SUBPROCESS: "subprocess",
                 C.TASK_MANUAL: "user_task",
             }[task_type]
             return NodeOutcome("park", wait_kind=wait_kind)
@@ -571,6 +581,95 @@ class TokenEngine:
             "advance",
             targets=_out_edges(model, node.id),
             variables=outputs or None,
+        )
+
+    async def _dispatch_call(
+        self,
+        node: WorkflowNode,
+        token: WorkflowRunToken,
+        run: WorkflowRun,
+        model: WorkflowDefinitionModel,
+        runs: WorkflowRunRepository,
+    ) -> NodeOutcome:
+        """Call activity: start a CHILD workflow run and block on it.
+
+        The child is created + driven inline (it's freshly created, so its per-run
+        advisory lock never contends with the parent's). If the child runs to
+        completion, the call task advances immediately with the child's variables
+        (optionally captured); a failed child is routed like any task failure
+        (error boundary / continue / dead-letter). If the child parks on its own
+        wait (a nested human task), the parent parks too and ``_signal_parent``
+        resumes it when the child later completes. ``MAX_TOKEN_DEPTH`` bounds
+        recursion.
+        """
+        if run.depth >= MAX_TOKEN_DEPTH:
+            return NodeOutcome("fail", error=f"call depth {MAX_TOKEN_DEPTH} exceeded")
+        try:
+            target_id = uuid.UUID(str(node.data.get("call_workflow_id")))
+        except (ValueError, TypeError):
+            return NodeOutcome("fail", error="call task requires a valid call_workflow_id")
+        target = await WorkflowRepository(self._session, run.org_id).get(target_id)
+        if target is None or target.active_version_id is None:
+            return NodeOutcome("fail", error="call target workflow not found or has no published version")
+        version = await WorkflowVersionRepository(self._session, run.org_id).get(target.active_version_id)
+        if version is None or version.status != "published":
+            return NodeOutcome("fail", error="call target has no published version")
+
+        snapshot = run.input_snapshot or {}
+        child = await runs.create_run_if_absent(
+            workflow_id=target.id,
+            workflow_version_id=version.id,
+            outbox_id=uuid.uuid4(),
+            outbox_seq=None,
+            created_at=datetime.now(UTC),
+            trigger_operation="call",
+            record_id=run.record_id,
+            input_snapshot={
+                "before": snapshot.get("before"),
+                "after": snapshot.get("after"),
+                "vars": run.variables or {},
+            },
+            depth=run.depth + 1,
+            parent_run_id=run.id,
+            parent_token_id=token.id,
+        )
+        if child is None:
+            return NodeOutcome("fail", error="could not create child run")
+        await self.start_run(child, version.definition)
+        await self.drive_run(child)  # child is new → its advisory lock is uncontended
+        fresh_child = await runs.get(child.id, child.created_at)
+        child_vars = (fresh_child.variables or {}) if fresh_child else {}
+        status = fresh_child.status if fresh_child else "failed"
+
+        if status in ("succeeded", "skipped"):
+            output = {"child_run_id": str(child.id), "vars": child_vars}
+            await self._record_step(run, node, token, status="succeeded", output=output)
+            variables = None
+            capture = node.data.get("capture")
+            if isinstance(capture, str) and capture:
+                variables = {capture: child_vars}
+            return NodeOutcome("advance", targets=_out_edges(model, node.id), variables=variables)
+
+        if status == "failed":
+            await self._record_step(
+                run, node, token, status="failed", output={"child_run_id": str(child.id)}
+            )
+            boundary = _error_boundary_for(model, node.id)
+            if boundary is not None:
+                return NodeOutcome(
+                    "advance",
+                    targets=[(boundary.id, C.HANDLE_BOUNDARY)],
+                    token_data={**(token.data or {}), "_error": {"node": node.id, "message": "child run failed"}},
+                )
+            if node.data.get("continue_on_error", False):
+                return NodeOutcome("advance", targets=_out_edges(model, node.id))
+            run.dead_letter = True
+            return NodeOutcome("fail", error="child run failed")
+
+        # Child is still running/waiting (a nested human task/timer): park; the
+        # child's completion will reactivate this token via _signal_parent.
+        return NodeOutcome(
+            "park", wait_kind="subprocess", token_data={**(token.data or {}), "_child_run_id": str(child.id)}
         )
 
     async def _dispatch_gateway(
@@ -864,12 +963,36 @@ class TokenEngine:
         run.conditions_matched = True
         run.finished_at = func.now()
         await self._session.flush()
+        await self._signal_parent(run)
 
     async def _fail_run(self, run: WorkflowRun, error: str) -> None:
         run.status = "failed"
         run.error = error
         run.finished_at = func.now()
         await self._session.flush()
+        await self._signal_parent(run)
+
+    async def _signal_parent(self, run: WorkflowRun) -> None:
+        """If this is a child (call-activity) run, reactivate the parent's parked
+        call token so the parent advances. A conditional raw UPDATE — the parent
+        token is parked (no concurrent advance of it), so no parent lock is needed;
+        it's a no-op in the synchronous case (the parent token isn't parked yet)."""
+        if not run.parent_run_id or not run.parent_token_id:
+            return
+        completion = {"child_run_id": str(run.id), "status": run.status, "vars": run.variables or {}}
+        await self._session.execute(
+            text(
+                "UPDATE workflow_run_tokens "
+                "SET status='active', wait_kind=NULL, lease_owner=NULL, leased_at=NULL, "
+                "    data = coalesce(data, '{}'::jsonb) || cast(:patch AS jsonb) "
+                "WHERE id=:tok AND org_id=:org AND status='waiting' AND wait_kind='subprocess'"
+            ),
+            {
+                "patch": json.dumps({"_completed": True, "_completion_output": json_safe(completion)}),
+                "tok": run.parent_token_id,
+                "org": run.org_id,
+            },
+        )
 
     async def _record_step(
         self,

@@ -218,13 +218,16 @@ class WorkflowRunRepository:
         record_id: uuid.UUID | None,
         input_snapshot: dict[str, Any] | None,
         depth: int,
+        parent_run_id: uuid.UUID | None = None,
+        parent_token_id: uuid.UUID | None = None,
     ) -> WorkflowRun | None:
         """Insert one run per (event x workflow). Returns None if it already exists.
 
         ``created_at`` is pinned to the source outbox event's timestamp — it is
         part of the ``uq_wf_run_event`` unique key (the partition key must be),
         so reprocessing the same event deterministically conflicts instead of
-        creating a duplicate run with a fresh now()-timestamp.
+        creating a duplicate run with a fresh now()-timestamp. ``parent_run_id`` /
+        ``parent_token_id`` link a child (call-activity) run back to the call token.
         """
         stmt = (
             pg_insert(WorkflowRun.__table__)
@@ -241,6 +244,8 @@ class WorkflowRunRepository:
                 status="running",
                 input_snapshot=input_snapshot,
                 depth=depth,
+                parent_run_id=parent_run_id,
+                parent_token_id=parent_token_id,
                 started_at=func.now(),
             )
             .on_conflict_do_nothing(constraint="uq_wf_run_event")
