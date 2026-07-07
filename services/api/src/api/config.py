@@ -107,6 +107,13 @@ class Settings(BaseSettings):
     smtp_from: str = Field(default="", validation_alias="SMTP_FROM")
     smtp_use_tls: bool = Field(default=True, validation_alias="SMTP_USE_TLS")
 
+    # Mailpit message-capture API for the site-admin "Sent Emails" console. Mailpit
+    # is a dev/staging container (km2_mailpit); in production the API talks to a real
+    # SMTP relay and nothing is captured, so the console tolerates this being
+    # unreachable. Points at the host mapping (8025) for host-run dev; in-cluster
+    # deployments override with http://mailpit:8025.
+    mailpit_api_url: str = Field(default="http://localhost:8025", validation_alias="MAILPIT_API_URL")
+
     # Observability (shared)
     log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
 

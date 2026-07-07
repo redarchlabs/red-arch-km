@@ -35,12 +35,17 @@ from api.schemas.admin import (
     JobCancelResult,
     JobLogEntry,
     JobLogsRead,
+    SentEmailAddress,
+    SentEmailDetailRead,
+    SentEmailListRead,
+    SentEmailSummary,
     SystemStatusRead,
     UserMembershipSummary,
 )
 from api.schemas.common import PaginatedResponse, PaginationParams, make_page
 from api.schemas.user import UserRead
 from api.services.brain_client import BrainAPIClient
+from api.services.mailpit_client import MailpitClient, MailpitUnavailableError
 from api.tasks.celery_app import celery_app
 
 router = APIRouter()
@@ -443,3 +448,98 @@ async def job_logs(
         except (ValueError, TypeError):
             continue
     return JobLogsRead(document_id=document_id, events=events)
+
+
+def _parse_email_address(raw: Any) -> SentEmailAddress | None:
+    """Convert one Mailpit ``{Name, Address}`` object into our schema (or None)."""
+    if not isinstance(raw, dict):
+        return None
+    address = raw.get("Address")
+    if not address:
+        return None
+    return SentEmailAddress(name=raw.get("Name") or None, address=str(address))
+
+
+def _parse_email_addresses(raw: Any) -> list[SentEmailAddress]:
+    if not isinstance(raw, list):
+        return []
+    return [addr for addr in (_parse_email_address(item) for item in raw) if addr is not None]
+
+
+@router.get("/emails", response_model=SentEmailListRead)
+async def list_sent_emails(
+    _admin: Annotated[CurrentUser, Depends(require_site_admin)],
+    settings: Annotated[Settings, Depends(get_settings)],
+    start: Annotated[int, Query(ge=0, description="Pagination offset (newest first)")] = 0,
+    limit: Annotated[int, Query(ge=1, le=200, description="Page size")] = 50,
+) -> SentEmailListRead:
+    """List messages captured by the Mailpit container (site-admin console).
+
+    Mailpit is dev/staging only, so an unreachable API is reported as
+    ``available=False`` rather than a 500 — the console then renders a friendly
+    "not running" state instead of an error.
+    """
+    client = MailpitClient(settings)
+    try:
+        payload = await client.list_messages(start=start, limit=limit)
+    except MailpitUnavailableError as exc:
+        return SentEmailListRead(available=False, detail=str(exc))
+
+    raw_messages = payload.get("messages") or []
+    messages = [
+        SentEmailSummary(
+            id=str(m.get("ID")),
+            from_addr=_parse_email_address(m.get("From")),
+            to=_parse_email_addresses(m.get("To")),
+            subject=m.get("Subject") or "(no subject)",
+            created=m.get("Created"),
+            size=m.get("Size"),
+            attachments=m.get("Attachments") or 0,
+            snippet=m.get("Snippet"),
+        )
+        for m in raw_messages
+        if isinstance(m, dict) and m.get("ID")
+    ]
+    total = payload.get("total")
+    return SentEmailListRead(
+        available=True,
+        total=total if isinstance(total, int) else len(messages),
+        messages=messages,
+    )
+
+
+@router.get("/emails/{message_id}", response_model=SentEmailDetailRead)
+async def get_sent_email(
+    message_id: str,
+    _admin: Annotated[CurrentUser, Depends(require_site_admin)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> SentEmailDetailRead:
+    """Fetch one captured message's full headers + body from Mailpit."""
+    client = MailpitClient(settings)
+    try:
+        payload = await client.get_message(message_id)
+    except MailpitUnavailableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Mailpit is unavailable: {exc}",
+        ) from exc
+    if payload is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Message not found")
+
+    attachments = [
+        str(a.get("FileName") or a.get("PartID") or "attachment")
+        for a in (payload.get("Attachments") or [])
+        if isinstance(a, dict)
+    ]
+    return SentEmailDetailRead(
+        id=str(payload.get("ID") or message_id),
+        from_addr=_parse_email_address(payload.get("From")),
+        to=_parse_email_addresses(payload.get("To")),
+        cc=_parse_email_addresses(payload.get("Cc")),
+        bcc=_parse_email_addresses(payload.get("Bcc")),
+        subject=payload.get("Subject") or "(no subject)",
+        date=payload.get("Date"),
+        text=payload.get("Text"),
+        html=payload.get("HTML"),
+        attachments=attachments,
+    )
