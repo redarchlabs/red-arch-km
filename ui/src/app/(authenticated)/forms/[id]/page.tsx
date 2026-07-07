@@ -2,8 +2,9 @@
 
 import { ArrowLeft, Copy, LinkIcon } from "lucide-react";
 import Link from "next/link";
-import { use, useCallback, useEffect, useMemo, useState } from "react";
+import { use, useCallback, useEffect, useState } from "react";
 
+import { FormFieldsEditor } from "@/components/forms/FormFieldsEditor";
 import { FormSectionsEditor } from "@/components/forms/FormSectionsEditor";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -15,7 +16,6 @@ import {
   listIncomingRelationships,
   listRelationships,
   type EntityDefinition,
-  type EntityField,
   type EntityRelationship,
 } from "@/lib/api/entities";
 import { listRecords, type EntityRecord } from "@/lib/api/entityRecords";
@@ -31,13 +31,6 @@ import {
   type FormSectionConfig,
 } from "@/lib/api/forms";
 
-interface FieldChoice {
-  included: boolean;
-  label: string;
-  required: boolean;
-  help: string;
-}
-
 function recordLabel(rec: EntityRecord): string {
   // Prefer a human-ish column; fall back to the id.
   for (const key of ["name", "title", "email", "first_name", "last_name"]) {
@@ -51,7 +44,7 @@ export default function FormBuilderPage({ params }: { params: Promise<{ id: stri
 
   const [form, setForm] = useState<Form | null>(null);
   const [entity, setEntity] = useState<EntityDefinition | null>(null);
-  const [choices, setChoices] = useState<Record<string, FieldChoice>>({});
+  const [fields, setFields] = useState<FormFieldConfig[]>([]);
   const [sections, setSections] = useState<FormSectionConfig[]>([]);
   const [allEntities, setAllEntities] = useState<EntityDefinition[]>([]);
   const [outgoing, setOutgoing] = useState<EntityRelationship[]>([]);
@@ -70,21 +63,6 @@ export default function FormBuilderPage({ params }: { params: Promise<{ id: stri
   const [newUrl, setNewUrl] = useState<string | null>(null);
   const [emailSent, setEmailSent] = useState(false);
 
-  const buildChoices = useCallback((f: Form, fields: EntityField[]) => {
-    const cfg = new Map(f.config.fields.map((fc) => [fc.slug, fc]));
-    const next: Record<string, FieldChoice> = {};
-    for (const field of fields) {
-      const existing = cfg.get(field.slug);
-      next[field.slug] = {
-        included: existing != null,
-        label: existing?.label ?? field.name,
-        required: existing?.required ?? field.is_required,
-        help: existing?.help_text ?? "",
-      };
-    }
-    return next;
-  }, []);
-
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -93,7 +71,7 @@ export default function FormBuilderPage({ params }: { params: Promise<{ id: stri
       const e = await getEntity(f.entity_definition_id);
       setForm(f);
       setEntity(e);
-      setChoices(buildChoices(f, e.fields));
+      setFields(f.config.fields ?? []);
       setSections(f.config.sections ?? []);
       const [ls, recs, all, out, inc] = await Promise.all([
         listFormLinks(id),
@@ -113,33 +91,17 @@ export default function FormBuilderPage({ params }: { params: Promise<{ id: stri
     } finally {
       setLoading(false);
     }
-  }, [id, buildChoices]);
+  }, [id]);
 
   useEffect(() => {
     void load();
   }, [load]);
-
-  const orderedFields = useMemo(() => entity?.fields ?? [], [entity]);
-
-  const setChoice = (slug: string, patch: Partial<FieldChoice>) =>
-    setChoices((prev) => ({ ...prev, [slug]: { ...prev[slug], ...patch } }));
 
   const handleSave = async () => {
     if (!entity) return;
     setSaving(true);
     setSaved(false);
     setError(null);
-    const fields: FormFieldConfig[] = orderedFields
-      .filter((f) => choices[f.slug]?.included)
-      .map((f) => {
-        const c = choices[f.slug];
-        return {
-          slug: f.slug,
-          label: c.label || null,
-          required: c.required,
-          help_text: c.help || null,
-        };
-      });
     try {
       const updated = await updateForm(id, { config: { fields, sections } });
       setForm(updated);
@@ -174,7 +136,7 @@ export default function FormBuilderPage({ params }: { params: Promise<{ id: stri
   if (loading) return <Skeleton className="h-96 w-full" />;
   if (!form || !entity) return <p className="text-sm text-destructive">{error ?? "Form not found."}</p>;
 
-  const includedCount = Object.values(choices).filter((c) => c.included).length;
+  const includedCount = fields.length;
 
   return (
     <div className="space-y-6">
@@ -203,52 +165,14 @@ export default function FormBuilderPage({ params }: { params: Promise<{ id: stri
               </Button>
             </div>
             <p className="text-sm text-muted-foreground">
-              Choose which fields appear on the form. {includedCount} selected.
+              Add fields, drag their order, and set label, width, placeholder, and
+              group headings. {includedCount} on the form.
             </p>
-            <ul className="divide-y rounded-md border">
-              {orderedFields.map((field) => {
-                const c = choices[field.slug];
-                if (!c) return null;
-                return (
-                  <li key={field.id} className="space-y-2 px-3 py-2">
-                    <label className="flex items-center gap-2 text-sm font-medium">
-                      <input
-                        type="checkbox"
-                        checked={c.included}
-                        onChange={(e) => setChoice(field.slug, { included: e.target.checked })}
-                      />
-                      {field.name}
-                      <span className="text-xs font-normal text-muted-foreground">{field.field_type}</span>
-                    </label>
-                    {c.included ? (
-                      <div className="ml-6 space-y-2">
-                        <Input
-                          value={c.label}
-                          onChange={(e) => setChoice(field.slug, { label: e.target.value })}
-                          placeholder="Label shown to the user"
-                        />
-                        <div className="flex items-center gap-3">
-                          <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                            <input
-                              type="checkbox"
-                              checked={c.required}
-                              onChange={(e) => setChoice(field.slug, { required: e.target.checked })}
-                            />
-                            Required
-                          </label>
-                          <Input
-                            value={c.help}
-                            onChange={(e) => setChoice(field.slug, { help: e.target.value })}
-                            placeholder="Help text (optional)"
-                            className="h-7 flex-1 text-xs"
-                          />
-                        </div>
-                      </div>
-                    ) : null}
-                  </li>
-                );
-              })}
-            </ul>
+            <FormFieldsEditor
+              entityFields={entity.fields}
+              fields={fields}
+              onChange={setFields}
+            />
           </CardContent>
         </Card>
 

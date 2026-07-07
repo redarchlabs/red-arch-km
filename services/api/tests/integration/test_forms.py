@@ -184,6 +184,62 @@ class TestPublicFormFlow:
         assert record["name"] == "Renamed"
         assert record["phone"] is None  # un-exposed field ignored, not written
 
+    async def test_presentational_layout_round_trips(
+        self, admin_session: AsyncSession, session: AsyncSession, engine: AsyncEngine
+    ) -> None:
+        """Order + placeholder/width/heading survive create → public render, and
+        never leak into the writable field set (they are pure presentation)."""
+        org = await _make_org(admin_session, "FORM-LAYOUT")
+        def_id = await _make_entity(admin_session, org)
+
+        await set_tenant(session, str(org.id))
+        definition = await EntityDefinitionRepository(session, org.id).get(def_id)
+        assert definition is not None
+        fields = await EntityFieldRepository(session, org.id).list_for_definition(def_id)
+        record = await DynamicEntityRepository(session, org.id, definition, fields).create({"name": "Jane"})
+        record_id = uuid.UUID(str(record["id"]))
+
+        fsvc = FormService(session, org.id, public_base_url="http://app.test")
+        # Declared order is phone-then-name (reversed vs entity order), with
+        # presentation overrides on each.
+        form = await fsvc.create_form(
+            FormCreate(
+                name="Layout",
+                slug="layout",
+                entity_definition_id=def_id,
+                config=FormConfig(
+                    fields=[
+                        FormFieldConfig(
+                            slug="phone",
+                            placeholder="(555) 555-5555",
+                            width="half",
+                            heading="Contact details",
+                        ),
+                        FormFieldConfig(slug="name", width="half"),
+                    ]
+                ),
+            )
+        )
+        _link, token, _url, _sent = await fsvc.generate_link(
+            form.id, GenerateLinkRequest(target_record_id=record_id)
+        )
+        await session.commit()
+
+        factory = _public_factory(engine)
+        async with factory() as ps:
+            await ps.execute(text("RESET ROLE"))
+            read = await PublicFormService(ps).load(token)
+            await ps.commit()
+
+        # Order preserved from config (phone first), presentation echoed through.
+        assert [f.slug for f in read.fields] == ["phone", "name"]
+        phone = read.fields[0]
+        assert phone.placeholder == "(555) 555-5555"
+        assert phone.width == "half"
+        assert phone.heading == "Contact details"
+        assert read.fields[1].width == "half"
+        assert read.fields[1].placeholder is None
+
     async def test_expired_link_rejected(
         self, admin_session: AsyncSession, session: AsyncSession, engine: AsyncEngine
     ) -> None:

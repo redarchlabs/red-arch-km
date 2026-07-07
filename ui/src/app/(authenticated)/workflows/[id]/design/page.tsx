@@ -19,6 +19,7 @@ import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { FormsPanel } from "@/components/workflows/FormsPanel";
 import { NodeInspector } from "@/components/workflows/NodeInspector";
 import { RunPanel } from "@/components/workflows/RunPanel";
 import { TestPanel } from "@/components/workflows/TestPanel";
@@ -298,6 +299,7 @@ export default function WorkflowDesignPage() {
             onChangeData={updateNodeData}
             onDelete={deleteNode}
           />
+          <FormsPanel forms={forms} entities={entities} />
           <TestPanel running={testing} result={testResult} fields={entityFields} onRun={handleTest} />
           {workflow ? (
             <RunPanel
