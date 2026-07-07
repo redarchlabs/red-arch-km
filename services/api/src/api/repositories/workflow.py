@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.models.workflow import (
     Workflow,
     WorkflowConnection,
+    WorkflowInboundEndpoint,
     WorkflowOutbox,
     WorkflowRun,
     WorkflowRunStep,
@@ -581,4 +582,53 @@ class WorkflowConnectionRepository:
 
     async def delete(self, conn: WorkflowConnection) -> None:
         await self._session.delete(conn)
+        await self._session.flush()
+
+
+class WorkflowInboundEndpointRepository:
+    """Public webhook endpoints that start a workflow run.
+
+    Management (create/list/delete) is org-scoped + RLS-enforced. The public
+    receiver resolves an endpoint by ``token_hash`` alone (the token is the
+    secret) on a privileged session, so ``get_by_token_hash`` deliberately does
+    not filter by org.
+    """
+
+    def __init__(self, session: AsyncSession, org_id: uuid.UUID | None = None) -> None:
+        self._session = session
+        self._org_id = org_id
+
+    async def get_by_token_hash(self, token_hash: str) -> WorkflowInboundEndpoint | None:
+        """Global lookup by the unique token hash (used by the public receiver)."""
+        result = await self._session.execute(
+            select(WorkflowInboundEndpoint).where(WorkflowInboundEndpoint.token_hash == token_hash)
+        )
+        return result.scalar_one_or_none()
+
+    async def list_all(self) -> list[WorkflowInboundEndpoint]:
+        result = await self._session.execute(
+            select(WorkflowInboundEndpoint)
+            .where(WorkflowInboundEndpoint.org_id == self._org_id)
+            .order_by(WorkflowInboundEndpoint.name)
+        )
+        return list(result.scalars().all())
+
+    async def get(self, endpoint_id: uuid.UUID) -> WorkflowInboundEndpoint | None:
+        result = await self._session.execute(
+            select(WorkflowInboundEndpoint).where(
+                WorkflowInboundEndpoint.id == endpoint_id, WorkflowInboundEndpoint.org_id == self._org_id
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def create(self, *, name: str, workflow_id: uuid.UUID, token_hash: str) -> WorkflowInboundEndpoint:
+        endpoint = WorkflowInboundEndpoint(
+            org_id=self._org_id, name=name, workflow_id=workflow_id, token_hash=token_hash, enabled=True
+        )
+        self._session.add(endpoint)
+        await self._session.flush()
+        return endpoint
+
+    async def delete(self, endpoint: WorkflowInboundEndpoint) -> None:
+        await self._session.delete(endpoint)
         await self._session.flush()
