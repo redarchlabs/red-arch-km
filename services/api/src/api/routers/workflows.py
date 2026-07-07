@@ -168,10 +168,12 @@ async def run_workflow(
             )
         before, after = record, record
     else:
+        # Legacy `action` nodes and v2 `task` nodes both carry an action_type;
+        # inspect both so a side-effecting step in either vocabulary is caught.
         action_types = {
             node.get("data", {}).get("action_type")
             for node in version.definition.get("nodes", [])
-            if node.get("type") == "action"
+            if node.get("type") in ("action", "task")
         }
         if action_types & SIDE_EFFECTING_ACTIONS:
             raise HTTPException(
