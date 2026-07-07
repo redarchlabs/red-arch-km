@@ -1,6 +1,24 @@
 import apiClient from "./client";
 
-export type NodeType = "trigger" | "condition" | "action" | "switch" | "delay";
+/**
+ * BPMN node categories (schema_version 2) plus the still-supported legacy types.
+ * Mirrors the backend vocabulary in `services/workflow/constants.py`; a node's
+ * concrete subtype (task_type / gateway_type / event position+type) lives in
+ * `data`. Legacy graphs keep running, so their types remain valid here.
+ */
+export type NodeType =
+  // BPMN categories
+  | "trigger"
+  | "task"
+  | "gateway"
+  | "event"
+  // legacy (interpreted at read time by the backend, never rewritten)
+  | "condition"
+  | "action"
+  | "switch"
+  | "delay"
+  | "merge"
+  | "passthrough";
 
 export interface GraphNode {
   id: string;

@@ -3,39 +3,83 @@ import type { Edge, Node } from "@xyflow/react";
 import { ACTION_CONFIG_FIELDS } from "@/components/workflows/actionTypes";
 import type { NodeType, WorkflowDefinition } from "@/lib/api/workflows";
 
-/** The node types the backend understands; anything else is a serialisation bug. */
-export const NODE_TYPES = ["trigger", "condition", "action", "switch", "delay"] as const;
+import { SCHEMA_VERSION } from "./nodes/nodeMeta";
+import { validateGraph } from "./validation";
+
+/**
+ * The node types the backend understands (BPMN categories + still-supported
+ * legacy types); anything else is a serialisation bug. Kept in sync with
+ * `NodeType` in `lib/api/workflows.ts` and the backend `constants.NODE_TYPES`.
+ */
+export const NODE_TYPES = [
+  "trigger",
+  "task",
+  "gateway",
+  "event",
+  "condition",
+  "action",
+  "switch",
+  "delay",
+  "merge",
+  "passthrough",
+] as const;
 
 function isNodeType(type: unknown): type is NodeType {
   return typeof type === "string" && (NODE_TYPES as readonly string[]).includes(type);
 }
+
+const ORIGIN = { x: 0, y: 0 };
 
 /** Convert a stored definition into React Flow nodes/edges. */
 export function toReactFlow(definition: WorkflowDefinition | undefined): {
   nodes: Node[];
   edges: Edge[];
 } {
-  const nodes: Node[] = (definition?.nodes ?? []).map((n) => ({
-    id: n.id,
-    type: n.type,
-    position: n.position ?? { x: 0, y: 0 },
-    data: { ...n.data },
-  }));
+  const raw = definition?.nodes ?? [];
+  const absPosById = new Map(raw.map((n) => [n.id, n.position ?? ORIGIN]));
+
+  const nodes: Node[] = raw.map((n) => {
+    const position = n.position ?? ORIGIN;
+    const base: Node = { id: n.id, type: n.type, position, data: { ...n.data } };
+    // A boundary event rides its host activity: give React Flow a `parentId`
+    // (+ `extent: 'parent'`) so it moves with and clips to the host. The stored
+    // position is absolute; convert to parent-relative for RF. Both are stripped
+    // on `toDefinition`, so the persisted schema stays clean (attached_to only).
+    if (n.type === "event" && n.data?.position === "boundary") {
+      const host = n.data?.attached_to;
+      if (typeof host === "string" && absPosById.has(host)) {
+        const parentPos = absPosById.get(host) ?? ORIGIN;
+        return {
+          ...base,
+          parentId: host,
+          extent: "parent",
+          position: { x: position.x - parentPos.x, y: position.y - parentPos.y },
+        };
+      }
+    }
+    return base;
+  });
+
+  // React Flow requires a parent node to precede its children in the array.
+  const ordered = [...nodes.filter((n) => !n.parentId), ...nodes.filter((n) => n.parentId)];
+
   const edges: Edge[] = (definition?.edges ?? []).map((e) => ({
     id: e.id,
     source: e.source,
     target: e.target,
     sourceHandle: e.source_handle ?? undefined,
-    // Colour "false" branch edges so the graph reads at a glance.
-    style: e.source_handle === "false" ? { stroke: "#f43f5e" } : undefined,
+    type: "labeled",
+    // Colour "false"/"error" branch edges so the graph reads at a glance.
+    style: e.source_handle === "false" || e.source_handle === "error" ? { stroke: "#f43f5e" } : undefined,
   }));
-  return { nodes, edges };
+  return { nodes: ordered, edges };
 }
 
-/** Convert React Flow nodes/edges back into a stored definition. */
+/** Convert React Flow nodes/edges back into a stored definition (schema_version 2). */
 export function toDefinition(nodes: Node[], edges: Edge[]): WorkflowDefinition {
+  const byId = new Map(nodes.map((n) => [n.id, n]));
   return {
-    schema_version: 1,
+    schema_version: SCHEMA_VERSION,
     nodes: nodes.map((n) => {
       // Never silently default an unknown type to "action" — that would persist
       // a mislabelled node the backend then mishandles. Fail loudly instead.
@@ -43,7 +87,16 @@ export function toDefinition(nodes: Node[], edges: Edge[]): WorkflowDefinition {
         throw new Error(`Cannot save node "${n.id}": unknown node type "${String(n.type)}".`);
       }
       // Programmatically-added nodes may lack a position; default to the origin.
-      const position = n.position ?? { x: 0, y: 0 };
+      let position = n.position ?? ORIGIN;
+      // A parented (boundary) node's position is parent-relative in React Flow;
+      // restore the absolute canvas position and drop the RF-only parent/extent.
+      if (n.parentId) {
+        const parent = byId.get(n.parentId);
+        if (parent) {
+          const pp = parent.position ?? ORIGIN;
+          position = { x: position.x + pp.x, y: position.y + pp.y };
+        }
+      }
       return {
         id: n.id,
         type: n.type,
@@ -68,61 +121,17 @@ export interface GraphIntegrity {
 }
 
 /**
- * Structural integrity checks run before save/publish: dangling edges and
- * cycles are hard errors (the run engine walks the graph forward and would
- * loop or dereference a missing node); orphaned non-trigger nodes are warnings.
+ * Back-compat wrapper over {@link validateGraph}. Cycles are now ALLOWED (the
+ * token engine bounds loops with a step budget); only `error`-severity issues
+ * (missing trigger, dangling edges, unattached boundary) block a save/publish.
+ * Prefer {@link validateGraph} directly for structured, node-keyed issues.
  */
 export function checkGraphIntegrity(def: WorkflowDefinition): GraphIntegrity {
-  const errors: string[] = [];
-  const warnings: string[] = [];
-  const ids = new Set(def.nodes.map((n) => n.id));
-
-  for (const e of def.edges) {
-    if (!ids.has(e.source) || !ids.has(e.target)) {
-      errors.push(`Edge "${e.id}" connects a node that no longer exists.`);
-    }
-  }
-
-  if (hasCycle(def)) {
-    errors.push("The graph contains a cycle; a workflow must be acyclic.");
-  }
-
-  const withIncoming = new Set(def.edges.map((e) => e.target));
-  for (const n of def.nodes) {
-    if (n.type !== "trigger" && !withIncoming.has(n.id)) {
-      warnings.push(`Node "${n.id}" is not connected to anything and won't run.`);
-    }
-  }
-
-  return { errors, warnings };
-}
-
-function hasCycle(def: WorkflowDefinition): boolean {
-  const adjacency = new Map<string, string[]>();
-  for (const n of def.nodes) adjacency.set(n.id, []);
-  for (const e of def.edges) adjacency.get(e.source)?.push(e.target);
-
-  const WHITE = 0;
-  const GRAY = 1;
-  const BLACK = 2;
-  const color = new Map<string, number>();
-  for (const id of adjacency.keys()) color.set(id, WHITE);
-
-  const visit = (id: string): boolean => {
-    color.set(id, GRAY);
-    for (const next of adjacency.get(id) ?? []) {
-      const c = color.get(next);
-      if (c === GRAY) return true; // back-edge → cycle
-      if (c === WHITE && visit(next)) return true;
-    }
-    color.set(id, BLACK);
-    return false;
+  const issues = validateGraph(def);
+  return {
+    errors: issues.filter((i) => i.severity === "error").map((i) => i.message),
+    warnings: issues.filter((i) => i.severity === "warning").map((i) => i.message),
   };
-
-  for (const id of adjacency.keys()) {
-    if (color.get(id) === WHITE && visit(id)) return true;
-  }
-  return false;
 }
 
 /** A fresh single-trigger starter graph for a brand-new workflow. */
@@ -153,7 +162,8 @@ export function normalizeForSave(definition: WorkflowDefinition): WorkflowDefini
   return {
     ...definition,
     nodes: definition.nodes.map((node) => {
-      if (node.type !== "action") return node;
+      // Legacy `action` nodes and BPMN `task` nodes both carry action config.
+      if (node.type !== "action" && node.type !== "task") return node;
       const actionType = String(node.data?.action_type ?? "");
       const jsonKeys = (ACTION_CONFIG_FIELDS[actionType] ?? [])
         .filter((f) => f.type === "json")
