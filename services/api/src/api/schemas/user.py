@@ -18,6 +18,15 @@ class UserRead(BaseModel):
     is_active: bool
 
 
+class OrgSummary(BaseModel):
+    """One accessible org plus whether the user administers it."""
+
+    id: str
+    name: str
+    # True if the user is an org admin of this org (site admins: true for all).
+    is_admin: bool
+
+
 class CurrentUserRead(BaseModel):
     """Current authenticated user with accessible orgs."""
 
@@ -25,4 +34,4 @@ class CurrentUserRead(BaseModel):
     username: str
     email: str
     is_site_admin: bool
-    orgs: list[dict[str, str]]
+    orgs: list[OrgSummary]

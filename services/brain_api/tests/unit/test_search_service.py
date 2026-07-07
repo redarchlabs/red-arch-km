@@ -5,8 +5,78 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import pytest
-from brain_api.services.search_service import SearchService
+from brain_api.services.search_service import SearchService, _snippet
 from brain_sdk.vector_store.protocol import SearchResult
+
+
+def _hit(number: int, *, doc_key: str, section: str | None, chunk_order: int, text: str = "body") -> dict:
+    return {
+        "id": f"chunk-{number}",
+        "score": 0.9 - number * 0.01,
+        "payload": {
+            "text": text,
+            "document_id": f"id-{doc_key}",
+            "document_key": doc_key,
+            "document_title": doc_key.title(),
+            "section": section,
+            "chunk_order": chunk_order,
+        },
+    }
+
+
+class TestSnippet:
+    def test_short_text_passes_through(self) -> None:
+        assert _snippet("Hello world.") == "Hello world."
+
+    def test_collapses_whitespace(self) -> None:
+        assert _snippet("Hello   \n  world.") == "Hello world."
+
+    def test_truncates_on_word_boundary_with_ellipsis(self) -> None:
+        text = "word " * 100
+        out = _snippet(text, max_chars=20)
+        assert out.endswith("…")
+        assert len(out) <= 21
+        assert not out[:-1].endswith(" ")
+
+
+class TestPassageSources:
+    def test_one_source_per_passage_numbered_in_order(self, mock_stores: MagicMock, fake_settings: MagicMock) -> None:
+        with patch("brain_api.services.search_service.OpenAI"):
+            service = SearchService(mock_stores, fake_settings)
+        hits = [
+            _hit(1, doc_key="nt", section="Matthew 4", chunk_order=7, text="Feeding the five thousand."),
+            _hit(2, doc_key="nt", section="Mark 8", chunk_order=20, text="Whom do men say that I am?"),
+        ]
+        sources = service._passage_sources(hits)
+        # Two passages of the SAME document get distinct numbers (the whole point).
+        assert [s["number"] for s in sources] == [1, 2]
+        assert [s["section"] for s in sources] == ["Matthew 4", "Mark 8"]
+        assert [s["chunk_order"] for s in sources] == [7, 20]
+        assert all(s["document_key"] == "nt" for s in sources)
+        assert sources[0]["snippet"] == "Feeding the five thousand."
+
+    def test_section_absent_is_none(self, mock_stores: MagicMock, fake_settings: MagicMock) -> None:
+        with patch("brain_api.services.search_service.OpenAI"):
+            service = SearchService(mock_stores, fake_settings)
+        hits = [{"id": "c", "score": 0.5, "payload": {"text": "t", "document_key": "d"}}]
+        sources = service._passage_sources(hits)
+        assert sources[0]["section"] is None
+        assert sources[0]["chunk_order"] is None
+
+
+class TestFormatContext:
+    def test_numbers_per_passage_with_section_label(self, mock_stores: MagicMock, fake_settings: MagicMock) -> None:
+        with patch("brain_api.services.search_service.OpenAI"):
+            service = SearchService(mock_stores, fake_settings)
+        hits = [
+            _hit(1, doc_key="nt", section="Matthew 4", chunk_order=7, text="alpha"),
+            _hit(2, doc_key="nt", section=None, chunk_order=8, text="beta"),
+        ]
+        ctx = service._format_context(hits, [])
+        assert "[1] Nt — Matthew 4" in ctx
+        assert "alpha" in ctx
+        # No section → label is just the title, no trailing dash.
+        assert "[2] Nt\n" in ctx
 
 
 @pytest.fixture

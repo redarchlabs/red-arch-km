@@ -52,6 +52,30 @@ class CeleryQueueItem(BaseModel):
     kwargs: str | None = None
 
 
+class CeleryActiveTask(BaseModel):
+    """One task currently executing on a worker (from ``inspect().active()``)."""
+
+    task: str | None = None
+    id: str | None = None
+    worker: str | None = None
+    args: str | None = None
+    kwargs: str | None = None
+    # Best-effort document id pulled from the ingest task's payload, so the
+    # console can deep-link to that document's job logs, show progress, cancel.
+    document_id: str | None = None
+    # Ingest progress joined from the document row (when document_id resolved).
+    status: str | None = None
+    percent: int | None = None
+    stage: str | None = None
+
+
+class JobCancelResult(BaseModel):
+    """Result of a site-admin cancelling a document's ingest job."""
+
+    document_id: str
+    status: str
+
+
 class BeatScheduleEntry(BaseModel):
     """One configured periodic task, as published by the running beat process."""
 
@@ -76,3 +100,22 @@ class CeleryStatusRead(BaseModel):
     truncated: bool
     beat: BeatStatus
     schedule: list[BeatScheduleEntry]
+    # Tasks currently executing on a worker (not just queued). Empty if no
+    # worker replied to the inspect broadcast.
+    active: list[CeleryActiveTask] = []
+
+
+class JobLogEntry(BaseModel):
+    """One structured line from an ingest job's Redis log list."""
+
+    ts: str | None = None
+    level: str | None = None
+    stage: str | None = None
+    message: str | None = None
+
+
+class JobLogsRead(BaseModel):
+    """An ingest job's log lines (oldest first), for the console drill-in."""
+
+    document_id: str
+    events: list[JobLogEntry]

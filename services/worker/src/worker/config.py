@@ -28,6 +28,23 @@ class WorkerSettings(BaseSettings):
     # dedicated timeout separate from the brain-api POST timeout.
     extraction_timeout_seconds: int = Field(default=600, validation_alias="EXTRACTION_TIMEOUT_SECONDS")
 
+    # brain-api ingest is asynchronous: the worker SUBMITS a document (fast) then
+    # POLLS for the outcome, so a long background pipeline (a whole book can take
+    # tens of minutes) is never gated by a single long-held HTTP request.
+    # accept: timeout for the submit + each status poll (both are quick calls).
+    brain_ingest_accept_timeout_seconds: int = Field(
+        default=60, validation_alias="BRAIN_INGEST_ACCEPT_TIMEOUT_SECONDS"
+    )
+    # poll_interval: seconds between status polls.
+    brain_ingest_poll_interval_seconds: int = Field(
+        default=5, validation_alias="BRAIN_INGEST_POLL_INTERVAL_SECONDS"
+    )
+    # max_wait: hard ceiling on total time spent waiting for one ingest before
+    # giving up and reporting FAILED (a backstop against a wedged background job).
+    brain_ingest_max_wait_seconds: int = Field(
+        default=5400, validation_alias="BRAIN_INGEST_MAX_WAIT_SECONDS"
+    )
+
     # Hard cap on PDF pages rendered/OCR'd per document. Bounds memory + cost
     # (and, for the AI path, per-page billing) so a pathological many-page PDF
     # can't OOM a worker or run up a huge bill. Pages beyond the cap are skipped

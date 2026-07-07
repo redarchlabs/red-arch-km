@@ -16,6 +16,13 @@ from worker.tasks._ingest_common import (
     post_to_brain_and_report,
     report_status,
 )
+from worker.tasks._job import (
+    STAGE_INGESTING,
+    STAGE_QUEUED,
+    IngestCancelled,
+    raise_if_cancelled,
+    report_progress,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -39,14 +46,23 @@ def task_ingest_document(self: Any, data: dict[str, Any]) -> dict[str, Any]:
     document_id = data.get("document_id", "")
     document_key = data.get("document_key", "")
     tenant_id = data.get("tenant_id", "")
+    task_id = self.request.id or ""
 
     logger.info("Ingesting document %s for tenant %s", document_key, tenant_id)
 
-    report_status(settings, document_id, tenant_id, "PROCESSING")
+    report_progress(settings, document_id, tenant_id, STAGE_QUEUED, message=f"queued: {document_key}")
+    try:
+        raise_if_cancelled(settings, document_id, tenant_id, task_id)
+    except IngestCancelled:
+        return {"status": "cancelled", "document_key": document_key}
+
+    # No extract stage for text docs — go straight to the brain ingest band.
+    report_progress(settings, document_id, tenant_id, STAGE_INGESTING, message="sending text to brain-api")
     return post_to_brain_and_report(
         settings,
         data,
         document_id=document_id,
         document_key=document_key,
         tenant_id=tenant_id,
+        task_id=task_id,
     )

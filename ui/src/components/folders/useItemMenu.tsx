@@ -1,9 +1,11 @@
 "use client";
 
 import {
+  Ban,
   FilePlus2,
   FolderPlus,
   Pencil,
+  RefreshCw,
   Settings2,
   SquareArrowOutUpRight,
   TextCursorInput,
@@ -13,8 +15,8 @@ import {
 
 import { type MenuItem, useRowMenu } from "@/components/common/ActionMenu";
 
-import { deleteEntry, renameEntry } from "./entryActions";
-import { type DialogState, type ExplorerItem, isMarkdownEditable } from "./explorerItem";
+import { cancelIngestEntry, deleteEntry, renameEntry, reprocessEntry } from "./entryActions";
+import { type DialogState, type ExplorerItem, isMarkdownEditable, isProcessing } from "./explorerItem";
 
 /**
  * Build the shared context menu for an explorer item (folder or document).
@@ -63,6 +65,26 @@ export function useItemMenu(
                 },
               ]
             : []),
+          // While the ingest runs, offer Cancel; once terminal, offer Reprocess
+          // (rebuild the index from the stored original). Server enforces
+          // uploader/admin; reload so the status badge reflects the change.
+          ...(item.doc && item.status && isProcessing(item.status)
+            ? [
+                {
+                  label: "Cancel ingest",
+                  icon: <Ban className="h-4 w-4" />,
+                  onSelect: () => void cancelIngestEntry(item.id, item.name, onReload),
+                },
+              ]
+            : item.doc
+              ? [
+                  {
+                    label: "Reprocess",
+                    icon: <RefreshCw className="h-4 w-4" />,
+                    onSelect: () => void reprocessEntry(item.id, item.name, onReload),
+                  },
+                ]
+              : []),
           {
             label: "Properties",
             icon: <Settings2 className="h-4 w-4" />,

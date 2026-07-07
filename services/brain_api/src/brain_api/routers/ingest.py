@@ -16,11 +16,17 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from brain_api.auth import require_api_key
+from brain_api.services.ingest_jobs import IngestJobRegistry, get_ingest_jobs
 from brain_api.services.ingest_service import IngestService
 from brain_api.stores import Stores, get_stores
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+# Strong references to in-flight background ingest tasks. asyncio only holds a
+# weak reference to a bare create_task(), so without this the task could be GC'd
+# mid-run; we discard each on completion.
+_background_tasks: set[asyncio.Task[None]] = set()
 
 
 class IngestRequest(BaseModel):
@@ -55,31 +61,82 @@ def _get_service(stores: Annotated[Stores, Depends(get_stores)]) -> IngestServic
     return IngestService(stores)
 
 
-@router.post("/ingest-document")
+@router.post("/ingest-document", status_code=status.HTTP_202_ACCEPTED)
 async def ingest_document(
     body: IngestRequest,
     service: Annotated[IngestService, Depends(_get_service)],
+    jobs: Annotated[IngestJobRegistry, Depends(get_ingest_jobs)],
     _api_key: Annotated[str, Depends(require_api_key)],
 ) -> dict[str, Any]:
-    """Ingest a document: chunk, embed, summarize, store in vector + graph."""
-    try:
-        return await asyncio.to_thread(
-            service.ingest_document,
-            tenant_id=body.tenant_id,
-            document_key=body.document_key,
-            title=body.title,
-            text=body.text,
-            tags=body.tags,
-            access_keys=body.access_keys,
-            use_knowledge_graph=body.use_knowledge_graph,
-            metadata=body.metadata,
-        )
-    except Exception as e:
-        logger.exception("Ingestion failed for %s", body.document_key)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Document ingestion failed",
-        ) from e
+    """Accept a document for ingestion and process it in the BACKGROUND.
+
+    Ingesting a large document (chunk → embed → summarize → fact-extract over
+    thousands of chunks) can take far longer than any reasonable HTTP timeout —
+    holding the request open until it finished is what made big documents fail.
+    So we return 202 immediately and run the pipeline in a background task; the
+    caller polls ``GET /ingest-status/{tenant}/{key}`` for the outcome.
+
+    Idempotent on concurrent submits: if a job for the same document is already
+    running, we do NOT start a second (which would race and duplicate vectors).
+    A redelivered task whose prior run already finished is made safe by the
+    purge-before-write inside ``ingest_document`` itself.
+    """
+    if jobs.is_running(body.tenant_id, body.document_key):
+        logger.info("Ingest already running for %s; ignoring duplicate submit", body.document_key)
+        return {"status": "accepted", "document_key": body.document_key, "already_running": True}
+
+    # Mark running BEFORE returning so the caller's first status poll never races
+    # ahead of the registry (and never sees a spurious "unknown").
+    jobs.mark_running(body.tenant_id, body.document_key)
+
+    async def _run() -> None:
+        try:
+            result = await asyncio.to_thread(
+                service.ingest_document,
+                tenant_id=body.tenant_id,
+                document_key=body.document_key,
+                title=body.title,
+                text=body.text,
+                tags=body.tags,
+                access_keys=body.access_keys,
+                use_knowledge_graph=body.use_knowledge_graph,
+                metadata=body.metadata,
+            )
+            jobs.mark_done(
+                body.tenant_id,
+                body.document_key,
+                chunks=int(result.get("chunks", 0)),
+                triplets=int(result.get("triplets", 0)),
+            )
+            logger.info("Background ingest complete for %s", body.document_key)
+        except Exception as e:  # noqa: BLE001 — record the failure for the poller
+            logger.exception("Background ingestion failed for %s", body.document_key)
+            jobs.mark_failed(body.tenant_id, body.document_key, str(e))
+
+    task = asyncio.create_task(_run())
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    return {"status": "accepted", "document_key": body.document_key}
+
+
+@router.get("/ingest-status/{tenant_id}/{document_key}")
+async def ingest_status(
+    tenant_id: str,
+    document_key: str,
+    jobs: Annotated[IngestJobRegistry, Depends(get_ingest_jobs)],
+    _api_key: Annotated[str, Depends(require_api_key)],
+) -> dict[str, Any]:
+    """Report a background ingest job's state for the worker's poll loop.
+
+    ``state`` is one of ``running`` / ``done`` / ``failed``, or ``unknown`` when
+    the registry has no record for the key — e.g. brain-api restarted and lost
+    the in-flight job. The caller treats a persistent ``unknown`` as a failure
+    and re-dispatches.
+    """
+    job = jobs.get(tenant_id, document_key)
+    if job is None:
+        return {"state": "unknown", "chunks": 0, "triplets": 0, "error": None}
+    return {"state": job.state, "chunks": job.chunks, "triplets": job.triplets, "error": job.error}
 
 
 @router.post("/remove-document")

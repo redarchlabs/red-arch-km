@@ -31,6 +31,16 @@ class OrgRepository:
         result = await self._session.execute(base.order_by(Org.name).offset(offset).limit(limit))
         return list(result.scalars().all()), total
 
+    async def admin_org_ids(self, profile_id: uuid.UUID) -> set[uuid.UUID]:
+        """Return the org ids where the user has an org-admin membership."""
+        result = await self._session.execute(
+            select(UserOrgMembership.org_id).where(
+                UserOrgMembership.profile_id == profile_id,
+                UserOrgMembership.is_org_admin.is_(True),
+            )
+        )
+        return set(result.scalars().all())
+
     async def list_all(self, *, offset: int = 0, limit: int = 200) -> tuple[list[Org], int]:
         """Return a page of all orgs (site admin only), plus total count."""
         total = (await self._session.execute(select(func.count()).select_from(Org))).scalar_one()

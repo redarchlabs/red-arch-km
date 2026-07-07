@@ -14,7 +14,7 @@ from pydantic import ValidationError
 
 
 def test_canonical_status_values() -> None:
-    assert {s.value for s in ProcessingStatus} == {"PENDING", "PROCESSING", "SUCCESS", "FAILED"}
+    assert {s.value for s in ProcessingStatus} == {"PENDING", "PROCESSING", "SUCCESS", "FAILED", "CANCELLED"}
 
 
 def test_legacy_values_removed() -> None:
@@ -23,7 +23,7 @@ def test_legacy_values_removed() -> None:
     assert "ERROR" not in values
 
 
-@pytest.mark.parametrize("status", ["PENDING", "PROCESSING", "SUCCESS", "FAILED"])
+@pytest.mark.parametrize("status", ["PENDING", "PROCESSING", "SUCCESS", "FAILED", "CANCELLED"])
 def test_status_update_accepts_worker_values(status: str) -> None:
     body = DocumentStatusUpdate(tenant_id="00000000-0000-0000-0000-000000000001", status=status)
     assert body.status == ProcessingStatus(status)

@@ -1,4 +1,9 @@
-import { deleteDocument, updateDocument } from "@/lib/api/documents";
+import {
+  cancelDocumentIngest,
+  deleteDocument,
+  reprocessDocument,
+  updateDocument,
+} from "@/lib/api/documents";
 import { deleteFolder, updateFolder } from "@/lib/api/folders";
 
 /**
@@ -54,5 +59,36 @@ export async function deleteEntry(
     onDone();
   } catch (e) {
     window.alert(e instanceof Error ? e.message : "Delete failed");
+  }
+}
+
+/**
+ * Confirm and cancel an in-progress document ingest. Mirrors {@link deleteEntry}:
+ * the request is wrapped so a 403 (not owner/admin) or 409 (already finished)
+ * surfaces via `alert`, and `onDone` (list reload) only fires on success.
+ */
+export async function cancelIngestEntry(id: string, name: string, onDone: () => void): Promise<void> {
+  if (!window.confirm(`Cancel ingesting "${name}"? Any partial index for it is discarded.`)) return;
+  try {
+    await cancelDocumentIngest(id);
+    onDone();
+  } catch (e) {
+    window.alert(e instanceof Error ? e.message : "Cancel failed");
+  }
+}
+
+/**
+ * Confirm and re-run a document's ingestion. Mirrors {@link cancelIngestEntry}:
+ * the request is wrapped so a 403 (not owner/admin) or 409 (already processing)
+ * surfaces via `alert`, and `onDone` (list reload, to reflect the PENDING
+ * status) only fires on success.
+ */
+export async function reprocessEntry(id: string, name: string, onDone: () => void): Promise<void> {
+  if (!window.confirm(`Reprocess "${name}"? Its current index is rebuilt from the original.`)) return;
+  try {
+    await reprocessDocument(id);
+    onDone();
+  } catch (e) {
+    window.alert(e instanceof Error ? e.message : "Reprocess failed");
   }
 }

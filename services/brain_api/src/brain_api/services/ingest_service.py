@@ -26,7 +26,7 @@ import time
 import uuid
 from typing import Any
 
-from brain_sdk.chunking.chunker import chunk_text
+from brain_sdk.chunking.chunker import create_sectioned_chunks
 from brain_sdk.facts.doc_profiles import GENERIC, PROFILE_REGISTRY, DocumentProfile
 from brain_sdk.facts.pipeline import Chunk
 from brain_sdk.summarization.chunk_summarizer import SummaryNode
@@ -107,11 +107,16 @@ class IngestService:
                 self._stores.vector.ensure_collections(tenant_id)
 
             with _tracer.start_as_current_span("chunk_text") as span:
-                chunks = chunk_text(
+                # Section-aware chunking tags each chunk with its Markdown
+                # heading path so retrieval can cite the specific passage rather
+                # than the whole document. `chunks` (plain text) still feeds
+                # embedding / summarisation / fact extraction unchanged.
+                sectioned = create_sectioned_chunks(
                     text,
-                    desired_chunk_size=_CHUNK_SIZE_TOKENS,
-                    desired_overlap=_CHUNK_OVERLAP_TOKENS,
+                    chunk_size_tokens=_CHUNK_SIZE_TOKENS,
+                    overlap_tokens=_CHUNK_OVERLAP_TOKENS,
                 )
+                chunks = [sc.text for sc in sectioned]
                 span.set_attribute("chunk_count", len(chunks))
 
             if not chunks:
@@ -136,9 +141,13 @@ class IngestService:
                     id=str(uuid.uuid4()),
                     vector=embedding,
                     payload={
-                        "text": chunk,
+                        "text": sc.text,
                         "summary": summary,
                         "chunk_order": idx,
+                        # Heading path of the passage (e.g. "Chapter 1 › Intro"),
+                        # or None for prose/OCR text with no headings. Retrieval
+                        # surfaces it as the citation's section label.
+                        "section": sc.section,
                         "document_id": doc_id,
                         "document_key": document_key,
                         "document_title": title,
@@ -149,10 +158,19 @@ class IngestService:
                         **(metadata or {}),
                     },
                 )
-                for idx, (chunk, embedding, summary) in enumerate(
-                    zip(chunks, chunk_embeddings, chunk_summaries, strict=True)
+                for idx, (sc, embedding, summary) in enumerate(
+                    zip(sectioned, chunk_embeddings, chunk_summaries, strict=True)
                 )
             ]
+
+            # Purge any prior index for this document_key BEFORE writing the new
+            # one, so a re-ingest / retry / redelivery REPLACES rather than
+            # appends duplicate vectors (ingest was previously not idempotent —
+            # each run inserted fresh point ids and never deleted the old set).
+            # Done here, right before the write, so an earlier failure (chunking
+            # / embedding) leaves the existing index intact.
+            with _tracer.start_as_current_span("purge_existing"):
+                self.remove_document(tenant_id, document_key)
 
             with _tracer.start_as_current_span("upsert_chunks"):
                 self._stores.vector.upsert_vectors(tenant_id, chunk_records, collection_type="chunks")

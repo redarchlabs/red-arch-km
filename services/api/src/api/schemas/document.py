@@ -63,12 +63,31 @@ class DocumentRead(BaseModel):
     description: str | None
     document_key: str
     processing_status: str
+    # Ingest progress/result blob: {stage, percent} while PROCESSING,
+    # {chunks, triplets} on SUCCESS, {error, ...} on FAILED.
+    processing_details: dict[str, Any] | None = None
     folder_id: uuid.UUID | None
     org_id: uuid.UUID
     created_at: Any
     size_bytes: int | None = None
     viewer_permissions_config: list[dict[str, Any]] | None = None
     contributor_permissions_config: list[dict[str, Any]] | None = None
+
+
+class JobLogEntry(BaseModel):
+    """One structured line from an ingest job's Redis log list."""
+
+    ts: str | None = None
+    level: str | None = None
+    stage: str | None = None
+    message: str | None = None
+
+
+class JobLogsRead(BaseModel):
+    """An ingest job's log lines for a document, oldest first."""
+
+    document_id: uuid.UUID
+    events: list[JobLogEntry]
 
 
 class UploadBatchRead(BaseModel):

@@ -1,15 +1,19 @@
 "use client";
 
 import DOMPurify from "dompurify";
-import { ArrowLeft, BookOpen, Pencil, Trash2 } from "lucide-react";
+import { ArrowLeft, Ban, BookOpen, Pencil, RefreshCw, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 
 import { Markdown } from "@/components/common/Markdown";
 import { DocumentReader } from "@/components/documents/DocumentReader";
+import { IngestProgress } from "@/components/documents/IngestProgress";
+import { JobLogs } from "@/components/documents/JobLogs";
 import { MarkdownEditor } from "@/components/documents/MarkdownEditor";
 import { SummaryTree } from "@/components/documents/SummaryTree";
+import { isProcessing } from "@/components/folders/explorerItem";
+import { useOrg } from "@/context/OrgContext";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -18,14 +22,17 @@ import {
   type DocumentChunk,
   type DocumentContentResponse,
   type SummaryTreeNode,
+  cancelDocumentIngest,
   deleteDocument,
   getDocument,
   getDocumentByKey,
   getDocumentChunks,
   getDocumentContent,
   getDocumentSummary,
+  reprocessDocument,
 } from "@/lib/api/documents";
 import { formatDate } from "@/lib/format";
+import { cn } from "@/lib/utils";
 import type { Document } from "@/types";
 
 /** Strip any HTML from chunk text — source docs could contain accidental markup. */
@@ -36,6 +43,7 @@ function sanitizeChunk(text: string): string {
 export default function DocumentDetailPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
+  const { isOrgAdmin } = useOrg();
   const id = params?.id ?? "";
 
   const [doc, setDoc] = useState<Document | null>(null);
@@ -45,12 +53,19 @@ export default function DocumentDetailPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  const [reprocessing, setReprocessing] = useState(false);
   const [readerOpen, setReaderOpen] = useState(false);
   const [editorOpen, setEditorOpen] = useState(false);
+  // Chunk to briefly highlight when arrived-at via a chat citation deep-link
+  // (`/documents/<key>#chunk-<order>`).
+  const [highlightOrder, setHighlightOrder] = useState<number | null>(null);
 
-  const load = useCallback(async () => {
+  // `silent` refreshes (polling while an ingest runs) skip the spinner so the
+  // page doesn't blank out every few seconds.
+  const load = useCallback(async (silent = false) => {
     if (!id) return;
-    setIsLoading(true);
+    if (!silent) setIsLoading(true);
     setError(null);
     try {
       // The URL param is usually a Postgres id, but chat/search links reference
@@ -83,15 +98,66 @@ export default function DocumentDetailPage() {
         setSummaryTree(summaryResult.value.summary_tree);
       }
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Failed to load document");
+      // A silent poll failure keeps the last-known document on screen.
+      if (!silent) setError(e instanceof Error ? e.message : "Failed to load document");
     } finally {
-      setIsLoading(false);
+      if (!silent) setIsLoading(false);
     }
   }, [id]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  // While the ingest is still running, poll quietly so the progress bar, status,
+  // logs, and (on completion) chunks/summary refresh without a manual reload.
+  const processing = doc ? isProcessing(doc.processing_status) : false;
+  useEffect(() => {
+    if (!processing) return;
+    const timer = setInterval(() => void load(true), 4000);
+    return () => clearInterval(timer);
+  }, [processing, load]);
+
+  // When linked from a chat citation (`#chunk-<order>`), scroll the matching
+  // indexed chunk into view and flash a highlight. Runs once chunks are loaded.
+  useEffect(() => {
+    if (chunks.length === 0) return;
+    const match = window.location.hash.match(/^#chunk-(\d+)$/);
+    if (!match) return;
+    const order = Number(match[1]);
+    const el = document.getElementById(`chunk-${order}`);
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    setHighlightOrder(order);
+    const timer = setTimeout(() => setHighlightOrder(null), 2500);
+    return () => clearTimeout(timer);
+  }, [chunks]);
+
+  const handleCancel = async () => {
+    if (!doc || !window.confirm("Cancel this ingest? Any partial index for it is discarded.")) return;
+    setCancelling(true);
+    try {
+      await cancelDocumentIngest(doc.id);
+      await load(true);
+    } catch (e: unknown) {
+      window.alert(e instanceof Error ? e.message : "Cancel failed");
+    } finally {
+      setCancelling(false);
+    }
+  };
+
+  const handleReprocess = async () => {
+    if (!doc || !window.confirm("Reprocess this document? Its current index is rebuilt from the original.")) return;
+    setReprocessing(true);
+    try {
+      await reprocessDocument(doc.id);
+      await load(true);
+    } catch (e: unknown) {
+      window.alert(e instanceof Error ? e.message : "Reprocess failed");
+    } finally {
+      setReprocessing(false);
+    }
+  };
 
   const handleDelete = async () => {
     if (!doc || !confirm("Delete this document permanently?")) return;
@@ -152,8 +218,26 @@ export default function DocumentDetailPage() {
             </Badge>
             <span className="text-xs text-muted-foreground">{formatDate(doc.created_at)}</span>
           </div>
+          {processing ? (
+            <IngestProgress
+              status={doc.processing_status}
+              details={doc.processing_details}
+              className="mt-3 max-w-sm"
+            />
+          ) : null}
         </div>
         <div className="flex items-center gap-2">
+          {processing ? (
+            <Button variant="outline" onClick={handleCancel} disabled={cancelling}>
+              <Ban className="h-4 w-4" />
+              {cancelling ? "Cancelling…" : "Cancel ingest"}
+            </Button>
+          ) : isOrgAdmin ? (
+            <Button variant="outline" onClick={handleReprocess} disabled={reprocessing}>
+              <RefreshCw className="h-4 w-4" />
+              {reprocessing ? "Reprocessing…" : "Reprocess"}
+            </Button>
+          ) : null}
           <Button variant="outline" onClick={() => setReaderOpen(true)}>
             <BookOpen className="h-4 w-4" />
             Read document
@@ -204,6 +288,8 @@ export default function DocumentDetailPage() {
         </Card>
       ) : null}
 
+      {isOrgAdmin ? <JobLogs documentId={doc.id} poll={processing} /> : null}
+
       <Card>
         <CardHeader>
           <CardTitle>Document Summary Tree</CardTitle>
@@ -236,7 +322,16 @@ export default function DocumentDetailPage() {
           ) : (
             <ol className="space-y-3">
               {chunks.map((chunk) => (
-                <li key={chunk.id} className="rounded-md border bg-muted/20 p-3">
+                <li
+                  key={chunk.id}
+                  id={`chunk-${chunk.chunk_order}`}
+                  className={cn(
+                    "scroll-mt-24 rounded-md border p-3 transition-colors duration-500",
+                    highlightOrder === chunk.chunk_order
+                      ? "border-primary bg-primary/10"
+                      : "bg-muted/20",
+                  )}
+                >
                   <div className="mb-1 text-xs font-medium text-muted-foreground">
                     Chunk #{chunk.chunk_order}
                   </div>
