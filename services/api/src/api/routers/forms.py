@@ -14,14 +14,19 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.auth.dependencies import OrgContext, require_org_admin
+from pydantic import BaseModel, ConfigDict
+
+from api.auth.dependencies import OrgContext, require_org_access, require_org_admin
 from api.config import Settings, get_settings
 from api.dependencies import get_db, get_tenant_db
+from api.services.rate_limit import SlidingWindowLimiter
 from api.schemas.form import (
     FormCreate,
     FormLinkCreated,
     FormLinkRead,
     FormRead,
+    FormRenderRead,
+    FormSubmit,
     FormUpdate,
     GenerateLinkRequest,
     PublicFormRead,
@@ -33,6 +38,7 @@ from api.services.form_service import (
     FormError,
     FormLinkError,
     FormNotFoundError,
+    FormRenderService,
     FormService,
     FormValidationError,
     PublicFormService,
@@ -61,6 +67,24 @@ def _service(session: AsyncSession, ctx: OrgContext, settings: Settings) -> Form
         public_base_url=settings.public_base_url,
         email_sender=EmailSender(settings),
     )
+
+
+# Per-token throttle for the unauthenticated public endpoints so a leaked token
+# can't be hammered. Per-process, lazily sized from settings on first use.
+_public_limiter: SlidingWindowLimiter | None = None
+
+
+def _rate_limit_public(
+    token: str, settings: Annotated[Settings, Depends(get_settings)]
+) -> None:
+    global _public_limiter
+    if _public_limiter is None:
+        _public_limiter = SlidingWindowLimiter(settings.rate_limit_per_minute)
+    if not _public_limiter.allow(token):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many requests. Please slow down and try again shortly.",
+        )
 
 
 # ------------------------------------------------------------------ #
@@ -146,6 +170,21 @@ async def list_links(
     return [FormLinkRead.model_validate(link) for link in links]
 
 
+@router.post("/{form_id}/links/{link_id}/revoke", response_model=FormLinkRead)
+async def revoke_link(
+    form_id: uuid.UUID,
+    link_id: uuid.UUID,
+    ctx: Annotated[OrgContext, Depends(require_org_admin)],
+    session: Annotated[AsyncSession, Depends(get_tenant_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> FormLinkRead:
+    try:
+        link = await _service(session, ctx, settings).revoke_link(form_id, link_id)
+    except FormError as exc:
+        _raise_http(exc)
+    return FormLinkRead.model_validate(link)
+
+
 @router.post("/{form_id}/links", response_model=FormLinkCreated, status_code=status.HTTP_201_CREATED)
 async def generate_link(
     form_id: uuid.UUID,
@@ -174,9 +213,51 @@ async def generate_link(
 
 
 # ------------------------------------------------------------------ #
+# Authenticated internal fill surface (any org member) — no token needed.
+# Same render/submit core as the public path, on the caller's tenant session.
+# ------------------------------------------------------------------ #
+class InternalSubmit(FormSubmit):
+    model_config = ConfigDict(extra="forbid")
+    record_id: uuid.UUID
+
+
+@router.get("/{form_id}/render", response_model=FormRenderRead)
+async def render_form(
+    form_id: uuid.UUID,
+    ctx: Annotated[OrgContext, Depends(require_org_access)],
+    session: Annotated[AsyncSession, Depends(get_tenant_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
+    record_id: uuid.UUID | None = None,
+) -> FormRenderRead:
+    try:
+        form = await _service(session, ctx, settings).get_form(form_id)
+        return await FormRenderService(session, ctx.org_id).build_render(form, record_id, "editable")
+    except FormError as exc:
+        _raise_http(exc)
+
+
+@router.post("/{form_id}/submit", status_code=status.HTTP_204_NO_CONTENT)
+async def submit_form(
+    form_id: uuid.UUID,
+    body: InternalSubmit,
+    ctx: Annotated[OrgContext, Depends(require_org_access)],
+    session: Annotated[AsyncSession, Depends(get_tenant_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> None:
+    try:
+        form = await _service(session, ctx, settings).get_form(form_id)
+        payload = FormSubmit(values=body.values, related=body.related)
+        await FormRenderService(session, ctx.org_id).apply_submit(form, body.record_id, payload)
+    except FormError as exc:
+        _raise_http(exc)
+
+
+# ------------------------------------------------------------------ #
 # Public (unauthenticated) — resolves org from the token
 # ------------------------------------------------------------------ #
-@public_router.get("/{token}", response_model=PublicFormRead)
+@public_router.get(
+    "/{token}", response_model=PublicFormRead, dependencies=[Depends(_rate_limit_public)]
+)
 async def public_get_form(
     token: str,
     session: Annotated[AsyncSession, Depends(get_db)],
@@ -187,7 +268,11 @@ async def public_get_form(
         _raise_http(exc)
 
 
-@public_router.post("/{token}", status_code=status.HTTP_204_NO_CONTENT)
+@public_router.post(
+    "/{token}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(_rate_limit_public)],
+)
 async def public_submit_form(
     token: str,
     body: PublicFormSubmit,

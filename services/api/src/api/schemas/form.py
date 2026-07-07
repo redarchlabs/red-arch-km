@@ -1,74 +1,39 @@
-"""Schemas for intake forms: admin CRUD, link generation, and the public form."""
+"""Schemas for the flexible form designer: admin CRUD, link generation, and the
+resolved render/submit contract shared by the public and authenticated surfaces.
+
+The form's layout is a recursive **element tree** (``form_elements.py``). The
+render contract deliberately sends the *authoring tree* plus a resolved **field
+catalog** (entity field metadata) rather than a parallel "public tree": the one
+``FormRenderer`` walks the authoring tree and looks up each leaf's type/options
+from the catalog. This keeps a single source of truth for layout and lets the
+builder preview reuse the exact same renderer with a catalog built from the
+entity definition.
+"""
 
 from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from api.schemas.form_elements import FormElement
 from api.services.email import is_valid_email
-
-# How a related entity is surfaced on the form:
-#   inline  — the 1:1 record's fields sit directly on the page
-#   modal   — the 1:1 record's fields open in a popup ("Add details")
-#   table   — a 1:M child collection edited as an add/remove-row table
-SectionMode = Literal["inline", "modal", "table"]
-
-# How wide a field sits in the form's responsive grid:
-#   full — spans the whole row (default)
-#   half — shares a row with the adjacent half-width field (two columns)
-FieldWidth = Literal["full", "half"]
-
-# How a picklist field is rendered. Purely presentational: the submitted value is
-# still one of the entity field's own options either way, so validation/coercion
-# is unaffected. Ignored for non-picklist fields.
-#   dropdown — a <select> (default)
-#   radio    — a radio-button group
-FieldDisplay = Literal["dropdown", "radio"]
-
-
-class FormFieldConfig(BaseModel):
-    """One entity field exposed on the form, with optional presentation overrides.
-
-    Only ``slug`` selects the underlying entity field; every other attribute is
-    presentational and never affects submission validation or coercion (which
-    key off the entity's own field type).
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    slug: str
-    label: str | None = None
-    required: bool | None = None  # override the entity field's own requiredness
-    help_text: str | None = None
-    placeholder: str | None = None  # hint text shown inside the empty input
-    width: FieldWidth | None = None  # column width in the responsive grid
-    heading: str | None = None  # group heading rendered above this field
-    display: FieldDisplay | None = None  # picklist render style (dropdown/radio)
-
-
-class FormSectionConfig(BaseModel):
-    """A related entity surfaced on the form (1:1 inline/modal, or 1:M table)."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    relationship_id: uuid.UUID
-    mode: SectionMode
-    label: str | None = None
-    fields: list[FormFieldConfig] = Field(default_factory=list)
 
 
 class FormConfig(BaseModel):
-    """The form's layout: root-entity fields plus related-entity sections."""
+    """A form's layout: a versioned, recursive tree of typed elements."""
 
     model_config = ConfigDict(extra="forbid")
 
-    fields: list[FormFieldConfig] = Field(default_factory=list)
-    sections: list[FormSectionConfig] = Field(default_factory=list)
+    version: int = 2
+    elements: list[FormElement] = Field(default_factory=list)
 
 
+# ------------------------------------------------------------------ #
+# Admin CRUD
+# ------------------------------------------------------------------ #
 class FormCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -142,49 +107,67 @@ class FormLinkCreated(FormLinkRead):
 
 
 # ------------------------------------------------------------------ #
-# Public (unauthenticated) form rendering + submission
+# Resolved render contract (shared: public token page + authenticated fill)
 # ------------------------------------------------------------------ #
-class PublicFormField(BaseModel):
-    """A field as the public page needs to render it (resolved from the catalog)."""
+class FieldMeta(BaseModel):
+    """Resolved metadata for one entity field — the truth the renderer needs to
+    pick a control and validate. Presentational overrides come from the element."""
 
     slug: str
-    label: str
+    label: str  # the entity field's own name (element may override the display)
     field_type: str
     required: bool
-    help_text: str | None = None
     options: list[str] = Field(default_factory=list)  # picklist choices
-    placeholder: str | None = None  # presentational hint text
-    width: FieldWidth | None = None  # column width in the responsive grid
-    heading: str | None = None  # group heading rendered above this field
-    display: FieldDisplay | None = None  # picklist render style (dropdown/radio)
 
 
-class PublicFormSection(BaseModel):
-    key: str  # relationship_id (the submission key under PublicFormSubmit.sections)
-    label: str
-    mode: SectionMode
-    entity_name: str  # the related entity's display name (e.g. "Contact")
-    fields: list[PublicFormField]
-    rows: list[dict[str, Any]] = Field(default_factory=list)  # prefilled child rows (1:M)
-    values: dict[str, Any] = Field(default_factory=dict)  # prefilled single record (1:1)
+class EntityCatalogEntry(BaseModel):
+    """Field catalog for one entity referenced anywhere in the tree."""
+
+    entity_id: uuid.UUID
+    name: str
+    fields: list[FieldMeta] = Field(default_factory=list)
 
 
-class PublicFormRead(BaseModel):
-    """Everything the public page renders: schema + prefilled values, no auth."""
+class RelationshipMeta(BaseModel):
+    """Where a section/table/block relationship points, so the client can switch
+    entity context as it descends into a related container."""
 
+    relationship_id: uuid.UUID
+    related_entity_id: uuid.UUID
+    kind: str  # "to_one" (section) | "to_many" (table/block)
+    name: str
+
+
+class FormRenderRead(BaseModel):
+    """Everything a renderer needs: the authoring tree, a resolved field catalog
+    for every entity it touches, relationship targets, and prefilled values."""
+
+    form_id: uuid.UUID
     form_name: str
     description: str | None
-    fields: list[PublicFormField]
-    values: dict[str, Any]  # prefilled root-record values (exposed fields only)
-    sections: list[PublicFormSection] = Field(default_factory=list)
-    status: str  # link status: pending | submitted | expired
+    status: str  # link/record status: pending | submitted | expired | editable
+    root_entity_id: uuid.UUID | None  # None for a standalone (no-entity) view
+    config: FormConfig
+    catalog: list[EntityCatalogEntry] = Field(default_factory=list)
+    relationships: list[RelationshipMeta] = Field(default_factory=list)
+    values: dict[str, Any] = Field(default_factory=dict)  # prefilled root values
+    # relationship_id -> {"values": {...}} (1:1) or {"rows": [{...}]} (1:M)
+    related: dict[str, Any] = Field(default_factory=dict)
 
 
-class PublicFormSubmit(BaseModel):
-    """A public submission: root field values plus per-section related data."""
+class FormSubmit(BaseModel):
+    """A submission: root field values plus per-relationship related data.
+
+    ``related`` is keyed by ``relationship_id``; a 1:1 carries ``{"values": {...}}``
+    and a 1:M carries ``{"rows": [{...}, ...]}``. Only values for fields the tree
+    actually exposes are honoured; everything else is dropped server-side."""
 
     model_config = ConfigDict(extra="forbid")
 
     values: dict[str, Any] = Field(default_factory=dict)
-    # relationship_slug -> {values: {...}} (1:1) or {rows: [{...}, ...]} (1:M)
-    sections: dict[str, Any] = Field(default_factory=dict)
+    related: dict[str, Any] = Field(default_factory=dict)
+
+
+# Back-compat alias for the public router/tests during the cutover.
+PublicFormSubmit = FormSubmit
+PublicFormRead = FormRenderRead

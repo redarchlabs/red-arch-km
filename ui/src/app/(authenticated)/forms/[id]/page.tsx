@@ -4,23 +4,16 @@ import { ArrowLeft, Copy, Eye, LinkIcon } from "lucide-react";
 import Link from "next/link";
 import { use, useCallback, useEffect, useMemo, useState } from "react";
 
-import { FormFieldsEditor } from "@/components/forms/FormFieldsEditor";
 import { FormPreview } from "@/components/forms/FormPreview";
-import { FormSectionsEditor } from "@/components/forms/FormSectionsEditor";
+import { LayoutBuilder, type BuilderCtx } from "@/components/forms/builder/LayoutBuilder";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import {
-  Dialog,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { Dialog, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   getEntity,
   listEntities,
-  listIncomingRelationships,
   listRelationships,
   type EntityDefinition,
   type EntityRelationship,
@@ -31,15 +24,15 @@ import {
   generateFormLink,
   getForm,
   listFormLinks,
+  revokeFormLink,
   updateForm,
   type Form,
-  type FormFieldConfig,
+  type FormElement,
   type FormLink,
-  type FormSectionConfig,
 } from "@/lib/api/forms";
+import { buildRenderFromConfig } from "@/lib/forms/catalogFromEntities";
 
 function recordLabel(rec: EntityRecord): string {
-  // Prefer a human-ish column; fall back to the id.
   for (const key of ["name", "title", "email", "first_name", "last_name"]) {
     if (typeof rec[key] === "string" && rec[key]) return rec[key] as string;
   }
@@ -51,11 +44,9 @@ export default function FormBuilderPage({ params }: { params: Promise<{ id: stri
 
   const [form, setForm] = useState<Form | null>(null);
   const [entity, setEntity] = useState<EntityDefinition | null>(null);
-  const [fields, setFields] = useState<FormFieldConfig[]>([]);
-  const [sections, setSections] = useState<FormSectionConfig[]>([]);
+  const [elements, setElements] = useState<FormElement[]>([]);
   const [allEntities, setAllEntities] = useState<EntityDefinition[]>([]);
-  const [outgoing, setOutgoing] = useState<EntityRelationship[]>([]);
-  const [incoming, setIncoming] = useState<EntityRelationship[]>([]);
+  const [allRels, setAllRels] = useState<EntityRelationship[]>([]);
   const [links, setLinks] = useState<FormLink[]>([]);
   const [records, setRecords] = useState<EntityRecord[]>([]);
   const [loading, setLoading] = useState(true);
@@ -64,7 +55,6 @@ export default function FormBuilderPage({ params }: { params: Promise<{ id: stri
   const [saved, setSaved] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
 
-  // Link generation.
   const [targetRecordId, setTargetRecordId] = useState("");
   const [email, setEmail] = useState("");
   const [generating, setGenerating] = useState(false);
@@ -79,20 +69,20 @@ export default function FormBuilderPage({ params }: { params: Promise<{ id: stri
       const e = await getEntity(f.entity_definition_id);
       setForm(f);
       setEntity(e);
-      setFields(f.config.fields ?? []);
-      setSections(f.config.sections ?? []);
-      const [ls, recs, all, out, inc] = await Promise.all([
+      setElements(f.config.elements ?? []);
+      const [ls, recs, all] = await Promise.all([
         listFormLinks(id),
         listRecords(e.slug, { limit: 100 }).then((r) => r.items).catch(() => []),
         listEntities().catch(() => []),
-        listRelationships(f.entity_definition_id).catch(() => []),
-        listIncomingRelationships(f.entity_definition_id).catch(() => []),
       ]);
       setLinks(ls);
       setRecords(recs);
       setAllEntities(all);
-      setOutgoing(out);
-      setIncoming(inc);
+      // Load every entity's relationships so nested section/table pickers resolve.
+      const rels = await Promise.all(all.map((ent) => listRelationships(ent.id).catch(() => [])));
+      const byId = new Map<string, EntityRelationship>();
+      for (const r of rels.flat()) byId.set(r.id, r);
+      setAllRels([...byId.values()]);
       if (recs.length > 0) setTargetRecordId(recs[0].id);
     } catch (e: unknown) {
       setError(getApiErrorMessage(e, "Failed to load form"));
@@ -106,18 +96,27 @@ export default function FormBuilderPage({ params }: { params: Promise<{ id: stri
   }, [load]);
 
   const handleSave = async () => {
-    if (!entity) return;
     setSaving(true);
     setSaved(false);
     setError(null);
     try {
-      const updated = await updateForm(id, { config: { fields, sections } });
+      const updated = await updateForm(id, { config: { version: 2, elements } });
       setForm(updated);
       setSaved(true);
     } catch (e: unknown) {
       setError(getApiErrorMessage(e, "Failed to save form"));
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleRevoke = async (linkId: string) => {
+    if (!confirm("Revoke this link? The token will stop working immediately.")) return;
+    try {
+      await revokeFormLink(id, linkId);
+      setLinks(await listFormLinks(id));
+    } catch (e: unknown) {
+      setError(getApiErrorMessage(e, "Failed to revoke link"));
     }
   };
 
@@ -141,25 +140,31 @@ export default function FormBuilderPage({ params }: { params: Promise<{ id: stri
     }
   };
 
-  // Preview reflects the current (possibly unsaved) editor state so the author
-  // sees their edits before saving. Owning entity first so FormPreview resolves
-  // field types even if listEntities() came back empty.
-  const previewForm = useMemo<Form | null>(
-    () => (form ? { ...form, config: { ...form.config, fields, sections } } : null),
-    [form, fields, sections],
-  );
-  const previewEntities = useMemo<EntityDefinition[]>(
+  const ctx = useMemo<BuilderCtx>(() => {
+    const entitiesById = new Map(allEntities.map((e) => [e.id, e]));
+    return {
+      entitiesById,
+      toOneOutgoing: (eid) =>
+        allRels.filter(
+          (r) =>
+            r.source_definition_id === eid &&
+            (r.cardinality === "many_to_one" || r.cardinality === "one_to_one"),
+        ),
+      incomingToMany: (eid) =>
+        allRels.filter((r) => r.target_definition_id === eid && r.cardinality === "many_to_one"),
+    };
+  }, [allEntities, allRels]);
+
+  const previewRender = useMemo(
     () =>
-      entity
-        ? [entity, ...allEntities.filter((e) => e.id !== entity.id)]
-        : allEntities,
-    [entity, allEntities],
+      form && entity
+        ? buildRenderFromConfig(form.name, entity.id, { version: 2, elements }, allEntities, allRels)
+        : null,
+    [form, entity, elements, allEntities, allRels],
   );
 
   if (loading) return <Skeleton className="h-96 w-full" />;
   if (!form || !entity) return <p className="text-sm text-destructive">{error ?? "Form not found."}</p>;
-
-  const includedCount = fields.length;
 
   return (
     <div className="space-y-6">
@@ -170,69 +175,45 @@ export default function FormBuilderPage({ params }: { params: Promise<{ id: stri
         <div className="flex-1">
           <h1 className="text-2xl font-semibold">{form.name}</h1>
           <p className="text-sm text-muted-foreground">
-            Collects into <span className="font-medium">{entity.name}</span> · updates the emailed record
+            Collects into <span className="font-medium">{entity.name}</span>
           </p>
         </div>
         <Button type="button" variant="outline" onClick={() => setShowPreview(true)}>
           <Eye className="h-4 w-4" />
           Preview
         </Button>
+        <Link href={`/forms/${id}/fill`}>
+          <Button type="button" variant="outline">
+            Fill
+          </Button>
+        </Link>
+        <Button onClick={() => void handleSave()} disabled={saving} size="sm">
+          {saving ? "Saving…" : saved ? "Saved" : "Save"}
+        </Button>
       </div>
 
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        {/* Field selection */}
-        <Card>
+      <div className="grid gap-4 lg:grid-cols-3">
+        <Card className="lg:col-span-2">
           <CardContent className="space-y-4 pt-6">
-            <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold">Fields on this form</h2>
-              <Button onClick={() => void handleSave()} disabled={saving} size="sm">
-                {saving ? "Saving…" : saved ? "Saved" : "Save"}
-              </Button>
-            </div>
+            <h2 className="text-lg font-semibold">Layout</h2>
             <p className="text-sm text-muted-foreground">
-              Add fields, drag their order, and set label, width, placeholder, and
-              group headings. {includedCount} on the form.
+              Compose the form: add fields, labels, calculated values, buttons, tables, and layout
+              containers (tabs, panels, accordions, columns). Nest freely.
             </p>
-            <FormFieldsEditor
-              entityFields={entity.fields}
-              fields={fields}
-              onChange={setFields}
-            />
+            <LayoutBuilder elements={elements} entityId={entity.id} ctx={ctx} onChange={setElements} />
           </CardContent>
         </Card>
 
-        {/* Related sections (1:1 + 1:M) */}
-        <Card>
-          <CardContent className="space-y-4 pt-6">
-            <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold">Related records</h2>
-              <Button onClick={() => void handleSave()} disabled={saving} size="sm" variant="outline">
-                {saving ? "Saving…" : "Save"}
-              </Button>
-            </div>
-            <FormSectionsEditor
-              allEntities={allEntities}
-              outgoing={outgoing}
-              incoming={incoming}
-              sections={sections}
-              onChange={setSections}
-            />
-          </CardContent>
-        </Card>
-
-        {/* Link generation */}
         <Card>
           <CardContent className="space-y-4 pt-6">
             <h2 className="text-lg font-semibold">Send a link</h2>
             <p className="text-sm text-muted-foreground">
-              Generate a single-use link bound to one {entity.name} record. The recipient updates that record.
+              Generate a single-use link bound to one {entity.name} record.
             </p>
             {records.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                No {entity.name} records yet — create one first.
-              </p>
+              <p className="text-sm text-muted-foreground">No {entity.name} records yet — create one first.</p>
             ) : (
               <div className="space-y-2">
                 <label className="block text-sm font-medium">Record to update</label>
@@ -250,15 +231,12 @@ export default function FormBuilderPage({ params }: { params: Promise<{ id: stri
                 <Input
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  placeholder="Recipient email (optional, for your records)"
+                  placeholder="Recipient email (optional)"
                 />
-                <Button onClick={() => void handleGenerate()} disabled={generating || includedCount === 0}>
+                <Button onClick={() => void handleGenerate()} disabled={generating || elements.length === 0}>
                   <LinkIcon className="h-4 w-4" />
                   {generating ? "Generating…" : "Generate link"}
                 </Button>
-                {includedCount === 0 ? (
-                  <p className="text-xs text-muted-foreground">Select at least one field and save first.</p>
-                ) : null}
               </div>
             )}
 
@@ -289,9 +267,18 @@ export default function FormBuilderPage({ params }: { params: Promise<{ id: stri
                 <h3 className="text-sm font-medium">Links</h3>
                 <ul className="divide-y rounded-md border text-sm">
                   {links.map((link) => (
-                    <li key={link.id} className="flex items-center justify-between px-3 py-2">
-                      <span className="text-muted-foreground">{link.recipient_email || "—"}</span>
+                    <li key={link.id} className="flex items-center justify-between gap-2 px-3 py-2">
+                      <span className="flex-1 truncate text-muted-foreground">{link.recipient_email || "—"}</span>
                       <span className="text-xs">{link.status}</span>
+                      {link.status === "pending" ? (
+                        <button
+                          type="button"
+                          onClick={() => void handleRevoke(link.id)}
+                          className="text-xs text-muted-foreground hover:text-destructive"
+                        >
+                          Revoke
+                        </button>
+                      ) : null}
                     </li>
                   ))}
                 </ul>
@@ -301,30 +288,16 @@ export default function FormBuilderPage({ params }: { params: Promise<{ id: stri
         </Card>
       </div>
 
-      <Dialog
-        open={showPreview}
-        onClose={() => setShowPreview(false)}
-        className="max-w-xl"
-      >
-        {previewForm ? (
-          <>
-            <DialogHeader>
-              <DialogTitle>{previewForm.name}</DialogTitle>
-              <DialogDescription>
-                {saved
-                  ? "Preview of the saved form as the recipient sees it."
-                  : "Preview reflects your current edits — save to publish them."}
-              </DialogDescription>
-            </DialogHeader>
-            <div className="max-h-[70vh] overflow-y-auto pr-1">
-              <FormPreview
-                form={previewForm}
-                entities={previewEntities}
-                relationships={[...outgoing, ...incoming]}
-              />
-            </div>
-          </>
-        ) : null}
+      <Dialog open={showPreview} onClose={() => setShowPreview(false)} className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>{form.name}</DialogTitle>
+          <DialogDescription>
+            {saved ? "Preview of the saved form." : "Preview reflects your current edits — save to publish."}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="max-h-[70vh] overflow-y-auto pr-1">
+          {previewRender ? <FormPreview render={previewRender} /> : null}
+        </div>
       </Dialog>
     </div>
   );
