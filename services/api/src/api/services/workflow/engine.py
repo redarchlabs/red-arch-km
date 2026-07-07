@@ -40,6 +40,7 @@ from api.schemas.workflow_definition import WorkflowDefinitionModel, WorkflowNod
 from api.services.workflow import compat
 from api.services.workflow import constants as C
 from api.services.workflow.decision import evaluate_decision_table
+from api.services.workflow.expression import evaluate_transform
 from api.services.workflow.jsonlogic import json_logic
 from api.services.workflow.retry import (
     attempts_so_far,
@@ -425,6 +426,9 @@ class TokenEngine:
         if task_type == C.TASK_BUSINESS_RULE:
             return await self._dispatch_decision(node, token, run, model, runs)
 
+        if task_type == C.TASK_SCRIPT:
+            return await self._dispatch_script(node, token, run, model, runs)
+
         action_type = node.data.get("action_type")
         if not action_type:
             # A script/business-rule/service task without a wired handler yet:
@@ -530,6 +534,28 @@ class TokenEngine:
         if run.step_seq >= MAX_RUN_STEPS:
             return NodeOutcome("fail", error=f"max run steps {MAX_RUN_STEPS} exceeded")
         outputs = evaluate_decision_table(node.data.get("decision_table"), _expr_context(run))
+        await self._record_step(run, node, token, status="succeeded", output=outputs)
+        return NodeOutcome(
+            "advance",
+            targets=_out_edges(model, node.id),
+            variables=outputs or None,
+        )
+
+    async def _dispatch_script(
+        self,
+        node: WorkflowNode,
+        token: WorkflowRunToken,
+        run: WorkflowRun,
+        model: WorkflowDefinitionModel,
+        runs: WorkflowRunRepository,
+    ) -> NodeOutcome:
+        """A script/transform task: map ``data.transform`` ({var: jsonlogic-expr})
+        over the run context and publish the results as run variables. Sandboxed
+        (jsonlogic only — no arbitrary code) and side-effect-free, so it never
+        fails the run."""
+        if run.step_seq >= MAX_RUN_STEPS:
+            return NodeOutcome("fail", error=f"max run steps {MAX_RUN_STEPS} exceeded")
+        outputs = evaluate_transform(node.data.get("transform"), _expr_context(run))
         await self._record_step(run, node, token, status="succeeded", output=outputs)
         return NodeOutcome(
             "advance",
