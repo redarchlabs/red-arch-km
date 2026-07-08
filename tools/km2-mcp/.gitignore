@@ -1,0 +1,14 @@
+# Build output
+dist/
+
+# Dependencies
+node_modules/
+
+# Local Playwright browser profile (holds the user's Clerk session cookies — NEVER commit)
+.profile/
+profile/
+*.profile/
+
+# Local env overrides
+.env
+.env.local
