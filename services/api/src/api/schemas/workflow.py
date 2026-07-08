@@ -191,6 +191,25 @@ class ConnectionRead(BaseModel):
     has_secret: bool = False
 
 
+class ConnectionCall(BaseModel):
+    """Invoke a saved connection from a form ``call_connection`` button (server-side).
+
+    ``body`` is the already-evaluated request payload (the client evaluated the button's
+    sandboxed expressions over the form values). The endpoint resolves the named
+    connection, injects its auth, applies the SSRF allow-list, and performs the request."""
+
+    connection: str = Field(min_length=1, max_length=120)
+    method: Literal["GET", "POST", "PUT", "PATCH", "DELETE"] = "POST"
+    path: str = Field(default="", max_length=1000)
+    body: dict[str, Any] = Field(default_factory=dict)
+
+
+class ConnectionCallResult(BaseModel):
+    ok: bool
+    status_code: int
+    body: Any = None
+
+
 class InboundEndpointCreate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     workflow_id: uuid.UUID

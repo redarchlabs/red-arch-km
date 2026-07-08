@@ -100,6 +100,60 @@ class CalculatedElement(_Element):
     width: FieldWidth | None = None
 
 
+# The widget an ``input`` renders. Presentational only — the value is coerced by the
+# control (numbers for number/slider, boolean for toggle, string otherwise).
+InputControl = Literal["text", "textarea", "number", "slider", "toggle", "select"]
+
+
+class InputOption(BaseModel):
+    """One choice for a ``select`` input."""
+
+    model_config = ConfigDict(extra="forbid")
+    value: str
+    label: str | None = None
+
+
+class InputElement(_Element):
+    """A standalone (unbound) input whose value lives in form state under ``key`` — not
+    tied to any entity field. It exists so a form/view can gather ad-hoc values and feed
+    them into a workflow-button's ``inputs`` (``{"var": "<key>"}``) or a ``calculated``
+    expression, without a backing record. ``control`` picks the widget (text/textarea/
+    number/slider/toggle/select); ``min``/``max``/``step`` shape number+slider, and
+    ``options`` populate select. Never persisted to an entity on submit."""
+
+    type: Literal["input"] = "input"
+    key: str  # where the value lives in form state (expression var name)
+    control: InputControl = "text"
+    label: str | None = None
+    placeholder: str | None = None
+    help_text: str | None = None
+    default: str | float | bool | None = None
+    required: bool = False
+    width: FieldWidth | None = None
+    # numeric shaping (control = number | slider)
+    min: float | None = None
+    max: float | None = None
+    step: float | None = None
+    # choices (control = select)
+    options: list[InputOption] = Field(default_factory=list)
+
+
+class LiveValueElement(_Element):
+    """A display-only readout that polls an HTTP endpoint from the browser and shows a
+    value pulled out of the JSON response — a generic 'live external state' element (a
+    device reading, a queue depth, anything). Not entity-bound, so it is valid in a
+    standalone view. ``url`` must be a CORS-reachable endpoint; ``json_pointer`` is a
+    dot path into the response body (e.g. ``head.pitch``); ``poll_ms`` sets the cadence."""
+
+    type: Literal["live_value"] = "live_value"
+    label: str | None = None
+    url: str
+    json_pointer: str | None = None  # dot path into the JSON body; whole body if None
+    poll_ms: int = 1000
+    units: str | None = None
+    width: FieldWidth | None = None
+
+
 # ------------------------------------------------------------------ #
 # Table (1:M editable grid) — columns can reach related entities
 # ------------------------------------------------------------------ #
@@ -264,8 +318,26 @@ class LinkAction(BaseModel):
     new_tab: bool = False
 
 
+class CallConnectionAction(BaseModel):
+    """POST/GET to a saved workflow **Connection** straight from a button — the generic
+    'external action' that avoids wrapping every call in a one-step workflow. Runs
+    server-side (``POST /workflows/connections/call``) so the connection's stored secret
+    and the workflow SSRF allow-list still apply; the browser never sees the base URL or
+    secret. ``body`` maps keys to sandboxed expressions over the current form values, so
+    a slider/toggle/field value flows straight into the request."""
+
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["call_connection"] = "call_connection"
+    connection: str
+    method: Literal["GET", "POST", "PUT", "PATCH", "DELETE"] = "POST"
+    path: str = ""
+    body: dict[str, Expression] = Field(default_factory=dict)
+    confirm: str | None = None
+    success_message: str | None = None
+
+
 ButtonAction = Annotated[
-    Union[SubmitAction, RunWorkflowAction, LinkAction],
+    Union[SubmitAction, RunWorkflowAction, LinkAction, CallConnectionAction],
     Field(discriminator="kind"),
 ]
 
@@ -298,6 +370,8 @@ FormElement = Annotated[
         FieldElement,
         LabelElement,
         CalculatedElement,
+        InputElement,
+        LiveValueElement,
         ButtonElement,
         FormRefElement,
         TableElement,

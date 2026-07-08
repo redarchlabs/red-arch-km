@@ -172,6 +172,26 @@ export async function runWorkflow(
   return (await apiClient.post<ManualRunResult>(`/workflows/${id}/run`, input)).data;
 }
 
+export interface ConnectionCallResult {
+  ok: boolean;
+  status_code: number;
+  body: unknown;
+}
+
+/**
+ * Invoke a saved connection from a form `call_connection` button. `body` is the already
+ * evaluated request payload; the server injects the connection's auth and applies the
+ * same SSRF allow-list as workflow `http_request`. Any org member may call it.
+ */
+export async function callConnection(input: {
+  connection: string;
+  method?: string;
+  path?: string;
+  body?: Record<string, unknown>;
+}): Promise<ConnectionCallResult> {
+  return (await apiClient.post<ConnectionCallResult>(`/workflows/connections/call`, input)).data;
+}
+
 export async function deleteWorkflow(id: string): Promise<void> {
   await apiClient.delete(`/workflows/${id}`);
 }

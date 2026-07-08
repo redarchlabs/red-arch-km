@@ -52,6 +52,35 @@ evaluated live as the form is filled.
   sum line items).
 `,
   ),
+  input: topic(
+    "Input element",
+    `
+A **standalone input** whose value is *not* tied to an entity field — it lives in
+the screen's state under a **key** you choose. Use it to gather ad-hoc values that
+feed a button's workflow inputs or a calculated expression (reference it as
+\`{ "var": "<key>" }\`).
+
+- **Key** — the name the value is stored/referenced under.
+- **Control** — text, textarea, number, **slider**, **toggle**, or select.
+- **Min / Max / Step** — shape the number and slider controls.
+- **Options** — the choices for a select.
+- **Default** — the starting value.
+`,
+  ),
+  live_value: topic(
+    "Live value element",
+    `
+A **read-only readout** that polls an HTTP endpoint from the browser and shows a
+value pulled from the JSON response — a generic way to display live external state
+(a device reading, a queue depth, a status).
+
+- **URL** — a CORS-reachable endpoint to poll.
+- **JSON pointer** — dot path into the response body (e.g. \`head.pitch\`); blank
+  shows the whole body.
+- **Poll (ms)** — how often to refresh.
+- **Units** — an optional suffix shown after the value.
+`,
+  ),
   button: topic(
     "Button element",
     `
@@ -61,6 +90,8 @@ An action control — how a form or view **kicks off something**.
 - **Action**:
   - **Submit form** — save the record being edited.
   - **Run workflow** — start a workflow by id (with optional inputs).
+  - **Call connection** — POST/GET straight to a saved connection (body templated
+    from the screen's values); runs server-side with the connection's auth.
   - **Link / navigate** — go to a URL.
 `,
   ),

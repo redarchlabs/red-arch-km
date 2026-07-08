@@ -55,6 +55,47 @@ export interface CalculatedElement extends ElementBase {
   width?: FieldWidth | null;
 }
 
+/** Widget an `input` renders. Presentational; value coercion follows the control. */
+export type InputControl = "text" | "textarea" | "number" | "slider" | "toggle" | "select";
+
+export interface InputOption {
+  value: string;
+  label?: string | null;
+}
+
+/**
+ * A standalone (unbound) input — its value lives in form state under `key`, NOT tied to
+ * an entity field. Reference it from a button's `inputs` or a `calculated` expression as
+ * `{ var: "<key>" }`. Enables sliders/toggles/free-text in a standalone view that feed a
+ * workflow run without a backing record.
+ */
+export interface InputElement extends ElementBase {
+  type: "input";
+  key: string;
+  control: InputControl;
+  label?: string | null;
+  placeholder?: string | null;
+  help_text?: string | null;
+  default?: string | number | boolean | null;
+  required?: boolean;
+  width?: FieldWidth | null;
+  min?: number | null;
+  max?: number | null;
+  step?: number | null;
+  options?: InputOption[];
+}
+
+/** Display-only readout that polls a CORS-reachable endpoint and shows a JSON value. */
+export interface LiveValueElement extends ElementBase {
+  type: "live_value";
+  label?: string | null;
+  url: string;
+  json_pointer?: string | null;
+  poll_ms?: number;
+  units?: string | null;
+  width?: FieldWidth | null;
+}
+
 export type SubmitAction = { kind: "submit" };
 export type RunWorkflowAction = {
   kind: "run_workflow";
@@ -64,7 +105,21 @@ export type RunWorkflowAction = {
   success_message?: string | null;
 };
 export type LinkAction = { kind: "link"; href: string; new_tab?: boolean };
-export type ButtonAction = SubmitAction | RunWorkflowAction | LinkAction;
+/** POST/GET to a saved Connection server-side; `body` templated from form values. */
+export type CallConnectionAction = {
+  kind: "call_connection";
+  connection: string;
+  method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+  path?: string;
+  body: Record<string, Expression>;
+  confirm?: string | null;
+  success_message?: string | null;
+};
+export type ButtonAction =
+  | SubmitAction
+  | RunWorkflowAction
+  | LinkAction
+  | CallConnectionAction;
 
 export interface ButtonElement extends ElementBase {
   type: "button";
@@ -169,6 +224,8 @@ export type FormElement =
   | FieldElement
   | LabelElement
   | CalculatedElement
+  | InputElement
+  | LiveValueElement
   | ButtonElement
   | FormRefElement
   | TableElement
