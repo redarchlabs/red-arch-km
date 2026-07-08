@@ -2423,13 +2423,37 @@ class AgentService:
                         "for display-only. The server recomputes persisted values authoritatively."
                     ),
                 },
+                "input": {
+                    "required": ["type", "key", "control (text|textarea|number|slider|toggle|select)"],
+                    "optional": [
+                        "label", "placeholder", "help_text", "default", "required", "width",
+                        "min", "max", "step (number|slider)", "options:[{value,label?}] (select)",
+                    ],
+                    "use": (
+                        "A STANDALONE input NOT bound to an entity field — its value lives in form "
+                        "state under `key`. Reference it from a button's inputs or a calculated "
+                        "expression as {\"var\": \"<key>\"}. Use for sliders/toggles/free-text in a "
+                        "standalone view that feed a workflow run. Never persisted to a record."
+                    ),
+                },
+                "live_value": {
+                    "required": ["type", "url"],
+                    "optional": ["label", "json_pointer (dot path e.g. head.pitch)", "poll_ms", "units", "width"],
+                    "use": (
+                        "Display-only readout that POLLS a CORS-reachable HTTP endpoint from the "
+                        "browser and shows a value from the JSON response. Generic live external "
+                        "state (a device reading, a status). Not entity-bound."
+                    ),
+                },
                 "button": {
                     "required": ["type", "label", "style (primary|secondary|danger|ghost)", "action"],
                     "optional": ["width"],
                     "action": (
                         "one of: {kind:'submit'} | {kind:'run_workflow', workflow_id, "
                         "inputs:{<name>:<expression>}, confirm?, success_message?} | "
-                        "{kind:'link', href, new_tab?}"
+                        "{kind:'link', href, new_tab?} | {kind:'call_connection', connection, "
+                        "method?, path?, body:{<key>:<expression>}, confirm?, success_message?} "
+                        "(POST straight to a saved Connection, server-side; body templated from form values)"
                     ),
                 },
                 "section": {

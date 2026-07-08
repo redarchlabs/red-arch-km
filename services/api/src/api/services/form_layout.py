@@ -136,8 +136,8 @@ def _validate_element(
     elif etype == "calculated":
         if el.target_slug is not None:
             _require_field(el.target_slug, ctx, fields_by_entity)
-    elif etype in ("label", "button", "form_ref"):
-        return  # presentational — nothing to bind at this entity level
+    elif etype in ("label", "button", "form_ref", "input", "live_value"):
+        return  # presentational / unbound — nothing to bind at this entity level
     elif etype == "section":
         info = _require_rel(el.relationship_id, rels)
         if info.source_id != ctx:

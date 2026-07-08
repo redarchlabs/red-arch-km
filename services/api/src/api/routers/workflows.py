@@ -30,6 +30,8 @@ from api.repositories.workflow import (
 from api.schemas.workflow import (
     CompleteTaskRequest,
     CompleteTaskResult,
+    ConnectionCall,
+    ConnectionCallResult,
     ConnectionCreate,
     ConnectionRead,
     ConnectionUpdate,
@@ -178,6 +180,76 @@ async def delete_connection(
     if conn is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="connection not found")
     await repo.delete(conn)
+
+
+@router.post("/connections/call", response_model=ConnectionCallResult)
+async def call_connection(
+    body: ConnectionCall,
+    ctx: Annotated[OrgContext, Depends(require_org_access)],
+    session: Annotated[AsyncSession, Depends(get_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> ConnectionCallResult:
+    """Perform an outbound call through a saved connection on behalf of a form
+    ``call_connection`` button. Any org member may call it (views are member-facing),
+    but it is bounded EXACTLY like a workflow ``http_request``: the target host must
+    pass the same SSRF allow-list (``WORKFLOW_WEBHOOK_ALLOWLIST`` /
+    ``WORKFLOW_TRUSTED_LOCAL_HOSTS``), and the connection's secret is injected
+    server-side and never exposed to the browser."""
+    import httpx
+    from urllib.parse import urlsplit
+
+    from api.services.crypto import decrypt_secret
+    from api.services.workflow.actions import (
+        ActionError,
+        ResolvedConnection,
+        _auth_headers,
+        assert_outbound_host_allowed,
+    )
+
+    conn = await WorkflowConnectionRepository(session, ctx.org_id).get_by_name(body.connection)
+    if conn is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"connection not found: {body.connection!r}")
+    org_key = settings.org_encryption_key.get_secret_value()
+    resolved = ResolvedConnection(
+        name=conn.name,
+        base_url=conn.base_url,
+        auth_type=conn.auth_type,
+        secret=decrypt_secret(conn.secret_encrypted, org_key) if conn.secret_encrypted else None,
+        config=conn.config or {},
+    )
+
+    base = (resolved.base_url or "").rstrip("/")
+    path = body.path or ""
+    url = path if path.startswith(("http://", "https://")) else f"{base}/{path.lstrip('/')}"
+    parsed = urlsplit(url)
+    try:
+        assert_outbound_host_allowed(
+            parsed.hostname or "",
+            parsed.scheme,
+            webhook_allowlist=tuple(settings.workflow_webhook_allowlist or ()),
+            trusted_local_hosts=tuple(settings.workflow_trusted_local_hosts or ()),
+            action="call_connection",
+        )
+    except ActionError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    headers = {"Content-Type": "application/json", **_auth_headers(resolved)}
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.request(
+                body.method,
+                url,
+                json=body.body if body.method != "GET" else None,
+                headers=headers,
+            )
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"connection call failed: {exc}") from exc
+
+    try:
+        payload: Any = resp.json()
+    except ValueError:
+        payload = resp.text
+    return ConnectionCallResult(ok=resp.is_success, status_code=resp.status_code, body=payload)
 
 
 # --------------------------------------------------------------------------- #

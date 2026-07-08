@@ -154,6 +154,10 @@ function ElementEditor({
       return <LabelEditor el={el} onChange={onChange} />;
     case "calculated":
       return <CalculatedEditor el={el} fields={fieldsOf(ctx, entityId)} onChange={onChange} />;
+    case "input":
+      return <InputEditor el={el} onChange={onChange} />;
+    case "live_value":
+      return <LiveValueEditor el={el} onChange={onChange} />;
     case "button":
       return <ButtonEditor el={el} onChange={onChange} />;
     case "form_ref":
@@ -371,6 +375,146 @@ function CalculatedEditor({
   );
 }
 
+type InputEl = Extract<FormElement, { type: "input" }>;
+
+function InputEditor({ el, onChange }: { el: InputEl; onChange: (el: FormElement) => void }) {
+  const numeric = el.control === "number" || el.control === "slider";
+  return (
+    <div className="space-y-1.5">
+      <Row label="Key">
+        <input
+          className={input}
+          value={el.key}
+          placeholder="value_key"
+          onChange={(e) => onChange({ ...el, key: e.target.value })}
+        />
+      </Row>
+      <Row label="Control">
+        <select
+          className={input}
+          value={el.control}
+          onChange={(e) => onChange({ ...el, control: e.target.value as InputEl["control"] })}
+        >
+          {["text", "textarea", "number", "slider", "toggle", "select"].map((c) => (
+            <option key={c} value={c}>
+              {c}
+            </option>
+          ))}
+        </select>
+      </Row>
+      <Row label="Label">
+        <input
+          className={input}
+          value={el.label ?? ""}
+          onChange={(e) => onChange({ ...el, label: e.target.value || null })}
+        />
+      </Row>
+      {numeric ? (
+        <Row label="Min / Max / Step">
+          <div className="flex gap-1">
+            {(["min", "max", "step"] as const).map((k) => (
+              <input
+                key={k}
+                className={input}
+                type="number"
+                placeholder={k}
+                value={el[k] ?? ""}
+                onChange={(e) =>
+                  onChange({ ...el, [k]: e.target.value === "" ? null : Number(e.target.value) })
+                }
+              />
+            ))}
+          </div>
+        </Row>
+      ) : null}
+      {el.control === "select" ? (
+        <Row label="Options">
+          <input
+            className={input}
+            placeholder="a, b, c"
+            value={(el.options ?? []).map((o) => o.value).join(", ")}
+            onChange={(e) =>
+              onChange({
+                ...el,
+                options: e.target.value
+                  .split(",")
+                  .map((s) => s.trim())
+                  .filter(Boolean)
+                  .map((v) => ({ value: v })),
+              })
+            }
+          />
+        </Row>
+      ) : null}
+      <Row label="Default">
+        <input
+          className={input}
+          value={el.default == null ? "" : String(el.default)}
+          onChange={(e) => {
+            const raw = e.target.value;
+            const value: string | number | boolean | null =
+              raw === ""
+                ? null
+                : el.control === "toggle"
+                  ? raw === "true"
+                  : numeric
+                    ? Number(raw)
+                    : raw;
+            onChange({ ...el, default: value });
+          }}
+        />
+      </Row>
+    </div>
+  );
+}
+
+type LiveValueEl = Extract<FormElement, { type: "live_value" }>;
+
+function LiveValueEditor({ el, onChange }: { el: LiveValueEl; onChange: (el: FormElement) => void }) {
+  return (
+    <div className="space-y-1.5">
+      <Row label="Label">
+        <input
+          className={input}
+          value={el.label ?? ""}
+          onChange={(e) => onChange({ ...el, label: e.target.value || null })}
+        />
+      </Row>
+      <Row label="URL">
+        <input
+          className={input}
+          placeholder="http://localhost:8080/senses"
+          value={el.url}
+          onChange={(e) => onChange({ ...el, url: e.target.value })}
+        />
+      </Row>
+      <Row label="JSON path">
+        <input
+          className={input}
+          placeholder="head.pitch"
+          value={el.json_pointer ?? ""}
+          onChange={(e) => onChange({ ...el, json_pointer: e.target.value || null })}
+        />
+      </Row>
+      <Row label="Poll (ms)">
+        <input
+          className={input}
+          type="number"
+          value={el.poll_ms ?? 1000}
+          onChange={(e) => onChange({ ...el, poll_ms: Number(e.target.value) || 1000 })}
+        />
+      </Row>
+      <Row label="Units">
+        <input
+          className={input}
+          value={el.units ?? ""}
+          onChange={(e) => onChange({ ...el, units: e.target.value || null })}
+        />
+      </Row>
+    </div>
+  );
+}
+
 function ButtonEditor({ el, onChange }: { el: ButtonElement; onChange: (el: ButtonElement) => void }) {
   return (
     <div className="space-y-1.5">
@@ -399,11 +543,14 @@ function ButtonEditor({ el, onChange }: { el: ButtonElement; onChange: (el: Butt
             if (kind === "submit") onChange({ ...el, action: { kind: "submit" } });
             else if (kind === "run_workflow")
               onChange({ ...el, action: { kind: "run_workflow", workflow_id: "", inputs: {} } });
+            else if (kind === "call_connection")
+              onChange({ ...el, action: { kind: "call_connection", connection: "", method: "POST", path: "", body: {} } });
             else onChange({ ...el, action: { kind: "link", href: "" } });
           }}
         >
           <option value="submit">Submit form</option>
           <option value="run_workflow">Run workflow</option>
+          <option value="call_connection">Call connection</option>
           <option value="link">Link / navigate</option>
         </select>
       </Row>
@@ -419,6 +566,7 @@ function ButtonEditor({ el, onChange }: { el: ButtonElement; onChange: (el: Butt
           />
         </Row>
       ) : null}
+      {el.action.kind === "call_connection" ? <CallConnectionFields el={el} onChange={onChange} /> : null}
       {el.action.kind === "link" ? (
         <Row label="Href">
           <input
@@ -429,6 +577,66 @@ function ButtonEditor({ el, onChange }: { el: ButtonElement; onChange: (el: Butt
         </Row>
       ) : null}
     </div>
+  );
+}
+
+function CallConnectionFields({
+  el,
+  onChange,
+}: {
+  el: ButtonElement;
+  onChange: (el: ButtonElement) => void;
+}) {
+  if (el.action.kind !== "call_connection") return null;
+  const action = el.action;
+  const set = (patch: Partial<typeof action>) => onChange({ ...el, action: { ...action, ...patch } });
+  return (
+    <>
+      <Row label="Connection">
+        <input
+          className={input}
+          placeholder="robot"
+          value={action.connection}
+          onChange={(e) => set({ connection: e.target.value })}
+        />
+      </Row>
+      <Row label="Method / Path">
+        <div className="flex gap-1">
+          <select
+            className={input}
+            value={action.method ?? "POST"}
+            onChange={(e) => set({ method: e.target.value as NonNullable<typeof action.method> })}
+          >
+            {["GET", "POST", "PUT", "PATCH", "DELETE"].map((m) => (
+              <option key={m} value={m}>
+                {m}
+              </option>
+            ))}
+          </select>
+          <input
+            className={input}
+            placeholder="/head"
+            value={action.path ?? ""}
+            onChange={(e) => set({ path: e.target.value })}
+          />
+        </div>
+      </Row>
+      <Row label="Body (JSON)">
+        <textarea
+          className={`${input} font-mono`}
+          rows={3}
+          placeholder={'{ "yaw": { "var": "body_yaw" } }'}
+          defaultValue={JSON.stringify(action.body ?? {}, null, 2)}
+          onBlur={(e) => {
+            try {
+              set({ body: JSON.parse(e.target.value || "{}") });
+            } catch {
+              /* keep last valid body; invalid JSON is ignored on blur */
+            }
+          }}
+        />
+      </Row>
+    </>
   );
 }
 

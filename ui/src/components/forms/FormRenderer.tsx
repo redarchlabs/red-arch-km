@@ -1,7 +1,8 @@
 "use client";
 
 import { Plus, Trash2, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, type ReactNode, useEffect, useMemo, useState } from "react";
+import { toast } from "sonner";
 
 import {
   getFormRender,
@@ -10,9 +11,12 @@ import {
   type FormElement,
   type FormRender,
   type FormSubmit,
+  type InputElement,
+  type LiveValueElement,
   type SectionElement,
   type TableElement,
 } from "@/lib/api/forms";
+import { callConnection } from "@/lib/api/workflows";
 import { buildCatalog, type Catalog, fieldMeta, relatedEntityId } from "@/lib/forms/catalog";
 import { evaluate } from "@/lib/forms/jsonLogic";
 
@@ -61,6 +65,212 @@ function nonEmpty(v: Values): boolean {
   return Object.values(v).some((x) => x !== "" && x != null);
 }
 
+/** Collect `input` elements reachable in the root scope (layout containers only, since
+ * section/table/block change entity scope and hold their own values). */
+function collectInputs(elements: FormElement[]): InputElement[] {
+  const out: InputElement[] = [];
+  const walk = (els: FormElement[]) => {
+    for (const el of els) {
+      if (el.type === "input") out.push(el);
+      else if (el.type === "columns") el.columns.forEach((c) => walk(c.elements));
+      else if (el.type === "panel") walk(el.elements);
+      else if (el.type === "tab_group") el.tabs.forEach((t) => walk(t.elements));
+      else if (el.type === "accordion") el.panes.forEach((p) => walk(p.elements));
+    }
+  };
+  walk(elements);
+  return out;
+}
+
+/** Read a dot-path (e.g. `head.pitch`, `items.0.name`) out of a parsed JSON value. */
+function readJsonPointer(data: unknown, pointer?: string | null): unknown {
+  if (!pointer) return data;
+  let cur: unknown = data;
+  for (const part of pointer.split(".")) {
+    if (cur == null || typeof cur !== "object") return undefined;
+    cur = (cur as Record<string, unknown>)[part];
+  }
+  return cur;
+}
+
+/** A read-only readout that polls a CORS-reachable endpoint and shows a JSON value.
+ * Top-level (owns polling state) so it's not re-created each parent render. */
+function LiveValueNode({ el }: { el: LiveValueElement }) {
+  const [value, setValue] = useState<string>("…");
+  const [ok, setOk] = useState(true);
+
+  useEffect(() => {
+    if (!el.url) {
+      setValue("(no url)");
+      return;
+    }
+    let alive = true;
+    const tick = async () => {
+      try {
+        const res = await fetch(el.url, { headers: { Accept: "application/json" } });
+        const json: unknown = await res.json();
+        const picked = readJsonPointer(json, el.json_pointer);
+        if (!alive) return;
+        setOk(true);
+        setValue(picked == null ? "—" : typeof picked === "object" ? JSON.stringify(picked) : String(picked));
+      } catch {
+        if (!alive) return;
+        setOk(false);
+        setValue("unreachable");
+      }
+    };
+    void tick();
+    const id = window.setInterval(tick, Math.max(200, el.poll_ms ?? 1000));
+    return () => {
+      alive = false;
+      window.clearInterval(id);
+    };
+  }, [el.url, el.json_pointer, el.poll_ms]);
+
+  return (
+    <div>
+      {el.label ? <label className="mb-1 block text-sm font-medium">{el.label}</label> : null}
+      <div
+        className={`rounded-md border bg-muted/40 px-3 py-2 text-sm tabular-nums ${
+          ok ? "" : "text-destructive"
+        }`}
+      >
+        {value}
+        {el.units ? <span className="ml-1 text-muted-foreground">{el.units}</span> : null}
+      </div>
+    </div>
+  );
+}
+
+/** A standalone input (text/textarea/number/slider/toggle/select). TOP-LEVEL and driven
+ * by props so its identity is stable across FormRenderer re-renders — otherwise every
+ * keystroke would remount the control and drop focus/scroll (the value lives in the
+ * parent's form state, so it persists regardless). */
+function InputNode({
+  el,
+  value,
+  onChange,
+  disabled,
+}: {
+  el: InputElement;
+  value: unknown;
+  onChange: (v: unknown) => void;
+  disabled: boolean;
+}) {
+  const base = "w-full rounded-md border bg-background px-3 py-2 text-sm disabled:opacity-60";
+  const label = el.label ? (
+    <label className="mb-1 block text-sm font-medium">
+      {el.label}
+      {el.required ? <span className="text-destructive"> *</span> : null}
+    </label>
+  ) : null;
+
+  let control: ReactNode;
+  switch (el.control) {
+    case "textarea":
+      control = (
+        <textarea
+          className={base}
+          rows={3}
+          disabled={disabled}
+          placeholder={el.placeholder ?? undefined}
+          value={value == null ? "" : String(value)}
+          onChange={(e) => onChange(e.target.value)}
+        />
+      );
+      break;
+    case "number":
+      control = (
+        <input
+          type="number"
+          className={base}
+          disabled={disabled}
+          placeholder={el.placeholder ?? undefined}
+          min={el.min ?? undefined}
+          max={el.max ?? undefined}
+          step={el.step ?? undefined}
+          value={value == null ? "" : Number(value)}
+          onChange={(e) => onChange(e.target.value === "" ? null : Number(e.target.value))}
+        />
+      );
+      break;
+    case "slider":
+      control = (
+        <div className="flex items-center gap-3">
+          <input
+            type="range"
+            className="flex-1"
+            disabled={disabled}
+            min={el.min ?? 0}
+            max={el.max ?? 100}
+            step={el.step ?? 1}
+            value={Number(value ?? el.min ?? 0)}
+            onChange={(e) => onChange(Number(e.target.value))}
+          />
+          <span className="w-12 text-right text-sm tabular-nums text-muted-foreground">
+            {value == null ? "—" : String(value)}
+          </span>
+        </div>
+      );
+      break;
+    case "toggle":
+      control = (
+        <button
+          type="button"
+          role="switch"
+          aria-checked={Boolean(value)}
+          disabled={disabled}
+          onClick={() => onChange(!value)}
+          className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors disabled:opacity-60 ${
+            value ? "bg-primary" : "bg-muted"
+          }`}
+        >
+          <span
+            className={`inline-block h-5 w-5 transform rounded-full bg-background shadow transition-transform ${
+              value ? "translate-x-5" : "translate-x-0.5"
+            }`}
+          />
+        </button>
+      );
+      break;
+    case "select":
+      control = (
+        <select
+          className={base}
+          disabled={disabled}
+          value={value == null ? "" : String(value)}
+          onChange={(e) => onChange(e.target.value)}
+        >
+          <option value="">—</option>
+          {(el.options ?? []).map((opt) => (
+            <option key={opt.value} value={opt.value}>
+              {opt.label ?? opt.value}
+            </option>
+          ))}
+        </select>
+      );
+      break;
+    default:
+      control = (
+        <input
+          type="text"
+          className={base}
+          disabled={disabled}
+          placeholder={el.placeholder ?? undefined}
+          value={value == null ? "" : String(value)}
+          onChange={(e) => onChange(e.target.value)}
+        />
+      );
+  }
+  return (
+    <div>
+      {label}
+      {control}
+      {el.help_text ? <p className="mt-1 text-xs text-muted-foreground">{el.help_text}</p> : null}
+    </div>
+  );
+}
+
 export function FormRenderer({
   render,
   mode = "fill",
@@ -96,6 +306,24 @@ export function FormRenderer({
     setRows(relId, rows);
   };
 
+  // Seed standalone-input defaults into root state once, so a button's workflow inputs /
+  // connection body see the default even if the operator never touched the control.
+  useEffect(() => {
+    const inputs = collectInputs(render.config.elements);
+    setValues((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      for (const el of inputs) {
+        if (next[el.key] === undefined && el.default !== undefined && el.default !== null) {
+          next[el.key] = el.default;
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [render]);
+
   const buildPayload = (): FormSubmit => {
     const outRelated: FormSubmit["related"] = {};
     for (const [relId, st] of Object.entries(related)) {
@@ -117,6 +345,23 @@ export function FormRenderer({
       const inputs: Record<string, unknown> = {};
       for (const [k, expr] of Object.entries(btn.action.inputs)) inputs[k] = evaluate(expr, values);
       await onRunWorkflow?.(btn.action.workflow_id, inputs);
+    } else if (btn.action.kind === "call_connection") {
+      const action = btn.action;
+      if (action.confirm && !window.confirm(action.confirm)) return;
+      const body: Record<string, unknown> = {};
+      for (const [k, expr] of Object.entries(action.body)) body[k] = evaluate(expr, values);
+      try {
+        const res = await callConnection({
+          connection: action.connection,
+          method: action.method,
+          path: action.path,
+          body,
+        });
+        if (res.ok) toast.success(action.success_message ?? "Done");
+        else toast.error(`Request failed (${res.status_code})`);
+      } catch (err: unknown) {
+        toast.error(err instanceof Error ? err.message : "Connection call failed");
+      }
     } else if (btn.action.kind === "link") {
       if (typeof window !== "undefined") {
         if (btn.action.new_tab) window.open(btn.action.href, "_blank");
@@ -132,15 +377,20 @@ export function FormRenderer({
     keyPrefix: "root",
   };
 
+  // Render the list by CALLING ElementNode (and its sub-nodes) as functions rather than
+  // mounting them as components. These node fns hold no hooks, so inlining them means a
+  // FormRenderer re-render (e.g. a keystroke) DIFFS the DOM in place instead of remounting
+  // the whole tree — inputs keep focus/scroll. Only true stateful leaves (FieldControl,
+  // InputNode, LiveValueNode, EmbeddedForm) stay real components with stable identity.
   const renderList = (elements: FormElement[], scope: Scope) => (
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-12">
       {elements.map((el, i) => (
-        <ElementNode key={el.id ?? `${scope.keyPrefix}-${i}`} el={el} scope={scope} />
+        <Fragment key={el.id ?? `${scope.keyPrefix}-${i}`}>{ElementNode({ el, scope })}</Fragment>
       ))}
     </div>
   );
 
-  function ElementNode({ el, scope }: { el: FormElement; scope: Scope }) {
+  function ElementNode({ el, scope }: { el: FormElement; scope: Scope }): ReactNode {
     switch (el.type) {
       case "field": {
         const meta = fieldMeta(catalog, scope.entityId, el.slug);
@@ -163,23 +413,28 @@ export function FormRenderer({
         );
       }
       case "label":
+        return <div className={spanClass(el.width)}>{LabelNode({ el })}</div>;
+      case "calculated":
+        return <div className={spanClass(el.width)}>{CalculatedNode({ el, scope })}</div>;
+      case "input":
         return (
           <div className={spanClass(el.width)}>
-            <LabelNode el={el} />
+            <InputNode
+              el={el}
+              value={scope.values[el.key]}
+              onChange={(v) => scope.setValue(el.key, v)}
+              disabled={preview}
+            />
           </div>
         );
-      case "calculated":
+      case "live_value":
         return (
           <div className={spanClass(el.width)}>
-            <CalculatedNode el={el} scope={scope} />
+            <LiveValueNode el={el} />
           </div>
         );
       case "button":
-        return (
-          <div className={spanClass(el.width)}>
-            <ButtonNode el={el} />
-          </div>
-        );
+        return <div className={spanClass(el.width)}>{ButtonNode({ el })}</div>;
       case "form_ref":
         return (
           <div className="sm:col-span-12 space-y-2 border-t pt-4">
@@ -213,15 +468,15 @@ export function FormRenderer({
           </fieldset>
         );
       case "tab_group":
-        return <TabGroupNode el={el} scope={scope} />;
+        return TabGroupNode({ el, scope });
       case "accordion":
-        return <AccordionNode el={el} scope={scope} />;
+        return AccordionNode({ el, scope });
       case "section":
-        return <SectionNode el={el} />;
+        return SectionNode({ el });
       case "table":
-        return <TableNode el={el} />;
+        return TableNode({ el });
       case "block":
-        return <BlockNode el={el} />;
+        return BlockNode({ el });
       default:
         return null;
     }

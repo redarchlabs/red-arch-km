@@ -406,21 +406,40 @@ def _is_private_host(host: str) -> bool:
     return ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
 
 
-def _check_outbound_host(host: str, scheme: str, ctx: ActionContext, *, action: str) -> None:
-    """Shared deny-by-default SSRF guard for outbound HTTP actions.
+def assert_outbound_host_allowed(
+    host: str,
+    scheme: str,
+    *,
+    webhook_allowlist: tuple[str, ...],
+    trusted_local_hosts: tuple[str, ...],
+    action: str,
+) -> None:
+    """Shared deny-by-default SSRF guard for outbound HTTP (the raw form).
 
     A host may be reached when it is EITHER allow-listed OR listed as a trusted
     local host. Trusted local hosts additionally bypass the private/loopback-IP
     rejection — they exist precisely to reach a bridge on localhost/LAN (e.g. a
     robot-control server). Every other host must still not resolve to a private
     address, even if allow-listed (guards against a rebinding mistake). Raises
-    :class:`ActionError` when the host is not permitted.
+    :class:`ActionError` when the host is not permitted. Reused by the form
+    ``call_connection`` endpoint so button-driven calls get the identical guard.
     """
-    trusted = host in ctx.trusted_local_hosts
-    if scheme not in ("http", "https") or (host not in ctx.webhook_allowlist and not trusted):
+    trusted = host in trusted_local_hosts
+    if scheme not in ("http", "https") or (host not in webhook_allowlist and not trusted):
         raise ActionError(f"{action} host not allow-listed: {host or scheme!r}")
     if not trusted and _is_private_host(host):
         raise ActionError(f"{action} host resolves to a private address: {host}")
+
+
+def _check_outbound_host(host: str, scheme: str, ctx: ActionContext, *, action: str) -> None:
+    """SSRF guard bound to an :class:`ActionContext` (workflow-execution path)."""
+    assert_outbound_host_allowed(
+        host,
+        scheme,
+        webhook_allowlist=ctx.webhook_allowlist,
+        trusted_local_hosts=ctx.trusted_local_hosts,
+        action=action,
+    )
 
 
 def _require(config: dict[str, Any], *keys: str) -> list[Any]:
