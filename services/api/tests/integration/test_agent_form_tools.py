@@ -165,7 +165,7 @@ async def test_agent_create_form_rejects_unknown_entity(engine: AsyncEngine, adm
     org = await _org(admin_session)
     agent = _agent(engine, org.id)
     result = await agent._dispatch("create_form", {"name": "Ghost", "entity_slug": "ghost"})
-    assert result == {"error": "entity not found: 'ghost'"}
+    assert result["error"] == "entity not found: 'ghost'"  # a recovery `hint` may also be present
 
 
 async def test_agent_create_form_rejects_unknown_field(engine: AsyncEngine, admin_session: AsyncSession) -> None:
@@ -228,6 +228,88 @@ async def test_agent_standalone_view_rejects_entity_bound_element(
         {"name": "Bad", "config": {"version": 2, "elements": [{"type": "field", "slug": "x"}]}},
     )
     assert "error" in result  # field requires an entity-bound view
+
+
+async def test_agent_create_form_returns_located_validation_error(
+    engine: AsyncEngine, admin_session: AsyncSession
+) -> None:
+    """A malformed element yields a LOCATED error the model can repair from.
+
+    Regression for the opaque "invalid arguments: Field required" that gave the
+    LLM no idea which element/field was wrong, so it retried blindly to the step
+    limit. The message must now name the path (element index + field).
+    """
+    org = await _org(admin_session)
+    agent = _agent(engine, org.id)
+    await _seed_customer_entity(agent)
+
+    result = await agent._dispatch(
+        "create_form",
+        {
+            "name": "Bad Tree",
+            "entity_slug": "customer",
+            "config": {"version": 2, "elements": [{"type": "field", "label": "no slug"}]},
+        },
+    )
+    assert "error" in result
+    assert "elements.0" in result["error"]  # located to the offending element
+    assert "slug" in result["error"] and "required" in result["error"].lower()
+
+
+async def test_agent_validate_form_layout_dry_run(engine: AsyncEngine, admin_session: AsyncSession) -> None:
+    """validate_form_layout checks a tree without persisting anything."""
+    org = await _org(admin_session)
+    agent = _agent(engine, org.id)
+    await _seed_customer_entity(agent)
+
+    # Structural failure (missing required field) → located error, nothing saved.
+    bad = await agent._dispatch(
+        "validate_form_layout",
+        {"config": {"version": 2, "elements": [{"type": "field"}]}},
+    )
+    assert bad["valid"] is False
+    assert "slug" in str(bad["errors"])
+
+    # Binding failure — field slug doesn't exist on the entity.
+    unbound = await agent._dispatch(
+        "validate_form_layout",
+        {"entity_slug": "customer", "config": {"version": 2, "elements": [{"type": "field", "slug": "ghost"}]}},
+    )
+    assert unbound["valid"] is False
+
+    # A valid tree against the entity passes.
+    ok = await agent._dispatch(
+        "validate_form_layout",
+        {"entity_slug": "customer", "config": {"version": 2, "elements": [{"type": "field", "slug": "email"}]}},
+    )
+    assert ok["valid"] is True
+
+    # Dry-run persists nothing.
+    assert await agent._dispatch("list_forms", {}) == {"forms": []}
+
+
+async def test_agent_describe_reference_tools(engine: AsyncEngine, admin_session: AsyncSession) -> None:
+    """The on-demand reference tools expose the element + action vocabularies."""
+    org = await _org(admin_session)
+    agent = _agent(engine, org.id)
+
+    elements = await agent._dispatch("describe_form_elements", {})
+    assert {"field", "button", "table", "form_ref"}.issubset(elements["elements"].keys())
+
+    actions = await agent._dispatch("describe_workflow_actions", {})
+    assert "send_webhook" in actions["actions"]
+    assert "url" in actions["actions"]["send_webhook"]["config"]
+
+
+async def test_reference_tools_are_not_admin_gated(engine: AsyncEngine, admin_session: AsyncSession) -> None:
+    """Pure-reference describe tools work for non-admins (no tenant data)."""
+    org = await _org(admin_session)
+    member = _member_agent(engine, org.id)
+    assert "elements" in await member._dispatch("describe_form_elements", {})
+    assert "actions" in await member._dispatch("describe_workflow_actions", {})
+    # ...but the mutating dry-run stays admin-only.
+    gated = await member._dispatch("validate_form_layout", {"config": {"version": 2, "elements": []}})
+    assert "organization-admin" in gated["error"]
 
 
 async def test_form_and_view_tools_are_admin_only(engine: AsyncEngine, admin_session: AsyncSession) -> None:

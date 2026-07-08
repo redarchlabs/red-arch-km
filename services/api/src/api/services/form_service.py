@@ -215,6 +215,15 @@ class FormService:
         except LayoutError as exc:
             raise FormValidationError(str(exc)) from exc
 
+    async def validate_layout(self, entity_definition_id: uuid.UUID, config: FormConfig) -> None:
+        """Validate a layout tree against an entity WITHOUT persisting.
+
+        Public entry point for dry-run validation (agent ``validate_form_layout``
+        tool). Raises ``FormError`` (FormNotFoundError / FormValidationError) with
+        an actionable message; returns None when the tree is valid.
+        """
+        await self._validate_config(entity_definition_id, config)
+
     async def create_form(self, body: FormCreate) -> Form:
         if await self._forms.count() >= MAX_FORMS_PER_ORG:
             raise FormConflictError(f"max {MAX_FORMS_PER_ORG} forms per org")

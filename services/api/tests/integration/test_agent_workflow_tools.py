@@ -350,7 +350,7 @@ async def test_agent_get_workflow_run_unknown(engine: AsyncEngine, admin_session
     org = await _org(admin_session)
     agent = _agent(engine, org.id)
     result = await agent._dispatch("get_workflow_run", {"run_id": str(uuid.uuid4())})
-    assert result == {"error": "run not found"}
+    assert result["error"] == "run not found"  # a recovery `hint` may also be present
 
 
 async def test_agent_retry_rejects_non_failed_run(engine: AsyncEngine, admin_session: AsyncSession) -> None:
@@ -519,4 +519,83 @@ async def test_agent_complete_task_rejects_non_waiting_run(engine: AsyncEngine, 
     org = await _org(admin_session)
     agent = _agent(engine, org.id)
     result = await agent._dispatch("complete_workflow_task", {"run_id": str(uuid.uuid4())})
-    assert result == {"error": "run not found"}
+    assert result["error"] == "run not found"  # a recovery `hint` may also be present
+
+
+async def test_agent_create_workflow_with_send_webhook(engine: AsyncEngine, admin_session: AsyncSession) -> None:
+    """The simple builder now supports send_webhook — the exact step needed to
+    'POST a value to a REST endpoint' — so the robot use case is ONE create_workflow
+    call, not a hand-authored BPMN graph.
+    """
+    org = await _org(admin_session)
+    agent = _agent(engine, org.id)
+    await _seed_ticket_entity(agent)
+
+    created = await agent._dispatch(
+        "create_workflow",
+        {
+            "name": "Post to robot",
+            "entity_slug": "ticket",
+            "operations": ["create"],
+            "actions": [{"type": "send_webhook", "url": "https://robot.example.com/say", "body": {"channel": "voice"}}],
+        },
+    )
+    assert "error" not in created, created
+    assert created["actions"] == ["send_webhook"]
+    # trigger + one action node.
+    assert created["definition_summary"] == {"nodes": 2, "edges": 1}
+
+    # The saved draft graph carries the webhook action + config (verifiable via get_workflow).
+    got = await agent._dispatch("get_workflow", {"workflow_id": created["created_workflow"]["id"]})
+    action_nodes = [n for n in got["workflow"]["definition"]["nodes"] if n["type"] == "action"]
+    assert len(action_nodes) == 1
+    assert action_nodes[0]["data"]["action_type"] == "send_webhook"
+    assert action_nodes[0]["data"]["config"]["url"] == "https://robot.example.com/say"
+
+
+async def test_agent_create_workflow_send_webhook_requires_url(engine: AsyncEngine, admin_session: AsyncSession) -> None:
+    org = await _org(admin_session)
+    agent = _agent(engine, org.id)
+    await _seed_ticket_entity(agent)
+    result = await agent._dispatch(
+        "create_workflow",
+        {"name": "Bad", "entity_slug": "ticket", "actions": [{"type": "send_webhook"}]},
+    )
+    assert result == {"error": "send_webhook action requires url"}
+
+
+async def test_agent_describe_bpmn_vocabulary(engine: AsyncEngine, admin_session: AsyncSession) -> None:
+    """On-demand BPMN reference for full-graph authoring (ungated, no DB)."""
+    org = await _org(admin_session)
+    agent = _agent(engine, org.id)
+    vocab = await agent._dispatch("describe_bpmn_vocabulary", {})
+    assert {"trigger", "task", "gateway", "event"}.issubset(vocab["node_types"].keys())
+    assert "schema_version" in vocab["graph_shape"]
+
+
+async def test_agent_describe_workflow_actions_has_quick_pick(engine: AsyncEngine, admin_session: AsyncSession) -> None:
+    org = await _org(admin_session)
+    agent = _agent(engine, org.id)
+    actions = await agent._dispatch("describe_workflow_actions", {})
+    # The quick-picker maps intents → action type so the model doesn't guess.
+    assert actions["quick_pick"]["POST to an external URL (simple)"] == "send_webhook"
+
+
+async def test_agent_error_results_carry_recovery_hints(engine: AsyncEngine, admin_session: AsyncSession) -> None:
+    """Failed tool calls attach a contextual `hint` (progressive disclosure —
+    the recovery move rides the error, not the always-on system prompt)."""
+    org = await _org(admin_session)
+    agent = _agent(engine, org.id)
+    await _seed_ticket_entity(agent)
+
+    # 'not found' → verify-with-a-listing-tool hint.
+    nf = await agent._dispatch("create_workflow", {"name": "X", "entity_slug": "ghost"})
+    assert "hint" in nf and "list_" in nf["hint"]
+
+    # A form validation failure → dry-run-with-validate_form_layout hint.
+    await agent._dispatch("create_entity", {"name": "Person", "fields": [{"name": "Email", "field_type": "text"}]})
+    bad = await agent._dispatch(
+        "create_form",
+        {"name": "Bad", "entity_slug": "person", "config": {"version": 2, "elements": [{"type": "field"}]}},
+    )
+    assert "hint" in bad and "validate_form_layout" in bad["hint"]
