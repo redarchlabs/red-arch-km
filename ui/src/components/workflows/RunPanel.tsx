@@ -5,10 +5,21 @@ import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import {
+  ManualRunInputs,
+  collectDeclaredInputs,
+  missingRequiredInputs,
+} from "@/components/workflows/ManualRunInputs";
 import type { EntityField } from "@/lib/api/entities";
 import { listRecords, type EntityRecord } from "@/lib/api/entityRecords";
 import { getApiErrorMessage } from "@/lib/api/errors";
-import { runWorkflow, updateWorkflow, type RunPermission, type RunPermissionMode } from "@/lib/api/workflows";
+import {
+  runWorkflow,
+  updateWorkflow,
+  type RunPermission,
+  type RunPermissionMode,
+  type TriggerInput,
+} from "@/lib/api/workflows";
 
 const selectClass = "h-9 w-full rounded-md border bg-background px-2 text-sm";
 
@@ -33,12 +44,26 @@ interface Props {
   onPermissionSaved: (p: RunPermission) => void;
   /** True if the workflow has a published version (manual run needs one). */
   canRun: boolean;
+  /** True for a manual (on-demand) workflow — run it with declared input variables. */
+  isManual?: boolean;
+  /** The input variables the manual trigger declares (from the published version). */
+  manualInputs?: TriggerInput[];
 }
 
-export function RunPanel({ workflowId, entitySlug, fields, runPermission, onPermissionSaved, canRun }: Props) {
+export function RunPanel({
+  workflowId,
+  entitySlug,
+  fields,
+  runPermission,
+  onPermissionSaved,
+  canRun,
+  isManual = false,
+  manualInputs = [],
+}: Props) {
   const [operation, setOperation] = useState("update");
   const [records, setRecords] = useState<EntityRecord[]>([]);
   const [recordId, setRecordId] = useState("");
+  const [inputValues, setInputValues] = useState<Record<string, unknown>>({});
   const [running, setRunning] = useState(false);
   const [perm, setPerm] = useState<RunPermission>(runPermission);
   const [savingPerm, setSavingPerm] = useState(false);
@@ -57,10 +82,30 @@ export function RunPanel({ workflowId, entitySlug, fields, runPermission, onPerm
   }, [entitySlug]);
 
   useEffect(() => {
+    if (isManual) return;
     void loadRecords();
-  }, [loadRecords]);
+  }, [loadRecords, isManual]);
 
-  const handleRun = async () => {
+  const setInput = (key: string, value: unknown) => setInputValues((prev) => ({ ...prev, [key]: value }));
+
+  const missingRequired = missingRequiredInputs(manualInputs, inputValues);
+
+  const runManual = async () => {
+    setRunning(true);
+    try {
+      // Only send declared keys; the backend coerces + re-validates against the schema.
+      const result = await runWorkflow(workflowId, {
+        inputs: collectDeclaredInputs(manualInputs, inputValues),
+      });
+      reportResult(result);
+    } catch (e: unknown) {
+      toast.error(getApiErrorMessage(e, "Run failed"));
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  const runAgainstRecord = async () => {
     setRunning(true);
     try {
       const record = records.find((r) => r.id === recordId);
@@ -73,19 +118,23 @@ export function RunPanel({ workflowId, entitySlug, fields, runPermission, onPerm
         before: after,
         after,
       });
-      if (result.status === "succeeded") {
-        toast.success(`Ran — ${result.actions_executed} action(s) executed`);
-      } else if (result.status === "waiting") {
-        toast.info(`Ran — ${result.actions_executed} action(s), now waiting at a delay`);
-      } else if (result.status === "skipped") {
-        toast.info("Ran — conditions did not match, no actions executed");
-      } else {
-        toast.error(`Run ${result.status}: ${result.error ?? "see run history"}`);
-      }
+      reportResult(result);
     } catch (e: unknown) {
       toast.error(getApiErrorMessage(e, "Run failed"));
     } finally {
       setRunning(false);
+    }
+  };
+
+  const reportResult = (result: Awaited<ReturnType<typeof runWorkflow>>) => {
+    if (result.status === "succeeded") {
+      toast.success(`Ran — ${result.actions_executed} action(s) executed`);
+    } else if (result.status === "waiting") {
+      toast.info(`Ran — ${result.actions_executed} action(s), now waiting at a delay`);
+    } else if (result.status === "skipped") {
+      toast.info("Ran — conditions did not match, no actions executed");
+    } else {
+      toast.error(`Run ${result.status}: ${result.error ?? "see run history"}`);
     }
   };
 
@@ -107,12 +156,22 @@ export function RunPanel({ workflowId, entitySlug, fields, runPermission, onPerm
       <div>
         <h3 className="text-sm font-semibold">Run now (real)</h3>
         <p className="text-xs text-muted-foreground">
-          Executes the published workflow for real against the record you pick. Writes data and records a run.
+          {isManual
+            ? "Runs the published workflow on demand with the inputs you provide. Writes data and records a run."
+            : "Executes the published workflow for real against the record you pick. Writes data and records a run."}
         </p>
       </div>
 
       {!canRun ? (
         <p className="text-xs text-muted-foreground">Publish the workflow first to run it.</p>
+      ) : isManual ? (
+        <div className="space-y-3">
+          <ManualRunInputs inputs={manualInputs} values={inputValues} onChange={setInput} />
+          <Button onClick={() => void runManual()} disabled={running || missingRequired} size="sm">
+            <Play className="h-4 w-4" />
+            {running ? "Running…" : "Run for real"}
+          </Button>
+        </div>
       ) : (
         <div className="space-y-2">
           <div className="flex gap-2">
@@ -135,7 +194,7 @@ export function RunPanel({ workflowId, entitySlug, fields, runPermission, onPerm
           ) : (
             <p className="text-xs text-muted-foreground">No records in this entity to run against.</p>
           )}
-          <Button onClick={() => void handleRun()} disabled={running || !recordId} size="sm">
+          <Button onClick={() => void runAgainstRecord()} disabled={running || !recordId} size="sm">
             <Play className="h-4 w-4" />
             {running ? "Running…" : "Run for real"}
           </Button>

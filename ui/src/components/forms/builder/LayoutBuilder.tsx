@@ -2,6 +2,8 @@
 
 import { ChevronDown, ChevronUp, Plus, Trash2 } from "lucide-react";
 
+import { useHelpOverride } from "@/context/HelpContext";
+import { helpForElement } from "@/lib/builderHelp";
 import type { EntityDefinition, EntityField, EntityRelationship } from "@/lib/api/entities";
 import type {
   ButtonElement,
@@ -50,6 +52,10 @@ interface LayoutBuilderProps {
 }
 
 export function LayoutBuilder({ elements, entityId, ctx, onChange, allow = "all" }: LayoutBuilderProps) {
+  // Focusing anything inside an element's card shows that element's help. Focus
+  // capture runs outermost-first, so for nested containers the innermost (most
+  // specific) element sets the help last and wins.
+  const setHelp = useHelpOverride();
   const updateAt = (i: number, el: FormElement) => onChange(elements.map((e, j) => (j === i ? el : e)));
   const removeAt = (i: number) => onChange(elements.filter((_, j) => j !== i));
   const move = (i: number, d: -1 | 1) => {
@@ -64,7 +70,7 @@ export function LayoutBuilder({ elements, entityId, ctx, onChange, allow = "all"
   return (
     <div className="space-y-2">
       {elements.map((el, i) => (
-        <div key={el.id ?? i} className={box}>
+        <div key={el.id ?? i} className={box} onFocusCapture={() => setHelp(helpForElement(el.type))}>
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold uppercase text-muted-foreground">
               {KIND_LABELS[el.type]}

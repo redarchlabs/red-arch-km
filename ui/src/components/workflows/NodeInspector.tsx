@@ -195,7 +195,11 @@ function TaskFields({
           triggerFields={triggerFields}
         />
       )}
-      <RetryFields data={data} onReplace={(next) => onChangeData(nodeId, next)} />
+      {/* Script tasks always succeed and advance (pure, side-effect-free), so
+          retry / continue-on-failure have nothing to act on — hide them there. */}
+      {taskType === "script" ? null : (
+        <RetryFields data={data} onReplace={(next) => onChangeData(nodeId, next)} />
+      )}
     </div>
   );
 }
@@ -521,6 +525,107 @@ function EventFields({
   );
 }
 
+const INPUT_TYPES = ["text", "number", "boolean"] as const;
+
+interface TriggerInput {
+  key: string;
+  label: string;
+  type: string;
+  required: boolean;
+}
+
+/** Constrain a label to a safe variable key: lowercase, [a-z0-9_], no edges. */
+function slugifyKey(raw: string): string {
+  return raw
+    .toLowerCase()
+    .replace(/[^a-z0-9_]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 64);
+}
+
+function ManualInputsEditor({
+  inputs,
+  onChange,
+}: {
+  inputs: TriggerInput[];
+  onChange: (next: TriggerInput[]) => void;
+}) {
+  const update = (i: number, next: Partial<TriggerInput>) =>
+    onChange(inputs.map((row, idx) => (idx === i ? { ...row, ...next } : row)));
+  const remove = (i: number) => onChange(inputs.filter((_, idx) => idx !== i));
+  const add = () => onChange([...inputs, { key: "", label: "", type: "text", required: false }]);
+
+  return (
+    <div className="space-y-2">
+      <label className="text-xs font-medium text-muted-foreground">Input variables</label>
+      <p className="text-xs text-muted-foreground">
+        Values the person running this workflow provides. Reference them anywhere with{" "}
+        <code className="rounded bg-muted px-1 py-0.5 text-[11px]">{"{{ inputs.key }}"}</code>.
+      </p>
+      {inputs.length === 0 ? (
+        <p className="text-xs text-muted-foreground">No inputs yet — add one below.</p>
+      ) : (
+        <div className="space-y-2">
+          {inputs.map((row, i) => (
+            <div key={i} className="space-y-1.5 rounded-md border p-2">
+              <div className="flex gap-2">
+                <Input
+                  value={row.label}
+                  onChange={(e) => {
+                    const label = e.target.value;
+                    // Keep the key in step with the label until the user hand-edits it.
+                    update(i, row.key === "" || row.key === slugifyKey(row.label) ? { label, key: slugifyKey(label) } : { label });
+                  }}
+                  placeholder="Label (e.g. Customer email)"
+                  className="h-8"
+                />
+                <button
+                  type="button"
+                  onClick={() => remove(i)}
+                  className="text-muted-foreground hover:text-destructive"
+                  aria-label="Remove input"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </div>
+              <div className="flex items-center gap-2">
+                <Input
+                  value={row.key}
+                  onChange={(e) => update(i, { key: slugifyKey(e.target.value) })}
+                  placeholder="key"
+                  className="h-8 flex-1 font-mono text-xs"
+                />
+                <select
+                  value={row.type}
+                  onChange={(e) => update(i, { type: e.target.value })}
+                  className="h-8 rounded-md border bg-background px-2 text-sm"
+                >
+                  {INPUT_TYPES.map((t) => (
+                    <option key={t} value={t}>
+                      {t}
+                    </option>
+                  ))}
+                </select>
+                <label className="flex items-center gap-1.5 whitespace-nowrap text-sm">
+                  <input
+                    type="checkbox"
+                    checked={row.required}
+                    onChange={(e) => update(i, { required: e.target.checked })}
+                  />
+                  required
+                </label>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      <Button type="button" variant="outline" size="sm" onClick={add}>
+        Add input
+      </Button>
+    </div>
+  );
+}
+
 function TriggerFields({
   data,
   patch,
@@ -550,9 +655,36 @@ function TriggerFields({
   const source = (data.source as string | undefined) ?? "any";
   const schedule = (data.schedule as { every_minutes?: number } | undefined) ?? {};
   const everyMinutes = Number(schedule.every_minutes ?? 0);
+  const manualInputs = (data.inputs as TriggerInput[] | undefined) ?? [];
+  const startType = source === "manual" ? "manual" : "data";
+
+  const setStartType = (next: string) => {
+    if (next === "manual") {
+      // BPMN "none" start event: on-demand only. Clear change-stream config so the
+      // node has one clear meaning; keep any inputs already declared.
+      patch({ source: "manual", operations: [], field_filter: [], schedule: undefined });
+    } else {
+      patch({ source: "any", operations: operations.length > 0 ? operations : ["update"], inputs: undefined });
+    }
+  };
 
   return (
     <div className="space-y-3">
+      <div>
+        <label className="text-xs font-medium text-muted-foreground">Start type</label>
+        <select value={startType} onChange={(e) => setStartType(e.target.value)} className={`${selectClass} mt-1`}>
+          <option value="data">When records change / on a schedule</option>
+          <option value="manual">On demand (run with inputs)</option>
+        </select>
+      </div>
+
+      {startType === "manual" ? (
+        <ManualInputsEditor
+          inputs={manualInputs}
+          onChange={(next) => patch({ inputs: next })}
+        />
+      ) : (
+        <>
       <div>
         <label className="text-xs font-medium text-muted-foreground">Fire on</label>
         <div className="mt-1 flex gap-3">
@@ -631,6 +763,8 @@ function TriggerFields({
           <em> only</em> on a schedule, uncheck all &ldquo;Fire on&rdquo; operations above.
         </p>
       </div>
+        </>
+      )}
     </div>
   );
 }

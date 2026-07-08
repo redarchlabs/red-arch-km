@@ -54,10 +54,19 @@ export interface Workflow {
   id: string;
   name: string;
   description: string | null;
-  entity_definition_id: string;
+  // null for a manual (on-demand) workflow with a BPMN "none" start event.
+  entity_definition_id: string | null;
   enabled: boolean;
   active_version_id: string | null;
   run_permission: RunPermission;
+}
+
+/** A variable a manual trigger declares; the caller supplies a value at run time. */
+export interface TriggerInput {
+  key: string;
+  label: string;
+  type: "text" | "number" | "boolean";
+  required: boolean;
 }
 
 export interface ManualRunResult {
@@ -129,7 +138,8 @@ export async function getWorkflow(id: string): Promise<Workflow> {
 
 export async function createWorkflow(input: {
   name: string;
-  entity_definition_id: string;
+  // Omit / null for a manual (on-demand) workflow not bound to an entity.
+  entity_definition_id?: string | null;
   description?: string | null;
 }): Promise<Workflow> {
   return (await apiClient.post<Workflow>("/workflows/", input)).data;
@@ -151,10 +161,12 @@ export async function updateWorkflow(
 export async function runWorkflow(
   id: string,
   input: {
-    operation: string;
+    operation?: string;
     record_id?: string | null;
     before?: Record<string, unknown> | null;
     after?: Record<string, unknown> | null;
+    // Caller-supplied variables for a manual (on-demand) workflow.
+    inputs?: Record<string, unknown>;
   },
 ): Promise<ManualRunResult> {
   return (await apiClient.post<ManualRunResult>(`/workflows/${id}/run`, input)).data;
@@ -179,13 +191,28 @@ export async function publishVersion(id: string, versionId: string): Promise<Wor
 export async function testVersion(
   id: string,
   versionId: string,
-  input: { operation: string; before?: Record<string, unknown> | null; after?: Record<string, unknown> | null },
+  input: {
+    operation: string;
+    before?: Record<string, unknown> | null;
+    after?: Record<string, unknown> | null;
+    inputs?: Record<string, unknown>;
+  },
 ): Promise<WorkflowTestResult> {
   return (await apiClient.post<WorkflowTestResult>(`/workflows/${id}/versions/${versionId}/test`, input)).data;
 }
 
 export async function listRuns(id: string, limit = 50): Promise<WorkflowRun[]> {
   return (await apiClient.get<WorkflowRun[]>(`/workflows/${id}/runs`, { params: { limit } })).data;
+}
+
+/** A run row for the org-wide activity feed — carries the parent workflow's name. */
+export interface WorkflowRunActivity extends WorkflowRun {
+  workflow_name: string;
+}
+
+/** Most-recent runs across every workflow in the org (the workflows activity feed). */
+export async function listRecentRuns(limit = 25): Promise<WorkflowRunActivity[]> {
+  return (await apiClient.get<WorkflowRunActivity[]>("/workflows/runs/recent", { params: { limit } })).data;
 }
 
 export async function listRunSteps(runId: string): Promise<WorkflowRunStep[]> {

@@ -6,6 +6,7 @@ import { use, useCallback, useEffect, useMemo, useState } from "react";
 
 import { FormPreview } from "@/components/forms/FormPreview";
 import { LayoutBuilder, type BuilderCtx } from "@/components/forms/builder/LayoutBuilder";
+import { useHelpOverride } from "@/context/HelpContext";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -23,6 +24,10 @@ import { buildRenderFromConfig } from "@/lib/forms/catalogFromEntities";
 
 export default function ViewBuilderPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
+
+  // The builder pushes per-element help on focus; clear it when leaving the page.
+  const clearHelp = useHelpOverride();
+  useEffect(() => () => clearHelp(null), [clearHelp]);
 
   const [view, setView] = useState<View | null>(null);
   const [elements, setElements] = useState<FormElement[]>([]);

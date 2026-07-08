@@ -17,7 +17,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Pagination } from "@/components/ui/pagination";
 import { Skeleton } from "@/components/ui/skeleton";
+import { WorkflowActivity } from "@/components/workflows/WorkflowActivity";
 import { listEntities, type EntityDefinition } from "@/lib/api/entities";
 import { getApiErrorMessage } from "@/lib/api/errors";
 import {
@@ -29,6 +31,7 @@ import {
 } from "@/lib/api/workflows";
 
 const selectClass = "h-9 rounded-md border bg-background px-2 text-sm";
+const PAGE_SIZE = 8;
 
 export default function WorkflowsPage() {
   const [items, setItems] = useState<Workflow[]>([]);
@@ -38,8 +41,18 @@ export default function WorkflowsPage() {
   const [newName, setNewName] = useState("");
   const [entityId, setEntityId] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [page, setPage] = useState(1);
 
-  const entityName = (id: string) => entities.find((e) => e.id === id)?.name ?? "—";
+  const entityName = (id: string | null) =>
+    id == null ? null : (entities.find((e) => e.id === id)?.name ?? "—");
+
+  const pageCount = Math.max(1, Math.ceil(items.length / PAGE_SIZE));
+  const pageItems = items.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+
+  // Keep the page in range as the list shrinks (delete) or grows (create).
+  useEffect(() => {
+    if (page > pageCount) setPage(pageCount);
+  }, [page, pageCount]);
 
   const load = useCallback(async () => {
     setIsLoading(true);
@@ -62,11 +75,12 @@ export default function WorkflowsPage() {
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
     const name = newName.trim();
-    if (!name || !entityId || isSubmitting) return;
+    if (!name || isSubmitting) return;
     setIsSubmitting(true);
     setError(null);
     try {
-      await createWorkflow({ name, entity_definition_id: entityId });
+      // Empty entity => a manual (on-demand) workflow with a BPMN "none" start event.
+      await createWorkflow({ name, entity_definition_id: entityId || null });
       setNewName("");
       setEntityId("");
       await load();
@@ -102,7 +116,8 @@ export default function WorkflowsPage() {
         <div>
           <h1 className="text-2xl font-semibold">Workflows</h1>
           <p className="text-sm text-muted-foreground">
-            Rules that fire when entity records change. Design them visually, test, then publish.
+            Automations that fire on record changes or run on demand with inputs. Design them visually,
+            test, then publish.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -143,36 +158,38 @@ export default function WorkflowsPage() {
               className={selectClass}
               disabled={isSubmitting}
             >
-              <option value="">On entity…</option>
+              <option value="">On demand (no entity)</option>
               {entities.map((ent) => (
                 <option key={ent.id} value={ent.id}>
-                  {ent.name}
+                  On {ent.name}
                 </option>
               ))}
             </select>
-            <Button type="submit" disabled={isSubmitting || !newName.trim() || !entityId}>
+            <Button type="submit" disabled={isSubmitting || !newName.trim()}>
               <Plus className="h-4 w-4" />
               Create
             </Button>
           </form>
-          {entities.length === 0 ? (
-            <p className="text-xs text-amber-600 dark:text-amber-500">
-              Create an entity first — workflows fire on entity record changes.
-            </p>
-          ) : null}
+          <p className="text-xs text-muted-foreground">
+            Bind a workflow to an entity to fire on record changes, or pick <em>On demand</em> to run it
+            manually with input variables.
+          </p>
 
           {error ? <p className="text-sm text-destructive">{error}</p> : null}
 
           {isLoading ? (
             <Skeleton className="h-10 w-full" />
           ) : items.length > 0 ? (
-            <ul className="divide-y rounded-md border">
-              {items.map((wf) => (
+            <div className="space-y-2">
+              <ul className="max-h-[26rem] divide-y overflow-y-auto rounded-md border">
+              {pageItems.map((wf) => (
                 <li key={wf.id} className="flex items-center gap-3 px-3 py-2">
                   <WorkflowIcon className="h-4 w-4 text-muted-foreground" />
                   <div className="flex-1">
                     <div className="text-sm font-medium">{wf.name}</div>
-                    <div className="text-xs text-muted-foreground">on {entityName(wf.entity_definition_id)}</div>
+                    <div className="text-xs text-muted-foreground">
+                      {wf.entity_definition_id == null ? "on demand" : `on ${entityName(wf.entity_definition_id)}`}
+                    </div>
                   </div>
                   <Badge variant={wf.enabled ? "default" : "outline"}>
                     {wf.enabled ? "enabled" : "disabled"}
@@ -200,12 +217,22 @@ export default function WorkflowsPage() {
                   </Button>
                 </li>
               ))}
-            </ul>
+              </ul>
+              <Pagination
+                page={page}
+                pageCount={pageCount}
+                total={items.length}
+                onPageChange={setPage}
+                itemLabel="workflow"
+              />
+            </div>
           ) : (
             <p className="text-sm text-muted-foreground">No workflows yet.</p>
           )}
         </CardContent>
       </Card>
+
+      <WorkflowActivity />
     </div>
   );
 }

@@ -1,8 +1,10 @@
 "use client";
 
 import { Plus, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
+import { useHelpOverride } from "@/context/HelpContext";
+import { ENTITY_FIELDS_HELP, ENTITY_RELATIONSHIPS_HELP } from "@/lib/entityHelp";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -64,6 +66,10 @@ export function EntitySchemaEditor({
   onChange,
 }: EntitySchemaEditorProps) {
   const [error, setError] = useState<string | null>(null);
+
+  // Focusing a card shows its glossary in the help dock; clear it on unmount.
+  const setHelp = useHelpOverride();
+  useEffect(() => () => setHelp(null), [setHelp]);
 
   // Add-field form state.
   const [fName, setFName] = useState("");
@@ -148,7 +154,7 @@ export function EntitySchemaEditor({
 
   return (
     <div className="grid gap-4 lg:grid-cols-2">
-      <Card>
+      <Card onFocusCapture={() => setHelp(ENTITY_FIELDS_HELP)}>
         <CardContent className="space-y-4 pt-6">
           <h2 className="text-lg font-semibold">Fields</h2>
           {entity.fields.length > 0 ? (
@@ -216,7 +222,7 @@ export function EntitySchemaEditor({
         </CardContent>
       </Card>
 
-      <Card>
+      <Card onFocusCapture={() => setHelp(ENTITY_RELATIONSHIPS_HELP)}>
         <CardContent className="space-y-4 pt-6">
           <h2 className="text-lg font-semibold">Relationships</h2>
           {relationships.length > 0 ? (

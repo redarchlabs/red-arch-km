@@ -40,7 +40,11 @@ export default function ViewViewerPage({ params }: { params: Promise<{ id: strin
   const handleRunWorkflow = async (workflowId: string, inputs: Record<string, unknown>) => {
     setNotice(null);
     try {
-      await runWorkflow(workflowId, { operation: "manual", after: inputs });
+      // A view button is an ad-hoc "run now" with no record context. The run
+      // endpoint requires a real CRUD operation (it bypasses trigger matching,
+      // so the value is cosmetic); "update" is the schema default. Button
+      // `inputs` ride along as `after` for workflows that reference them.
+      await runWorkflow(workflowId, { operation: "update", after: inputs });
       setNotice("Workflow started.");
     } catch (e: unknown) {
       setError(getApiErrorMessage(e, "Workflow failed to start"));

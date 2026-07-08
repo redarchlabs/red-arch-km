@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { CeleryMonitor } from "@/components/site-admin/CeleryMonitor";
 import { GlobalMembershipManager } from "@/components/site-admin/GlobalMembershipManager";
@@ -10,6 +10,8 @@ import { SystemStatus } from "@/components/site-admin/SystemStatus";
 import { UserManager } from "@/components/site-admin/UserManager";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useOrg } from "@/context/OrgContext";
+import { SITE_ADMIN_TAB_HELP } from "@/lib/adminHelp";
+import { useHelpOverride } from "@/context/HelpContext";
 import { cn } from "@/lib/utils";
 
 type SiteAdminTab = "orgs" | "users" | "memberships" | "system" | "celery" | "emails";
@@ -26,6 +28,14 @@ const TABS: ReadonlyArray<{ key: SiteAdminTab; label: string }> = [
 export default function SiteAdminPage() {
   const { isSiteAdmin, isLoading } = useOrg();
   const [active, setActive] = useState<SiteAdminTab>("orgs");
+
+  // Show help for the active tab (clears when leaving the page). Declared before
+  // the early returns below to keep hook order stable.
+  const setHelp = useHelpOverride();
+  useEffect(() => {
+    setHelp(SITE_ADMIN_TAB_HELP[active]);
+    return () => setHelp(null);
+  }, [active, setHelp]);
 
   if (isLoading) {
     return <Skeleton className="h-64 w-full" />;

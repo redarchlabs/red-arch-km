@@ -14,12 +14,20 @@ export interface InboundEndpoint {
   name: string;
   workflow_id: string;
   enabled: boolean;
+  /** Whether callers must send a valid HMAC signature (the secret is never returned on reads). */
+  has_signing_secret: boolean;
 }
 
-/** The create response — carries the one-time plaintext token + callable URL. */
+/**
+ * The create response — carries the one-time plaintext token + callable URL AND
+ * the one-time HMAC signing secret. The caller must sign each request:
+ * `signature_header: t=<unix>,v1=<hex hmac_sha256(secret, `${t}.${rawBody}`)>`.
+ */
 export interface InboundEndpointCreated extends InboundEndpoint {
   token: string;
   url: string;
+  signing_secret: string;
+  signature_header: string;
 }
 
 export interface InboundEndpointCreateInput {

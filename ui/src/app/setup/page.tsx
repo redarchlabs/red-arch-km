@@ -4,6 +4,7 @@ import { CheckCircle2, KeyRound, Loader2, Rocket } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
+import { ClerkTemplateGuide } from "@/components/setup/ClerkTemplateGuide";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -202,6 +203,11 @@ export default function SetupPage() {
             </div>
           </div>
         ) : null}
+
+        {/* Install-time Clerk guidance — visible throughout the wizard (but not
+            during the brief status check) so the admin configures the JWT
+            template before inviting members. */}
+        {step !== "checking" ? <ClerkTemplateGuide /> : null}
       </CardContent>
     </Card>
   );

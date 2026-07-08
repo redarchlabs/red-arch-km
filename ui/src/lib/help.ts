@@ -14,6 +14,12 @@ export interface HelpTopic {
   prefix: string;
   title: string;
   body: string;
+  /**
+   * Optional pattern for routes a prefix can't isolate (e.g. an id in the
+   * middle: `/workflows/<id>/runs`). A `match` topic wins over prefix matches.
+   * Give such a topic a non-colliding `prefix` so it never wins by prefix.
+   */
+  match?: RegExp;
 }
 
 const TOPICS: HelpTopic[] = [
@@ -145,6 +151,159 @@ retrieves relevant passages and answers from them, not from general knowledge.
 `,
   },
   {
+    prefix: "/workflows",
+    title: "Workflows",
+    body: `
+**Workflows** automate what happens when a record changes — send an email,
+update a field, call an API, route work to a person, and more.
+
+### The list
+- **Create** a workflow, then open it to build it in the designer.
+- A workflow only runs once it's **published** — drafts are for editing.
+- Each workflow starts from a single **trigger** (a record create / update /
+  delete on a watched entity).
+
+### The designer
+- **Drag** a node from the palette onto the canvas, or click to place it, then
+  **drag between handles** to connect steps.
+- **Select any node** to configure it on the right — and this help panel will
+  show a detailed explanation of that node type.
+- **⌘K** opens the command palette; **Auto-layout** tidies the diagram.
+- **Save draft** as you go; **Publish** when you're ready for it to run.
+
+> Tip: use the **Test (dry run)** panel to simulate a record change against the
+> saved version without writing any data.
+`,
+  },
+  {
+    prefix: "/workflows/connections",
+    title: "Connections",
+    body: `
+**Connections** are reusable, centrally-stored API credentials — a base URL plus
+its authentication — that workflow **"Call a connected API"** actions use, so
+secrets never live inside a workflow.
+
+### Creating one
+- Give it a name, a **base URL**, and an **auth type**: none, **API key** (a
+  header name + secret), **basic** (username + password), or **bearer** (a
+  token).
+- Edit or delete a connection here; a workflow's HTTP action just picks it by
+  name.
+
+> Because credentials live here, you can rotate a secret in one place and every
+> workflow that uses the connection picks it up.
+`,
+  },
+  {
+    prefix: "/workflows/webhooks",
+    title: "Inbound webhooks",
+    body: `
+**Webhooks** let an external system **start a workflow** by POSTing to a
+generated URL — the inbound counterpart to the outbound webhook action.
+
+### Setting one up
+1. Create an endpoint: give it a name and pick the **workflow it triggers**.
+2. You're shown a **URL and a signing secret** — copy them now; the **secret is
+   shown only once**.
+
+### How requests are handled
+- Incoming requests must be **HMAC-signed** (\`X-KM2-Signature\`) with that
+  secret and are verified before anything runs.
+- A verified request executes its workflow **inline** (no polling delay), so the
+  caller gets an immediate result.
+
+Use these to wire external events — a form service, a device, another app —
+straight into your automations.
+`,
+  },
+  {
+    prefix: "/workflows/inbox",
+    title: "Task inbox",
+    body: `
+The **inbox** lists workflow runs paused on a **human step** — a *user* or
+*manual* task — that are waiting for someone to act.
+
+- Each item shows which workflow it's from and what it's waiting on.
+- **Approve / reject** (or otherwise complete) the task to **release the run**
+  so it continues down the next path.
+
+This is the human-in-the-loop side of automation: a run parks at a user task and
+sits here until a person resolves it, then the engine picks up where it left off.
+`,
+  },
+  {
+    prefix: "/entities",
+    title: "Entities & data model",
+    body: `
+**Entities** are your structured data model — custom record types (e.g. *Task*,
+*Contact*, *Asset*) with typed fields and relationships. They're what forms
+capture into, what views display, and what workflow triggers watch.
+
+### The list
+Create, open, or delete an entity. Opening one shows its **schema** and its
+**records**.
+
+### Schema editor
+- **Fields** — add a field with a **type**: text / long text, integer / bigint /
+  numeric, boolean, date, timestamp, uuid, json, or **picklist** (a fixed set of
+  options). Mark a field **unique** to enforce no duplicates.
+- **Relationships** — link entities with a **cardinality** (one-to-one,
+  one-to-many, many-to-one, many-to-many), a target entity, and an **on-delete**
+  rule (set null, cascade, or restrict) that decides what happens to related
+  records when one is deleted.
+
+### Records
+The records table lets you add, edit, and delete individual records directly —
+the same data your forms write and your views read.
+`,
+  },
+  {
+    prefix: "/forms",
+    title: "Forms",
+    body: `
+**Forms** capture structured input **into an entity**. The list lets you create,
+open, or delete a form (each is bound to one entity).
+
+### Building a form
+Compose it from an **element tree** — add and arrange:
+- **Fields** (bound to the entity's fields), **labels/text**, and **calculated**
+  values (derived with an expression).
+- **Buttons** that submit, run a workflow, or link out.
+- **Tables** and **related-record** sections for one-to-many / one-to-one links.
+- **Layout containers** — sections, tabs, accordions, columns, panels — to
+  structure the page.
+
+Each element has its own settings (width, required, read-only, and so on).
+**Preview** to see exactly what a recipient gets.
+
+### Sharing & filling
+- **Send a link** generates a single-use link to email the form for a specific
+  record.
+- The **Fill** view is internal data entry against the same form. Submitting can
+  **trigger a workflow** via a button.
+`,
+  },
+  {
+    prefix: "/views",
+    title: "Views",
+    body: `
+**Views** are read/display layouts built with the **same element-tree builder as
+forms**, but for *showing* records rather than capturing them. A view can be
+**bound to an entity** or **standalone**.
+
+### Building a view
+Compose it from labels/text, **buttons** (which run workflows or link out),
+**embedded forms**, **tables** of related records, and **layout containers**
+(sections, tabs, columns, panels). Entity-bound fields are available when the
+view is tied to an entity.
+
+### Using it
+Open the **runtime viewer** to see the view rendered with real data; its buttons
+run workflows in place. Use views for dashboards, record detail pages, and
+action launchers.
+`,
+  },
+  {
     prefix: "/site-admin",
     title: "Site administration",
     body: `
@@ -186,19 +345,21 @@ global users) live under **Site Admin**.
 `,
   },
   {
-    prefix: "/setup",
-    title: "First-run setup",
+    // The id in the middle of the path can't be isolated by a prefix, so this
+    // topic matches by regex; the prefix is a sentinel that never prefix-matches.
+    prefix: "/workflows/runs",
+    match: /^\/workflows\/[^/]+\/runs(\/|$)/,
+    title: "Run monitor",
     body: `
-Welcome — this instance needs to be initialized.
+Every **execution of this workflow**, newest first. Use it to see what a
+workflow actually did — and to debug when it didn't do what you expected.
 
-### What to do
-1. Paste the **setup token** printed in the server logs when the instance first
-   started. It proves you're the operator bootstrapping the system.
-2. This promotes your account to **site admin** and lets you create the first
-   organization.
-
-Once setup completes you won't see this page again. If you don't have the token,
-check the API server's startup logs (or ask whoever deployed the instance).
+- **Click a run** to expand its **steps** and see what happened at each node,
+  including inputs, outputs, and any error.
+- **Statuses**: *running*, *waiting* (parked on a human task, timer, or event),
+  *succeeded*, *failed*, and *dead-lettered* (retries exhausted with no catcher
+  — needs a manual replay).
+- Deep-link a specific run with \`?run=<id>\`.
 `,
   },
 ];
@@ -229,8 +390,12 @@ drawer. Toggle it any time with the **?** button in the header.
 
 /** Resolve the most specific help topic for a pathname. */
 export function helpForPath(pathname: string): HelpTopic {
-  const match = TOPICS.filter((t) => pathname.startsWith(t.prefix)).sort(
+  // A regex `match` topic wins over prefix matching (for routes with an id in
+  // the middle that no prefix can isolate).
+  const byPattern = TOPICS.find((t) => t.match?.test(pathname));
+  if (byPattern) return byPattern;
+  const byPrefix = TOPICS.filter((t) => pathname.startsWith(t.prefix)).sort(
     (a, b) => b.prefix.length - a.prefix.length,
   )[0];
-  return match ?? DEFAULT_TOPIC;
+  return byPrefix ?? DEFAULT_TOPIC;
 }
