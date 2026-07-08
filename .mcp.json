@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "km2": {
+      "command": "node",
+      "args": ["tools/km2-mcp/dist/index.js"],
+      "env": {
+        "KM2_APP_URL": "http://localhost:3000",
+        "KM2_API_URL": "http://localhost:8000/api",
+        "KM2_BROWSER_CHANNEL": "chrome"
+      }
+    }
+  }
+}
