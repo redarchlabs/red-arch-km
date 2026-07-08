@@ -44,7 +44,13 @@ from api.services.workflow.service import WorkflowError, WorkflowService
 
 logger = logging.getLogger(__name__)
 
-MAX_ITERATIONS = 8
+# Tool-calling turns allowed per user message. Multi-step authoring goals
+# (e.g. create_entity → create_workflow → publish → create_form → validate →
+# create_view) legitimately need ~7 sequential turns before any retry, and a
+# "build the whole thing" request chains several of those — so the budget is
+# generous. When it IS exhausted we still emit an actionable summary (see the
+# tool_choice="none" wrap-up in the run loop) rather than dead-ending.
+MAX_ITERATIONS = 32
 
 # Tools that mutate workspace configuration (entity/workflow schema) or folders
 # and their permissions are org-admin only — the same boundary the REST API
@@ -67,6 +73,7 @@ _ADMIN_ONLY_TOOLS = frozenset(
         "create_form",
         "update_form",
         "delete_form",
+        "validate_form_layout",
         # Views: composable screens (same element tree) — full lifecycle.
         "list_views",
         "get_view",
@@ -118,6 +125,56 @@ def _parse_uuid(value: Any) -> uuid.UUID | None:
         return uuid.UUID(str(value))
     except (ValueError, TypeError):
         return None
+
+
+def _format_validation_errors(exc: ValidationError, limit: int = 6) -> str:
+    """Render a Pydantic error as located, actionable text for the model.
+
+    The default first-error `msg` (e.g. bare "Field required") tells the LLM
+    nothing about WHICH field of WHICH element is wrong, so it retries blindly.
+    We surface `loc: msg` for every error (capped) so the agent can repair the
+    exact spot — e.g. ``elements.0.action: Field required``.
+    """
+    errors = exc.errors()
+    parts: list[str] = []
+    for err in errors[:limit]:
+        loc = ".".join(str(p) for p in err.get("loc", ())) or "(root)"
+        parts.append(f"{loc}: {err.get('msg', 'invalid')}")
+    if len(errors) > limit:
+        parts.append(f"(+{len(errors) - limit} more)")
+    return "; ".join(parts)
+
+
+# Tools whose failures have a well-known recovery move. We surface the hint IN
+# the error payload (only when a call actually fails) rather than front-loading
+# it into the system prompt — progressive disclosure: the model sees the fix
+# exactly when it's relevant and pays no tokens for it on the happy path.
+_DRY_RUN_HINT: dict[str, str] = {
+    "create_form": "Dry-run first with validate_form_layout (pass entity_slug) to get located errors before saving.",
+    "update_form": "Dry-run the new tree with validate_form_layout (pass entity_slug) before saving.",
+    "create_view": "Dry-run first with validate_form_layout (omit entity_slug for a standalone view) before saving.",
+    "update_view": "Dry-run the new tree with validate_form_layout before saving.",
+    "save_workflow_definition": "Check the graph with validate_workflow (no save) and fix the returned issues, then resend.",
+}
+
+
+def _attach_recovery_hint(name: str, result: dict[str, Any]) -> dict[str, Any]:
+    """Add a contextual `hint` to an error result so the model knows the recovery
+    move. No-op on success or when a hint is already present."""
+    if not isinstance(result, dict) or "error" not in result or "hint" in result:
+        return result
+    err = str(result["error"]).lower()
+    hint: str | None = None
+    if "not found" in err:
+        # A bad id/slug — point the model at the matching listing tool to verify.
+        hint = "Confirm the id/slug exists first with the matching list_/get_ tool (e.g. list_entities, list_workflows, list_forms)."
+    elif "invalid arguments" in err or "required" in err or "valid" in err:
+        hint = _DRY_RUN_HINT.get(name)
+    else:
+        hint = _DRY_RUN_HINT.get(name)
+    if hint:
+        return {**result, "hint": hint}
+    return result
 
 
 # Reused by the folder/document permission-setting tools. A permission config is
@@ -177,14 +234,19 @@ _SYSTEM_PROMPT = (
     "Forms & views: a form binds to one entity and is filled internally (Forms UI) or via a public "
     "share link to create/update a record; a view is a composable screen that arranges forms "
     "(form_ref), action buttons and layout, optionally bound to an entity. Both use the SAME v2 "
-    "element tree in `config` = {version:2, elements:[...]} — element `type` is field/label/"
-    "calculated/button/section/table/block/tab_group/panel/accordion/columns (views add form_ref). "
-    "Bind fields by entity-field slug (get_entity_schema); calculated elements use a JsonLogic "
-    "`expression` and may persist via `target_slug`; tables support cross-entity related columns; "
-    "buttons can run a workflow. Inspect with list_forms/get_form (or list_views/get_view), build "
-    "with create_form/create_view, edit with update_form/update_view (config REPLACES the whole tree "
-    "— get first, modify, send the complete tree), remove with delete_form/delete_view. Org-admin "
-    "only. Invalid trees are rejected with a clear error to repair from.\n"
+    "element tree in `config` = {version:2, elements:[...]}. Do NOT guess element shapes — call "
+    "describe_form_elements for the full element vocabulary (each type + its required/optional "
+    "fields) and get_entity_schema for the field/relationship slugs to bind. Inspect with "
+    "list_forms/get_form (or list_views/get_view), build with create_form/create_view, edit with "
+    "update_form/update_view (config REPLACES the whole tree — get first, modify, send the complete "
+    "tree), remove with delete_form/delete_view. Dry-run any tree with validate_form_layout (pass "
+    "entity_slug to also check bindings) before saving; invalid trees are rejected with a precise, "
+    "located error to repair from. Org-admin only.\n"
+    "End-to-end automation: to collect input and trigger an action (e.g. 'a button that asks for a "
+    "statement and posts it to a REST endpoint'), build a workflow whose step performs the action "
+    "(call describe_workflow_actions to pick the right action — send_webhook/http_request post to a "
+    "URL), then surface it with a form/view button whose action is run_workflow (mapping the "
+    "collected fields into the workflow inputs).\n"
     "Slugs must be lowercase snake_case. Be concise and friendly."
 )
 
@@ -403,8 +465,11 @@ TOOLS: list[dict[str, Any]] = [
             "name": "create_workflow",
             "description": (
                 "Create a workflow that fires on record changes to an entity, fully wired with a "
-                "trigger and action steps. Saved as an unpublished draft for the user to review "
-                "and publish."
+                "trigger and a linear chain of action steps. Saved as an unpublished draft for the "
+                "user to review and publish. Call describe_workflow_actions for the action `type`s "
+                "and their config keys (e.g. send_webhook to POST to a REST endpoint). For branching/"
+                "parallel/timers or anything non-linear, author the full graph with "
+                "save_workflow_definition instead."
             ),
             "parameters": {
                 "type": "object",
@@ -439,10 +504,24 @@ TOOLS: list[dict[str, Any]] = [
                         ),
                         "items": {
                             "type": "object",
+                            "description": (
+                                "One step. See describe_workflow_actions for each type's config. "
+                                "Config values may reference the triggering record via a "
+                                '{"$ref": "after.<slug>"} / "before.<slug>" envelope; send_webhook '
+                                "also auto-includes before/after in its POST body."
+                            ),
                             "properties": {
                                 "type": {
                                     "type": "string",
-                                    "enum": ["create_record", "update_record_field", "log"],
+                                    "enum": [
+                                        "create_record",
+                                        "update_record_field",
+                                        "log",
+                                        "send_webhook",
+                                        "http_request",
+                                        "send_email",
+                                        "send_form",
+                                    ],
                                 },
                                 "target_slug": {
                                     "type": "string",
@@ -465,6 +544,46 @@ TOOLS: list[dict[str, Any]] = [
                                 },
                                 "value": {"description": "update_record_field: the new value."},
                                 "message": {"type": "string", "description": "log: message to record."},
+                                "url": {
+                                    "type": "string",
+                                    "description": "send_webhook/http_request: target URL (host must be allow-listed).",
+                                },
+                                "body": {
+                                    "description": "send_webhook/http_request/send_email: optional payload/body.",
+                                },
+                                "connection": {
+                                    "type": "string",
+                                    "description": "http_request: optional saved connection name for auth.",
+                                },
+                                "path": {
+                                    "type": "string",
+                                    "description": "http_request: path appended to the connection base_url (alternative to url).",
+                                },
+                                "method": {
+                                    "type": "string",
+                                    "description": "http_request: HTTP method (default GET).",
+                                },
+                                "headers": {
+                                    "type": "object",
+                                    "description": "http_request: optional request headers.",
+                                },
+                                "to": {
+                                    "type": "string",
+                                    "description": "send_email: recipient address (or an after.<slug> reference).",
+                                },
+                                "subject": {"type": "string", "description": "send_email: subject line."},
+                                "form_id": {
+                                    "type": "string",
+                                    "description": "send_form: the form to mint a link for.",
+                                },
+                                "recipient_field": {
+                                    "type": "string",
+                                    "description": "send_form: record field slug holding the recipient email.",
+                                },
+                                "recipient": {
+                                    "type": "string",
+                                    "description": "send_form: literal recipient email (or after.<slug> reference).",
+                                },
                             },
                             "required": ["type"],
                         },
@@ -524,10 +643,12 @@ TOOLS: list[dict[str, Any]] = [
         "function": {
             "name": "save_workflow_definition",
             "description": (
-                "Save a full BPMN graph as a new DRAFT version of an existing workflow. The graph is "
-                "validated first; if it has errors nothing is saved and the issues are returned for you "
-                "to fix and resend. Warnings do not block saving. Publish separately with "
-                "publish_workflow once reviewed."
+                "Save a full BPMN graph as a new DRAFT version of an existing workflow. Call "
+                "describe_bpmn_vocabulary for the node/gateway/event shapes first, and prefer "
+                "checking the graph with validate_workflow (no save) before this — repeated blind "
+                "saves waste steps. The graph is validated on save too; if it has errors nothing is "
+                "saved and the issues are returned to fix and resend. Warnings do not block saving. "
+                "Publish separately with publish_workflow once reviewed."
             ),
             "parameters": {
                 "type": "object",
@@ -781,9 +902,9 @@ TOOLS: list[dict[str, Any]] = [
                     "config": {
                         "type": "object",
                         "description": (
-                            "The v2 layout tree {version:2, elements:[...]}. Bound field slugs must "
-                            "exist on the entity (use get_entity_schema). Invalid trees are rejected "
-                            "with a clear error."
+                            "The v2 layout tree {version:2, elements:[...]}. Call describe_form_elements "
+                            "for the element shapes and get_entity_schema for bindable slugs; dry-run with "
+                            "validate_form_layout. Omit for an empty form."
                         ),
                     },
                 },
@@ -809,7 +930,10 @@ TOOLS: list[dict[str, Any]] = [
                     "is_active": {"type": "boolean"},
                     "config": {
                         "type": "object",
-                        "description": "COMPLETE new v2 layout tree {version:2, elements:[...]} (replaces existing).",
+                        "description": (
+                            "COMPLETE new v2 layout tree {version:2, elements:[...]} (replaces existing). "
+                            "See describe_form_elements; dry-run with validate_form_layout."
+                        ),
                     },
                 },
                 "required": ["form_id"],
@@ -870,7 +994,11 @@ TOOLS: list[dict[str, Any]] = [
                     "description": {"type": "string"},
                     "config": {
                         "type": "object",
-                        "description": "The v2 layout tree {version:2, elements:[...]}.",
+                        "description": (
+                            "The v2 layout tree {version:2, elements:[...]}. Call describe_form_elements "
+                            "for element shapes (views may also use form_ref); dry-run with "
+                            "validate_form_layout."
+                        ),
                     },
                 },
                 "required": ["name"],
@@ -892,7 +1020,13 @@ TOOLS: list[dict[str, Any]] = [
                     "name": {"type": "string"},
                     "description": {"type": "string"},
                     "is_active": {"type": "boolean"},
-                    "config": {"type": "object", "description": "COMPLETE new v2 layout tree."},
+                    "config": {
+                        "type": "object",
+                        "description": (
+                            "COMPLETE new v2 layout tree (replaces existing). See describe_form_elements; "
+                            "dry-run with validate_form_layout."
+                        ),
+                    },
                 },
                 "required": ["view_id"],
             },
@@ -908,6 +1042,76 @@ TOOLS: list[dict[str, Any]] = [
                 "properties": {"view_id": {"type": "string"}},
                 "required": ["view_id"],
             },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "describe_form_elements",
+            "description": (
+                "Reference: the v2 form/view element vocabulary — every element `type` with its "
+                "required and optional fields (field, label, calculated, button, section, table, "
+                "block, tab_group, panel, accordion, columns, and form_ref for views), plus the "
+                "button `action` shapes. Call this BEFORE authoring a form/view `config` so you use "
+                "the correct shapes; no arguments."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "validate_form_layout",
+            "description": (
+                "Dry-run a v2 layout tree WITHOUT saving. Returns {valid:true} or {valid:false, "
+                "errors:[...]} with located messages to repair from. Pass entity_slug to also verify "
+                "that bound field slugs and relationships exist on that entity (omit for a standalone "
+                "view — structural check only). Use this to iterate before create_form/update_form/"
+                "create_view/update_view."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "config": {
+                        "type": "object",
+                        "description": "The v2 layout tree {version:2, elements:[...]} to check.",
+                    },
+                    "entity_slug": {
+                        "type": "string",
+                        "description": "Optional entity to validate field/relationship bindings against.",
+                    },
+                },
+                "required": ["config"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "describe_workflow_actions",
+            "description": (
+                "Reference: the workflow action catalog — every action `type` (send_webhook, "
+                "http_request, send_email, send_form, create_record, update_record_field, log) with "
+                "its `config` keys and when to use it. Call this when authoring a workflow (create_"
+                "workflow / save_workflow_definition) so you pick the right step — e.g. send_webhook "
+                "to POST to a REST endpoint. No arguments."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "describe_bpmn_vocabulary",
+            "description": (
+                "Reference: the BPMN graph vocabulary for save_workflow_definition — node categories "
+                "(trigger/task/gateway/event), task_types, gateway_types and event_types, plus the "
+                "edge shape. Call this ONLY when authoring a full non-linear graph (branching, "
+                "parallel, timers, boundary events) with save_workflow_definition; for a simple "
+                "linear trigger→actions flow use create_workflow + describe_workflow_actions. No "
+                "arguments."
+            ),
+            "parameters": {"type": "object", "properties": {}},
         },
     },
     # ---- Knowledge base: documents & folders (act as the calling user) ----
@@ -1056,7 +1260,21 @@ TOOLS: list[dict[str, Any]] = [
 
 # Action types the assistant is allowed to wire. send_webhook is intentionally
 # excluded (its host allow-list / SSRF guard belongs behind explicit UI setup).
-_ASSISTANT_ACTION_TYPES = frozenset({"create_record", "update_record_field", "log"})
+_ASSISTANT_ACTION_TYPES = frozenset(
+    {
+        "create_record",
+        "update_record_field",
+        "log",
+        # Outbound / messaging actions — the runtime has handlers for these
+        # (services/workflow/actions.py); the simple linear builder passes their
+        # config straight to a task node, so e.g. "POST the statement to a REST
+        # endpoint" is one create_workflow call, not a hand-authored BPMN graph.
+        "send_webhook",
+        "http_request",
+        "send_email",
+        "send_form",
+    }
+)
 
 
 def _build_workflow_definition(
@@ -1318,7 +1536,39 @@ class AgentService:
                     result = await self._dispatch(name, args)
                     yield {"type": "tool_result", "name": name, "result": result}
                     messages.append({"role": "tool", "tool_call_id": tc.id, "content": json.dumps(result, default=str)})
-            yield {"type": "delta", "content": "I've reached the step limit for this request."}
+            # Budget exhausted mid-task. Instead of dead-ending, force ONE
+            # tool-free turn so the model reports what it accomplished and the
+            # exact remaining step(s) — a resumable handoff, not a wall.
+            messages.append(
+                {
+                    "role": "system",
+                    "content": (
+                        "You have hit the tool-step limit for this turn. Do NOT request any more "
+                        "tools. In 1-3 sentences tell the user what you have already created/changed "
+                        "(name the resources) and the precise next step(s) remaining, and invite them "
+                        "to say 'continue' so you can finish."
+                    ),
+                }
+            )
+            try:
+                wrap_up = await self._client.chat.completions.create(
+                    model=self._settings.openai_model,
+                    messages=messages,  # type: ignore[arg-type]
+                    tools=TOOLS,  # type: ignore[arg-type]
+                    tool_choice="none",
+                )
+                summary = wrap_up.choices[0].message.content
+            except Exception:  # noqa: BLE001 - fall back to a static message if the wrap-up call fails
+                logger.exception("step-limit wrap-up call failed")
+                summary = None
+            yield {
+                "type": "delta",
+                "content": summary
+                or (
+                    "I've reached the step limit for this request. Ask me to continue and I'll pick "
+                    "up where I left off."
+                ),
+            }
             yield {"type": "done"}
         except Exception as exc:  # noqa: BLE001 - surface any agent/LLM failure to the UI
             logger.exception("agent run failed")
@@ -1342,19 +1592,21 @@ class AgentService:
             async with self._tenant_session() as session:
                 result = await handler(session, args)
                 await session.commit()
-                return result
+                # Handlers may themselves return {"error": ...} (e.g. "entity not
+                # found"); attach a recovery hint to those too.
+                return _attach_recovery_hint(name, result)
         except HTTPException as exc:
             # Reused REST handlers raise HTTPException for validation/permission
             # errors (e.g. a folder_id that doesn't exist). Surface the message.
             detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
-            return {"error": detail}
+            return _attach_recovery_hint(name, {"error": detail})
         except ValidationError as exc:
-            return {"error": f"invalid arguments: {exc.errors()[0].get('msg', str(exc))}"}
+            return _attach_recovery_hint(name, {"error": f"invalid arguments — {_format_validation_errors(exc)}"})
         except (EntityError, WorkflowError) as exc:
-            return {"error": str(exc)}
+            return _attach_recovery_hint(name, {"error": str(exc)})
         except Exception as exc:  # noqa: BLE001
             logger.exception("tool %s failed", name)
-            return {"error": str(exc)}
+            return _attach_recovery_hint(name, {"error": str(exc)})
 
     # ------------------------------------------------------------------ #
     # Tools
@@ -1520,6 +1772,34 @@ class AgentService:
                 if not field_slug:
                     return {"error": "update_record_field action requires field"}
                 config = {"field": field_slug, "value": spec.get("value")}
+            elif action_type == "send_webhook":
+                url = spec.get("url")
+                if not url:
+                    return {"error": "send_webhook action requires url"}
+                config = {"url": url}
+                if spec.get("body") is not None:
+                    config["body"] = spec["body"]
+            elif action_type == "http_request":
+                if not spec.get("url") and not spec.get("path"):
+                    return {"error": "http_request action requires url (or connection + path)"}
+                config = {
+                    k: spec[k]
+                    for k in ("connection", "url", "path", "method", "headers", "body")
+                    if spec.get(k) is not None
+                }
+            elif action_type == "send_email":
+                to = spec.get("to")
+                if not to:
+                    return {"error": "send_email action requires to"}
+                config = {"to": to, "subject": spec.get("subject", ""), "body": spec.get("body", "")}
+            elif action_type == "send_form":
+                form_id = spec.get("form_id")
+                if not form_id:
+                    return {"error": "send_form action requires form_id"}
+                config = {"form_id": form_id}
+                for k in ("recipient_field", "recipient"):
+                    if spec.get(k) is not None:
+                        config[k] = spec[k]
             else:  # log
                 config = {"message": spec.get("message", "")}
             action_nodes.append({"action_type": action_type, "config": config})
@@ -1535,9 +1815,11 @@ class AgentService:
             "trigger": {"operations": operations, "field_filter": field_filter},
             "actions": [n["action_type"] for n in action_nodes],
             "draft_version": version.version_number,
+            "definition_summary": {"nodes": len(graph["nodes"]), "edges": len(graph["edges"])},
             "note": (
-                "Saved as an unpublished draft. Open it in the workflow builder to review and "
-                "test, then click Publish to make it live."
+                "Saved as an unpublished draft. Publish it with publish_workflow (or open the "
+                "builder to review/test first). To let a user trigger it from a screen, add a "
+                "button with action {kind:'run_workflow', workflow_id} to a form or view."
             ),
         }
 
@@ -2010,6 +2292,229 @@ class AgentService:
         except FormError as exc:
             return {"error": str(exc)}
         return {"deleted_form": str(form_id)}
+
+    async def _tool_describe_form_elements(
+        self, _session: AsyncSession, _args: dict[str, Any]
+    ) -> dict[str, Any]:
+        """On-demand reference for the v2 element vocabulary (no DB access).
+
+        Kept out of the tool schemas / system prompt so the model pulls it only
+        when authoring — progressive disclosure instead of front-loading ~5k
+        tokens of layout schema on every request.
+        """
+        return {
+            "config_shape": "{version: 2, elements: [ <element>, ... ]}",
+            "notes": (
+                "Every element is an object with a `type` plus the fields below. Containers nest "
+                "arbitrarily. Bind by entity-field slug / relationship_id from get_entity_schema. "
+                "Widths: full|half|third|quarter."
+            ),
+            "elements": {
+                "field": {
+                    "required": ["type", "slug"],
+                    "optional": [
+                        "label", "required", "read_only", "width", "help_text",
+                        "placeholder", "display (dropdown|radio)",
+                    ],
+                    "use": "Bind one entity field by its slug.",
+                },
+                "label": {
+                    "required": ["type", "text", "variant (heading|subheading|paragraph|divider)"],
+                    "use": "Static presentational text / divider.",
+                },
+                "calculated": {
+                    "required": ["type", "expression", "result_type (text|integer|numeric|boolean|date|timestamptz)"],
+                    "optional": ["label", "target_slug", "help_text", "width"],
+                    "use": (
+                        "JsonLogic `expression` over field slugs (date ops: today, now, date_add, "
+                        "date_diff). Set target_slug to PERSIST the result to an entity field; omit "
+                        "for display-only. The server recomputes persisted values authoritatively."
+                    ),
+                },
+                "button": {
+                    "required": ["type", "label", "style (primary|secondary|danger|ghost)", "action"],
+                    "optional": ["width"],
+                    "action": (
+                        "one of: {kind:'submit'} | {kind:'run_workflow', workflow_id, "
+                        "inputs:{<name>:<expression>}, confirm?, success_message?} | "
+                        "{kind:'link', href, new_tab?}"
+                    ),
+                },
+                "section": {
+                    "required": ["type", "relationship_id", "mode (inline|modal)", "elements"],
+                    "optional": ["label"],
+                    "use": "A single (1:1) related record; elements are field/calculated/label.",
+                },
+                "table": {
+                    "required": ["type", "anchor_relationship_id", "columns"],
+                    "optional": ["label", "min_rows", "max_rows"],
+                    "columns": (
+                        "each column is {kind:'field', slug, read_only?, width?, display?} on the "
+                        "1:M child, OR {kind:'related', relationship_id, slug, editable?, width?} "
+                        "reached one hop across (edits create/link the related record)."
+                    ),
+                    "use": "Editable grid over a 1:M related entity with cross-entity columns.",
+                },
+                "block": {
+                    "required": ["type", "anchor_relationship_id", "elements"],
+                    "optional": ["label", "add_label", "min_items", "max_items"],
+                    "use": "Repeating group of sub-elements mapped to a 1:M child.",
+                },
+                "tab_group": {
+                    "required": ["type", "tabs"],
+                    "tabs": "[{label, elements:[...]}]",
+                },
+                "panel": {
+                    "required": ["type", "elements"],
+                    "optional": ["title", "collapsible", "collapsed"],
+                },
+                "accordion": {
+                    "required": ["type", "panes"],
+                    "panes": "[{label, elements:[...]}]",
+                },
+                "columns": {
+                    "required": ["type", "columns"],
+                    "columns_shape": "[{span, elements:[...]}]",
+                },
+                "form_ref": {
+                    "required": ["type", "form_id", "mode (fill|display)"],
+                    "optional": ["label"],
+                    "use": "VIEWS ONLY — embed an existing form.",
+                },
+            },
+            "next": (
+                "Compose your tree, then validate_form_layout(config, entity_slug) to check it, "
+                "then create_form / create_view."
+            ),
+        }
+
+    async def _tool_validate_form_layout(
+        self, session: AsyncSession, args: dict[str, Any]
+    ) -> dict[str, Any]:
+        from api.schemas.form import FormConfig
+        from api.services.form_service import FormError, FormService
+
+        try:
+            config = FormConfig.model_validate(args.get("config") or {})
+        except ValidationError as exc:
+            return {"valid": False, "errors": _format_validation_errors(exc)}
+        entity_slug = args.get("entity_slug")
+        if not entity_slug:
+            return {
+                "valid": True,
+                "note": (
+                    "Structural check only — pass entity_slug to also verify that field slugs and "
+                    "relationships exist on the entity."
+                ),
+            }
+        definition = await EntityDefinitionRepository(session, self._org_id).get_by_slug(entity_slug)
+        if definition is None:
+            return {"valid": False, "errors": f"entity not found: {entity_slug!r}"}
+        try:
+            await FormService(session, self._org_id).validate_layout(definition.id, config)
+        except FormError as exc:
+            return {"valid": False, "errors": str(exc)}
+        return {"valid": True}
+
+    async def _tool_describe_workflow_actions(
+        self, _session: AsyncSession, _args: dict[str, Any]
+    ) -> dict[str, Any]:
+        """On-demand reference for the workflow action catalog (no DB access)."""
+        return {
+            "notes": (
+                "Workflow steps are `actions` (each {type, config}) on create_workflow / "
+                "save_workflow_definition. Config values may embed {{after.<slug>}} / "
+                "{{before.<slug>}} tokens or a {\"$ref\": \"after.<slug>\"} envelope resolved against "
+                "the triggering record."
+            ),
+            "quick_pick": {
+                "POST to an external URL (simple)": "send_webhook",
+                "Authenticated HTTP call via a saved connection": "http_request",
+                "Email someone": "send_email",
+                "Email a fillable form link": "send_form",
+                "Create a record in another entity": "create_record",
+                "Change a field on the triggering record": "update_record_field",
+                "Write an audit line": "log",
+            },
+            "actions": {
+                "send_webhook": {
+                    "config": {"url": "required — target REST endpoint", "body": "optional object merged into the POST"},
+                    "use": "POST record data (before/after) plus body to an external REST endpoint.",
+                    "note": "Target host must be allow-listed (SSRF guard) or the call is blocked.",
+                },
+                "http_request": {
+                    "config": {
+                        "connection": "optional saved connection (for auth)",
+                        "url or path": "target (path appends to the connection base_url)",
+                        "method": "GET|POST|... (default GET)",
+                        "headers": "optional object",
+                        "body": "optional JSON body",
+                    },
+                    "use": "Authenticated HTTP call via a reusable connection; returns the parsed response.",
+                    "note": "Same allow-list SSRF guard as send_webhook.",
+                },
+                "send_email": {
+                    "config": {"to": "recipient (or {$ref:'after.<slug>'})", "subject": "", "body": "supports {{after.<slug>}} tokens"},
+                    "use": "Send a templated email.",
+                },
+                "send_form": {
+                    "config": {"form_id": "required", "recipient_field": "slug on the record", "recipient": "or a literal/$ref email"},
+                    "use": "Mint an intake-form link bound to the triggering record and email it.",
+                },
+                "create_record": {
+                    "config": {"target_slug": "required entity slug", "values": "object of field→value (tokens/$ref ok)"},
+                    "use": "Create a record in another entity.",
+                },
+                "update_record_field": {
+                    "config": {"field": "required slug", "value": "value or {$ref:...}"},
+                    "use": "Update one field on the triggering record.",
+                },
+                "log": {"config": {"message": "text"}, "use": "Emit a log line (no side effects)."},
+            },
+            "next": (
+                "Author with create_workflow (or save_workflow_definition for a full BPMN graph), "
+                "validate_workflow, then publish_workflow. Surface it from a form/view button via "
+                "action {kind:'run_workflow', workflow_id, inputs}."
+            ),
+        }
+
+    async def _tool_describe_bpmn_vocabulary(
+        self, _session: AsyncSession, _args: dict[str, Any]
+    ) -> dict[str, Any]:
+        """On-demand reference for the BPMN graph shape (save_workflow_definition)."""
+        return {
+            "graph_shape": "{schema_version: 2, nodes: [...], edges: [...]}",
+            "node": "{id (unique, [A-Za-z0-9_-], <=64), type, data:{...}, position?:{x,y}}",
+            "edge": "{id, source, target, source_handle? (a gateway case key for branch edges)}",
+            "node_types": {
+                "trigger": "Start. data:{operations:[create|update|delete], field_filter:[slug]}. Exactly one.",
+                "task": (
+                    "A work step. data:{task_type, action_type, config}. task_type is the BPMN kind "
+                    "(service|send|script|businessRule|user|receive|call|subProcess|manual); for our "
+                    "actions use task_type 'send' or 'service' with action_type from "
+                    "describe_workflow_actions (send_webhook, http_request, send_email, ...)."
+                ),
+                "gateway": (
+                    "Branch/merge. data:{gateway_type: exclusive|parallel|inclusive|event_based, "
+                    "expr?, cases?}. exclusive = if/else on `expr`; parallel = fork/join; branch "
+                    "edges carry the matching case in source_handle."
+                ),
+                "event": (
+                    "data:{position: intermediate|end|boundary, event_type: "
+                    "timer|message|signal|error|escalation|terminate|none, attached_to? (boundary "
+                    "host node id)}. Use a boundary timer event on a task for escalation/timeout."
+                ),
+            },
+            "rules": (
+                "One trigger; every path should reach an end event; gateway branch edges need a "
+                "source_handle matching a case; boundary events set attached_to to their host task."
+            ),
+            "next": (
+                "For a simple linear trigger→actions flow, prefer create_workflow. Otherwise build "
+                "the graph, then validate_workflow (no save) to get precise issues, then "
+                "save_workflow_definition, then publish_workflow."
+            ),
+        }
 
     # ---- Views (org-admin) ----
     async def _tool_list_views(self, session: AsyncSession, _args: dict[str, Any]) -> dict[str, Any]:

@@ -147,7 +147,7 @@ async def test_agent_create_workflow_rejects_unknown_target(
             "actions": [{"type": "create_record", "target_slug": "ghost", "values": {}}],
         },
     )
-    assert result == {"error": "target entity not found: 'ghost'"}
+    assert result["error"] == "target entity not found: 'ghost'"  # a recovery `hint` may also be present
     # No half-built workflow left behind.
     from api.repositories.workflow import WorkflowRepository
 
@@ -162,7 +162,7 @@ async def test_agent_tool_errors_are_returned_not_raised(
 
     # Unknown entity → structured error, not an exception.
     result = await agent._dispatch("get_entity_schema", {"slug": "nonexistent"})
-    assert result == {"error": "entity not found"}
+    assert result["error"] == "entity not found"  # a recovery `hint` may also be present
 
     # Unknown tool name → structured error.
     unknown = await agent._dispatch("do_something_weird", {})
