@@ -241,9 +241,10 @@ class TokenEngine:
     async def advance_tokens(self, *, limit: int = 100) -> dict[str, int]:
         """Claim a cross-org batch of active tokens and advance each one node."""
         claimed = (
-            await self._session.execute(
-                text(
-                    """
+            (
+                await self._session.execute(
+                    text(
+                        """
                     UPDATE workflow_run_tokens t
                     SET status='running', lease_owner=:owner, leased_at=now()
                     WHERE (t.id, t.created_at) IN (
@@ -255,10 +256,13 @@ class TokenEngine:
                     )
                     RETURNING t.id, t.created_at, t.org_id, t.run_id, t.run_created_at
                     """
-                ),
-                {"owner": self._worker_id, "lim": limit},
+                    ),
+                    {"owner": self._worker_id, "lim": limit},
+                )
             )
-        ).mappings().all()
+            .mappings()
+            .all()
+        )
 
         counters: dict[str, int] = {"claimed": len(claimed), "advanced": 0, "parked": 0, "failed": 0}
         for row in claimed:
@@ -285,9 +289,10 @@ class TokenEngine:
         and crashed 'running' leases past the TTL. Mirrors resume_waiting_runs."""
         now = datetime.now(UTC)
         claimed = (
-            await self._session.execute(
-                text(
-                    """
+            (
+                await self._session.execute(
+                    text(
+                        """
                     UPDATE workflow_run_tokens t
                     SET status='active', lease_owner=NULL, leased_at=NULL
                     WHERE (t.id, t.created_at) IN (
@@ -304,10 +309,13 @@ class TokenEngine:
                     )
                     RETURNING t.id
                     """
-                ),
-                {"now": now, "stale": now - timedelta(seconds=LEASE_TTL_SECONDS), "lim": limit},
+                    ),
+                    {"now": now, "stale": now - timedelta(seconds=LEASE_TTL_SECONDS), "lim": limit},
+                )
             )
-        ).mappings().all()
+            .mappings()
+            .all()
+        )
         return {"reactivated": len(claimed)}
 
     async def _release_token(self, token_id: uuid.UUID, created_at: datetime) -> None:
@@ -323,15 +331,19 @@ class TokenEngine:
         """Privileged best-effort fail after a savepoint rollback detached the ORM
         object; also fails the owning run."""
         row = (
-            await self._session.execute(
-                text(
-                    "UPDATE workflow_run_tokens SET status='dead', finished_at=now(), "
-                    "data = coalesce(data,'{}'::jsonb) || jsonb_build_object('_error', cast(:err AS text)) "
-                    "WHERE id=:id AND created_at=:ca RETURNING run_id, run_created_at, org_id"
-                ),
-                {"err": error, "id": token_id, "ca": created_at},
+            (
+                await self._session.execute(
+                    text(
+                        "UPDATE workflow_run_tokens SET status='dead', finished_at=now(), "
+                        "data = coalesce(data,'{}'::jsonb) || jsonb_build_object('_error', cast(:err AS text)) "
+                        "WHERE id=:id AND created_at=:ca RETURNING run_id, run_created_at, org_id"
+                    ),
+                    {"err": error, "id": token_id, "ca": created_at},
+                )
             )
-        ).mappings().one_or_none()
+            .mappings()
+            .one_or_none()
+        )
         if row is not None:
             await self._session.execute(
                 text(
@@ -422,9 +434,7 @@ class TokenEngine:
             data = token.data or {}
             if data.get("_completed"):
                 output = data.get("_completion_output") or {"completed": True}
-                cleaned = {
-                    k: v for k, v in data.items() if k not in ("_completed", "_completion_output", "_armed")
-                }
+                cleaned = {k: v for k, v in data.items() if k not in ("_completed", "_completion_output", "_armed")}
                 await self._record_step(run, node, token, status="succeeded", output=output)
                 variables = None
                 capture = node.data.get("capture")
@@ -494,6 +504,7 @@ class TokenEngine:
             record_id=run.record_id,
             before=snapshot.get("before"),
             after=snapshot.get("after"),
+            inputs=snapshot.get("inputs") or {},
             entity_definition_id=await self._entity_of(run),
             origin_run_id=run.id,
         )
@@ -532,7 +543,12 @@ class TokenEngine:
             await self._session.flush()
             logger.info(
                 "workflow task retry %d/%d (run=%s node=%s) in %.1fs: %s",
-                attempt + 1, policy.max_attempts, run.id, node.id, delay, result.error,
+                attempt + 1,
+                policy.max_attempts,
+                run.id,
+                node.id,
+                delay,
+                result.error,
             )
             return NodeOutcome(
                 "park",
@@ -660,6 +676,10 @@ class TokenEngine:
             input_snapshot={
                 "before": snapshot.get("before"),
                 "after": snapshot.get("after"),
+                # Carry the parent's manual-run inputs so a called sub-process can
+                # also resolve ``inputs.<key>`` (the primary inter-run channel is
+                # still ``vars`` via a task's ``capture``).
+                "inputs": snapshot.get("inputs") or {},
                 "vars": run.variables or {},
             },
             depth=run.depth + 1,
@@ -684,9 +704,7 @@ class TokenEngine:
             return NodeOutcome("advance", targets=_out_edges(model, node.id), variables=variables)
 
         if status == "failed":
-            await self._record_step(
-                run, node, token, status="failed", output={"child_run_id": str(child.id)}
-            )
+            await self._record_step(run, node, token, status="failed", output={"child_run_id": str(child.id)})
             boundary = _error_boundary_for(model, node.id)
             if boundary is not None:
                 return NodeOutcome(
@@ -733,9 +751,7 @@ class TokenEngine:
         # Exclusive (and event-based routing / condition / switch / passthrough).
         return self._exclusive_route(node, run, model)
 
-    def _exclusive_route(
-        self, node: WorkflowNode, run: WorkflowRun, model: WorkflowDefinitionModel
-    ) -> NodeOutcome:
+    def _exclusive_route(self, node: WorkflowNode, run: WorkflowRun, model: WorkflowDefinitionModel) -> NodeOutcome:
         outs = _out_edges(model, node.id)
         if not outs:
             return NodeOutcome("complete")
@@ -819,8 +835,7 @@ class TokenEngine:
         others = [
             t
             for t in await tokens.list_for_run(run.id)
-            if t.status in ("active", "running", "waiting")
-            and not (t.node_id == node.id and t.wait_kind == "join")
+            if t.status in ("active", "running", "waiting") and not (t.node_id == node.id and t.wait_kind == "join")
         ]
         reachable = _forward_reachable_nodes(model, {t.node_id for t in others})
         if node.id in reachable:
@@ -1134,5 +1149,8 @@ def _expr_context(run: WorkflowRun) -> dict[str, Any]:
     return {
         "before": snapshot.get("before"),
         "after": snapshot.get("after"),
+        # Caller-supplied manual-run variables (empty for record/form runs), so
+        # gateways/scripts can route on ``inputs.<key>``.
+        "inputs": snapshot.get("inputs") or {},
         "vars": run.variables or {},
     }

@@ -80,8 +80,11 @@ class Workflow(Base, UUIDMixin, TimestampMixin):
 
     name: Mapped[str] = mapped_column(String(200))
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    entity_definition_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("entity_definitions.id", ondelete="CASCADE"), index=True
+    # NULL for a manual (BPMN "none" start event) workflow that is run on demand
+    # with caller-supplied input variables rather than bound to an entity's
+    # create/update/delete stream. Data-change and form-source triggers require it.
+    entity_definition_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("entity_definitions.id", ondelete="CASCADE"), index=True, nullable=True
     )
     enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     # References workflow_versions.id. No DB FK to avoid a circular dependency
@@ -371,6 +374,9 @@ class WorkflowInboundEndpoint(Base, UUIDMixin, TimestampMixin):
     token_hash: Mapped[str] = mapped_column(String(64), index=True)
     workflow_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
+    # Fernet ciphertext of the HMAC signing secret (services/crypto.py). Present
+    # ⇒ the receiver REQUIRES a valid X-KM2-Signature; NULL ⇒ legacy token-only.
+    signing_secret_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     org_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True

@@ -67,6 +67,14 @@ class TestTriggerMatches:
         assert trigger_matches(data, "update", set(), source="form")
         assert trigger_matches(data, "update", set(), source="record")
 
+    def test_manual_source_never_matches_outbox(self) -> None:
+        # A manual (BPMN "none") start event is on-demand only — no record/form
+        # change fires it, regardless of operation or (absent) operations key.
+        data = {"source": "manual", "inputs": [{"key": "x"}]}
+        assert not trigger_matches(data, "create", set(), source="record")
+        assert not trigger_matches(data, "update", {"title"}, source="record")
+        assert not trigger_matches(data, "delete", set(), source="form")
+
 
 def _graph(nodes, edges):
     return {"nodes": nodes, "edges": edges}
@@ -106,6 +114,25 @@ class TestEvaluateGraph:
         small = evaluate_graph(g, {"after": {"amount": 5}})
         assert [n["id"] for n in small.actions] == ["no"]
         assert small.trace[0].result is False
+
+    def test_condition_routes_on_manual_inputs(self) -> None:
+        # A manual workflow's post-delay/legacy condition must be able to route on
+        # the caller-supplied input variables (the context the resume path rebuilds).
+        g = _graph(
+            [
+                {"id": "t", "type": "trigger", "data": {"source": "manual"}},
+                {"id": "c", "type": "condition", "data": {"expr": {"==": [{"var": "inputs.approved"}, True]}}},
+                {"id": "yes", "type": "action", "data": {"action_type": "notify"}},
+            ],
+            [
+                {"id": "e1", "source": "t", "target": "c"},
+                {"id": "e2", "source": "c", "target": "yes", "source_handle": "true"},
+            ],
+        )
+        approved = evaluate_graph(g, {"before": None, "after": None, "inputs": {"approved": True}})
+        assert [n["id"] for n in approved.actions] == ["yes"]
+        rejected = evaluate_graph(g, {"before": None, "after": None, "inputs": {"approved": False}})
+        assert rejected.actions == []
 
     def test_condition_false_dead_end_no_actions(self) -> None:
         g = _graph(

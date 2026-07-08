@@ -11,7 +11,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 class WorkflowCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
-    entity_definition_id: uuid.UUID
+    # None => a manual (on-demand) workflow with a BPMN "none" start event; it is
+    # run with caller-supplied input variables instead of bound to an entity.
+    entity_definition_id: uuid.UUID | None = None
     description: str | None = Field(default=None, max_length=2000)
 
 
@@ -48,19 +50,26 @@ class WorkflowRead(BaseModel):
     id: uuid.UUID
     name: str
     description: str | None
-    entity_definition_id: uuid.UUID
+    entity_definition_id: uuid.UUID | None
     enabled: bool
     active_version_id: uuid.UUID | None
     run_permission: RunPermission = Field(default_factory=RunPermission)
 
 
 class ManualRunRequest(BaseModel):
-    """Run the published workflow for real against provided inputs."""
+    """Run the published workflow for real against provided inputs.
+
+    For an entity-bound workflow the run is described by ``operation`` +
+    ``record_id`` (or ``before``/``after``). For a manual (on-demand) workflow,
+    ``inputs`` carries the caller-supplied variables declared by the trigger; the
+    record fields are ignored.
+    """
 
     operation: Literal["create", "update", "delete"] = "update"
     record_id: uuid.UUID | None = None
     before: dict[str, Any] | None = None
     after: dict[str, Any] | None = None
+    inputs: dict[str, Any] = Field(default_factory=dict)
 
 
 class ManualRunResult(BaseModel):
@@ -81,6 +90,8 @@ class WorkflowTestRequest(BaseModel):
     operation: Literal["create", "update", "delete"] = "update"
     before: dict[str, Any] | None = None
     after: dict[str, Any] | None = None
+    # Manual-trigger input variables for a dry run (side-effect-free simulation).
+    inputs: dict[str, Any] = Field(default_factory=dict)
 
 
 class SimulatedStep(BaseModel):
@@ -140,6 +151,13 @@ class WorkflowRunDetail(WorkflowRunRead):
     steps: list[WorkflowRunStepRead] = Field(default_factory=list)
 
 
+class WorkflowRunActivityRead(WorkflowRunRead):
+    """A run row for the org-wide activity feed — carries the parent workflow's
+    name so the feed can label each run without a second lookup."""
+
+    workflow_name: str
+
+
 class ConnectionCreate(BaseModel):
     """Create a connector credential. `secret` is write-only (encrypted at rest)."""
 
@@ -185,13 +203,20 @@ class InboundEndpointRead(BaseModel):
     name: str
     workflow_id: uuid.UUID
     enabled: bool
+    # True when the endpoint requires an HMAC signature (set by the router; the
+    # secret itself is never returned on reads).
+    has_signing_secret: bool = False
 
 
 class InboundEndpointCreated(InboundEndpointRead):
-    """Returned once on creation — carries the plaintext token (never stored)."""
+    """Returned once on creation — carries the plaintext token + signing secret
+    (neither is stored recoverably: the token only as a hash, the secret only
+    Fernet-encrypted)."""
 
     token: str = ""
     url: str = ""
+    signing_secret: str = ""
+    signature_header: str = ""
 
 
 class CompleteTaskRequest(BaseModel):

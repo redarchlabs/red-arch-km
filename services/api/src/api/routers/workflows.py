@@ -41,6 +41,7 @@ from api.schemas.workflow import (
     VersionSaveRequest,
     WorkflowCreate,
     WorkflowRead,
+    WorkflowRunActivityRead,
     WorkflowRunRead,
     WorkflowRunStepRead,
     WorkflowTestRequest,
@@ -51,6 +52,7 @@ from api.schemas.workflow import (
 from api.services.email import EmailSender
 from api.services.workflow.actions import SIDE_EFFECTING_ACTIONS
 from api.services.workflow.dispatcher import WorkflowDispatchService
+from api.services.workflow.manual_inputs import InputValidationError, coerce_inputs, is_manual_trigger
 from api.services.workflow.permissions import can_run
 from api.services.workflow.service import (
     WorkflowConflictError,
@@ -67,9 +69,7 @@ _ERROR_STATUS = {
 
 
 def _raise(exc: Exception) -> NoReturn:
-    raise HTTPException(
-        status_code=_ERROR_STATUS.get(type(exc), status.HTTP_400_BAD_REQUEST), detail=str(exc)
-    ) from exc
+    raise HTTPException(status_code=_ERROR_STATUS.get(type(exc), status.HTTP_400_BAD_REQUEST), detail=str(exc)) from exc
 
 
 @router.get("/", response_model=list[WorkflowRead])
@@ -125,9 +125,7 @@ async def create_connection(
     from api.services.crypto import encrypt_secret
 
     secret_encrypted = (
-        encrypt_secret(body.secret, settings.org_encryption_key.get_secret_value())
-        if body.secret
-        else None
+        encrypt_secret(body.secret, settings.org_encryption_key.get_secret_value()) if body.secret else None
     )
     conn = await WorkflowConnectionRepository(session, ctx.org_id).create(
         name=body.name,
@@ -156,9 +154,7 @@ async def update_connection(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="connection not found")
     # Only re-encrypt when a new secret is supplied; omitting it keeps the old one.
     secret_encrypted = (
-        encrypt_secret(body.secret, settings.org_encryption_key.get_secret_value())
-        if body.secret
-        else None
+        encrypt_secret(body.secret, settings.org_encryption_key.get_secret_value()) if body.secret else None
     )
     await repo.update(
         conn,
@@ -193,7 +189,13 @@ async def list_inbound_endpoints(
     session: Annotated[AsyncSession, Depends(get_db)],
 ) -> list[InboundEndpointRead]:
     items = await WorkflowInboundEndpointRepository(session, ctx.org_id).list_all()
-    return [InboundEndpointRead.model_validate(e) for e in items]
+
+    def _read(e: object) -> InboundEndpointRead:
+        r = InboundEndpointRead.model_validate(e)
+        r.has_signing_secret = bool(getattr(e, "signing_secret_encrypted", None))
+        return r
+
+    return [_read(e) for e in items]
 
 
 @router.post("/inbound-endpoints", response_model=InboundEndpointCreated, status_code=status.HTTP_201_CREATED)
@@ -205,20 +207,31 @@ async def create_inbound_endpoint(
 ) -> InboundEndpointCreated:
     import secrets
 
+    from api.services.crypto import encrypt_secret
     from api.services.workflow.inbound import hash_token
+    from api.services.workflow.webhook_signing import SIGNATURE_HEADER
 
     wf = await WorkflowRepository(session, ctx.org_id).get(body.workflow_id)
     if wf is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="workflow not found")
     token = secrets.token_urlsafe(32)
+    # The signing secret authenticates each POST (HMAC), so a leaked URL alone
+    # can't trigger the workflow. Stored Fernet-encrypted; shown to the creator once.
+    signing_secret = "whsec_" + secrets.token_urlsafe(32)
     endpoint = await WorkflowInboundEndpointRepository(session, ctx.org_id).create(
-        name=body.name, workflow_id=body.workflow_id, token_hash=hash_token(token)
+        name=body.name,
+        workflow_id=body.workflow_id,
+        token_hash=hash_token(token),
+        signing_secret_encrypted=encrypt_secret(signing_secret, settings.org_encryption_key.get_secret_value()),
     )
-    # The token is shown ONCE (only its hash is stored). Build the callable URL.
+    # Token + secret are shown ONCE (only a hash / ciphertext is stored). Build the URL.
     url = f"{settings.public_base_url.rstrip('/')}/api/inbound/{token}"
     read = InboundEndpointCreated.model_validate(endpoint)
     read.token = token
     read.url = url
+    read.signing_secret = signing_secret
+    read.signature_header = SIGNATURE_HEADER
+    read.has_signing_secret = True
     return read
 
 
@@ -263,9 +276,7 @@ async def update_workflow(
         name=body.name,
         description=body.description,
         enabled=body.enabled,
-        run_permission=body.run_permission.model_dump(mode="json")
-        if body.run_permission is not None
-        else None,
+        run_permission=body.run_permission.model_dump(mode="json") if body.run_permission is not None else None,
     )
     return WorkflowRead.model_validate(wf)
 
@@ -308,17 +319,50 @@ async def run_workflow(
         org_encryption_key=settings.org_encryption_key.get_secret_value(),
     )
 
-    # SECURITY: never trust client-supplied record data for a manual run.
+    # A manual (BPMN "none" start event) workflow runs on demand with the caller-
+    # supplied input variables the trigger declares. Detected by the trigger's
+    # source (so an entity-bound workflow whose trigger is switched to manual also
+    # runs this way); an entity-less workflow can only ever be manual. The record
+    # fields are irrelevant and ignored; inputs are validated/coerced against the
+    # declared schema (undeclared keys dropped, required ones enforced) so a caller
+    # can only supply the variables the author designed. run_permission still gates
+    # WHO may run it.
+    if is_manual_trigger(version.definition) or wf.entity_definition_id is None:
+        try:
+            inputs = coerce_inputs(version.definition, body.inputs)
+        except InputValidationError as exc:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
+        run, executed = await dispatcher.run_version_manually(
+            ctx.org_id,
+            wf,
+            version,
+            operation="manual",
+            record_id=None,
+            before=None,
+            after=None,
+            inputs=inputs,
+            actor_user_id=ctx.user.profile_id,
+        )
+        return ManualRunResult(
+            run_id=run.id,
+            status=run.status,
+            conditions_matched=bool(run.conditions_matched),
+            actions_executed=executed,
+            error=run.error,
+        )
+
+    # SECURITY: never trust client-supplied record data for an entity-bound run.
     #  * With a record_id, load before/after from the real entity table scoped
     #    to this org + the workflow's entity — a cross-org/cross-entity id can't
     #    resolve, and the client's before/after are ignored entirely.
-    #  * Without a record_id, refuse to run any side-effecting action (email/
-    #    webhook/form invite) on free-form client data — otherwise a member with
-    #    any_member run_permission could email/webhook arbitrary fabricated data.
+    #  * Without a record_id, a side-effecting action (email/webhook/http/form)
+    #    still runs (e.g. a view "run now" button), but its record context is
+    #    NULLED — the client's before/after are dropped so only the workflow's
+    #    own author-defined config can leave the org. A member could otherwise
+    #    push arbitrary fabricated data outward; run_permission stays the gate
+    #    on who may trigger the run at all.
     if body.record_id is not None:
-        record = await dispatcher.load_trigger_record(
-            ctx.org_id, wf.entity_definition_id, body.record_id
-        )
+        record = await dispatcher.load_trigger_record(ctx.org_id, wf.entity_definition_id, body.record_id)
         if record is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -334,14 +378,9 @@ async def run_workflow(
             if node.get("type") in ("action", "task")
         }
         if action_types & SIDE_EFFECTING_ACTIONS:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    "This workflow performs external actions (email/webhook/form). "
-                    "Provide a record_id so it runs against a real record."
-                ),
-            )
-        before, after = body.before, body.after
+            before, after = None, None  # never trust client data outbound
+        else:
+            before, after = body.before, body.after
 
     run, executed = await dispatcher.run_version_manually(
         ctx.org_id,
@@ -426,11 +465,27 @@ async def test_version(
     service = WorkflowService(session, ctx.org_id)
     try:
         result = await service.test_version(
-            version_id, operation=body.operation, before=body.before, after=body.after
+            version_id, operation=body.operation, before=body.before, after=body.after, inputs=body.inputs
         )
     except WorkflowNotFoundError as exc:
         _raise(exc)
     return WorkflowTestResult.model_validate(result)
+
+
+@router.get("/runs/recent", response_model=list[WorkflowRunActivityRead])
+async def list_recent_runs(
+    ctx: Annotated[OrgContext, Depends(require_org_admin)],
+    session: Annotated[AsyncSession, Depends(get_db)],
+    limit: Annotated[int, Query(ge=1, le=100)] = 25,
+) -> list[WorkflowRunActivityRead]:
+    """Most-recent runs across all workflows in the org — the activity feed on
+    the workflows page. Declared before ``/{workflow_id}/...`` so the literal
+    ``runs/recent`` path is never shadowed by the workflow-id routes."""
+    rows = await WorkflowService(session, ctx.org_id).recent_runs(limit=limit)
+    return [
+        WorkflowRunActivityRead(**WorkflowRunRead.model_validate(run).model_dump(), workflow_name=name)
+        for run, name in rows
+    ]
 
 
 @router.get("/{workflow_id}/runs", response_model=list[WorkflowRunRead])

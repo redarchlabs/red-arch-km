@@ -249,8 +249,12 @@ async def test_agent_run_workflow_executes_real_side_effect(engine: AsyncEngine,
     assert fresh["title"] == "CLOSED"
 
 
-async def test_agent_run_side_effecting_requires_record(engine: AsyncEngine, admin_session: AsyncSession) -> None:
-    """A graph with an email/webhook/form step refuses to run on fabricated data."""
+async def test_agent_run_side_effecting_without_record_drops_client_data(
+    engine: AsyncEngine, admin_session: AsyncSession
+) -> None:
+    """A no-record side-effecting run is ALLOWED (e.g. a view 'run now' button),
+    but client-supplied before/after are DROPPED so only the workflow's own
+    author-defined config leaves the org (mirrors the REST manual-run guard)."""
     org = await _org(admin_session)
     agent = _agent(engine, org.id)
     await _seed_ticket_entity(agent)
@@ -260,6 +264,11 @@ async def test_agent_run_side_effecting_requires_record(engine: AsyncEngine, adm
         "schema_version": 2,
         "nodes": [
             {"id": "start", "type": "trigger", "data": {"operations": ["update"]}},
+            {
+                "id": "log",
+                "type": "task",
+                "data": {"task_type": "service", "action_type": "log", "config": {"message": "fired"}},
+            },
             {
                 "id": "mail",
                 "type": "task",
@@ -271,15 +280,21 @@ async def test_agent_run_side_effecting_requires_record(engine: AsyncEngine, adm
             },
             {"id": "done", "type": "event", "data": {"position": "end", "event_type": "none"}},
         ],
-        "edges": [{"source": "start", "target": "mail"}, {"source": "mail", "target": "done"}],
+        "edges": [
+            {"source": "start", "target": "log"},
+            {"source": "log", "target": "mail"},
+            {"source": "mail", "target": "done"},
+        ],
     }
     await agent._dispatch("save_workflow_definition", {"workflow_id": wf_id, "definition": graph})
     await agent._dispatch("publish_workflow", {"workflow_id": wf_id})
 
-    # No record_id → refuse (mirrors the REST manual-run guard).
-    result = await agent._dispatch("run_workflow", {"workflow_id": wf_id, "operation": "update"})
-    assert "error" in result
-    assert "record_id" in result["error"]
+    # No record_id + fabricated `after` → runs, but the fabricated data is discarded.
+    result = await agent._dispatch(
+        "run_workflow", {"workflow_id": wf_id, "operation": "update", "after": {"title": "FABRICATED"}}
+    )
+    assert "error" not in result, result
+    assert result["run"]["status"] in {"succeeded", "failed"}  # ran (send_email no-ops without SMTP)
 
 
 async def test_agent_run_workflow_rejects_bad_operation(engine: AsyncEngine, admin_session: AsyncSession) -> None:
