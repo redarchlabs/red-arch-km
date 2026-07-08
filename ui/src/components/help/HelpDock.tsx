@@ -5,8 +5,13 @@ import { usePathname } from "next/navigation";
 import { useEffect } from "react";
 
 import { Markdown } from "@/components/common/Markdown";
+import { useDesignerStore } from "@/components/workflows/designer/store";
 import { useHelp } from "@/context/HelpContext";
 import { helpForPath } from "@/lib/help";
+import { helpForNode } from "@/lib/nodeHelp";
+
+/** Workflow designer route (`/workflows/<id>/design`) — where node help applies. */
+const DESIGN_ROUTE = /^\/workflows\/[^/]+\/design(\/|$)/;
 
 /**
  * Context-sensitive help panel. It resolves the CURRENT route to the most
@@ -19,9 +24,16 @@ import { helpForPath } from "@/lib/help";
  *    closes it.
  */
 export function HelpDock() {
-  const { open, setOpen } = useHelp();
-  const pathname = usePathname();
-  const topic = helpForPath(pathname ?? "/");
+  const { open, setOpen, override } = useHelp();
+  const pathname = usePathname() ?? "/";
+  // The designer store is a global singleton (empty + reset off-route), so this
+  // is safe to read on every page; we only consult it on the design route.
+  const selectedNode = useDesignerStore((s) => s.nodes.find((n) => n.selected) ?? null);
+  const nodeTopic = DESIGN_ROUTE.test(pathname) ? helpForNode(selectedNode) : null;
+  // Precedence: an explicit item override (builder element, admin tab, …) wins,
+  // then designer node help, then route help.
+  const itemTopic = override ?? nodeTopic;
+  const topic = itemTopic ?? helpForPath(pathname);
 
   useEffect(() => {
     if (!open) return;
@@ -53,8 +65,17 @@ export function HelpDock() {
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
         <Markdown content={topic.body} />
         <p className="mt-6 border-t pt-3 text-xs text-muted-foreground">
-          Help updates as you move between pages. Reopen it any time with the{" "}
-          <span className="font-medium">?</span> button.
+          {itemTopic ? (
+            <>
+              Showing help for what you have selected. Pick another item — or
+              click empty space — to change it.
+            </>
+          ) : (
+            <>
+              Help updates as you move between pages. Reopen it any time with the{" "}
+              <span className="font-medium">?</span> button.
+            </>
+          )}
         </p>
       </div>
     </>

@@ -1,11 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { AttributeManager } from "@/components/admin/AttributeManager";
 import { DimensionManager } from "@/components/admin/DimensionManager";
 import { MembershipManager } from "@/components/admin/MembershipManager";
 import { TagManager } from "@/components/admin/TagManager";
+import { useHelpOverride } from "@/context/HelpContext";
+import { ADMIN_TAB_HELP } from "@/lib/adminHelp";
 import type { DimensionKind } from "@/lib/api/dimensions";
 import { cn } from "@/lib/utils";
 
@@ -41,6 +43,13 @@ function isDimension(key: AdminTab): key is DimensionKind {
 
 export default function AdminPage() {
   const [active, setActive] = useState<AdminTab>("regions");
+
+  // Show help for the active tab (clears when leaving the page).
+  const setHelp = useHelpOverride();
+  useEffect(() => {
+    setHelp(ADMIN_TAB_HELP[active]);
+    return () => setHelp(null);
+  }, [active, setHelp]);
 
   return (
     <div className="space-y-6">

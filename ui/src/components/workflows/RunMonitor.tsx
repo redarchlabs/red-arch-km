@@ -7,8 +7,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { RunOverlayCanvas } from "@/components/workflows/RunOverlayCanvas";
+import { ACTIVE_STATUSES, StatusPill, duration } from "@/components/workflows/runStatus";
 import { UserTaskActions } from "@/components/workflows/UserTaskActions";
-import { cn } from "@/lib/utils";
 import { getApiErrorMessage } from "@/lib/api/errors";
 import {
   getWorkflow,
@@ -20,41 +20,25 @@ import {
   type WorkflowRunStep,
 } from "@/lib/api/workflows";
 
-const STATUS_CLASSES: Record<string, string> = {
-  succeeded: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400",
-  failed: "bg-rose-500/15 text-rose-600 dark:text-rose-400",
-  running: "bg-sky-500/15 text-sky-600 dark:text-sky-400",
-  waiting: "bg-violet-500/15 text-violet-600 dark:text-violet-400",
-  retrying: "bg-amber-500/15 text-amber-600 dark:text-amber-400",
-  skipped: "bg-amber-500/15 text-amber-600 dark:text-amber-400",
-  pending: "bg-muted text-muted-foreground",
-};
-
-function StatusPill({ status }: { status: string }) {
-  return (
-    <span className={cn("rounded-full px-2 py-0.5 text-xs font-medium", STATUS_CLASSES[status] ?? "bg-muted")}>
-      {status}
-    </span>
-  );
-}
-
-function duration(start: string | null, end: string | null): string {
-  if (!start || !end) return "—";
-  const ms = new Date(end).getTime() - new Date(start).getTime();
-  if (ms < 1000) return `${ms}ms`;
-  return `${(ms / 1000).toFixed(1)}s`;
-}
-
-const ACTIVE = new Set(["pending", "running", "retrying", "waiting"]);
+const ACTIVE = ACTIVE_STATUSES;
 export const POLL_MS = 2500;
 
-export function RunMonitor({ workflowId }: { workflowId: string }) {
+export function RunMonitor({
+  workflowId,
+  initialRunId = null,
+}: {
+  workflowId: string;
+  /** A run to auto-expand + scroll to on first load (from the activity-feed deep link). */
+  initialRunId?: string | null;
+}) {
   const [runs, setRuns] = useState<WorkflowRun[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [definition, setDefinition] = useState<WorkflowDefinition | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Auto-expand the deep-linked run once, after it first appears in the list.
+  const didAutoExpand = useRef(false);
   // Monotonic request id: a slow earlier response with a stale id is ignored so
   // it can't overwrite the result of a newer request.
   const reqId = useRef(0);
@@ -100,6 +84,20 @@ export function RunMonitor({ workflowId }: { workflowId: string }) {
       if (timer.current) clearTimeout(timer.current);
     };
   }, [load]);
+
+  // Expand + scroll to the deep-linked run once it has loaded (the activity feed
+  // links here with ?run=<id> so "go into" lands on the run's step trace).
+  useEffect(() => {
+    if (!initialRunId || didAutoExpand.current) return;
+    if (!runs.some((r) => r.id === initialRunId)) return;
+    didAutoExpand.current = true;
+    setExpanded(initialRunId);
+    requestAnimationFrame(() => {
+      document
+        .querySelector(`[data-run-id="${initialRunId}"]`)
+        ?.scrollIntoView({ block: "center", behavior: "smooth" });
+    });
+  }, [initialRunId, runs]);
 
   // Load the published graph once so a run row can overlay live state on it.
   useEffect(() => {
@@ -207,7 +205,11 @@ function RunRow({
 
   return (
     <>
-      <tr className="cursor-pointer border-b last:border-0 hover:bg-muted/30" onClick={onToggle}>
+      <tr
+        data-run-id={run.id}
+        className="cursor-pointer border-b last:border-0 hover:bg-muted/30 scroll-mt-24"
+        onClick={onToggle}
+      >
         <td className="px-3 py-2 text-muted-foreground">
           {open ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
         </td>

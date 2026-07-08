@@ -142,6 +142,11 @@ export default function WebhooksPage() {
                   starts {workflowName(endpoint.workflow_id)}
                 </div>
               </div>
+              {endpoint.has_signing_secret ? (
+                <span className="rounded-full border border-emerald-600/30 bg-emerald-500/10 px-2 py-0.5 text-xs text-emerald-700 dark:text-emerald-400">
+                  Signed
+                </span>
+              ) : null}
               {!endpoint.enabled ? <span className="text-xs text-muted-foreground">(disabled)</span> : null}
               <Button
                 variant="ghost"
@@ -161,46 +166,64 @@ export default function WebhooksPage() {
   );
 }
 
-function TokenDialog({ created, onClose }: { created: InboundEndpointCreated; onClose: () => void }) {
+function SecretField({ label, value }: { label: string; value: string }) {
   const [copied, setCopied] = useState(false);
-
   const copy = async () => {
     try {
-      await navigator.clipboard?.writeText(created.url);
+      await navigator.clipboard?.writeText(value);
       setCopied(true);
     } catch {
-      // Clipboard may be unavailable (insecure context) — the URL is still shown to copy manually.
       setCopied(false);
     }
   };
+  return (
+    <div className="rounded-md border bg-muted/40 p-3">
+      <p className="mb-1 text-xs font-medium text-muted-foreground">{label}</p>
+      <div className="flex items-center gap-2">
+        <code className="flex-1 break-all rounded bg-background px-2 py-1 text-xs">{value}</code>
+        <Button
+          type="button"
+          variant="outline"
+          size="icon"
+          className="h-7 w-7 shrink-0"
+          onClick={() => void copy()}
+          aria-label={`Copy ${label}`}
+        >
+          <Copy className="h-4 w-4" />
+        </Button>
+      </div>
+      {copied ? <p className="mt-1 text-xs text-emerald-600 dark:text-emerald-400">Copied.</p> : null}
+    </div>
+  );
+}
 
+function TokenDialog({ created, onClose }: { created: InboundEndpointCreated; onClose: () => void }) {
   return (
     <Dialog open onClose={onClose}>
       <DialogHeader>
         <DialogTitle>Webhook created</DialogTitle>
         <DialogDescription>
-          Copy this URL now — the secret token is part of it and won&rsquo;t be shown again.
+          Copy the URL <strong>and signing secret</strong> now — neither is shown again. The caller
+          must sign every request, so the URL alone can&rsquo;t trigger the workflow.
         </DialogDescription>
       </DialogHeader>
 
-      <div className="rounded-md border bg-muted/40 p-3">
-        <p className="mb-1 text-xs font-medium text-muted-foreground">
-          Callable URL for &ldquo;{created.name}&rdquo;
-        </p>
-        <div className="flex items-center gap-2">
-          <code className="flex-1 break-all rounded bg-background px-2 py-1 text-xs">{created.url}</code>
-          <Button
-            type="button"
-            variant="outline"
-            size="icon"
-            className="h-7 w-7 shrink-0"
-            onClick={() => void copy()}
-            aria-label="Copy webhook URL"
-          >
-            <Copy className="h-4 w-4" />
-          </Button>
+      <div className="space-y-3">
+        <SecretField label={`Callable URL for “${created.name}”`} value={created.url} />
+        <SecretField label="Signing secret" value={created.signing_secret} />
+
+        <div className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
+          <p className="mb-1 font-medium text-foreground">How to sign each request</p>
+          <p>
+            Send header{" "}
+            <code className="rounded bg-muted px-1">{created.signature_header || "X-KM2-Signature"}</code>{" "}
+            with value <code className="rounded bg-muted px-1">{"t=<unix_seconds>,v1=<hex>"}</code>, where{" "}
+            <code className="rounded bg-muted px-1">{'hex = HMAC_SHA256(secret, t + "." + rawBody)'}</code>.
+            Sign the exact bytes you POST, within ±5 min of server time. The bound workflow runs
+            immediately with your JSON body as input (reference it via{" "}
+            <code className="rounded bg-muted px-1">{"{{after.<field>}}"}</code>).
+          </p>
         </div>
-        {copied ? <p className="mt-1 text-xs text-emerald-600 dark:text-emerald-400">Copied to clipboard.</p> : null}
       </div>
 
       <DialogFooter>

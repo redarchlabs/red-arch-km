@@ -135,14 +135,19 @@ export function checkGraphIntegrity(def: WorkflowDefinition): GraphIntegrity {
 }
 
 /** A fresh single-trigger starter graph for a brand-new workflow. */
-export function starterGraph(): { nodes: Node[]; edges: Edge[] } {
+export function starterGraph(opts?: { manual?: boolean }): { nodes: Node[]; edges: Edge[] } {
+  // A workflow with no entity starts life as a manual (BPMN "none") start event;
+  // an entity-bound one defaults to firing on record updates.
+  const data = opts?.manual
+    ? { source: "manual", inputs: [] }
+    : { operations: ["update"], field_filter: [] };
   return {
     nodes: [
       {
         id: "trigger",
         type: "trigger",
         position: { x: 240, y: 40 },
-        data: { operations: ["update"], field_filter: [] },
+        data,
       },
     ],
     edges: [],

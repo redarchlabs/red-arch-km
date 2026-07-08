@@ -6,6 +6,7 @@ import { use, useCallback, useEffect, useMemo, useState } from "react";
 
 import { FormPreview } from "@/components/forms/FormPreview";
 import { LayoutBuilder, type BuilderCtx } from "@/components/forms/builder/LayoutBuilder";
+import { useHelpOverride } from "@/context/HelpContext";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -41,6 +42,10 @@ function recordLabel(rec: EntityRecord): string {
 
 export default function FormBuilderPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
+
+  // The builder pushes per-element help on focus; clear it when leaving the page.
+  const clearHelp = useHelpOverride();
+  useEffect(() => () => clearHelp(null), [clearHelp]);
 
   const [form, setForm] = useState<Form | null>(null);
   const [entity, setEntity] = useState<EntityDefinition | null>(null);

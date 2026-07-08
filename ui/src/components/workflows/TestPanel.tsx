@@ -4,18 +4,27 @@ import { CheckCircle2, FlaskConical, XCircle } from "lucide-react";
 import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import {
+  ManualRunInputs,
+  collectDeclaredInputs,
+  missingRequiredInputs,
+} from "@/components/workflows/ManualRunInputs";
 import { RecordFieldEditor } from "@/components/workflows/RecordFieldEditor";
 import type { EntityField } from "@/lib/api/entities";
-import type { WorkflowTestResult } from "@/lib/api/workflows";
+import type { TriggerInput, WorkflowTestResult } from "@/lib/api/workflows";
 
 interface TestPanelProps {
   running: boolean;
   result: WorkflowTestResult | null;
   fields?: EntityField[];
+  /** True for a manual (on-demand) workflow — simulate with declared inputs. */
+  isManual?: boolean;
+  manualInputs?: TriggerInput[];
   onRun: (input: {
     operation: string;
     before: Record<string, unknown> | null;
     after: Record<string, unknown> | null;
+    inputs?: Record<string, unknown>;
   }) => void;
 }
 
@@ -26,12 +35,24 @@ function orNull(record: Record<string, unknown>): Record<string, unknown> | null
   return Object.keys(record).length > 0 ? record : null;
 }
 
-export function TestPanel({ running, result, fields, onRun }: TestPanelProps) {
+export function TestPanel({ running, result, fields, isManual = false, manualInputs = [], onRun }: TestPanelProps) {
   const [operation, setOperation] = useState("update");
   const [before, setBefore] = useState<Record<string, unknown>>({});
   const [after, setAfter] = useState<Record<string, unknown>>({ status: "closed" });
+  const [inputValues, setInputValues] = useState<Record<string, unknown>>({});
+
+  const setInput = (key: string, value: unknown) => setInputValues((prev) => ({ ...prev, [key]: value }));
 
   const run = () => {
+    if (isManual) {
+      onRun({
+        operation: "update",
+        before: null,
+        after: null,
+        inputs: collectDeclaredInputs(manualInputs, inputValues),
+      });
+      return;
+    }
     onRun({
       operation,
       before: operation === "create" ? null : orNull(before),
@@ -46,41 +67,49 @@ export function TestPanel({ running, result, fields, onRun }: TestPanelProps) {
         <h3 className="text-sm font-semibold">Test (dry run)</h3>
       </div>
       <p className="text-xs text-muted-foreground">
-        Simulate a record change against the saved version. No data is written.
+        {isManual
+          ? "Simulate a run with the inputs you provide, against the saved version. No data is written."
+          : "Simulate a record change against the saved version. No data is written."}
       </p>
 
-      <div className="flex items-center gap-2">
-        <label className="text-xs font-medium text-muted-foreground">Operation</label>
-        <select value={operation} onChange={(e) => setOperation(e.target.value)} className={selectClass}>
-          <option value="create">create</option>
-          <option value="update">update</option>
-          <option value="delete">delete</option>
-        </select>
-      </div>
-
-      {operation !== "create" ? (
-        <div>
-          <label className="text-xs font-medium text-muted-foreground">
-            Before {operation === "delete" ? "(the record being deleted)" : "(the record's prior state)"}
-          </label>
-          <div className="mt-1">
-            <RecordFieldEditor value={before} fields={fields} onChange={setBefore} emptyLabel="Empty record." />
+      {isManual ? (
+        <ManualRunInputs inputs={manualInputs} values={inputValues} onChange={setInput} />
+      ) : (
+        <>
+          <div className="flex items-center gap-2">
+            <label className="text-xs font-medium text-muted-foreground">Operation</label>
+            <select value={operation} onChange={(e) => setOperation(e.target.value)} className={selectClass}>
+              <option value="create">create</option>
+              <option value="update">update</option>
+              <option value="delete">delete</option>
+            </select>
           </div>
-        </div>
-      ) : null}
 
-      {operation !== "delete" ? (
-        <div>
-          <label className="text-xs font-medium text-muted-foreground">
-            After {operation === "create" ? "(the new record)" : "(the record after the change)"}
-          </label>
-          <div className="mt-1">
-            <RecordFieldEditor value={after} fields={fields} onChange={setAfter} emptyLabel="Empty record." />
-          </div>
-        </div>
-      ) : null}
+          {operation !== "create" ? (
+            <div>
+              <label className="text-xs font-medium text-muted-foreground">
+                Before {operation === "delete" ? "(the record being deleted)" : "(the record's prior state)"}
+              </label>
+              <div className="mt-1">
+                <RecordFieldEditor value={before} fields={fields} onChange={setBefore} emptyLabel="Empty record." />
+              </div>
+            </div>
+          ) : null}
 
-      <Button size="sm" onClick={run} disabled={running}>
+          {operation !== "delete" ? (
+            <div>
+              <label className="text-xs font-medium text-muted-foreground">
+                After {operation === "create" ? "(the new record)" : "(the record after the change)"}
+              </label>
+              <div className="mt-1">
+                <RecordFieldEditor value={after} fields={fields} onChange={setAfter} emptyLabel="Empty record." />
+              </div>
+            </div>
+          ) : null}
+        </>
+      )}
+
+      <Button size="sm" onClick={run} disabled={running || (isManual && missingRequiredInputs(manualInputs, inputValues))}>
         {running ? "Running…" : "Run test"}
       </Button>
 

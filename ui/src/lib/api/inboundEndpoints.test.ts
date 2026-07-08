@@ -30,15 +30,20 @@ const CREATED: InboundEndpointCreated = {
   name: "Stripe webhook",
   workflow_id: "w1",
   enabled: true,
+  has_signing_secret: true,
   token: "tok_secret",
   url: "https://app.example.com/api/inbound/tok_secret",
+  signing_secret: "whsec_abc",
+  signature_header: "X-KM2-Signature",
 };
 
 describe("inbound endpoints API client", () => {
   it("lists endpoints and unwraps data", async () => {
-    get.mockResolvedValue({ data: [{ id: "e1", name: "n", workflow_id: "w1", enabled: true }] });
+    get.mockResolvedValue({
+      data: [{ id: "e1", name: "n", workflow_id: "w1", enabled: true, has_signing_secret: true }],
+    });
     await expect(listInboundEndpoints()).resolves.toEqual([
-      { id: "e1", name: "n", workflow_id: "w1", enabled: true },
+      { id: "e1", name: "n", workflow_id: "w1", enabled: true, has_signing_secret: true },
     ]);
     expect(get).toHaveBeenCalledWith("/workflows/inbound-endpoints");
   });

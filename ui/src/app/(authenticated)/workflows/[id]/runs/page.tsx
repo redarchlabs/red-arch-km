@@ -14,6 +14,13 @@ export default function WorkflowRunsPage() {
   const { id } = useParams<{ id: string }>();
   const [workflow, setWorkflow] = useState<Workflow | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Read ?run=<id> from the URL (the activity feed deep-links here) via
+  // window.location so no Suspense boundary is needed for useSearchParams.
+  const [initialRunId, setInitialRunId] = useState<string | null>(null);
+
+  useEffect(() => {
+    setInitialRunId(new URLSearchParams(window.location.search).get("run"));
+  }, []);
 
   useEffect(() => {
     getWorkflow(id)
@@ -41,7 +48,7 @@ export default function WorkflowRunsPage() {
 
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
 
-      <RunMonitor workflowId={id} />
+      <RunMonitor workflowId={id} initialRunId={initialRunId} />
     </div>
   );
 }

@@ -28,6 +28,7 @@ import {
   publishVersion,
   saveDraft,
   testVersion,
+  type TriggerInput,
   type Workflow,
   type WorkflowTestResult,
   type WorkflowVersion,
@@ -102,7 +103,9 @@ export default function WorkflowDesignPage() {
         setEntityFields([]);
       }
       const latest = versions[0] ?? null;
-      const graph = latest ? toReactFlow(latest.definition) : starterGraph();
+      const graph = latest
+        ? toReactFlow(latest.definition)
+        : starterGraph({ manual: wf.entity_definition_id == null });
       useDesignerStore.getState().setGraph(graph.nodes, graph.edges);
       // Reset the undo baseline so a freshly-loaded graph reads as "not dirty".
       useDesignerStore.temporal.getState().clear();
@@ -191,6 +194,7 @@ export default function WorkflowDesignPage() {
     operation: string;
     before: Record<string, unknown> | null;
     after: Record<string, unknown> | null;
+    inputs?: Record<string, unknown>;
   }) => {
     setTesting(true);
     try {
@@ -207,6 +211,13 @@ export default function WorkflowDesignPage() {
     return <Skeleton className="h-[80vh] w-full" />;
   }
 
+  // Derive "manual start" from the LIVE trigger node (reactive to the inspector's
+  // Start-type toggle), not the workflow's entity binding — an entity-bound
+  // workflow can be switched to an on-demand (manual) trigger.
+  const triggerData = (allNodes.find((n) => n.type === "trigger")?.data ?? {}) as Record<string, unknown>;
+  const isManualTrigger = triggerData.source === "manual";
+  const declaredInputs = ((triggerData.inputs as TriggerInput[] | undefined) ?? []).filter((i) => i?.key);
+
   const inspector = (
     <>
       <NodeInspector
@@ -220,7 +231,14 @@ export default function WorkflowDesignPage() {
         onDelete={deleteNode}
       />
       <FormsPanel forms={forms} entities={entities} />
-      <TestPanel running={testing} result={testResult} fields={entityFields} onRun={handleTest} />
+      <TestPanel
+        running={testing}
+        result={testResult}
+        fields={entityFields}
+        isManual={isManualTrigger}
+        manualInputs={declaredInputs}
+        onRun={handleTest}
+      />
       {workflow ? (
         <RunPanel
           workflowId={workflow.id}
@@ -229,6 +247,8 @@ export default function WorkflowDesignPage() {
           runPermission={workflow.run_permission}
           onPermissionSaved={(p) => setWorkflow({ ...workflow, run_permission: p })}
           canRun={baseVersion?.status === "published" || workflow.active_version_id != null}
+          isManual={isManualTrigger}
+          manualInputs={declaredInputs}
         />
       ) : null}
     </>
