@@ -113,7 +113,9 @@ class WorkflowRepository:
         result = await self._session.execute(stmt)
         return [(row[0], row[1]) for row in result.all()]
 
-    async def create(self, *, name: str, entity_definition_id: uuid.UUID, description: str | None) -> Workflow:
+    async def create(
+        self, *, name: str, entity_definition_id: uuid.UUID | None, description: str | None
+    ) -> Workflow:
         wf = Workflow(
             name=name,
             entity_definition_id=entity_definition_id,
@@ -291,6 +293,20 @@ class WorkflowRunRepository:
             .limit(limit)
         )
         return list(result.scalars().all())
+
+    async def list_recent(self, *, limit: int = 25) -> list[tuple[WorkflowRun, str]]:
+        """Most-recent runs across ALL workflows in the org (the global activity
+        feed on the workflows page). Each run is paired with its parent workflow's
+        display name via a join; RLS + the explicit ``org_id`` keep it tenant-scoped.
+        """
+        result = await self._session.execute(
+            select(WorkflowRun, Workflow.name)
+            .join(Workflow, Workflow.id == WorkflowRun.workflow_id)
+            .where(WorkflowRun.org_id == self._org_id)
+            .order_by(WorkflowRun.created_at.desc())
+            .limit(limit)
+        )
+        return [(row[0], row[1]) for row in result.all()]
 
     async def steps_for_run(self, run_id: uuid.UUID) -> list[WorkflowRunStep]:
         result = await self._session.execute(
@@ -621,9 +637,21 @@ class WorkflowInboundEndpointRepository:
         )
         return result.scalar_one_or_none()
 
-    async def create(self, *, name: str, workflow_id: uuid.UUID, token_hash: str) -> WorkflowInboundEndpoint:
+    async def create(
+        self,
+        *,
+        name: str,
+        workflow_id: uuid.UUID,
+        token_hash: str,
+        signing_secret_encrypted: str | None = None,
+    ) -> WorkflowInboundEndpoint:
         endpoint = WorkflowInboundEndpoint(
-            org_id=self._org_id, name=name, workflow_id=workflow_id, token_hash=token_hash, enabled=True
+            org_id=self._org_id,
+            name=name,
+            workflow_id=workflow_id,
+            token_hash=token_hash,
+            enabled=True,
+            signing_secret_encrypted=signing_secret_encrypted,
         )
         self._session.add(endpoint)
         await self._session.flush()

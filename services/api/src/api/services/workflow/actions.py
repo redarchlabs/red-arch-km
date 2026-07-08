@@ -12,7 +12,7 @@ import ipaddress
 import re
 import uuid
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 from urllib.parse import urlparse
 
@@ -54,6 +54,9 @@ class ActionContext:
     trigger_repo: Callable[[], Awaitable[DynamicEntityRepository]]
     # Builds a record repo for another entity, addressed by slug.
     repo_for_slug: Callable[[str], Awaitable[DynamicEntityRepository]]
+    # Caller-supplied input variables for a manual (on-demand) run, addressable as
+    # ``inputs.<key>`` / ``{{ inputs.<key> }}``. Empty for record/form-triggered runs.
+    inputs: dict[str, Any] = field(default_factory=dict)
     # Allow-listed webhook hosts (SSRF guard).
     webhook_allowlist: tuple[str, ...] = ()
     # Hosts explicitly trusted to reach a private/loopback address (e.g. a
@@ -63,9 +66,7 @@ class ActionContext:
     # Mints an intake-form link bound to (form_id, record_id) and emails the
     # recipient if given + SMTP configured. Returns (url, email_sent). None when
     # form links aren't wired (e.g. the dry-run test path).
-    mint_form_link: (
-        Callable[[uuid.UUID, uuid.UUID, str | None], Awaitable[tuple[str, bool]]] | None
-    ) = None
+    mint_form_link: Callable[[uuid.UUID, uuid.UUID, str | None], Awaitable[tuple[str, bool]]] | None = None
     # Sends a plain email (to, subject, body). Returns True if actually sent
     # (SMTP configured), False otherwise. None on the dry-run test path.
     send_email: Callable[[str, str, str], Awaitable[bool]] | None = None
@@ -88,9 +89,7 @@ ACTION_REGISTRY: dict[str, ActionHandler] = {}
 # Actions that reach OUTSIDE the workspace (email/webhook/form invite). A manual
 # run may only execute these when its inputs were loaded server-side from a real
 # record — never against free-form, client-supplied ``before``/``after`` data.
-SIDE_EFFECTING_ACTIONS: frozenset[str] = frozenset(
-    {"send_email", "send_webhook", "send_form", "http_request"}
-)
+SIDE_EFFECTING_ACTIONS: frozenset[str] = frozenset({"send_email", "send_webhook", "send_form", "http_request"})
 
 
 def register(cls: type[ActionHandler]) -> type[ActionHandler]:
@@ -110,8 +109,9 @@ _REF_KEY = "$ref"
 
 
 def _trigger_context(ctx: ActionContext) -> dict[str, Any]:
-    """The triggering record, addressable as ``before.<field>`` / ``after.<field>``."""
-    return {"before": ctx.before, "after": ctx.after}
+    """The run's data context: the triggering record (``before.<field>`` /
+    ``after.<field>``) plus any manual-run input variables (``inputs.<key>``)."""
+    return {"before": ctx.before, "after": ctx.after, "inputs": ctx.inputs or {}}
 
 
 def _lookup(context: dict[str, Any], path: str) -> Any:
@@ -137,8 +137,9 @@ def _resolve_values(values: dict[str, Any], context: dict[str, Any]) -> dict[str
     return {key: _resolve_ref(value, context) for key, value in values.items()}
 
 
-# ``{{ after.first_name }}`` style tokens in email subject/body/recipient.
-_TEMPLATE_TOKEN = re.compile(r"\{\{\s*(before|after)\.([A-Za-z0-9_]+)\s*\}\}")
+# ``{{ after.first_name }}`` / ``{{ inputs.amount }}`` tokens in email
+# subject/body/recipient (and any other templated action field).
+_TEMPLATE_TOKEN = re.compile(r"\{\{\s*(before|after|inputs)\.([A-Za-z0-9_]+)\s*\}\}")
 
 
 def _render_template(template: str, context: dict[str, Any]) -> str:
@@ -225,9 +226,7 @@ class SendForm:
             form_uuid = uuid.UUID(str(form_id))
         except ValueError as exc:
             raise ActionError(f"invalid form_id: {form_id!r}") from exc
-        url, email_sent = await ctx.mint_form_link(
-            form_uuid, ctx.record_id, str(recipient) if recipient else None
-        )
+        url, email_sent = await ctx.mint_form_link(form_uuid, ctx.record_id, str(recipient) if recipient else None)
         return {"form_id": str(form_id), "url": url, "email_sent": email_sent}
 
     def simulate(self, ctx: ActionContext) -> dict[str, Any]:
@@ -349,9 +348,7 @@ class HttpRequest:
         import httpx
 
         async with httpx.AsyncClient(timeout=WEBHOOK_TIMEOUT_SECONDS) as client:
-            resp = await client.request(
-                method, url, headers=headers, json=body if body is not None else None
-            )
+            resp = await client.request(method, url, headers=headers, json=body if body is not None else None)
         try:
             parsed_body: Any = resp.json()
         except Exception:  # noqa: BLE001 - any non-JSON body falls back to text

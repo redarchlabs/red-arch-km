@@ -96,6 +96,14 @@ _ADMIN_ONLY_TOOLS = frozenset(
         "get_workflow_run",
         "retry_workflow_run",
         "complete_workflow_task",
+        # Connector credentials + inbound webhook endpoints (mirror the org-admin
+        # REST routes under /workflows/connections and /workflows/inbound-endpoints).
+        "list_connections",
+        "create_connection",
+        "delete_connection",
+        "list_webhooks",
+        "create_webhook",
+        "delete_webhook",
     }
 )
 
@@ -1114,6 +1122,93 @@ TOOLS: list[dict[str, Any]] = [
             "parameters": {"type": "object", "properties": {}},
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_connections",
+            "description": "List reusable HTTP connections (for http_request workflow steps). Secrets are never returned.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_connection",
+            "description": (
+                "Create a reusable HTTP connection an http_request step calls by name (base_url + "
+                "optional auth). E.g. a local device bridge: {name:'robot', base_url:'http://localhost:8080', "
+                "auth_type:'none'}. For a private/loopback base_url the host must also be in the "
+                "server's trusted-local-hosts allowlist (SSRF guard). The secret is stored encrypted."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "base_url": {"type": "string", "description": "e.g. https://api.example.com or http://localhost:8080"},
+                    "auth_type": {"type": "string", "enum": ["none", "bearer", "api_key", "basic"]},
+                    "secret": {"type": "string", "description": "Bearer token / api key / basic password (encrypted at rest)."},
+                    "config": {"type": "object", "description": "Non-secret auth config: api-key header name, basic username, static headers."},
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_connection",
+            "description": "Delete an HTTP connection by id. http_request steps referencing it will then fail.",
+            "parameters": {
+                "type": "object",
+                "properties": {"connection_id": {"type": "string"}},
+                "required": ["connection_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_webhooks",
+            "description": (
+                "List inbound webhook endpoints — public URLs that START a workflow when POSTed to. "
+                "Shows whether each requires a signature; never returns the token or secret."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_webhook",
+            "description": (
+                "Create an inbound webhook endpoint bound to a workflow: an external system POSTs to "
+                "the returned URL and the workflow runs immediately with the POST body as input "
+                "(reference it via {{after.<field>}}). Returns the URL, one-time token, and an HMAC "
+                "signing secret (shown ONCE) — the caller must sign each request, so a leaked URL "
+                "alone can't trigger it. Use for 'when <external event> happens, run <workflow>'."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "workflow_id": {"type": "string", "description": "The workflow this endpoint starts (must be published to run)."},
+                },
+                "required": ["name", "workflow_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_webhook",
+            "description": "Delete an inbound webhook endpoint by id. Its URL stops working immediately.",
+            "parameters": {
+                "type": "object",
+                "properties": {"endpoint_id": {"type": "string"}},
+                "required": ["endpoint_id"],
+            },
+        },
+    },
     # ---- Knowledge base: documents & folders (act as the calling user) ----
     {
         "type": "function",
@@ -2042,7 +2137,8 @@ class AgentService:
         )
         # SECURITY (mirrors POST /workflows/{id}/run): never trust client record
         # data. With a record_id, load real before/after server-side; without one,
-        # refuse any side-effecting action on fabricated data.
+        # a side-effecting run is still allowed but its record context is NULLED,
+        # so only the workflow's own author-defined config can leave the org.
         before: dict[str, Any] | None
         after: dict[str, Any] | None
         record_id = _parse_uuid(args.get("record_id"))
@@ -2054,20 +2150,16 @@ class AgentService:
         else:
             # Collect action_type from BOTH legacy `action` nodes and v2 `task`
             # nodes (a send task carries the same action_type) so a side-effecting
-            # step in either vocabulary is caught before running on fabricated data.
+            # step in either vocabulary drops any client-supplied before/after.
             action_types = {
                 node.get("data", {}).get("action_type")
                 for node in version.definition.get("nodes", [])
                 if node.get("type") in ("action", "task")
             }
             if action_types & SIDE_EFFECTING_ACTIONS:
-                return {
-                    "error": (
-                        "This workflow performs external actions (email/webhook/form). Provide a "
-                        "record_id so it runs against a real record."
-                    )
-                }
-            before, after = args.get("before"), args.get("after")
+                before, after = None, None  # never trust client data outbound
+            else:
+                before, after = args.get("before"), args.get("after")
 
         actor = self._ctx.user.profile_id if self._ctx is not None else None
         run, executed = await dispatcher.run_version_manually(
@@ -2515,6 +2607,140 @@ class AgentService:
                 "save_workflow_definition, then publish_workflow."
             ),
         }
+
+    # ---- Connections + inbound webhooks (org-admin) ----
+    async def _tool_list_connections(self, session: AsyncSession, _args: dict[str, Any]) -> dict[str, Any]:
+        from api.repositories.workflow import WorkflowConnectionRepository
+
+        conns = await WorkflowConnectionRepository(session, self._org_id).list_all()
+        return {
+            "connections": [
+                {
+                    "id": str(c.id),
+                    "name": c.name,
+                    "base_url": c.base_url,
+                    "auth_type": c.auth_type,
+                    "has_secret": bool(c.secret_encrypted),
+                }
+                for c in conns
+            ]
+        }
+
+    async def _tool_create_connection(self, session: AsyncSession, args: dict[str, Any]) -> dict[str, Any]:
+        from api.repositories.workflow import WorkflowConnectionRepository
+        from api.services.crypto import encrypt_secret
+
+        name = args.get("name")
+        if not name:
+            return {"error": "name is required"}
+        secret = args.get("secret")
+        secret_encrypted = (
+            encrypt_secret(secret, self._settings.org_encryption_key.get_secret_value()) if secret else None
+        )
+        conn = await WorkflowConnectionRepository(session, self._org_id).create(
+            name=name,
+            kind=args.get("kind", "http"),
+            base_url=args.get("base_url"),
+            auth_type=args.get("auth_type", "none"),
+            secret_encrypted=secret_encrypted,
+            config=args.get("config") or {},
+        )
+        return {
+            "created_connection": {
+                "id": str(conn.id),
+                "name": conn.name,
+                "base_url": conn.base_url,
+                "auth_type": conn.auth_type,
+            },
+            "note": "Reference it from an http_request step as {\"connection\": \"" + str(conn.name) + "\", \"path\": \"...\"}.",
+        }
+
+    async def _tool_delete_connection(self, session: AsyncSession, args: dict[str, Any]) -> dict[str, Any]:
+        from api.repositories.workflow import WorkflowConnectionRepository
+
+        conn_id = _parse_uuid(args.get("connection_id"))
+        if conn_id is None:
+            return {"error": "connection_id is required"}
+        repo = WorkflowConnectionRepository(session, self._org_id)
+        conn = await repo.get(conn_id)
+        if conn is None:
+            return {"error": "connection not found"}
+        await repo.delete(conn)
+        return {"deleted_connection": str(conn_id)}
+
+    async def _tool_list_webhooks(self, session: AsyncSession, _args: dict[str, Any]) -> dict[str, Any]:
+        from api.repositories.workflow import WorkflowInboundEndpointRepository
+
+        items = await WorkflowInboundEndpointRepository(session, self._org_id).list_all()
+        return {
+            "webhooks": [
+                {
+                    "id": str(e.id),
+                    "name": e.name,
+                    "workflow_id": str(e.workflow_id),
+                    "enabled": e.enabled,
+                    "signature_required": bool(e.signing_secret_encrypted),
+                }
+                for e in items
+            ]
+        }
+
+    async def _tool_create_webhook(self, session: AsyncSession, args: dict[str, Any]) -> dict[str, Any]:
+        import secrets
+
+        from api.repositories.workflow import WorkflowInboundEndpointRepository, WorkflowRepository
+        from api.services.crypto import encrypt_secret
+        from api.services.workflow.inbound import hash_token
+        from api.services.workflow.webhook_signing import SIGNATURE_HEADER
+
+        name = args.get("name")
+        workflow_id = _parse_uuid(args.get("workflow_id"))
+        if not name:
+            return {"error": "name is required"}
+        if workflow_id is None:
+            return {"error": "workflow_id is required"}
+        if await WorkflowRepository(session, self._org_id).get(workflow_id) is None:
+            return {"error": "workflow not found"}
+        token = secrets.token_urlsafe(32)
+        signing_secret = "whsec_" + secrets.token_urlsafe(32)
+        endpoint = await WorkflowInboundEndpointRepository(session, self._org_id).create(
+            name=name,
+            workflow_id=workflow_id,
+            token_hash=hash_token(token),
+            signing_secret_encrypted=encrypt_secret(
+                signing_secret, self._settings.org_encryption_key.get_secret_value()
+            ),
+        )
+        url = f"{self._settings.public_base_url.rstrip('/')}/api/inbound/{token}"
+        return {
+            "created_webhook": {
+                "id": str(endpoint.id),
+                "name": endpoint.name,
+                "workflow_id": str(workflow_id),
+                "url": url,
+                "signing_secret": signing_secret,
+                "signature_header": SIGNATURE_HEADER,
+            },
+            "note": (
+                "URL + signing_secret are shown ONCE. The caller must sign each POST: "
+                "sig = HMAC_SHA256(signing_secret, f'{t}.{raw_body}'), sent as header "
+                f"'{SIGNATURE_HEADER}: t=<unix_seconds>,v1=<hex sig>'. Sign the EXACT raw body bytes "
+                "you send. The bound workflow must be published to actually run."
+            ),
+        }
+
+    async def _tool_delete_webhook(self, session: AsyncSession, args: dict[str, Any]) -> dict[str, Any]:
+        from api.repositories.workflow import WorkflowInboundEndpointRepository
+
+        endpoint_id = _parse_uuid(args.get("endpoint_id"))
+        if endpoint_id is None:
+            return {"error": "endpoint_id is required"}
+        repo = WorkflowInboundEndpointRepository(session, self._org_id)
+        endpoint = await repo.get(endpoint_id)
+        if endpoint is None:
+            return {"error": "webhook not found"}
+        await repo.delete(endpoint)
+        return {"deleted_webhook": str(endpoint_id)}
 
     # ---- Views (org-admin) ----
     async def _tool_list_views(self, session: AsyncSession, _args: dict[str, Any]) -> dict[str, Any]:

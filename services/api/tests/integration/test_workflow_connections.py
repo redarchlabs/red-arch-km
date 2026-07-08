@@ -11,7 +11,9 @@ from api.config import Settings
 from api.models.org import Org
 from api.repositories.workflow import WorkflowConnectionRepository
 from api.services.crypto import encrypt_secret
+from api.services.workflow.dispatcher import WorkflowDispatchService
 from api.services.workflow.runner import ActionExecutor
+from api.services.workflow.service import WorkflowService
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .helpers import set_tenant
@@ -162,3 +164,85 @@ async def test_http_request_enforces_ssrf_allowlist(admin_session: AsyncSession)
     )
     assert result.ok is False
     assert "allow-listed" in (result.error or "")
+
+
+async def test_manual_run_legacy_walker_resolves_connection(
+    admin_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A MANUAL run of a LEGACY (schema_version 1) workflow whose http_request uses
+    a named connection must resolve it. Regression: the dispatcher's legacy-walker
+    path (``_run_actions``) omitted the connection resolver and failed with
+    "connections are not available in this context" — while the runner/token path
+    resolved it. This is exactly the path a form/view button hits via POST /run."""
+    org = await _org(admin_session, "CONNMANUAL")
+    await set_tenant(admin_session, str(org.id))
+    await WorkflowConnectionRepository(admin_session, org.id).create(
+        name="robot", base_url="https://robot.example.com", auth_type="none"
+    )
+    await admin_session.commit()
+
+    captured: dict = {}
+
+    class _FakeResp:
+        status_code = 200
+        is_success = True
+        text = ""
+
+        def json(self) -> dict:
+            return {"ok": True, "gesture": "nod"}
+
+    class _FakeClient:
+        def __init__(self, *a: object, **k: object) -> None:
+            pass
+
+        async def __aenter__(self) -> _FakeClient:
+            return self
+
+        async def __aexit__(self, *a: object) -> bool:
+            return False
+
+        async def request(self, method: str, url: str, headers: dict | None = None, json: object = None) -> _FakeResp:
+            captured.update(method=method, url=url)
+            return _FakeResp()
+
+    monkeypatch.setattr(httpx, "AsyncClient", _FakeClient)
+
+    # No schema_version ⇒ the legacy walker runs this on the manual path.
+    definition = {
+        "nodes": [
+            {"id": "t", "type": "trigger", "data": {"operations": ["update"]}},
+            {
+                "id": "a",
+                "type": "action",
+                "data": {
+                    "action_type": "http_request",
+                    "config": {"connection": "robot", "method": "POST", "path": "/gesture", "body": {"name": "nod"}},
+                },
+            },
+        ],
+        "edges": [{"id": "e1", "source": "t", "target": "a"}],
+    }
+    svc = WorkflowService(admin_session, org.id)
+    workflow = await svc.create_workflow(name="RobotManual", entity_definition_id=None, description=None)
+    version = await svc.save_draft(workflow.id, definition)
+    await svc.publish(workflow.id, version.id)
+    await admin_session.commit()
+
+    dispatcher = WorkflowDispatchService(
+        admin_session, webhook_allowlist=("robot.example.com",), org_encryption_key=_KEY
+    )
+    run, executed = await dispatcher.run_version_manually(
+        org.id,
+        workflow,
+        version,
+        operation="update",
+        record_id=None,
+        before={"x": "a"},
+        after={"x": "b"},
+    )
+    await admin_session.commit()
+
+    # Before the fix this raised "connections are not available in this context".
+    assert run.status == "succeeded", run.error
+    assert executed == 1
+    assert captured["url"] == "https://robot.example.com/gesture"

@@ -50,9 +50,14 @@ class WorkflowService:
 
     # --- workflows ---
     async def create_workflow(
-        self, *, name: str, entity_definition_id: uuid.UUID, description: str | None
+        self, *, name: str, entity_definition_id: uuid.UUID | None, description: str | None
     ) -> Workflow:
-        if await EntityDefinitionRepository(self._session, self._org_id).get(entity_definition_id) is None:
+        # A NULL entity is a manual (on-demand) workflow; an entity-bound one must
+        # reference a real entity in this org.
+        if (
+            entity_definition_id is not None
+            and await EntityDefinitionRepository(self._session, self._org_id).get(entity_definition_id) is None
+        ):
             raise WorkflowNotFoundError("entity not found")
         return await self._workflows.create(
             name=name, entity_definition_id=entity_definition_id, description=description
@@ -69,9 +74,7 @@ class WorkflowService:
         """Create a new draft version (also used to fork a published one)."""
         await self.get_workflow(workflow_id)
         number = await self._versions.next_version_number(workflow_id)
-        return await self._versions.create(
-            workflow_id=workflow_id, version_number=number, definition=definition
-        )
+        return await self._versions.create(workflow_id=workflow_id, version_number=number, definition=definition)
 
     async def publish(self, workflow_id: uuid.UUID, version_id: uuid.UUID) -> WorkflowVersion:
         wf = await self.get_workflow(workflow_id)
@@ -98,18 +101,30 @@ class WorkflowService:
         await self.get_workflow(workflow_id)
         return await self._runs.list_for_workflow(workflow_id, limit=limit)
 
+    async def recent_runs(self, *, limit: int = 25) -> list[tuple[Any, str]]:
+        """Recent runs across every workflow in the org, each paired with its
+        workflow name — powers the activity feed on the workflows page."""
+        return await self._runs.list_recent(limit=limit)
+
     async def run_steps(self, run_id: uuid.UUID) -> list[Any]:
         return await self._runs.steps_for_run(run_id)
 
     # --- dry-run test ---
     async def test_version(
-        self, version_id: uuid.UUID, *, operation: str, before: dict[str, Any] | None, after: dict[str, Any] | None
+        self,
+        version_id: uuid.UUID,
+        *,
+        operation: str,
+        before: dict[str, Any] | None,
+        after: dict[str, Any] | None,
+        inputs: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         version = await self._versions.get(version_id)
         if version is None:
             raise WorkflowNotFoundError("version not found")
 
-        context = {"before": before, "after": after}
+        inputs = inputs or {}
+        context = {"before": before, "after": after, "inputs": inputs}
         result = evaluate_graph(version.definition, context)
 
         steps: list[dict[str, Any]] = []
@@ -122,6 +137,7 @@ class WorkflowService:
                 record_id=None,
                 before=before,
                 after=after,
+                inputs=inputs,
                 config=data.get("config", {}),
                 trigger_repo=_unsupported_repo,
                 repo_for_slug=_unsupported_repo,

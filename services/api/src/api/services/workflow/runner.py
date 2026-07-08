@@ -70,6 +70,7 @@ class ActionExecutor:
         after: dict[str, Any] | None,
         entity_definition_id: uuid.UUID | None,
         origin_run_id: uuid.UUID,
+        inputs: dict[str, Any] | None = None,
     ) -> ActionResult:
         """Run one action handler; never raises — failures come back on the result."""
         handler = ACTION_REGISTRY.get(action_type)
@@ -97,6 +98,7 @@ class ActionExecutor:
             record_id=record_id,
             before=before,
             after=after,
+            inputs=inputs or {},
             config=config or {},
             trigger_repo=_trigger_repo,
             repo_for_slug=_repo_for_slug,

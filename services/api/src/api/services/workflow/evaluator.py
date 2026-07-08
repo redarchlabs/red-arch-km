@@ -51,6 +51,11 @@ def trigger_matches(
     ``"form"`` for a public intake-form submission. A trigger may pin a required
     source (``{"source": "form"}``) to fire *only* on form submissions.
     """
+    required_source = trigger_data.get("source")
+    # A "manual" (BPMN none) start event is on-demand only: it is never fired by a
+    # record/form change flowing through the outbox, whatever the operation.
+    if required_source == "manual":
+        return False
     # An ABSENT operations key means "any operation" (legacy definitions); an
     # explicit empty list means "no change triggers" (schedule-only workflows).
     ops = trigger_data.get("operations")
@@ -58,7 +63,6 @@ def trigger_matches(
         ops = ["create", "update", "delete"]
     if operation not in ops:
         return False
-    required_source = trigger_data.get("source")
     if required_source and required_source != "any" and required_source != source:
         return False
     field_filter = trigger_data.get("field_filter") or []

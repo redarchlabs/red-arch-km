@@ -135,6 +135,32 @@ class WorkflowDispatchService:
         steps = await WorkflowRunRepository(self._session, run.org_id).steps_for_run(run.id)
         return sum(1 for step in steps if step.status == "succeeded")
 
+    # ---- connection resolution (mirrors WorkflowRunner) ------------------ #
+    async def _resolve_connection(self, org_id: uuid.UUID, name: str) -> Any:
+        """Load a named connection (org-scoped) and decrypt its secret. Returns a
+        ResolvedConnection or None. Mirrors ``WorkflowRunner._resolve_connection``
+        so the legacy walker path (used by manual runs of schema_version 1 graphs)
+        resolves named connections exactly like the token engine does. Without this
+        an ``http_request``/``send_webhook`` with a ``connection`` fails with
+        "connections are not available in this context" on the manual/legacy path."""
+        from api.repositories.workflow import WorkflowConnectionRepository
+        from api.services.crypto import decrypt_secret
+        from api.services.workflow.actions import ResolvedConnection
+
+        if not self._org_encryption_key:
+            return None
+        conn = await WorkflowConnectionRepository(self._session, org_id).get_by_name(name)
+        if conn is None:
+            return None
+        secret = decrypt_secret(conn.secret_encrypted, self._org_encryption_key) if conn.secret_encrypted else None
+        return ResolvedConnection(
+            name=conn.name,
+            base_url=conn.base_url,
+            auth_type=conn.auth_type,
+            secret=secret,
+            config=conn.config or {},
+        )
+
     # ---- per-tenant RLS downgrade ---------------------------------------- #
     async def _enter_tenant(self, org_id: uuid.UUID) -> None:
         """Downgrade the (privileged) sweep session to ``app_user`` + set the
@@ -167,9 +193,10 @@ class WorkflowDispatchService:
     async def process_pending(self, *, limit: int = 100, max_depth: int = MAX_DEPTH) -> dict[str, int]:
         """Claim and process a batch of pending outbox events. Returns counters."""
         claimed = (
-            await self._session.execute(
-                text(
-                    """
+            (
+                await self._session.execute(
+                    text(
+                        """
                     UPDATE workflow_outbox o
                     SET status='claimed', claimed_at=now(), attempts=attempts+1
                     WHERE (o.id, o.created_at) IN (
@@ -181,10 +208,13 @@ class WorkflowDispatchService:
                     )
                     RETURNING o.*
                     """
-                ),
-                {"lim": limit},
+                    ),
+                    {"lim": limit},
+                )
             )
-        ).mappings().all()
+            .mappings()
+            .all()
+        )
 
         counters = {"events": len(claimed), "runs": 0, "actions": 0, "skipped": 0}
         for event in claimed:
@@ -300,6 +330,7 @@ class WorkflowDispatchService:
         record_id: uuid.UUID | None,
         before: dict[str, Any] | None,
         after: dict[str, Any] | None,
+        inputs: dict[str, Any] | None = None,
         actor_user_id: uuid.UUID | None = None,
     ) -> tuple[WorkflowRun, int]:
         """Execute a workflow version FOR REAL against provided inputs (manual run).
@@ -307,8 +338,11 @@ class WorkflowDispatchService:
         Reuses the same action engine as the outbox path — real side effects, a
         real ``workflow_run`` + step rows — but bypasses trigger matching (the
         operator chose to run it) while still honouring the graph's conditions.
-        Returns ``(run, actions_executed)``.
+        ``inputs`` are caller-supplied variables for a manual (on-demand) workflow,
+        addressable as ``inputs.<key>`` in conditions/gateways and ``{{ inputs.<key> }}``
+        in templated action fields. Returns ``(run, actions_executed)``.
         """
+        inputs = inputs or {}
         run_repo = WorkflowRunRepository(self._session, org_id)
         synthetic_outbox_id = uuid.uuid4()
         run = await run_repo.create_run_if_absent(
@@ -319,7 +353,7 @@ class WorkflowDispatchService:
             created_at=datetime.now(UTC),
             trigger_operation=operation,
             record_id=record_id,
-            input_snapshot={"before": before, "after": after, "manual": True},
+            input_snapshot={"before": before, "after": after, "inputs": inputs, "manual": True},
             depth=0,
         )
         if run is None:  # extraordinarily unlikely (fresh uuid) — treat as a conflict
@@ -329,7 +363,7 @@ class WorkflowDispatchService:
             executed = await self._run_token_engine(run, version.definition)
             return run, executed
 
-        result = evaluate_graph(version.definition, {"before": before, "after": after})
+        result = evaluate_graph(version.definition, {"before": before, "after": after, "inputs": inputs})
         if result.error is not None:
             await self._finish_run(run, status="failed", error=result.error, matched=False)
             return run, 0
@@ -343,6 +377,7 @@ class WorkflowDispatchService:
             "record_id": record_id,
             "before_data": before,
             "after_data": after,
+            "inputs": inputs,
             "entity_definition_id": workflow.entity_definition_id,
             "entity_table": "",
         }
@@ -390,9 +425,7 @@ class WorkflowDispatchService:
         async def _trigger_repo() -> DynamicEntityRepository:
             key = ("id", event["entity_definition_id"])
             if key not in repo_cache:
-                repo_cache[key] = await self._repo_by_id(
-                    org_id, event["entity_definition_id"], run.id
-                )
+                repo_cache[key] = await self._repo_by_id(org_id, event["entity_definition_id"], run.id)
             return repo_cache[key]
 
         async def _repo_for_slug(slug: str) -> DynamicEntityRepository:
@@ -413,6 +446,7 @@ class WorkflowDispatchService:
                 record_id=record_id,
                 before=_as_dict(event["before_data"]),
                 after=_as_dict(event["after_data"]),
+                inputs=event.get("inputs") or {},
                 config=data.get("config", {}),
                 trigger_repo=_trigger_repo,
                 repo_for_slug=_repo_for_slug,
@@ -420,6 +454,7 @@ class WorkflowDispatchService:
                 trusted_local_hosts=self._trusted_local_hosts,
                 mint_form_link=lambda form_id, rid, email: self._mint_form_link(org_id, form_id, rid, email),
                 send_email=self._send_email,
+                resolve_connection=lambda name: self._resolve_connection(org_id, name),
             )
             try:
                 if handler is None:
@@ -435,7 +470,10 @@ class WorkflowDispatchService:
                 # needs to diagnose a broken action.
                 logger.exception(
                     "workflow action failed (run=%s node=%s type=%s): %s",
-                    run.id, node.get("id"), action_type, exc,
+                    run.id,
+                    node.get("id"),
+                    action_type,
+                    exc,
                 )
                 step.status = "failed"
                 step.error = str(exc)
@@ -461,9 +499,7 @@ class WorkflowDispatchService:
         if origin_run_id is None:
             return 0
         result = await self._session.execute(
-            select(WorkflowRun.depth).where(
-                WorkflowRun.id == origin_run_id, WorkflowRun.org_id == org_id
-            )
+            select(WorkflowRun.depth).where(WorkflowRun.id == origin_run_id, WorkflowRun.org_id == org_id)
         )
         parent_depth = result.scalar_one_or_none()
         return (parent_depth or 0) + 1
@@ -488,9 +524,10 @@ class WorkflowDispatchService:
         ``running`` (no longer ``waiting``) — exactly-once resume."""
         now = datetime.now(UTC)
         claimed = (
-            await self._session.execute(
-                text(
-                    """
+            (
+                await self._session.execute(
+                    text(
+                        """
                     UPDATE workflow_runs r
                     SET status='running', started_at=now()
                     WHERE (r.id, r.created_at) IN (
@@ -502,10 +539,13 @@ class WorkflowDispatchService:
                     )
                     RETURNING r.id, r.created_at, r.org_id
                     """
-                ),
-                {"now": now, "lim": limit},
+                    ),
+                    {"now": now, "lim": limit},
+                )
             )
-        ).mappings().all()
+            .mappings()
+            .all()
+        )
 
         counters = {"resumed": 0, "actions": 0}
         for row in claimed:
@@ -513,9 +553,7 @@ class WorkflowDispatchService:
             try:
                 async with self._session.begin_nested():
                     await self._enter_tenant(org_id)
-                    run = await WorkflowRunRepository(self._session, org_id).get(
-                        row["id"], row["created_at"]
-                    )
+                    run = await WorkflowRunRepository(self._session, org_id).get(row["id"], row["created_at"])
                     if run is None:
                         await self._exit_tenant()
                         continue
@@ -535,9 +573,7 @@ class WorkflowDispatchService:
                 await self._mark_run_failed(row["id"], row["created_at"], "resume failed")
         return counters
 
-    async def _mark_run_failed(
-        self, run_id: uuid.UUID, created_at: datetime, error: str
-    ) -> None:
+    async def _mark_run_failed(self, run_id: uuid.UUID, created_at: datetime, error: str) -> None:
         """Best-effort privileged UPDATE to fail a run whose savepoint rolled back
         (the ORM object is detached, so we can't flush it)."""
         await self._session.execute(
@@ -558,8 +594,15 @@ class WorkflowDispatchService:
         snapshot = run.input_snapshot or {}
         before = snapshot.get("before")
         after = snapshot.get("after")
+        # Manual-run input variables persist on the snapshot; carry them across the
+        # delay so post-delay conditions/actions still resolve ``inputs.<key>`` and
+        # ``{{ inputs.<key> }}`` (the token engine re-derives these per dispatch; the
+        # legacy walker rebuilds the context here and must not drop them).
+        inputs = snapshot.get("inputs") or {}
         result = evaluate_graph(
-            version.definition, {"before": before, "after": after}, start_node_id=run.resume_node_id
+            version.definition,
+            {"before": before, "after": after, "inputs": inputs},
+            start_node_id=run.resume_node_id,
         )
         if result.error is not None:
             await self._finish_run(run, status="failed", error=result.error)
@@ -571,9 +614,7 @@ class WorkflowDispatchService:
         # accumulated MAX_RUN_STEPS across its resume cycles, finish it as failed
         # rather than parking it at the delay again.
         if offset >= MAX_RUN_STEPS:
-            await self._finish_run(
-                run, status="failed", error=f"max run steps {MAX_RUN_STEPS} exceeded (delay cycle?)"
-            )
+            await self._finish_run(run, status="failed", error=f"max run steps {MAX_RUN_STEPS} exceeded (delay cycle?)")
             return 0
         event = {
             "id": run.outbox_id,
@@ -581,6 +622,7 @@ class WorkflowDispatchService:
             "record_id": run.record_id,
             "before_data": before,
             "after_data": after,
+            "inputs": inputs,
             "entity_definition_id": workflow.entity_definition_id,
             "entity_table": "",
         }
@@ -649,8 +691,13 @@ class WorkflowDispatchService:
                 async with self._session.begin_nested():
                     await self._enter_tenant(workflow.org_id)
                     _run, executed = await self.run_version_manually(
-                        workflow.org_id, workflow, version,
-                        operation="scheduled", record_id=None, before=None, after=None,
+                        workflow.org_id,
+                        workflow,
+                        version,
+                        operation="scheduled",
+                        record_id=None,
+                        before=None,
+                        after=None,
                     )
                 await self._exit_tenant()
                 counters["scheduled"] += 1
@@ -669,9 +716,7 @@ class WorkflowDispatchService:
         )
         return {row[0]: row[1] for row in result.all()}
 
-    async def _last_scheduled_run_at(
-        self, org_id: uuid.UUID, workflow_id: uuid.UUID
-    ) -> datetime | None:
+    async def _last_scheduled_run_at(self, org_id: uuid.UUID, workflow_id: uuid.UUID) -> datetime | None:
         result = await self._session.execute(
             select(func.max(WorkflowRun.created_at)).where(
                 WorkflowRun.org_id == org_id,
@@ -714,9 +759,7 @@ class WorkflowDispatchService:
             raise ActionError("entity definition not found")
         return await self._build_repo(org_id, definition, origin_run_id)
 
-    async def _repo_by_slug(
-        self, org_id: uuid.UUID, slug: str, origin_run_id: uuid.UUID
-    ) -> DynamicEntityRepository:
+    async def _repo_by_slug(self, org_id: uuid.UUID, slug: str, origin_run_id: uuid.UUID) -> DynamicEntityRepository:
         definition = await EntityDefinitionRepository(self._session, org_id).get_by_slug(slug)
         if definition is None:
             raise ActionError(f"entity not found: {slug!r}")
