@@ -6,7 +6,7 @@ import uuid
 
 import pytest
 
-from api.schemas.form import FormConfig
+from api.schemas.form import FormConfig, upgrade_legacy_form_config
 from api.services import form_layout as fl
 from api.services.form_layout import (
     BlockBinding,
@@ -186,3 +186,66 @@ def test_max_depth_enforced(ids, fields_by_entity, rels):
     cfg = FormConfig.model_validate({"version": 2, "elements": [node]})
     with pytest.raises(LayoutError):
         fl.validate(cfg.elements, ids["root"], fields_by_entity, rels)
+
+
+# ------------------------------------------------------------------ #
+# Legacy (pre-v2) {fields, sections} -> v2 {version, elements} upgrade.
+# Regression: a stale legacy row used to 500 list/render on extra_forbidden.
+# ------------------------------------------------------------------ #
+def test_legacy_flat_config_upgrades_to_v2():
+    legacy = {
+        "fields": [
+            {"slug": "first_name", "label": None, "required": True, "help_text": None},
+            {"slug": "phone_number", "label": None, "required": None, "help_text": None},
+        ],
+        "sections": [],
+    }
+    cfg = FormConfig.model_validate(legacy)  # previously raised ValidationError
+    assert cfg.version == 2
+    assert [e.type for e in cfg.elements] == ["field", "field"]
+    assert [e.slug for e in cfg.elements] == ["first_name", "phone_number"]
+    assert cfg.elements[0].required is True
+    assert cfg.elements[1].required is None
+
+
+def test_legacy_field_heading_becomes_label_element():
+    cfg = FormConfig.model_validate(
+        {"fields": [{"slug": "email", "heading": "Contact"}], "sections": []}
+    )
+    assert [e.type for e in cfg.elements] == ["label", "field"]
+    assert cfg.elements[0].text == "Contact"
+
+
+def test_legacy_section_upgrades_to_section_element():
+    rel = str(uuid.uuid4())
+    cfg = FormConfig.model_validate(
+        {
+            "fields": [],
+            "sections": [
+                {
+                    "relationship_id": rel,
+                    "mode": "modal",
+                    "label": "Address",
+                    "fields": [{"slug": "line1"}],
+                }
+            ],
+        }
+    )
+    assert len(cfg.elements) == 1
+    sec = cfg.elements[0]
+    assert sec.type == "section"
+    assert str(sec.relationship_id) == rel
+    assert sec.mode == "modal"
+    assert [c.slug for c in sec.elements] == ["line1"]
+
+
+def test_v2_config_passes_through_untouched():
+    v2 = {"version": 2, "elements": [{"type": "field", "slug": "name"}]}
+    assert upgrade_legacy_form_config(v2) is v2  # no-op for already-v2 payloads
+
+
+def test_legacy_upgrade_is_idempotent():
+    legacy = {"fields": [{"slug": "name", "required": True}], "sections": []}
+    once = FormConfig.model_validate(legacy)
+    twice = FormConfig.model_validate(once.model_dump(mode="json"))
+    assert once.model_dump(mode="json") == twice.model_dump(mode="json")
