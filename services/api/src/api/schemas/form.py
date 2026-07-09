@@ -16,10 +16,71 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from api.schemas.form_elements import FormElement
 from api.services.email import is_valid_email
+
+
+# ------------------------------------------------------------------ #
+# Legacy (pre-v2) layout upgrade
+# ------------------------------------------------------------------ #
+# v2 replaced the flat ``{fields, sections}`` layout with a ``{version, elements}``
+# element tree, but shipped without migrating existing rows. ``FormConfig`` is
+# ``extra="forbid"``, so a stale legacy row would 500 the list/render endpoints on
+# ``extra_forbidden``. The before-validator below upgrades any such payload in place
+# so old forms stay listable and renderable. A one-off backfill converts the stored
+# rows; this shim is the safety net for anything the backfill misses.
+
+# Optional presentational keys shared by v1 ``FormFieldConfig`` and v2 ``FieldElement``.
+_LEGACY_FIELD_KEYS = ("label", "required", "help_text", "placeholder", "width", "display")
+
+
+def _legacy_field_to_elements(field: dict[str, Any]) -> list[dict[str, Any]]:
+    """Map one v1 field dict to v2 element dicts: a ``field``, optionally preceded
+    by a ``label`` carrying the legacy ``heading`` (which v2 fields don't have)."""
+    element: dict[str, Any] = {"type": "field", "slug": field["slug"]}
+    for key in _LEGACY_FIELD_KEYS:
+        value = field.get(key)
+        if value is not None:
+            element[key] = value
+    elements: list[dict[str, Any]] = []
+    heading = field.get("heading")
+    if heading:
+        elements.append({"type": "label", "text": heading, "variant": "subheading"})
+    elements.append(element)
+    return elements
+
+
+def upgrade_legacy_form_config(data: Any) -> Any:
+    """Upgrade a pre-v2 ``{fields, sections}`` layout to the v2 ``{version, elements}``
+    tree. Passes through anything already in v2 shape (or not a dict)."""
+    if not isinstance(data, dict) or "elements" in data:
+        return data
+    if "fields" not in data and "sections" not in data:
+        return data
+
+    elements: list[dict[str, Any]] = []
+    for field in data.get("fields") or []:
+        if isinstance(field, dict):
+            elements.extend(_legacy_field_to_elements(field))
+    for section in data.get("sections") or []:
+        if not isinstance(section, dict):
+            continue
+        children: list[dict[str, Any]] = []
+        for field in section.get("fields") or []:
+            if isinstance(field, dict):
+                children.extend(_legacy_field_to_elements(field))
+        elements.append(
+            {
+                "type": "section",
+                "relationship_id": section.get("relationship_id"),
+                "mode": section.get("mode", "inline"),
+                "label": section.get("label"),
+                "elements": children,
+            }
+        )
+    return {"version": 2, "elements": elements}
 
 
 class FormConfig(BaseModel):
@@ -29,6 +90,11 @@ class FormConfig(BaseModel):
 
     version: int = 2
     elements: list[FormElement] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _upgrade_legacy(cls, data: Any) -> Any:
+        return upgrade_legacy_form_config(data)
 
 
 # ------------------------------------------------------------------ #
