@@ -91,6 +91,7 @@ export default function FormFillPage({ params }: { params: Promise<{ id: string 
 
   const handleRunWorkflow = async (workflowId: string, inputs: Record<string, unknown>) => {
     setNotice(null);
+    setSubmitError(null);
     try {
       await runWorkflow(workflowId, { operation: "update", record_id: recordId || null, after: inputs });
       setNotice("Workflow started.");
