@@ -154,6 +154,31 @@ class LiveValueElement(_Element):
     width: FieldWidth | None = None
 
 
+class RecordListElement(_Element):
+    """A read-only display of existing records of an entity — a live "status board".
+
+    Reads ``entity`` (by slug) newest-first (or by ``sort_by``/``sort_dir``), showing
+    at most ``limit`` rows with the given ``fields`` as columns (all fields when
+    empty). Set ``poll_ms`` to re-poll on a cadence so the board stays live. Not
+    bound to the view's root record, so it is valid in a standalone view. An optional
+    ``row_workflow_id`` renders a per-row button that runs that workflow against the
+    row's record (e.g. re-announce this mission-state row) — the runtime targets the
+    row id, so an ``update_record``/``update_record_field`` step writes that row."""
+
+    type: Literal["record_list"] = "record_list"
+    entity: str  # entity slug to read records from
+    label: str | None = None
+    fields: list[str] = Field(default_factory=list)  # field slugs as columns; empty = every field
+    sort_by: str | None = None  # field slug or base column; defaults to created_at
+    sort_dir: Literal["asc", "desc"] = "desc"
+    limit: int = 20
+    poll_ms: int | None = None  # when set, re-poll for a live board; None = fetch once
+    empty_text: str | None = None
+    row_workflow_id: uuid.UUID | None = None  # optional per-row run_workflow (row record is the target)
+    row_action_label: str | None = None
+    width: FieldWidth | None = None
+
+
 # ------------------------------------------------------------------ #
 # Table (1:M editable grid) — columns can reach related entities
 # ------------------------------------------------------------------ #
@@ -439,6 +464,7 @@ FormElement = Annotated[
         CalculatedElement,
         InputElement,
         LiveValueElement,
+        RecordListElement,
         ChatElement,
         ButtonElement,
         FormRefElement,
