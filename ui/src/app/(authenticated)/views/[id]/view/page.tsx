@@ -48,6 +48,7 @@ export default function ViewViewerPage({ params }: { params: Promise<{ id: strin
     rowRecordId?: string,
   ) => {
     setNotice(null);
+    setError(null);
     try {
       // Target the row's record (record-list action), else the page's record
       // (`?record_id=`), else no record — an ad-hoc "run now". The run endpoint
