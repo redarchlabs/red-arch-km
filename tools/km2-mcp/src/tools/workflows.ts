@@ -52,12 +52,17 @@ export function registerWorkflowTools(server: McpServer, ctx: AppContext): void 
   defineTool(server, {
     name: "km2_update_workflow",
     title: "Update workflow",
-    description: "Update a workflow's name/description/enabled flag or run_permission. Only provided fields change.",
+    description:
+      "Update a workflow's name/description/enabled flag, run_permission, or run_inline_on_change. " +
+      "Only provided fields change. Set run_inline_on_change=true on an entity-change-triggered " +
+      "workflow to fire it INLINE in the request that mutated the record (no beat-sweep delay) — " +
+      "e.g. a robot announcing a state change the instant the record is saved.",
     inputSchema: {
       workflow_id: uuid,
       name: z.string().min(1).max(200).optional(),
       description: z.string().max(2000).optional(),
       enabled: z.boolean().optional(),
+      run_inline_on_change: z.boolean().optional(),
       run_permission: runPermission.optional(),
     },
     handler: ({ workflow_id, ...rest }) =>
