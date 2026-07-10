@@ -76,7 +76,19 @@ describe("workflows API client", () => {
   it("triggers a real run", async () => {
     post.mockResolvedValue({ data: { run_id: "r1" } });
     await runWorkflow("w1", { operation: "update" });
-    expect(post).toHaveBeenCalledWith("/workflows/w1/run", { operation: "update" });
+    expect(post).toHaveBeenCalledWith("/workflows/w1/run", { operation: "update" }, {
+      timeout: undefined,
+    });
+  });
+
+  it("passes a per-call timeout override to the run request", async () => {
+    post.mockResolvedValue({ data: { run_id: "r1" } });
+    await runWorkflow("w1", { inputs: { text: "hi" } }, 120000);
+    expect(post).toHaveBeenCalledWith(
+      "/workflows/w1/run",
+      { inputs: { text: "hi" } },
+      { timeout: 120000 },
+    );
   });
 
   it("lists runs with the limit as a query param", async () => {

@@ -157,7 +157,11 @@ export async function updateWorkflow(
   return (await apiClient.patch<Workflow>(`/workflows/${id}`, input)).data;
 }
 
-/** Run the published workflow for real against provided inputs. */
+/** Run the published workflow for real against provided inputs.
+ *
+ * ``timeoutMs`` overrides the client's default request timeout for this call —
+ * synchronous runs that fan out to RAG + one or more LLM steps (e.g. a robot
+ * chat answer) routinely take longer than the 30s default. */
 export async function runWorkflow(
   id: string,
   input: {
@@ -168,8 +172,13 @@ export async function runWorkflow(
     // Caller-supplied variables for a manual (on-demand) workflow.
     inputs?: Record<string, unknown>;
   },
+  timeoutMs?: number,
 ): Promise<ManualRunResult> {
-  return (await apiClient.post<ManualRunResult>(`/workflows/${id}/run`, input)).data;
+  return (
+    await apiClient.post<ManualRunResult>(`/workflows/${id}/run`, input, {
+      timeout: timeoutMs,
+    })
+  ).data;
 }
 
 export interface ConnectionCallResult {

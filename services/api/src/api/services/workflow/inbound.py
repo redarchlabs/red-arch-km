@@ -51,6 +51,7 @@ async def trigger_from_inbound(
     org_encryption_key: str = "",
     webhook_allowlist: tuple[str, ...] = (),
     trusted_local_hosts: tuple[str, ...] = (),
+    settings: Any = None,
 ) -> dict[str, Any] | None:
     """Resolve the endpoint by token, verify its signature, and run its workflow.
 
@@ -84,9 +85,7 @@ async def trigger_from_inbound(
 
     # Downgrade to the endpoint's tenant for all subsequent writes (RLS-enforced).
     await session.execute(text("SET LOCAL ROLE app_user"))
-    await session.execute(
-        text("SELECT set_config('app.current_tenant_id', :tid, true)"), {"tid": str(org_id)}
-    )
+    await session.execute(text("SELECT set_config('app.current_tenant_id', :tid, true)"), {"tid": str(org_id)})
 
     wf = await WorkflowRepository(session, org_id).get(workflow_id)
     if wf is None or wf.active_version_id is None:
@@ -114,6 +113,7 @@ async def trigger_from_inbound(
         org_encryption_key=org_encryption_key,
         webhook_allowlist=webhook_allowlist,
         trusted_local_hosts=trusted_local_hosts,
+        settings=settings,
     )
     await engine.start_run(run, version.definition)
     # Drive inline so the workflow executes NOW (real-time), not on the next

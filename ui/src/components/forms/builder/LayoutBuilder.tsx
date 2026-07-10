@@ -158,6 +158,8 @@ function ElementEditor({
       return <InputEditor el={el} onChange={onChange} />;
     case "live_value":
       return <LiveValueEditor el={el} onChange={onChange} />;
+    case "chat":
+      return <ChatEditor el={el} onChange={onChange} />;
     case "button":
       return <ButtonEditor el={el} onChange={onChange} />;
     case "form_ref":
@@ -511,6 +513,229 @@ function LiveValueEditor({ el, onChange }: { el: LiveValueEl; onChange: (el: For
           onChange={(e) => onChange({ ...el, units: e.target.value || null })}
         />
       </Row>
+    </div>
+  );
+}
+
+type ChatEl = Extract<FormElement, { type: "chat" }>;
+
+function ChatEditor({ el, onChange }: { el: ChatEl; onChange: (el: FormElement) => void }) {
+  return (
+    <div className="space-y-1.5">
+      <Row label="Title">
+        <input
+          className={input}
+          value={el.title ?? ""}
+          onChange={(e) => onChange({ ...el, title: e.target.value || null })}
+        />
+      </Row>
+      <Row label="Answer workflow id">
+        <input
+          className={input}
+          placeholder="Robot: Chat Answer workflow id"
+          value={el.answer_workflow_id ?? ""}
+          onChange={(e) => onChange({ ...el, answer_workflow_id: e.target.value || null })}
+        />
+      </Row>
+      <Row label="Message entity">
+        <input
+          className={input}
+          value={el.message_entity ?? "robot_message"}
+          onChange={(e) => onChange({ ...el, message_entity: e.target.value })}
+        />
+      </Row>
+      <Row label="Conversation entity">
+        <input
+          className={input}
+          value={el.conversation_entity ?? "robot_conversation"}
+          onChange={(e) => onChange({ ...el, conversation_entity: e.target.value })}
+        />
+      </Row>
+      <Row label="Conversation link slug">
+        <input
+          className={input}
+          value={el.conversation_relationship ?? "conversation"}
+          onChange={(e) => onChange({ ...el, conversation_relationship: e.target.value })}
+        />
+      </Row>
+      <Row label="Poll (ms)">
+        <input
+          className={input}
+          type="number"
+          value={el.poll_ms ?? 1500}
+          onChange={(e) => onChange({ ...el, poll_ms: Number(e.target.value) || 1500 })}
+        />
+      </Row>
+      <Row label="Placeholder">
+        <input
+          className={input}
+          value={el.placeholder ?? ""}
+          onChange={(e) => onChange({ ...el, placeholder: e.target.value })}
+        />
+      </Row>
+      <ChatAnswerControlsEditor el={el} onChange={onChange} />
+      <ChatFillerEditor el={el} onChange={onChange} />
+    </div>
+  );
+}
+
+/** Builder controls for the "one moment…" filler chatter the chat shows (and optionally
+ * speaks) while a slow answer is still being generated. */
+function ChatFillerEditor({ el, onChange }: { el: ChatEl; onChange: (el: FormElement) => void }) {
+  const f = el.filler ?? {};
+  const patch = (next: Partial<NonNullable<ChatEl["filler"]>>) =>
+    onChange({ ...el, filler: { ...f, ...next } });
+  return (
+    <div className="mt-1.5 space-y-1.5 rounded-md border border-dashed p-2">
+      <label className="flex items-center gap-2 text-xs font-medium">
+        <input type="checkbox" checked={f.show ?? false} onChange={(e) => patch({ show: e.target.checked })} />
+        <span>Fill wait with &ldquo;one moment…&rdquo; chatter</span>
+      </label>
+      {f.show ? (
+        <>
+          <p className="text-[11px] text-muted-foreground">
+            While the answer is still cooking, drip out a randomized line (first after{" "}
+            <em>Delay</em>, then every <em>Interval</em>) so a slow reply feels responsive. Set a{" "}
+            <em>Speak connection</em> to have the robot say it out loud too.
+          </p>
+          <Row label="Delay (ms)">
+            <input
+              className={input}
+              type="number"
+              value={f.delay_ms ?? 1400}
+              onChange={(e) => patch({ delay_ms: Number(e.target.value) || 1400 })}
+            />
+          </Row>
+          <Row label="Interval (ms)">
+            <input
+              className={input}
+              type="number"
+              value={f.interval_ms ?? 6000}
+              onChange={(e) => patch({ interval_ms: Number(e.target.value) || 6000 })}
+            />
+          </Row>
+          <Row label="Max lines">
+            <input
+              className={input}
+              type="number"
+              value={f.max_lines ?? 2}
+              onChange={(e) => patch({ max_lines: Number(e.target.value) || 2 })}
+            />
+          </Row>
+          <Row label="Speak connection">
+            <input
+              className={input}
+              placeholder="robot (optional)"
+              value={f.speak_connection ?? ""}
+              onChange={(e) => patch({ speak_connection: e.target.value || null })}
+            />
+          </Row>
+          <Row label="Phrases">
+            <textarea
+              className={input}
+              rows={3}
+              placeholder={"One line each. {q} = the question.\nLeave blank for the built-in set."}
+              value={(f.phrases ?? []).join("\n")}
+              onChange={(e) =>
+                patch({
+                  phrases: e.target.value
+                    .split("\n")
+                    .map((p) => p.trim())
+                    .filter(Boolean),
+                })
+              }
+            />
+          </Row>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+/** Builder controls for the live answer-speed toggle row (Fast mode / Knowledge graph
+ * / Concise / Answer model) the chat card can render at runtime. */
+function ChatAnswerControlsEditor({ el, onChange }: { el: ChatEl; onChange: (el: FormElement) => void }) {
+  const ac = el.answer_controls ?? {};
+  const patch = (next: Partial<NonNullable<ChatEl["answer_controls"]>>) =>
+    onChange({ ...el, answer_controls: { ...ac, ...next } });
+  return (
+    <div className="mt-1.5 space-y-1.5 rounded-md border border-dashed p-2">
+      <label className="flex items-center gap-2 text-xs font-medium">
+        <input
+          type="checkbox"
+          checked={ac.show ?? false}
+          onChange={(e) => patch({ show: e.target.checked })}
+        />
+        <span>Show answer speed controls</span>
+      </label>
+      {ac.show ? (
+        <>
+          <p className="text-[11px] text-muted-foreground">
+            Initial state — viewers can flip these per turn. The workflow must read{" "}
+            <code>inputs.synthesize</code>, <code>inputs.use_knowledge_graph</code>,{" "}
+            <code>inputs.answer_model</code>, <code>inputs.max_words</code>.
+          </p>
+          <Row label="Fast mode">
+            <input
+              type="checkbox"
+              checked={ac.fast_mode ?? true}
+              onChange={(e) => patch({ fast_mode: e.target.checked })}
+            />
+          </Row>
+          <Row label="Knowledge graph">
+            <input
+              type="checkbox"
+              checked={ac.knowledge_graph ?? false}
+              onChange={(e) => patch({ knowledge_graph: e.target.checked })}
+            />
+          </Row>
+          <Row label="Concise">
+            <input
+              type="checkbox"
+              checked={ac.concise ?? true}
+              onChange={(e) => patch({ concise: e.target.checked })}
+            />
+          </Row>
+          <Row label="Speak aloud">
+            <input
+              type="checkbox"
+              checked={ac.speak ?? true}
+              onChange={(e) => patch({ speak: e.target.checked })}
+            />
+          </Row>
+          <Row label="Models">
+            <input
+              className={input}
+              placeholder="gpt-5-nano, gpt-5-mini"
+              value={(ac.models ?? []).join(", ")}
+              onChange={(e) =>
+                patch({
+                  models: e.target.value
+                    .split(",")
+                    .map((m) => m.trim())
+                    .filter(Boolean),
+                })
+              }
+            />
+          </Row>
+          <Row label="Concise words">
+            <input
+              className={input}
+              type="number"
+              value={ac.concise_words ?? 20}
+              onChange={(e) => patch({ concise_words: Number(e.target.value) || 20 })}
+            />
+          </Row>
+          <Row label="Full words">
+            <input
+              className={input}
+              type="number"
+              value={ac.verbose_words ?? 45}
+              onChange={(e) => patch({ verbose_words: Number(e.target.value) || 45 })}
+            />
+          </Row>
+        </>
+      ) : null}
     </div>
   );
 }

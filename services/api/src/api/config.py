@@ -50,6 +50,10 @@ class Settings(BaseSettings):
     # fallback; an org's own key (orgs.openai_api_key) takes precedence.
     openai_api_key: SecretStr = Field(default=SecretStr(""), validation_alias="OPENAI_API_KEY")
     openai_model: str = Field(default="gpt-5-mini", validation_alias="OPENAI_CHAT_MODEL")
+    # A smaller/cheaper/faster model for short auxiliary calls (e.g. the workflow
+    # `summarize` action that compresses a RAG answer into one spoken line for a
+    # robot). Falls back to the chat model if the env var is unset.
+    openai_summary_model: str = Field(default="gpt-5-nano", validation_alias="OPENAI_SUMMARY_MODEL")
 
     # Application-level encryption secret for per-org third-party credentials at
     # rest (e.g. orgs.openai_api_key). Derives a Fernet key (see services/crypto.py).

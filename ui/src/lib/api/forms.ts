@@ -96,6 +96,69 @@ export interface LiveValueElement extends ElementBase {
   width?: FieldWidth | null;
 }
 
+/** Live, per-turn controls for how the answer workflow retrieves/generates. When
+ * `show` is set, the chat renders a compact toggle row and forwards the chosen values
+ * as workflow `inputs` (synthesize / use_knowledge_graph / answer_model / max_words),
+ * so a viewer can trade quality for speed without rebuilding the workflow. The other
+ * fields are the *initial* state of each control. */
+export interface ChatAnswerControls {
+  show?: boolean;
+  /** Fast mode = retrieval-only (`synthesize:false`): one LLM call, no graph hop. */
+  fast_mode?: boolean;
+  /** Include the knowledge-graph hop (only affects the non-fast/synthesis path). */
+  knowledge_graph?: boolean;
+  /** Concise = cap the spoken reply to `concise_words`; otherwise `verbose_words`. */
+  concise?: boolean;
+  /** Speak = have the robot say the answer aloud (forwarded as `inputs.speak`). */
+  speak?: boolean;
+  /** Selectable answer models (first entry is the default). e.g. ["gpt-5-nano","gpt-5-mini"]. */
+  models?: string[];
+  concise_words?: number;
+  verbose_words?: number;
+}
+
+/** Perceived-latency filler: while the answer workflow runs, the chat shows (and,
+ * if `speak_connection` is set, speaks) short randomized "one moment…" lines so a
+ * slow answer still feels responsive. Fillers are ephemeral — nothing is persisted,
+ * and they clear the instant the real reply lands. */
+export interface ChatFiller {
+  show?: boolean;
+  /** Wait this long into a turn before the first filler (ms). */
+  delay_ms?: number;
+  /** Gap between successive fillers while the robot is still working (ms). */
+  interval_ms?: number;
+  /** Max filler lines to emit per turn before falling silent (default 2). */
+  max_lines?: number;
+  /** Override the phrase pool. `{q}` is replaced with the person's question. */
+  phrases?: string[];
+  /** Saved connection slug to verbalize the filler through (e.g. "robot"). */
+  speak_connection?: string | null;
+  /** Connection path that makes the robot talk (default "/say"). */
+  speak_path?: string;
+  /** Request-body field carrying the phrase text (default "text"). */
+  speak_field?: string;
+}
+
+/** A conversation panel over two entities (a conversation session + its messages).
+ * Lists the active conversation's messages as bubbles (polling) and, on send, creates
+ * a `person` message then runs `answer_workflow_id` so the robot answers + speaks. */
+export interface ChatElement extends ElementBase {
+  type: "chat";
+  title?: string | null;
+  conversation_entity?: string;
+  message_entity?: string;
+  conversation_relationship?: string;
+  role_field?: string;
+  text_field?: string;
+  channel_field?: string;
+  answer_workflow_id?: string | null;
+  answer_controls?: ChatAnswerControls | null;
+  filler?: ChatFiller | null;
+  poll_ms?: number;
+  placeholder?: string;
+  width?: FieldWidth | null;
+}
+
 export type SubmitAction = { kind: "submit" };
 export type RunWorkflowAction = {
   kind: "run_workflow";
@@ -226,6 +289,7 @@ export type FormElement =
   | CalculatedElement
   | InputElement
   | LiveValueElement
+  | ChatElement
   | ButtonElement
   | FormRefElement
   | TableElement

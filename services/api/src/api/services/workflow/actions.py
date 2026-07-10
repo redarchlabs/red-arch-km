@@ -57,6 +57,10 @@ class ActionContext:
     # Caller-supplied input variables for a manual (on-demand) run, addressable as
     # ``inputs.<key>`` / ``{{ inputs.<key> }}``. Empty for record/form-triggered runs.
     inputs: dict[str, Any] = field(default_factory=dict)
+    # Run-scoped variables captured from earlier steps' outputs (a task's
+    # ``capture`` key). Addressable as ``vars.<key>`` / ``{{ vars.<key> }}`` so a
+    # later action can consume an earlier step's result (e.g. speak a KB answer).
+    vars: dict[str, Any] = field(default_factory=dict)
     # Allow-listed webhook hosts (SSRF guard).
     webhook_allowlist: tuple[str, ...] = ()
     # Hosts explicitly trusted to reach a private/loopback address (e.g. a
@@ -74,6 +78,30 @@ class ActionContext:
     # absent). Built by the runner from the org's connections + encryption key;
     # None on the dry-run test path (so simulate() never touches secrets).
     resolve_connection: Callable[[str], Awaitable[ResolvedConnection | None]] | None = None
+    # Runs an org-scoped RAG query against the knowledge base and returns
+    # ``{"answer": str, "sources": [...]}``. Built by the runner from Settings +
+    # the brain-api client; None on the dry-run test path (so simulate() makes no
+    # network call).
+    # Hybrid RAG lookup: given ``{"query": str, "use_knowledge_graph": bool}`` returns
+    # ``{"answer", "sources"}``. ``use_knowledge_graph`` lets a per-run toggle skip the
+    # (sequential) graph hop for speed. None on the dry-run test path.
+    search_knowledge: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]] | None = None
+    # Retrieval-ONLY KB lookup (no brain-api LLM synthesis): returns the matched
+    # passages pre-formatted as context — ``{"answer": <passage text>, "sources":
+    # [...], "passages": [...]}``. Used by ``knowledge_search`` when
+    # ``synthesize: false`` so a downstream ``llm_decide`` grounds on the raw
+    # passages and does the ONE generation itself (one LLM call per turn instead of
+    # brain-api RAG + llm_decide). None on the dry-run test path.
+    retrieve_knowledge: Callable[[str], Awaitable[dict[str, Any]]] | None = None
+    # Compresses text into one short spoken line via a small LLM (opts: text,
+    # question, max_words, instruction, model) → the condensed string. Built by the
+    # runner from Settings + the org's OpenAI key; None on the dry-run test path.
+    summarize: Callable[[dict[str, Any]], Awaitable[str]] | None = None
+    # Constrained-LLM steering for a robot: given (system, question, context,
+    # gestures, moods, history, model) returns a structured decision dict
+    # ``{say, gesture, mood, done, reason}`` with gesture/mood locked to the passed
+    # vocabulary. Built by the runner; None on the dry-run test path.
+    decide: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]] | None = None
 
 
 class ActionHandler(Protocol):
@@ -110,8 +138,9 @@ _REF_KEY = "$ref"
 
 def _trigger_context(ctx: ActionContext) -> dict[str, Any]:
     """The run's data context: the triggering record (``before.<field>`` /
-    ``after.<field>``) plus any manual-run input variables (``inputs.<key>``)."""
-    return {"before": ctx.before, "after": ctx.after, "inputs": ctx.inputs or {}}
+    ``after.<field>``), any manual-run input variables (``inputs.<key>``), and
+    variables captured from earlier steps (``vars.<key>``)."""
+    return {"before": ctx.before, "after": ctx.after, "inputs": ctx.inputs or {}, "vars": ctx.vars or {}}
 
 
 def _lookup(context: dict[str, Any], path: str) -> Any:
@@ -137,9 +166,11 @@ def _resolve_values(values: dict[str, Any], context: dict[str, Any]) -> dict[str
     return {key: _resolve_ref(value, context) for key, value in values.items()}
 
 
-# ``{{ after.first_name }}`` / ``{{ inputs.amount }}`` tokens in email
-# subject/body/recipient (and any other templated action field).
-_TEMPLATE_TOKEN = re.compile(r"\{\{\s*(before|after|inputs)\.([A-Za-z0-9_]+)\s*\}\}")
+# ``{{ after.first_name }}`` / ``{{ inputs.amount }}`` / ``{{ vars.answer }}``
+# tokens in email subject/body/recipient (and any other templated action field).
+# The path after the namespace may be dotted (``{{ vars.kb.answer }}``) so a token
+# can reach into a captured step output (e.g. knowledge_search's {answer, sources}).
+_TEMPLATE_TOKEN = re.compile(r"\{\{\s*(before|after|inputs|vars)\.([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*)\s*\}\}")
 
 
 def _render_template(template: str, context: dict[str, Any]) -> str:
@@ -151,6 +182,54 @@ def _render_template(template: str, context: dict[str, Any]) -> str:
         return "" if value is None else str(value)
 
     return _TEMPLATE_TOKEN.sub(_sub, template)
+
+
+def _render_deep(value: Any, context: dict[str, Any]) -> Any:
+    """Render ``{{...}}`` tokens in every string leaf of a nested body (dict/list),
+    leaving non-string scalars untouched. Used for an action's JSON body so e.g. a
+    robot ``/say`` can carry ``{"text": "{{vars.kb.answer}}"}``."""
+    if isinstance(value, str):
+        return _render_template(value, context)
+    if isinstance(value, dict):
+        return {key: _render_deep(item, context) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_render_deep(item, context) for item in value]
+    return value
+
+
+def _resolve_dynamic(raw: Any, context: dict[str, Any]) -> Any:
+    """Resolve a config value that may be a ``{"$ref": "inputs.x"}`` envelope (typed
+    value preserved), a ``{{ inputs.x }}`` template string (rendered to text), or a
+    plain literal (passed through). Lets a per-run toggle steer a node's behaviour."""
+    if isinstance(raw, dict):
+        return _resolve_ref(raw, context)
+    if isinstance(raw, str):
+        return _render_template(raw, context)
+    return raw
+
+
+def _as_bool(value: Any, default: bool) -> bool:
+    """Coerce a resolved config value to a bool. ``None``/empty → ``default`` so an
+    unset (or empty-rendered) toggle keeps the back-compat behaviour; strings like
+    ``"true"``/``"1"``/``"on"`` are truthy so a ``{{ inputs.flag }}`` template works."""
+    if value is None or value == "":
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return str(value).strip().lower() in ("true", "1", "yes", "on")
+
+
+def _as_int(value: Any, default: int) -> int:
+    """Coerce a resolved config value to an int, tolerating a ``{{ inputs.n }}``
+    template that rendered to a numeric string. ``None``/blank/garbage → ``default``."""
+    if value is None or value == "":
+        return default
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return default
 
 
 @register
@@ -343,7 +422,11 @@ class HttpRequest:
         for key, value in (ctx.config.get("headers") or {}).items():
             headers[str(key)] = str(value)
         headers.update(_auth_headers(conn))
-        body = ctx.config.get("body")
+        # Render ``{{after.x}}`` / ``{{vars.kb.answer}}`` tokens in the JSON body so a
+        # request can carry values from the trigger or an earlier captured step
+        # (e.g. speak a knowledge_search answer). The URL/host is intentionally NOT
+        # templated — it stays under the connection + SSRF allow-list.
+        body = _render_deep(ctx.config.get("body"), _trigger_context(ctx))
 
         import httpx
 
@@ -382,6 +465,181 @@ def _auth_headers(conn: ResolvedConnection | None) -> dict[str, str]:
         token = base64.b64encode(f"{username}:{conn.secret}".encode()).decode()
         return {"Authorization": f"Basic {token}"}
     return {}
+
+
+@register
+class KnowledgeSearch:
+    """Answer a question from the org's knowledge base (hybrid RAG).
+
+    Config: ``{"query": "<text>", "capture": "answer", "synthesize": true}`` where
+    ``query`` may be a literal, a ``{{ after.<slug> }}`` / ``{{ vars.<key> }}``
+    template, or a ``{"$ref": "after.<slug>"}`` envelope — so a workflow triggered
+    by a robot's "heard" webhook can look up ``{{ after.text }}``. The step output
+    is ``{"query", "answer", "sources"}``; wire the node's ``capture`` to publish
+    ``answer`` as a run variable a later ``/say`` step can speak via
+    ``{{ vars.answer }}``. Read-only (queries the KB, mutates nothing).
+
+    ``synthesize`` (default ``true``) controls whether brain-api runs its own LLM
+    to compose the answer. Set ``synthesize: false`` for RETRIEVAL-ONLY: ``answer``
+    is then the raw matched passages (no brain-api LLM), meant to feed a downstream
+    ``llm_decide`` that does the single grounded generation itself — one LLM call
+    per turn instead of two (brain-api RAG synthesis + llm_decide)."""
+
+    type = "knowledge_search"
+
+    def _query(self, ctx: ActionContext) -> str:
+        raw = ctx.config.get("query")
+        context = _trigger_context(ctx)
+        resolved = _resolve_ref(raw, context) if isinstance(raw, dict) else _render_template(str(raw or ""), context)
+        return str(resolved or "").strip()
+
+    async def execute(self, ctx: ActionContext) -> dict[str, Any]:
+        query = self._query(ctx)
+        if not query:
+            raise ActionError("knowledge_search requires a non-empty query")
+        context = _trigger_context(ctx)
+        # ``synthesize`` and ``use_knowledge_graph`` may be literals OR per-run
+        # values (``{{ inputs.synthesize }}`` / ``{"$ref": "inputs.use_knowledge_graph"}``)
+        # so a caller such as the robot chat's Fast-mode / Knowledge-graph toggles can
+        # steer each turn. Both default true (back-compat): brain-api synthesizes with
+        # graph context. ``synthesize:false`` = retrieval-only, leaving generation to a
+        # downstream step (llm_decide or summarize) — one LLM call instead of two.
+        synthesize = _as_bool(_resolve_dynamic(ctx.config.get("synthesize"), context), True)
+        use_knowledge_graph = _as_bool(_resolve_dynamic(ctx.config.get("use_knowledge_graph"), context), True)
+        if not synthesize:
+            if ctx.retrieve_knowledge is None:
+                raise ActionError("knowledge retrieval is not available in this context")
+            result = await ctx.retrieve_knowledge(query)
+            return {
+                "query": query,
+                "answer": result.get("answer", ""),
+                "sources": result.get("sources", []),
+                "passages": result.get("passages", []),
+            }
+        if ctx.search_knowledge is None:
+            raise ActionError("knowledge search is not available in this context")
+        result = await ctx.search_knowledge({"query": query, "use_knowledge_graph": use_knowledge_graph})
+        return {
+            "query": query,
+            "answer": result.get("answer", ""),
+            "sources": result.get("sources", []),
+        }
+
+    def simulate(self, ctx: ActionContext) -> dict[str, Any]:
+        # Never hit the network in a dry run.
+        return {"query": self._query(ctx), "answer": "<knowledge search result>", "sources": []}
+
+
+@register
+class Summarize:
+    """Compress text into one short, natural spoken line via a small LLM.
+
+    Config: ``{"text": "{{vars.kb.answer}}", "question": "{{after.text}}",
+    "max_words": 25, "instruction"?: "...", "model"?: "gpt-5-nano"}``. ``text`` (and
+    ``question``) may be literals, templates, or ``$ref`` envelopes. Intended to sit
+    between ``knowledge_search`` and a robot ``/say`` so the robot speaks a precise
+    one-liner instead of a full RAG answer with citations. Output: ``{text, ...}``."""
+
+    type = "summarize"
+
+    def _field(self, ctx: ActionContext, key: str) -> str:
+        raw = ctx.config.get(key)
+        context = _trigger_context(ctx)
+        resolved = _resolve_ref(raw, context) if isinstance(raw, dict) else _render_template(str(raw or ""), context)
+        return str(resolved or "").strip()
+
+    async def execute(self, ctx: ActionContext) -> dict[str, Any]:
+        text = self._field(ctx, "text")
+        if not text:
+            raise ActionError("summarize requires non-empty text")
+        if ctx.summarize is None:
+            raise ActionError("summarization is not available in this context")
+        question = self._field(ctx, "question")
+        context = _trigger_context(ctx)
+        # ``max_words`` and ``model`` may be literals or per-run values
+        # (``{{ inputs.max_words }}`` / ``{"$ref": "inputs.answer_model"}``) so the robot
+        # chat's Concise / Answer-model toggles steer the spoken reply. A blank ``model``
+        # resolves to None → the runner falls back to the org's default summary model.
+        max_words = _as_int(_resolve_dynamic(ctx.config.get("max_words"), context), 30)
+        model = str(_resolve_dynamic(ctx.config.get("model"), context) or "").strip() or None
+        spoken = await ctx.summarize(
+            {
+                "text": text,
+                "question": question or None,
+                "max_words": max_words,
+                "instruction": ctx.config.get("instruction"),
+                "model": model,
+            }
+        )
+        return {"text": spoken, "input_chars": len(text), "output_chars": len(spoken)}
+
+    def simulate(self, ctx: ActionContext) -> dict[str, Any]:
+        # Never call the LLM in a dry run.
+        text = self._field(ctx, "text")
+        return {"text": "<summarized spoken reply>", "input_chars": len(text), "output_chars": 0}
+
+
+@register
+class LlmDecide:
+    """Constrained-LLM steering step for a workflow-driven robot.
+
+    The workflow is the controller; this node uses an LLM only to *pick the next move*
+    within the robot's advertised vocabulary. It returns a STRUCTURED decision
+    ``{say, gesture, mood, done, reason}`` — ``gesture``/``mood`` are enum-locked to the
+    ``gestures``/``moods`` config (source these from the robot's ``GET /capabilities``), and
+    ``done`` lets an exclusive gateway loop or finish (goal-directed). Wire the node's
+    ``capture`` (e.g. ``"decision"``) so downstream ``http_request`` steps template
+    ``{{vars.decision.say}}`` / ``{{vars.decision.gesture}}``.
+
+    Config: ``{"question": "{{after.text}}", "context": "{{vars.kb.answer}}",
+    "system": "<rules of engagement>", "gestures": [...], "moods": [...],
+    "history"?: [...], "model"?: "..."}``. Read-only (calls the LLM, mutates nothing)."""
+
+    type = "llm_decide"
+
+    def _field(self, ctx: ActionContext, key: str) -> str:
+        raw = ctx.config.get(key)
+        context = _trigger_context(ctx)
+        resolved = _resolve_ref(raw, context) if isinstance(raw, dict) else _render_template(str(raw or ""), context)
+        return str(resolved or "").strip()
+
+    async def execute(self, ctx: ActionContext) -> dict[str, Any]:
+        if ctx.decide is None:
+            raise ActionError("llm_decide is not available in this context")
+        question = self._field(ctx, "question")
+        if not question:
+            raise ActionError("llm_decide requires a non-empty question")
+        gestures = [str(g) for g in (ctx.config.get("gestures") or [])]
+        moods = [str(m) for m in (ctx.config.get("moods") or [])]
+        decision = await ctx.decide(
+            {
+                "system": self._field(ctx, "system") or None,
+                "question": question,
+                "context": self._field(ctx, "context"),
+                "gestures": gestures,
+                "moods": moods,
+                "history": ctx.config.get("history"),
+                "model": ctx.config.get("model"),
+            }
+        )
+        # Defense-in-depth: enforce the vocabulary even if a model ignored the schema, so a
+        # downstream /gesture or /mood call can never be handed a move the robot rejects.
+        if decision.get("gesture") not in gestures:
+            decision["gesture"] = None
+        if decision.get("mood") not in moods:
+            decision["mood"] = None
+        decision["done"] = bool(decision.get("done"))
+        return decision
+
+    def simulate(self, ctx: ActionContext) -> dict[str, Any]:
+        # Never call the LLM in a dry run.
+        return {
+            "say": "<decided spoken reply>",
+            "gesture": None,
+            "mood": None,
+            "done": True,
+            "reason": "dry-run",
+        }
 
 
 @register

@@ -237,7 +237,7 @@ _SYSTEM_PROMPT = (
     "control-flow tokens with per-step output/error; retry_workflow_run re-runs the failed step(s) of a "
     "failed run. When a run is 'waiting' on a human task (a user_task token in get_workflow_run), "
     "complete_workflow_task advances it — pass `variables` for any approval decision the flow branches "
-    "on (e.g. {\"approved\": true}). Authoring/publishing/testing/monitoring are org-admin only; running "
+    'on (e.g. {"approved": true}). Authoring/publishing/testing/monitoring are org-admin only; running '
     "honors the workflow's run_permission.\n"
     "Forms & views: a form binds to one entity and is filled internally (Forms UI) or via a public "
     "share link to create/update a record; a view is a composable screen that arranges forms "
@@ -830,7 +830,7 @@ TOOLS: list[dict[str, Any]] = [
             "name": "complete_workflow_task",
             "description": (
                 "Complete a human task a run is WAITING on (e.g. an approval) and advance the run. "
-                "Provide `variables` for any decision the workflow branches on (e.g. {\"approved\": true}). "
+                'Provide `variables` for any decision the workflow branches on (e.g. {"approved": true}). '
                 "Use get_workflow_run first to see which task node is waiting. Reports 'nothing to "
                 "complete' if the run isn't awaiting a task."
             ),
@@ -1144,10 +1144,19 @@ TOOLS: list[dict[str, Any]] = [
                 "type": "object",
                 "properties": {
                     "name": {"type": "string"},
-                    "base_url": {"type": "string", "description": "e.g. https://api.example.com or http://localhost:8080"},
+                    "base_url": {
+                        "type": "string",
+                        "description": "e.g. https://api.example.com or http://localhost:8080",
+                    },
                     "auth_type": {"type": "string", "enum": ["none", "bearer", "api_key", "basic"]},
-                    "secret": {"type": "string", "description": "Bearer token / api key / basic password (encrypted at rest)."},
-                    "config": {"type": "object", "description": "Non-secret auth config: api-key header name, basic username, static headers."},
+                    "secret": {
+                        "type": "string",
+                        "description": "Bearer token / api key / basic password (encrypted at rest).",
+                    },
+                    "config": {
+                        "type": "object",
+                        "description": "Non-secret auth config: api-key header name, basic username, static headers.",
+                    },
                 },
                 "required": ["name"],
             },
@@ -1191,7 +1200,10 @@ TOOLS: list[dict[str, Any]] = [
                 "type": "object",
                 "properties": {
                     "name": {"type": "string"},
-                    "workflow_id": {"type": "string", "description": "The workflow this endpoint starts (must be published to run)."},
+                    "workflow_id": {
+                        "type": "string",
+                        "description": "The workflow this endpoint starts (must be published to run).",
+                    },
                 },
                 "required": ["name", "workflow_id"],
             },
@@ -1368,6 +1380,13 @@ _ASSISTANT_ACTION_TYPES = frozenset(
         "http_request",
         "send_email",
         "send_form",
+        # Read-only knowledge-base lookup (hybrid RAG). Answers a question from the
+        # org's docs; pair with a node ``capture`` + ``{{ vars.<key> }}`` in a later
+        # step (token-engine graph) to speak/store the answer.
+        "knowledge_search",
+        # Small-LLM condensation of text into one short spoken line (e.g. shrink a
+        # RAG answer before a robot /say). Read-only.
+        "summarize",
     }
 )
 
@@ -1390,12 +1409,15 @@ def _build_workflow_definition(
     prev_id = "trigger"
     for index, action in enumerate(actions):
         node_id = f"action_{index}_{uuid.uuid4().hex[:6]}"
+        node_data: dict[str, Any] = {"action_type": action["action_type"], "config": action["config"]}
+        if action.get("capture"):
+            node_data["capture"] = action["capture"]
         nodes.append(
             {
                 "id": node_id,
                 "type": "action",
                 "position": {"x": 240, "y": 40 + 180 * (index + 1)},
-                "data": {"action_type": action["action_type"], "config": action["config"]},
+                "data": node_data,
             }
         )
         edges.append(
@@ -1882,6 +1904,19 @@ class AgentService:
                     for k in ("connection", "url", "path", "method", "headers", "body")
                     if spec.get(k) is not None
                 }
+            elif action_type == "knowledge_search":
+                query = spec.get("query")
+                if not query:
+                    return {"error": "knowledge_search action requires query"}
+                config = {"query": query}
+            elif action_type == "summarize":
+                stext = spec.get("text")
+                if not stext:
+                    return {"error": "summarize action requires text"}
+                config = {"text": stext}
+                for k in ("question", "max_words", "instruction", "model"):
+                    if spec.get(k) is not None:
+                        config[k] = spec[k]
             elif action_type == "send_email":
                 to = spec.get("to")
                 if not to:
@@ -1897,7 +1932,12 @@ class AgentService:
                         config[k] = spec[k]
             else:  # log
                 config = {"message": spec.get("message", "")}
-            action_nodes.append({"action_type": action_type, "config": config})
+            node_spec: dict[str, Any] = {"action_type": action_type, "config": config}
+            # Optional: publish this step's output as a run variable (``vars.<key>``)
+            # for a later step to template. Only piped through on the token engine.
+            if spec.get("capture"):
+                node_spec["capture"] = str(spec["capture"])
+            action_nodes.append(node_spec)
 
         service = WorkflowService(session, self._org_id)
         wf = await service.create_workflow(
@@ -2134,6 +2174,7 @@ class AgentService:
             public_base_url=self._settings.public_base_url,
             email_sender=EmailSender(self._settings),
             org_encryption_key=self._settings.org_encryption_key.get_secret_value(),
+            settings=self._settings,
         )
         # SECURITY (mirrors POST /workflows/{id}/run): never trust client record
         # data. With a record_id, load real before/after server-side; without one,
@@ -2235,6 +2276,7 @@ class AgentService:
             public_base_url=self._settings.public_base_url,
             email_sender=EmailSender(self._settings),
             org_encryption_key=self._settings.org_encryption_key.get_secret_value(),
+            settings=self._settings,
         )
         result = await engine.retry_run(run, version.definition)
         if result.get("reactivated", 0) == 0:
@@ -2273,6 +2315,7 @@ class AgentService:
             public_base_url=self._settings.public_base_url,
             email_sender=EmailSender(self._settings),
             org_encryption_key=self._settings.org_encryption_key.get_secret_value(),
+            settings=self._settings,
         )
         variables = args.get("variables") if isinstance(args.get("variables"), dict) else None
         output = args.get("output") if isinstance(args.get("output"), dict) else None
@@ -2385,9 +2428,7 @@ class AgentService:
             return {"error": str(exc)}
         return {"deleted_form": str(form_id)}
 
-    async def _tool_describe_form_elements(
-        self, _session: AsyncSession, _args: dict[str, Any]
-    ) -> dict[str, Any]:
+    async def _tool_describe_form_elements(self, _session: AsyncSession, _args: dict[str, Any]) -> dict[str, Any]:
         """On-demand reference for the v2 element vocabulary (no DB access).
 
         Kept out of the tool schemas / system prompt so the model pulls it only
@@ -2405,8 +2446,13 @@ class AgentService:
                 "field": {
                     "required": ["type", "slug"],
                     "optional": [
-                        "label", "required", "read_only", "width", "help_text",
-                        "placeholder", "display (dropdown|radio)",
+                        "label",
+                        "required",
+                        "read_only",
+                        "width",
+                        "help_text",
+                        "placeholder",
+                        "display (dropdown|radio)",
                     ],
                     "use": "Bind one entity field by its slug.",
                 },
@@ -2426,13 +2472,21 @@ class AgentService:
                 "input": {
                     "required": ["type", "key", "control (text|textarea|number|slider|toggle|select)"],
                     "optional": [
-                        "label", "placeholder", "help_text", "default", "required", "width",
-                        "min", "max", "step (number|slider)", "options:[{value,label?}] (select)",
+                        "label",
+                        "placeholder",
+                        "help_text",
+                        "default",
+                        "required",
+                        "width",
+                        "min",
+                        "max",
+                        "step (number|slider)",
+                        "options:[{value,label?}] (select)",
                     ],
                     "use": (
                         "A STANDALONE input NOT bound to an entity field — its value lives in form "
                         "state under `key`. Reference it from a button's inputs or a calculated "
-                        "expression as {\"var\": \"<key>\"}. Use for sliders/toggles/free-text in a "
+                        'expression as {"var": "<key>"}. Use for sliders/toggles/free-text in a '
                         "standalone view that feed a workflow run. Never persisted to a record."
                     ),
                 },
@@ -2504,9 +2558,7 @@ class AgentService:
             ),
         }
 
-    async def _tool_validate_form_layout(
-        self, session: AsyncSession, args: dict[str, Any]
-    ) -> dict[str, Any]:
+    async def _tool_validate_form_layout(self, session: AsyncSession, args: dict[str, Any]) -> dict[str, Any]:
         from api.schemas.form import FormConfig
         from api.services.form_service import FormError, FormService
 
@@ -2532,20 +2584,21 @@ class AgentService:
             return {"valid": False, "errors": str(exc)}
         return {"valid": True}
 
-    async def _tool_describe_workflow_actions(
-        self, _session: AsyncSession, _args: dict[str, Any]
-    ) -> dict[str, Any]:
+    async def _tool_describe_workflow_actions(self, _session: AsyncSession, _args: dict[str, Any]) -> dict[str, Any]:
         """On-demand reference for the workflow action catalog (no DB access)."""
         return {
             "notes": (
                 "Workflow steps are `actions` (each {type, config}) on create_workflow / "
                 "save_workflow_definition. Config values may embed {{after.<slug>}} / "
-                "{{before.<slug>}} tokens or a {\"$ref\": \"after.<slug>\"} envelope resolved against "
-                "the triggering record."
+                "{{before.<slug>}} / {{inputs.<key>}} / {{vars.<key>}} tokens or a "
+                '{"$ref": "after.<slug>"} envelope. `after`/`before` = triggering record (or '
+                "the inbound webhook payload); `vars` = values captured from earlier steps."
             ),
             "quick_pick": {
                 "POST to an external URL (simple)": "send_webhook",
                 "Authenticated HTTP call via a saved connection": "http_request",
+                "Answer a question from the knowledge base (RAG)": "knowledge_search",
+                "Shrink text into one spoken line (small LLM)": "summarize",
                 "Email someone": "send_email",
                 "Email a fillable form link": "send_form",
                 "Create a record in another entity": "create_record",
@@ -2554,7 +2607,10 @@ class AgentService:
             },
             "actions": {
                 "send_webhook": {
-                    "config": {"url": "required — target REST endpoint", "body": "optional object merged into the POST"},
+                    "config": {
+                        "url": "required — target REST endpoint",
+                        "body": "optional object merged into the POST",
+                    },
                     "use": "POST record data (before/after) plus body to an external REST endpoint.",
                     "note": "Target host must be allow-listed (SSRF guard) or the call is blocked.",
                 },
@@ -2569,16 +2625,54 @@ class AgentService:
                     "use": "Authenticated HTTP call via a reusable connection; returns the parsed response.",
                     "note": "Same allow-list SSRF guard as send_webhook.",
                 },
+                "knowledge_search": {
+                    "config": {
+                        "query": "required — the question; a literal, a {{after.<slug>}}/{{vars.<key>}} token, or $ref",
+                        "capture (node.data)": "name to publish the answer under, e.g. 'answer' → {{ vars.answer }}",
+                    },
+                    "use": "Answer a question from the org's knowledge base (RAG). Output: query/answer/sources.",
+                    "note": (
+                        "Read-only. To speak/store the answer, set the node's `capture` (e.g. 'kb') and "
+                        "reference {{ vars.kb.answer }} in a later step — piped only on the token engine. For a "
+                        "robot, condense it first with `summarize` so the spoken reply is short + citation-free."
+                    ),
+                },
+                "summarize": {
+                    "config": {
+                        "text": "required — text to condense (usually {{vars.kb.answer}})",
+                        "question": "optional — original question for context (e.g. {{after.text}})",
+                        "max_words": "optional int (default 30)",
+                        "instruction": "optional — override the spoken-style prompt",
+                        "model": "optional — small model override (default OPENAI_SUMMARY_MODEL)",
+                    },
+                    "use": "Small-LLM condensation of text into ONE short spoken line. Output: {text, ...}.",
+                    "note": (
+                        "Read-only. Robot Q&A: knowledge_search (capture kb) → summarize "
+                        "{text:'{{vars.kb.answer}}', question:'{{after.text}}'} (capture spoken) → "
+                        "/say {text:'{{vars.spoken.text}}'}."
+                    ),
+                },
                 "send_email": {
-                    "config": {"to": "recipient (or {$ref:'after.<slug>'})", "subject": "", "body": "supports {{after.<slug>}} tokens"},
+                    "config": {
+                        "to": "recipient (or {$ref:'after.<slug>'})",
+                        "subject": "",
+                        "body": "supports {{after.<slug>}} tokens",
+                    },
                     "use": "Send a templated email.",
                 },
                 "send_form": {
-                    "config": {"form_id": "required", "recipient_field": "slug on the record", "recipient": "or a literal/$ref email"},
+                    "config": {
+                        "form_id": "required",
+                        "recipient_field": "slug on the record",
+                        "recipient": "or a literal/$ref email",
+                    },
                     "use": "Mint an intake-form link bound to the triggering record and email it.",
                 },
                 "create_record": {
-                    "config": {"target_slug": "required entity slug", "values": "object of field→value (tokens/$ref ok)"},
+                    "config": {
+                        "target_slug": "required entity slug",
+                        "values": "object of field→value (tokens/$ref ok)",
+                    },
                     "use": "Create a record in another entity.",
                 },
                 "update_record_field": {
@@ -2594,9 +2688,7 @@ class AgentService:
             ),
         }
 
-    async def _tool_describe_bpmn_vocabulary(
-        self, _session: AsyncSession, _args: dict[str, Any]
-    ) -> dict[str, Any]:
+    async def _tool_describe_bpmn_vocabulary(self, _session: AsyncSession, _args: dict[str, Any]) -> dict[str, Any]:
         """On-demand reference for the BPMN graph shape (save_workflow_definition)."""
         return {
             "graph_shape": "{schema_version: 2, nodes: [...], edges: [...]}",
@@ -2676,7 +2768,9 @@ class AgentService:
                 "base_url": conn.base_url,
                 "auth_type": conn.auth_type,
             },
-            "note": "Reference it from an http_request step as {\"connection\": \"" + str(conn.name) + "\", \"path\": \"...\"}.",
+            "note": 'Reference it from an http_request step as {"connection": "'
+            + str(conn.name)
+            + '", "path": "..."}.',
         }
 
     async def _tool_delete_connection(self, session: AsyncSession, args: dict[str, Any]) -> dict[str, Any]:
@@ -2771,12 +2865,7 @@ class AgentService:
         from api.services.view_service import ViewService
 
         views = await ViewService(session, self._org_id).list_views()
-        return {
-            "views": [
-                {"id": str(v.id), "name": v.name, "slug": v.slug, "is_active": v.is_active}
-                for v in views
-            ]
-        }
+        return {"views": [{"id": str(v.id), "name": v.name, "slug": v.slug, "is_active": v.is_active} for v in views]}
 
     async def _tool_get_view(self, session: AsyncSession, args: dict[str, Any]) -> dict[str, Any]:
         from api.schemas.view import ViewRead

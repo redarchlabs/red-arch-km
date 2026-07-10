@@ -127,11 +127,7 @@ async def get_org_openai_key(
                 detail="Org not found",
             )
         stored = org.openai_api_key
-        plaintext = (
-            decrypt_secret(stored, settings.org_encryption_key.get_secret_value())
-            if stored
-            else None
-        )
+        plaintext = decrypt_secret(stored, settings.org_encryption_key.get_secret_value()) if stored else None
         return OrgOpenAIKey(openai_api_key=plaintext)
 
 
@@ -175,7 +171,8 @@ async def dispatch_workflows(
                 trusted_local_hosts=tuple(settings.workflow_trusted_local_hosts or ()),
                 public_base_url=settings.public_base_url,
                 email_sender=EmailSender(settings),
-            org_encryption_key=settings.org_encryption_key.get_secret_value(),
+                org_encryption_key=settings.org_encryption_key.get_secret_value(),
+                settings=settings,
             )
             counters = await service.process_pending(limit=limit)
             await session.commit()
@@ -223,7 +220,8 @@ async def run_workflow_timers(
                 trusted_local_hosts=tuple(settings.workflow_trusted_local_hosts or ()),
                 public_base_url=settings.public_base_url,
                 email_sender=EmailSender(settings),
-            org_encryption_key=settings.org_encryption_key.get_secret_value(),
+                org_encryption_key=settings.org_encryption_key.get_secret_value(),
+                settings=settings,
             )
             counters = await service.process_timers()
             await session.commit()
@@ -273,7 +271,8 @@ async def advance_workflow_tokens(
                 trusted_local_hosts=tuple(settings.workflow_trusted_local_hosts or ()),
                 public_base_url=settings.public_base_url,
                 email_sender=EmailSender(settings),
-            org_encryption_key=settings.org_encryption_key.get_secret_value(),
+                org_encryption_key=settings.org_encryption_key.get_secret_value(),
+                settings=settings,
             )
             resumed = await engine.resume_due_tokens(limit=limit)
             await session.commit()

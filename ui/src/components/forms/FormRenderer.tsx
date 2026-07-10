@@ -1,13 +1,14 @@
 "use client";
 
 import { Plus, Trash2, X } from "lucide-react";
-import { Fragment, type ReactNode, useEffect, useMemo, useState } from "react";
+import { Fragment, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import {
   getFormRender,
   type ButtonElement,
   type CalculatedElement,
+  type ChatElement,
   type FormElement,
   type FormRender,
   type FormSubmit,
@@ -16,7 +17,8 @@ import {
   type SectionElement,
   type TableElement,
 } from "@/lib/api/forms";
-import { callConnection } from "@/lib/api/workflows";
+import { createRecord, listRecords, type EntityRecord } from "@/lib/api/entityRecords";
+import { callConnection, runWorkflow } from "@/lib/api/workflows";
 import { buildCatalog, type Catalog, fieldMeta, relatedEntityId } from "@/lib/forms/catalog";
 import { evaluate } from "@/lib/forms/jsonLogic";
 
@@ -137,6 +139,458 @@ function LiveValueNode({ el }: { el: LiveValueElement }) {
       >
         {value}
         {el.units ? <span className="ml-1 text-muted-foreground">{el.units}</span> : null}
+      </div>
+    </div>
+  );
+}
+
+/** A compact on/off pill for the chat's live answer-speed controls. */
+function ChatToggle({
+  label,
+  on,
+  onClick,
+  disabled,
+  title,
+}: {
+  label: string;
+  on: boolean;
+  onClick: () => void;
+  disabled?: boolean;
+  title?: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      aria-pressed={on}
+      title={title}
+      className={`rounded-full border px-2.5 py-0.5 text-xs transition-colors disabled:opacity-50 ${
+        on ? "border-primary bg-primary text-primary-foreground" : "border-input text-muted-foreground hover:bg-muted"
+      }`}
+    >
+      {label}
+    </button>
+  );
+}
+
+/** Render a chat response latency in ms as a compact human string (e.g. "820ms", "3.4s"). */
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
+/** Default "one moment…" chatter shown/spoken while a slow answer is still cooking.
+ * `{q}` is swapped for the person's question so some lines restate what was asked
+ * (which both reassures the asker and buys the robot time). */
+const DEFAULT_FILLER_PHRASES: readonly string[] = [
+  "One moment please…",
+  "Let me check on that…",
+  "Give me a second while I look that up…",
+  'Checking my notes on "{q}"…',
+  "Hang on, pulling that together…",
+  "Just a moment while I find the best answer…",
+  'Still working on "{q}" — almost there.',
+  "Good question — let me dig into that.",
+];
+
+/** Pick a filler phrase at random, avoiding an immediate repeat, and fill in `{q}`.
+ * `lastIdx` is a mutable cursor (a ref's value) so successive calls don't repeat. */
+function pickFiller(pool: readonly string[], question: string, lastIdx: { current: number }): string {
+  let idx = Math.floor(Math.random() * pool.length);
+  if (pool.length > 1 && idx === lastIdx.current) idx = (idx + 1) % pool.length;
+  lastIdx.current = idx;
+  const q = question.length > 48 ? `${question.slice(0, 48)}…` : question;
+  return pool[idx].replace(/\{q\}/g, q);
+}
+
+/** A conversation panel backed by two entities (a conversation session + its messages).
+ * Lists the active conversation's messages as bubbles (polling), and on send creates a
+ * `person` message then runs the answer workflow so the robot replies + speaks. TOP-LEVEL
+ * so its polling/input state is stable across FormRenderer re-renders. */
+function ChatNode({ el, preview }: { el: ChatElement; preview: boolean }) {
+  const convEntity = el.conversation_entity ?? "robot_conversation";
+  const msgEntity = el.message_entity ?? "robot_message";
+  const relSlug = el.conversation_relationship ?? "conversation";
+  const roleField = el.role_field ?? "role";
+  const textField = el.text_field ?? "text";
+  const channelField = el.channel_field ?? "channel";
+  const pollMs = Math.max(500, el.poll_ms ?? 1500);
+
+  // Live answer-speed controls (Fast mode / Knowledge graph / Concise / Answer model).
+  // When enabled, the chosen values ride along as workflow `inputs` so a viewer can
+  // trade quality for speed per turn without touching the workflow itself.
+  const controls = el.answer_controls ?? null;
+  const controlsEnabled = !!controls?.show;
+  const models = controls?.models?.length ? controls.models : [];
+  const [fastMode, setFastMode] = useState(controls?.fast_mode ?? true);
+  const [useGraph, setUseGraph] = useState(controls?.knowledge_graph ?? false);
+  const [concise, setConcise] = useState(controls?.concise ?? true);
+  const [speak, setSpeak] = useState(controls?.speak ?? true);
+  const [answerModel, setAnswerModel] = useState(models[0] ?? "");
+
+  const [conversationId, setConversationId] = useState<string | null>(null);
+  const [messages, setMessages] = useState<EntityRecord[]>([]);
+  const [input, setInput] = useState("");
+  const [sending, setSending] = useState(false);
+  // `thinking` covers the gap between firing the answer workflow and the robot's
+  // reply landing in the polled message list — the run is not awaited, so this is
+  // what tells the user the robot is working.
+  const [thinking, setThinking] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  // Response-time tracking: `askedAtRef` stamps when a turn is sent, `responseMs`
+  // freezes the measured latency keyed by the robot reply's id (so each answered
+  // turn keeps its own time), and `elapsedMs` ticks live while the robot thinks.
+  const askedAtRef = useRef<number | null>(null);
+  const [responseMs, setResponseMs] = useState<Record<string, number>>({});
+  const [elapsedMs, setElapsedMs] = useState(0);
+  // Perceived-latency filler: ephemeral "one moment…" lines shown (and optionally
+  // spoken) while the robot works. `lastQuestionRef` lets a filler restate the ask;
+  // `fillerIdxRef` avoids picking the same phrase twice in a row.
+  const filler = el.filler ?? null;
+  const fillerEnabled = !!filler?.show;
+  const [fillers, setFillers] = useState<string[]>([]);
+  const lastQuestionRef = useRef("");
+  const fillerIdxRef = useRef(-1);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  // Whether the transcript is scrolled to (near) the bottom. Auto-scroll only
+  // follows new content when this is true, so polling never yanks the reader back
+  // down while they're looking at earlier turns.
+  const atBottomRef = useRef(true);
+  // Guards against setting state from a backgrounded run that resolves/rejects
+  // after the node unmounts.
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  // Adopt the most recent conversation on mount (fresh one is created on first send).
+  useEffect(() => {
+    if (preview) return;
+    let alive = true;
+    void (async () => {
+      try {
+        const res = await listRecords(convEntity, { limit: 1 });
+        if (alive && res.items[0]) setConversationId(String(res.items[0].id));
+      } catch {
+        /* no conversation yet — created on first send */
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [convEntity, preview]);
+
+  // Poll the active conversation's messages (client-side filter: the records list
+  // endpoint has no field filter, but a live chat's turns are among the newest rows).
+  useEffect(() => {
+    if (preview || !conversationId) return;
+    let alive = true;
+    const tick = async () => {
+      try {
+        const res = await listRecords(msgEntity, { limit: 100 });
+        if (!alive) return;
+        const rows = res.items
+          .filter((r) => String(r[relSlug] ?? "") === conversationId)
+          .sort((a, b) => String(a.created_at ?? "").localeCompare(String(b.created_at ?? "")));
+        setMessages(rows);
+        // The robot has answered once the newest turn is no longer the person's;
+        // clearing here (rather than on the run promise) makes the reply and the
+        // dismissal of the typing indicator land on the same tick.
+        const last = rows[rows.length - 1];
+        if (last && String(last[roleField] ?? "") !== "person") {
+          setThinking(false);
+          setFillers([]);
+          // Freeze the latency for this reply once. `askedAtRef` is nulled after
+          // recording, so a still-answered conversation re-polled later won't
+          // overwrite the time with the (much larger) idle gap.
+          if (askedAtRef.current != null) {
+            const elapsed = Date.now() - askedAtRef.current;
+            askedAtRef.current = null;
+            const id = String(last.id);
+            setResponseMs((prev) => (prev[id] != null ? prev : { ...prev, [id]: elapsed }));
+          }
+        }
+      } catch {
+        /* transient; keep the last good render */
+      }
+    };
+    void tick();
+    const id = window.setInterval(tick, pollMs);
+    return () => {
+      alive = false;
+      window.clearInterval(id);
+    };
+  }, [msgEntity, relSlug, roleField, conversationId, pollMs, preview]);
+
+  // Track the reader's position: pinned to the bottom (follow new turns) vs.
+  // scrolled up (leave them where they are). ~48px of slack counts as "bottom".
+  const handleScroll = () => {
+    const node = scrollRef.current;
+    if (!node) return;
+    atBottomRef.current = node.scrollHeight - node.scrollTop - node.clientHeight < 48;
+  };
+
+  useEffect(() => {
+    if (!atBottomRef.current) return;
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+  }, [messages, thinking, fillers]);
+
+  // Tick a live counter while the robot is thinking so the user watches the
+  // response time climb; the frozen `responseMs` value takes over once it replies.
+  useEffect(() => {
+    if (!thinking) return;
+    const start = askedAtRef.current ?? Date.now();
+    setElapsedMs(Date.now() - start);
+    const id = window.setInterval(() => setElapsedMs(Date.now() - start), 100);
+    return () => window.clearInterval(id);
+  }, [thinking]);
+
+  // While the robot is thinking, drip out filler chatter: the first line after
+  // `delay_ms`, then another every `interval_ms`, until the reply lands (which
+  // flips `thinking` off and tears this down). Each line is also spoken through
+  // `speak_connection` if configured, so the physical robot stalls out loud too.
+  useEffect(() => {
+    if (!thinking || !fillerEnabled) return;
+    const pool = filler?.phrases?.length ? filler.phrases : DEFAULT_FILLER_PHRASES;
+    const delay = Math.max(400, filler?.delay_ms ?? 1400);
+    const interval = Math.max(2000, filler?.interval_ms ?? 6000);
+    // Say a couple of lines, then fall silent (the ticking timer still shows the
+    // robot is working) — endless "one moment…" is more annoying than reassuring.
+    const maxLines = Math.max(1, filler?.max_lines ?? 2);
+    let emitted = 0;
+    let intervalId: number | undefined;
+    const emit = () => {
+      emitted += 1;
+      const phrase = pickFiller(pool, lastQuestionRef.current, fillerIdxRef);
+      setFillers((prev) => [...prev, phrase]);
+      if (filler?.speak_connection) {
+        // Fire-and-forget: a filler that fails to speak must never surface an
+        // error or block the real answer.
+        void callConnection({
+          connection: filler.speak_connection,
+          method: "POST",
+          path: filler.speak_path ?? "/say",
+          body: { [filler.speak_field ?? "text"]: phrase },
+        }).catch(() => {});
+      }
+      if (emitted >= maxLines && intervalId !== undefined) {
+        window.clearInterval(intervalId);
+        intervalId = undefined;
+      }
+    };
+    const timeoutId = window.setTimeout(() => {
+      emit();
+      if (emitted < maxLines) intervalId = window.setInterval(emit, interval);
+    }, delay);
+    return () => {
+      window.clearTimeout(timeoutId);
+      if (intervalId !== undefined) window.clearInterval(intervalId);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [thinking, fillerEnabled]);
+
+  const send = async () => {
+    const text = input.trim();
+    if (!text || sending || preview) return;
+    setSending(true);
+    setErr(null);
+    setFillers([]);
+    lastQuestionRef.current = text;
+    // Sending is an explicit "bring me to the latest" gesture — re-pin to bottom
+    // even if the reader had scrolled up.
+    atBottomRef.current = true;
+    try {
+      let convId = conversationId;
+      if (!convId) {
+        const conv = await createRecord(convEntity, { title: text.slice(0, 60), status: "active" });
+        convId = String(conv.id);
+        setConversationId(convId);
+      }
+      await createRecord(msgEntity, {
+        [roleField]: "person",
+        [channelField]: "typed",
+        [textField]: text,
+        [relSlug]: convId,
+      });
+      setInput("");
+      if (el.answer_workflow_id) {
+        // Fire the answer workflow but DON'T block the composer on it: the run
+        // fans out to RAG + one or more LLM steps and can take many seconds. The
+        // robot's reply is written as a robot_message and surfaced by the poll
+        // loop, so we show a "thinking" indicator and let the user keep typing.
+        // The generous timeout is just a backstop against a hung request.
+        const inputs: Record<string, unknown> = { text, conversation_id: convId };
+        // Whole-conversation memory: pass every prior turn so the workflow can
+        // condense a follow-up ("tell me more") into a standalone, context-aware
+        // search query. `messages` holds the turns before this one (the just-sent
+        // person message hasn't been polled back yet), which is exactly the history.
+        const history = messages
+          .map((m) => {
+            const who = String(m[roleField] ?? "") === "person" ? "User" : "Robot";
+            const line = String(m[textField] ?? "").trim();
+            return line ? `${who}: ${line}` : "";
+          })
+          .filter(Boolean)
+          .join("\n");
+        if (history) inputs.history = history;
+        if (controlsEnabled) {
+          // Fast mode = retrieval-only, so synthesize is its inverse.
+          inputs.synthesize = !fastMode;
+          inputs.use_knowledge_graph = useGraph;
+          inputs.max_words = concise ? controls?.concise_words ?? 20 : controls?.verbose_words ?? 45;
+          inputs.speak = speak;
+          if (answerModel) inputs.answer_model = answerModel;
+        }
+        askedAtRef.current = Date.now();
+        setThinking(true);
+        void runWorkflow(el.answer_workflow_id, { inputs }, 120000).catch((e: unknown) => {
+          if (!mountedRef.current) return;
+          askedAtRef.current = null;
+          setThinking(false);
+          setFillers([]);
+          setErr(e instanceof Error ? e.message : "The robot could not answer");
+        });
+      }
+    } catch (e: unknown) {
+      setErr(e instanceof Error ? e.message : "Failed to send");
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const startNew = () => {
+    setConversationId(null);
+    setMessages([]);
+    setThinking(false);
+    setErr(null);
+    askedAtRef.current = null;
+    setResponseMs({});
+    setFillers([]);
+    fillerIdxRef.current = -1;
+  };
+
+  return (
+    <div className="flex h-96 flex-col rounded-lg border bg-background">
+      <div className="flex items-center justify-between border-b px-3 py-2">
+        <span className="text-sm font-semibold">{el.title ?? "Chat"}</span>
+        <button
+          type="button"
+          onClick={startNew}
+          disabled={preview}
+          className="rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-muted disabled:opacity-60"
+        >
+          New chat
+        </button>
+      </div>
+      {controlsEnabled ? (
+        <div className="flex flex-wrap items-center gap-1.5 border-b px-3 py-1.5">
+          <ChatToggle label="Fast mode" on={fastMode} onClick={() => setFastMode((v) => !v)} disabled={preview} />
+          <ChatToggle
+            label="Knowledge graph"
+            on={useGraph}
+            onClick={() => setUseGraph((v) => !v)}
+            disabled={preview || fastMode}
+            title={fastMode ? "Fast mode already skips the knowledge graph" : undefined}
+          />
+          <ChatToggle label="Concise" on={concise} onClick={() => setConcise((v) => !v)} disabled={preview} />
+          <ChatToggle
+            label={speak ? "🔊 Speak" : "🔇 Speak"}
+            on={speak}
+            onClick={() => setSpeak((v) => !v)}
+            disabled={preview}
+            title={speak ? "Robot says the answer aloud" : "Robot answers silently (text only)"}
+          />
+          {models.length > 0 ? (
+            <select
+              className="ml-auto rounded-md border bg-background px-2 py-1 text-xs disabled:opacity-60"
+              value={answerModel}
+              disabled={preview}
+              onChange={(e) => setAnswerModel(e.target.value)}
+              aria-label="Answer model"
+            >
+              {models.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </select>
+          ) : null}
+        </div>
+      ) : null}
+      <div ref={scrollRef} onScroll={handleScroll} className="flex-1 space-y-2 overflow-y-auto px-3 py-3">
+        {messages.length === 0 ? (
+          <p className="py-8 text-center text-sm text-muted-foreground">
+            {preview ? "Chat preview — messages appear here at runtime." : "Say hello to the robot…"}
+          </p>
+        ) : (
+          messages.map((m) => {
+            const isPerson = String(m[roleField] ?? "") === "person";
+            const took = responseMs[String(m.id)];
+            return (
+              <div key={m.id} className={`flex flex-col ${isPerson ? "items-end" : "items-start"}`}>
+                <div
+                  className={`max-w-[80%] whitespace-pre-wrap break-words rounded-2xl px-3 py-2 text-sm ${
+                    isPerson ? "bg-primary text-primary-foreground" : "bg-muted"
+                  }`}
+                >
+                  {String(m[textField] ?? "")}
+                </div>
+                {!isPerson && took != null ? (
+                  <span className="mt-0.5 px-1 text-[11px] tabular-nums text-muted-foreground">
+                    responded in {formatDuration(took)}
+                  </span>
+                ) : null}
+              </div>
+            );
+          })
+        )}
+        {fillers.map((f, i) => (
+          <div key={`filler-${i}`} className="flex justify-start">
+            <div className="max-w-[80%] whitespace-pre-wrap break-words rounded-2xl bg-muted/60 px-3 py-2 text-sm italic text-muted-foreground">
+              {f}
+            </div>
+          </div>
+        ))}
+        {thinking ? (
+          <div className="flex justify-start">
+            <div className="flex max-w-[80%] items-center gap-2 rounded-2xl bg-muted px-3 py-2 text-sm text-muted-foreground">
+              <span className="flex items-center gap-1">
+                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-current [animation-delay:-0.3s]" />
+                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-current [animation-delay:-0.15s]" />
+                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-current" />
+              </span>
+              <span className="tabular-nums text-[11px]">{formatDuration(elapsedMs)}</span>
+            </div>
+          </div>
+        ) : null}
+      </div>
+      {err ? <p className="px-3 text-xs text-destructive">{err}</p> : null}
+      <div className="flex items-center gap-2 border-t p-2">
+        <input
+          className="w-full rounded-md border bg-background px-3 py-2 text-sm disabled:opacity-60"
+          placeholder={el.placeholder ?? "Message the robot…"}
+          value={input}
+          disabled={preview || sending}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              void send();
+            }
+          }}
+        />
+        <button
+          type="button"
+          onClick={() => void send()}
+          disabled={preview || sending || !input.trim()}
+          className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-60"
+        >
+          {sending ? "…" : "Send"}
+        </button>
       </div>
     </div>
   );
@@ -431,6 +885,12 @@ export function FormRenderer({
         return (
           <div className={spanClass(el.width)}>
             <LiveValueNode el={el} />
+          </div>
+        );
+      case "chat":
+        return (
+          <div className="sm:col-span-12">
+            <ChatNode el={el} preview={preview} />
           </div>
         );
       case "button":

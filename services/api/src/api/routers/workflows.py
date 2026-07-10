@@ -389,6 +389,7 @@ async def run_workflow(
         public_base_url=settings.public_base_url,
         email_sender=EmailSender(settings),
         org_encryption_key=settings.org_encryption_key.get_secret_value(),
+        settings=settings,
     )
 
     # A manual (BPMN "none" start event) workflow runs on demand with the caller-
@@ -618,6 +619,7 @@ async def complete_run_task(
         public_base_url=settings.public_base_url,
         email_sender=EmailSender(settings),
         org_encryption_key=settings.org_encryption_key.get_secret_value(),
+        settings=settings,
     )
     signaled = await engine.signal_token(
         run, node_id=body.node_id, variables=body.variables or None, output=body.output or None

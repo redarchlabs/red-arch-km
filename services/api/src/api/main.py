@@ -34,6 +34,7 @@ from api.routers import (
     inbound,
     internal,
     memberships,
+    migration,
     orgs,
     search,
     setup,
@@ -189,6 +190,7 @@ def create_app() -> FastAPI:
     app.include_router(internal.router, prefix="/api/internal", tags=["internal"])
     app.include_router(setup.router, prefix="/api/setup", tags=["setup"])
     app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
+    app.include_router(migration.router, prefix="/api/migration", tags=["migration"])
 
     return app
 

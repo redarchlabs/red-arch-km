@@ -81,6 +81,45 @@ value pulled from the JSON response — a generic way to display live external s
 - **Units** — an optional suffix shown after the value.
 `,
   ),
+  chat: topic(
+    "Chat element",
+    `
+A **conversation panel** backed by two entities — a conversation session and its
+messages. It lists the active conversation's turns as bubbles (refreshing on a
+poll) and its input **drives the robot**: sending creates a person message and runs
+the answer workflow, so the robot searches the knowledge base, speaks a concise
+reply, and records its turn.
+
+- **Answer workflow id** — the workflow run on send (e.g. "Robot: Chat Answer"),
+  called with \`{ text, conversation_id }\`. The run is fired **in the background**
+  (the composer stays live and a typing indicator shows) — the reply arrives via the
+  poll, so a slow answer never blocks or times out the chat.
+- **Message / Conversation entity** — where turns and sessions are stored.
+- **Conversation link slug** — the message → conversation relationship.
+- **Poll (ms)** — how often the transcript refreshes.
+- **Answer speed controls** — an optional live toggle row on the chat card. When
+  shown, the viewer can trade quality for speed per turn, and the chosen values ride
+  along as extra workflow \`inputs\`:
+  - **Fast mode** → \`inputs.synthesize = false\` (retrieval-only: one LLM call, no
+    graph hop — the biggest speedup).
+  - **Knowledge graph** → \`inputs.use_knowledge_graph\` (only affects the non-fast
+    synthesis path).
+  - **Concise** → \`inputs.max_words\` (Concise words vs Full words).
+  - **Speak aloud** → \`inputs.speak\` — whether the robot vocalizes the answer. The
+    workflow's \`/say\` step must sit behind a gateway on \`inputs.speak\` (default on)
+    so turning it off answers in text only.
+  - **Answer model** → \`inputs.answer_model\` (pick a faster/cheaper tier).
+  The workflow's \`knowledge_search\`/\`summarize\` nodes must reference these inputs
+  (e.g. \`synthesize: {{ inputs.synthesize }}\`) for the toggles to take effect.
+- **Wait filler** — optional "one moment…" chatter for slow answers. While the robot
+  works, the chat drips out a randomized line (the first after **Delay**, then every
+  **Interval**, up to **Max lines** then it falls silent) that keeps the asker engaged
+  — some lines restate the question via a \`{q}\` placeholder. Each bubble is ephemeral (never stored) and clears the instant
+  the real reply lands. Set a **Speak connection** (e.g. \`robot\`) and the filler is
+  also spoken aloud, so the physical robot stalls out loud instead of going silent.
+  Leave **Phrases** blank to use the built-in set.
+`,
+  ),
   button: topic(
     "Button element",
     `

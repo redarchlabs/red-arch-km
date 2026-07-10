@@ -110,6 +110,35 @@ def mock_stores() -> MagicMock:
     return stores
 
 
+class TestWarmUp:
+    def test_exercises_every_read_path(self, mock_stores: MagicMock, fake_settings: MagicMock) -> None:
+        """warm_up touches embedding + Qdrant + Neo4j + a tiny chat completion so
+        the first real user query doesn't pay cold connection/TLS setup."""
+        with patch("brain_api.services.search_service.OpenAI") as fake_openai:
+            service = SearchService(mock_stores, fake_settings)
+            service.warm_up()
+
+        mock_stores.embedder.embed.assert_called_once()
+        mock_stores.vector.search.assert_called_once()
+        mock_stores.graph.fuzzy_relationship_search.assert_called_once()
+        # A minimal chat completion primes the OpenAI connection pool.
+        fake_openai.return_value.chat.completions.create.assert_called_once()
+
+    def test_one_failing_path_does_not_stop_the_others(
+        self, mock_stores: MagicMock, fake_settings: MagicMock
+    ) -> None:
+        """Each probe is isolated: a cold path that errors must not prevent the
+        remaining paths from warming, and warm_up must never raise."""
+        mock_stores.vector.search.side_effect = RuntimeError("qdrant not ready")
+        with patch("brain_api.services.search_service.OpenAI") as fake_openai:
+            service = SearchService(mock_stores, fake_settings)
+            service.warm_up()  # must not raise
+
+        # Graph + chat still ran despite the retrieval path failing.
+        mock_stores.graph.fuzzy_relationship_search.assert_called_once()
+        fake_openai.return_value.chat.completions.create.assert_called_once()
+
+
 class TestVectorSearch:
     def test_returns_hits(self, mock_stores: MagicMock, fake_settings: MagicMock) -> None:
         with patch("brain_api.services.search_service.OpenAI"):
