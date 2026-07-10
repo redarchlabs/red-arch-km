@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Record-state platform (workflow read/write, live status boards, inline triggers)
+
+- **`get_record` / `update_record` workflow actions** — read a record's live fields
+  into run variables (`by_id` / `latest` / `first`, optional filters) and write
+  multiple fields of a targeted record. Values/filters render both `{"$ref": ...}`
+  envelopes and `{{ }}` templates.
+- **`record_list` view element** — a read-only, optionally-polling table of an
+  entity's records (a live "status board"), with an optional per-row workflow button.
+  Polling pauses on hidden tabs and backs off on error.
+- **Records list `order_by` / `order_dir`** query params; view viewer honours
+  `?record_id=` (entity-bound prefill + run-workflow-against-record).
+- **`run_inline_on_change`** per-workflow flag — fire an entity-change workflow
+  synchronously in the mutating request (no beat-sweep delay), bounded by a hard
+  time budget and dedup'd against the later sweep. Settable via `PATCH /workflows`
+  and MCP `km2_update_workflow`. Migrations **024** (column) and **027** (partial index).
+
 ### Added — Knowledge engine, custom entities, workflow automation, intake forms, and tenant hardening (Slices 1, 5–7)
 
 Marks the completion of **5 major slices** adding enterprise automation and knowledge-extraction capabilities:

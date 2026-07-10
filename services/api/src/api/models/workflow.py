@@ -76,7 +76,17 @@ TOKEN_WAIT_KINDS = (
 
 class Workflow(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "workflows"
-    __table_args__ = (UniqueConstraint("org_id", "name", name="uq_workflow_name_per_org"),)
+    __table_args__ = (
+        UniqueConstraint("org_id", "name", name="uq_workflow_name_per_org"),
+        # Hot-path index for the per-record-write inline-dispatch EXISTS check
+        # (has_inline_for_entity). Partial: only inline-flagged rows are indexed.
+        Index(
+            "ix_workflows_inline_entity",
+            "org_id",
+            "entity_definition_id",
+            postgresql_where=text("enabled AND run_inline_on_change"),
+        ),
+    )
 
     name: Mapped[str] = mapped_column(String(200))
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
