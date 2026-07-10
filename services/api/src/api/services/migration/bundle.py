@@ -28,6 +28,7 @@ RESOURCE_ORDER: tuple[str, ...] = (
     "workflows",
     "inbound_endpoints",
     "forms",
+    "reports",
     "views",
     "records",
     "documents",
@@ -87,6 +88,7 @@ _REMAP_KEYS: dict[str, str] = {
     "workflow_id": "workflows",
     "answer_workflow_id": "workflows",
     "form_id": "forms",
+    "report_id": "reports",
     "entity_definition_id": "entities",
     "entity_id": "entities",
 }

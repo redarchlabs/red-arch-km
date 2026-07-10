@@ -15,12 +15,15 @@ import {
   type InputElement,
   type LiveValueElement,
   type RecordListElement,
+  type ReportElement,
   type SectionElement,
   type TableElement,
 } from "@/lib/api/forms";
 import { createRecord, listRecords, type EntityRecord } from "@/lib/api/entityRecords";
+import { runReport, type AggregateResult, type Visualization } from "@/lib/api/reports";
 import { callConnection, runWorkflow } from "@/lib/api/workflows";
-import { buildCatalog, type Catalog, fieldMeta, relatedEntityId } from "@/lib/forms/catalog";
+import { ReportChart } from "@/components/reports/ReportChart";
+import { buildCatalog, fieldMeta, relatedEntityId } from "@/lib/forms/catalog";
 import { evaluate } from "@/lib/forms/jsonLogic";
 
 import { FieldControl } from "./FieldControl";
@@ -270,6 +273,72 @@ function RecordListNode({
             </tbody>
           </table>
         </div>
+      )}
+    </div>
+  );
+}
+
+/** Embeds a saved report: runs it (optionally re-polling) and draws the result
+ * with {@link ReportChart} per the report's own visualization spec. */
+function ReportNode({ el }: { el: ReportElement }) {
+  const [result, setResult] = useState<AggregateResult | null>(null);
+  const [viz, setViz] = useState<Visualization | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!el.report_id) {
+      setError("No report selected.");
+      return;
+    }
+    let alive = true;
+    const tick = async () => {
+      try {
+        // The run response carries the aggregate rows; the report's viz is fetched
+        // once alongside so the chart knows how to draw. We read viz from the report.
+        const res = await runReport(el.report_id);
+        if (!alive) return;
+        setResult(res);
+        setError(null);
+      } catch {
+        if (!alive) return;
+        setError("Unable to load report.");
+      }
+    };
+    void tick();
+    const interval = el.poll_ms ? window.setInterval(tick, Math.max(1000, el.poll_ms)) : undefined;
+    return () => {
+      alive = false;
+      if (interval) window.clearInterval(interval);
+    };
+  }, [el.report_id, el.poll_ms]);
+
+  // The report's viz spec lives on the saved report; fetch it once.
+  useEffect(() => {
+    if (!el.report_id) return;
+    let alive = true;
+    void (async () => {
+      try {
+        const { getReport } = await import("@/lib/api/reports");
+        const report = await getReport(el.report_id);
+        if (alive) setViz(report.viz);
+      } catch {
+        /* chart falls back to a bar default if viz can't load */
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [el.report_id]);
+
+  return (
+    <div className="rounded-md border p-3">
+      {el.title ? <div className="mb-2 text-sm font-medium">{el.title}</div> : null}
+      {error ? (
+        <div className="px-1 py-2 text-sm text-destructive">{error}</div>
+      ) : result ? (
+        <ReportChart result={result} viz={viz ?? { type: "bar", series: [] }} height={el.height ?? 320} />
+      ) : (
+        <div className="px-1 py-2 text-sm text-muted-foreground">Loading…</div>
       )}
     </div>
   );
@@ -1016,6 +1085,12 @@ export function FormRenderer({
         return (
           <div className={spanClass(el.width)}>
             <LiveValueNode el={el} />
+          </div>
+        );
+      case "report":
+        return (
+          <div className={spanClass(el.width)}>
+            <ReportNode el={el} />
           </div>
         );
       case "record_list":

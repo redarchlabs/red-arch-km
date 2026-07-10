@@ -22,7 +22,7 @@ Key invariants (enforced here + in ``FormService._validate_config``):
 from __future__ import annotations
 
 import uuid
-from typing import Annotated, Any, Literal, Union
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -154,6 +154,23 @@ class LiveValueElement(_Element):
     width: FieldWidth | None = None
 
 
+class ReportElement(_Element):
+    """Embeds a saved report on a dashboard — renders its chart, KPI tile, or table
+    per the report's own visualization spec (fetched from ``/reports/{id}/run``).
+
+    Not bound to the view's root record, so it is valid in a standalone view.
+    ``report_id`` references a saved report; ``title`` overrides the heading;
+    ``height`` sizes the chart in px; ``poll_ms`` re-runs on a cadence for a live
+    dashboard. The report's ``viz`` decides how the aggregate result is drawn."""
+
+    type: Literal["report"] = "report"
+    report_id: uuid.UUID
+    title: str | None = None
+    height: int | None = None
+    poll_ms: int | None = None
+    width: FieldWidth | None = None
+
+
 class RecordListElement(_Element):
     """A read-only display of existing records of an entity — a live "status board".
 
@@ -212,7 +229,7 @@ class RelatedColumn(BaseModel):
     display: FieldDisplay | None = None
 
 
-TableColumn = Annotated[Union[AnchorColumn, RelatedColumn], Field(discriminator="kind")]
+TableColumn = Annotated[AnchorColumn | RelatedColumn, Field(discriminator="kind")]
 
 
 class TableElement(_Element):
@@ -239,11 +256,11 @@ class SectionElement(_Element):
     mode: SectionMode = "inline"
     label: str | None = None
     # Only leaf elements are meaningful inside a section (validated in the service).
-    elements: list["SectionChild"] = Field(default_factory=list)
+    elements: list[SectionChild] = Field(default_factory=list)
 
 
 SectionChild = Annotated[
-    Union[FieldElement, CalculatedElement, LabelElement],
+    FieldElement | CalculatedElement | LabelElement,
     Field(discriminator="type"),
 ]
 
@@ -254,7 +271,7 @@ SectionChild = Annotated[
 class Tab(BaseModel):
     model_config = ConfigDict(extra="forbid")
     label: str = "Tab"
-    elements: list["FormElement"] = Field(default_factory=list)
+    elements: list[FormElement] = Field(default_factory=list)
 
 
 class TabGroupElement(_Element):
@@ -269,13 +286,13 @@ class PanelElement(_Element):
     title: str | None = None
     collapsible: bool = False
     collapsed: bool = False  # initial state when collapsible
-    elements: list["FormElement"] = Field(default_factory=list)
+    elements: list[FormElement] = Field(default_factory=list)
 
 
 class AccordionPane(BaseModel):
     model_config = ConfigDict(extra="forbid")
     label: str = "Section"
-    elements: list["FormElement"] = Field(default_factory=list)
+    elements: list[FormElement] = Field(default_factory=list)
 
 
 class AccordionElement(_Element):
@@ -286,7 +303,7 @@ class AccordionElement(_Element):
 class ColumnDef(BaseModel):
     model_config = ConfigDict(extra="forbid")
     span: int = 1  # relative width weight within the row
-    elements: list["FormElement"] = Field(default_factory=list)
+    elements: list[FormElement] = Field(default_factory=list)
 
 
 class ColumnsElement(_Element):
@@ -308,7 +325,7 @@ class BlockElement(_Element):
     add_label: str | None = None  # e.g. "Add another"
     min_items: int = 0
     max_items: int | None = None
-    elements: list["SectionChild"] = Field(default_factory=list)
+    elements: list[SectionChild] = Field(default_factory=list)
 
 
 # ------------------------------------------------------------------ #
@@ -362,7 +379,7 @@ class CallConnectionAction(BaseModel):
 
 
 ButtonAction = Annotated[
-    Union[SubmitAction, RunWorkflowAction, LinkAction, CallConnectionAction],
+    SubmitAction | RunWorkflowAction | LinkAction | CallConnectionAction,
     Field(discriminator="kind"),
 ]
 
@@ -458,24 +475,23 @@ class ChatElement(_Element):
 # The recursive element union
 # ------------------------------------------------------------------ #
 FormElement = Annotated[
-    Union[
-        FieldElement,
-        LabelElement,
-        CalculatedElement,
-        InputElement,
-        LiveValueElement,
-        RecordListElement,
-        ChatElement,
-        ButtonElement,
-        FormRefElement,
-        TableElement,
-        SectionElement,
-        BlockElement,
-        TabGroupElement,
-        PanelElement,
-        AccordionElement,
-        ColumnsElement,
-    ],
+    FieldElement
+    | LabelElement
+    | CalculatedElement
+    | InputElement
+    | LiveValueElement
+    | ReportElement
+    | RecordListElement
+    | ChatElement
+    | ButtonElement
+    | FormRefElement
+    | TableElement
+    | SectionElement
+    | BlockElement
+    | TabGroupElement
+    | PanelElement
+    | AccordionElement
+    | ColumnsElement,
     Field(discriminator="type"),
 ]
 
@@ -515,9 +531,7 @@ def iter_elements(elements: list[Any]):
             elif etype == "columns":
                 for col in el.columns:
                     yield from _walk(col.elements, depth + 1)
-            elif etype in ("panel",):
-                yield from _walk(el.elements, depth + 1)
-            elif etype in ("section", "block"):
+            elif etype in ("panel",) or etype in ("section", "block"):
                 yield from _walk(el.elements, depth + 1)
 
     yield from _walk(elements, 0)

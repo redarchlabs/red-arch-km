@@ -1,6 +1,7 @@
 "use client";
 
 import { ChevronDown, ChevronUp, Plus, Trash2 } from "lucide-react";
+import { useEffect, useState } from "react";
 
 import { useHelpOverride } from "@/context/HelpContext";
 import { helpForElement } from "@/lib/builderHelp";
@@ -158,6 +159,8 @@ function ElementEditor({
       return <InputEditor el={el} onChange={onChange} />;
     case "live_value":
       return <LiveValueEditor el={el} onChange={onChange} />;
+    case "report":
+      return <ReportEditor el={el} onChange={onChange} />;
     case "chat":
       return <ChatEditor el={el} onChange={onChange} />;
     case "button":
@@ -511,6 +514,71 @@ function LiveValueEditor({ el, onChange }: { el: LiveValueEl; onChange: (el: For
           className={input}
           value={el.units ?? ""}
           onChange={(e) => onChange({ ...el, units: e.target.value || null })}
+        />
+      </Row>
+    </div>
+  );
+}
+
+type ReportEl = Extract<FormElement, { type: "report" }>;
+
+function ReportEditor({ el, onChange }: { el: ReportEl; onChange: (el: FormElement) => void }) {
+  const [reports, setReports] = useState<Array<{ id: string; name: string }>>([]);
+
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      try {
+        const { listReports } = await import("@/lib/api/reports");
+        const rows = await listReports();
+        if (alive) setReports(rows.map((r) => ({ id: r.id, name: r.name })));
+      } catch {
+        /* leave the list empty; the id can still be typed */
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  return (
+    <div className="space-y-1.5">
+      <Row label="Report">
+        <select
+          className={input}
+          value={el.report_id}
+          onChange={(e) => onChange({ ...el, report_id: e.target.value })}
+        >
+          <option value="">— pick a report —</option>
+          {reports.map((r) => (
+            <option key={r.id} value={r.id}>
+              {r.name}
+            </option>
+          ))}
+        </select>
+      </Row>
+      <Row label="Title">
+        <input
+          className={input}
+          value={el.title ?? ""}
+          onChange={(e) => onChange({ ...el, title: e.target.value || null })}
+        />
+      </Row>
+      <Row label="Height (px)">
+        <input
+          className={input}
+          type="number"
+          value={el.height ?? 320}
+          onChange={(e) => onChange({ ...el, height: Number(e.target.value) || null })}
+        />
+      </Row>
+      <Row label="Poll (ms)">
+        <input
+          className={input}
+          type="number"
+          placeholder="off"
+          value={el.poll_ms ?? ""}
+          onChange={(e) => onChange({ ...el, poll_ms: Number(e.target.value) || null })}
         />
       </Row>
     </div>

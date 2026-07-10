@@ -38,8 +38,8 @@ from api.repositories.dynamic_entity import (
     FilterClause,
     RecordCursor,
 )
-from api.schemas.aggregate import AggregateQuery, AggregateResult
 from api.repositories.workflow import OutboxWriter, WorkflowRepository
+from api.schemas.aggregate import AggregateQuery, AggregateResult
 from api.services.email import EmailSender
 from api.services.workflow.dispatcher import WorkflowDispatchService
 

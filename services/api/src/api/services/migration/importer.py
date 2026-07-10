@@ -37,12 +37,14 @@ from api.repositories.workflow import (
     WorkflowInboundEndpointRepository,
     WorkflowRepository,
 )
+from api.schemas.aggregate import AggregateQuery
 from api.schemas.custom_entity import (
     EntityDefinitionCreate,
     EntityFieldCreate,
     EntityRelationshipCreate,
 )
 from api.schemas.form import FormConfig, FormCreate, FormUpdate
+from api.schemas.report import ReportCreate, ReportUpdate, Visualization
 from api.schemas.view import ViewCreate, ViewUpdate
 from api.services.entity_service import EntityError, EntityService
 from api.services.folder_service import build_dot_path, compute_folder_masks
@@ -58,6 +60,7 @@ from api.services.migration.bundle import (
     suffix_name,
     suffix_slug,
 )
+from api.services.report_service import ReportService
 from api.services.view_service import ViewService
 from api.services.workflow.service import WorkflowService
 
@@ -93,6 +96,7 @@ class MigrationImporter:
         await self._import_workflows(resources.get("workflows") or [], strategy, summary)
         await self._import_inbound_endpoints(resources.get("inbound_endpoints") or [], strategy, summary)
         await self._import_forms(resources.get("forms") or [], strategy, summary)
+        await self._import_reports(resources.get("reports") or [], strategy, summary)
         await self._import_views(resources.get("views") or [], strategy, summary)
         await self._import_records(resources.get("entities") or [], resources.get("records") or [], summary)
         await self._import_documents(resources.get("documents") or [], strategy, summary, dry_run=dry_run)
@@ -525,6 +529,59 @@ class MigrationImporter:
             except FormError as exc:
                 out.record("failed")
                 summary.errors.append(f"form {slug!r}: {exc}")
+
+    # ------------------------------------------------------------------ #
+    # Reports
+    # ------------------------------------------------------------------ #
+    async def _import_reports(
+        self, reports: list[dict], strategy: CollisionStrategy, summary: ImportSummary
+    ) -> None:
+        service = ReportService(self._session, self._org_id)
+        existing = {r.slug: r for r in await service.list_reports()}
+        out = summary.outcome("reports")
+        for report in reports:
+            slug = report["slug"]
+            found = existing.get(slug)
+            if found is not None and strategy is CollisionStrategy.SKIP:
+                self._ids.put("reports", report["id"], found.id)
+                out.record("skipped")
+                continue
+            # A report always binds to an entity; the entity must be in the bundle.
+            entity_new = self._ids.get("entities", report["entity_definition_id"])
+            if entity_new is None:
+                out.record("failed")
+                summary.errors.append(f"report {slug!r}: entity not in bundle")
+                continue
+            # query/viz hold field slugs (stable per entity), not ids — no remap.
+            query = AggregateQuery.model_validate(report.get("query") or {})
+            viz = Visualization.model_validate(report.get("viz") or {})
+            try:
+                if found is not None and strategy is CollisionStrategy.OVERWRITE:
+                    updated = await service.update_report(
+                        found.id,
+                        ReportUpdate(name=report["name"], description=report.get("description"), query=query, viz=viz),
+                    )
+                    self._ids.put("reports", report["id"], updated.id)
+                    out.record("overwritten")
+                    continue
+                new_slug = slug if found is None else suffix_slug(slug, set(existing))
+                new_name = report["name"] if found is None else suffix_name(report["name"], set())
+                created = await service.create_report(
+                    ReportCreate(
+                        name=new_name,
+                        slug=new_slug,
+                        description=report.get("description"),
+                        entity_definition_id=uuid.UUID(entity_new),
+                        query=query,
+                        viz=viz,
+                    )
+                )
+                existing[new_slug] = created
+                self._ids.put("reports", report["id"], created.id)
+                out.record("created" if found is None else "renamed")
+            except FormError as exc:
+                out.record("failed")
+                summary.errors.append(f"report {slug!r}: {exc}")
 
     # ------------------------------------------------------------------ #
     # Views
