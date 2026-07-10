@@ -8,6 +8,7 @@ Any org member with access may read/write records (``require_org_access``).
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 import json
@@ -43,6 +44,16 @@ from api.services.email import EmailSender
 from api.services.workflow.dispatcher import WorkflowDispatchService
 
 logger = logging.getLogger(__name__)
+
+# Hard ceiling on how long an inline (run_inline_on_change) dispatch may hold the
+# request's pooled DB connection. Inline workflows run synchronously in the
+# record-write request; without a budget a slow LLM/RAG step (OpenAI SDK default
+# 600s, brain-api 120s) could pin one of a small pool of connections for minutes
+# and exhaust it under concurrent writes. On timeout the savepoint rolls back and
+# the outbox row (left pending) is completed by the beat sweep instead. Keep inline
+# workflows to a few fast steps (say/perform/mood); heavy multi-step LLM work
+# belongs on the async beat path.
+_INLINE_DISPATCH_BUDGET_SECONDS = 15.0
 
 router = APIRouter()
 
@@ -149,7 +160,14 @@ async def _dispatch_inline_workflows(
     no workflow opted in. Drives the matching inline workflows in a savepoint; the
     whole body is guarded so a workflow/robot failure is logged and swallowed and the
     record write still commits. The real outbox row is left ``pending`` so the beat
-    sweep dedups these runs and still fires any non-inline workflows on the change."""
+    sweep dedups these runs and still fires any non-inline workflows on the change.
+
+    Semantics: side effects are AT-LEAST-ONCE and fire BEFORE the request commits.
+    An inline action's external effect (robot /perform, email) runs inside the
+    savepoint; if the savepoint later rolls back (timeout/error after the effect
+    fired) or the request's final commit fails, the outbox row stays pending and the
+    beat sweep re-runs the workflow — the external effect can repeat. Inline
+    workflows should therefore be idempotent-friendly (announcements, not payments)."""
     if event_row is None:
         return
     try:
@@ -180,9 +198,17 @@ async def _dispatch_inline_workflows(
             settings=settings,
         )
         async with session.begin_nested():
-            await dispatcher.run_inline_for_change(event)
+            # Bounded so a slow inline workflow can't pin the request's connection.
+            # The timeout almost always lands during an external LLM/HTTP await (the
+            # long pole), leaving the DB idle so the savepoint rolls back cleanly.
+            await asyncio.wait_for(
+                dispatcher.run_inline_for_change(event), timeout=_INLINE_DISPATCH_BUDGET_SECONDS
+            )
     except Exception:  # noqa: BLE001 — inline reaction failure must not fail the record write
-        logger.exception("inline workflow dispatch failed for org %s", org_id)
+        # Swallow (this also catches asyncio.wait_for's TimeoutError): the record
+        # write must still commit. A timeout/failure leaves the outbox row pending,
+        # so the beat sweep completes the workflow instead.
+        logger.exception("inline workflow dispatch failed or timed out for org %s", org_id)
 
 
 @router.get("/{slug}/records")
