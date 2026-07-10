@@ -14,10 +14,22 @@ vi.mock("./client", () => ({
   },
 }));
 
-import { createRecord, deleteRecord, listRecords, updateRecord } from "./entityRecords";
+import { createRecord, deleteRecord, filterToParam, listRecords, updateRecord } from "./entityRecords";
 
 beforeEach(() => {
   [get, post, patch, del].forEach((m) => m.mockReset());
+});
+
+describe("filterToParam", () => {
+  it("omits the value for isnull / empty-value ops", () => {
+    expect(filterToParam({ field: "email", op: "isnull" })).toBe("email:isnull");
+    expect(filterToParam({ field: "stage", op: "eq", value: "" })).toBe("stage:eq");
+  });
+
+  it("emits field:op:value otherwise", () => {
+    expect(filterToParam({ field: "stage", op: "eq", value: "won" })).toBe("stage:eq:won");
+    expect(filterToParam({ field: "tags", op: "in", value: "a,b,c" })).toBe("tags:in:a,b,c");
+  });
 });
 
 describe("entityRecords API client", () => {
@@ -25,6 +37,7 @@ describe("entityRecords API client", () => {
     get.mockResolvedValue({ data: { items: [], next_cursor: null, limit: 50 } });
     await listRecords("widgets", { search: "abc", cursor: "c1", limit: 20 });
     expect(get).toHaveBeenCalledWith("/entities/widgets/records", {
+      paramsSerializer: { indexes: null },
       params: { q: "abc", cursor: "c1", limit: 20 },
     });
   });
@@ -33,8 +46,27 @@ describe("entityRecords API client", () => {
     get.mockResolvedValue({ data: { items: [], next_cursor: null, limit: 50 } });
     await listRecords("widgets");
     expect(get).toHaveBeenCalledWith("/entities/widgets/records", {
+      paramsSerializer: { indexes: null },
       params: { q: undefined, cursor: undefined, limit: 50 },
     });
+  });
+
+  it("serializes complete filters to repeated field:op[:value] params", async () => {
+    get.mockResolvedValue({ data: { items: [], next_cursor: null, limit: 50 } });
+    await listRecords("widgets", {
+      filters: [
+        { field: "stage", op: "eq", value: "won" },
+        { field: "amount", op: "gte", value: "100" },
+        { field: "email", op: "isnull" },
+      ],
+    });
+    expect(get).toHaveBeenCalledWith(
+      "/entities/widgets/records",
+      expect.objectContaining({
+        paramsSerializer: { indexes: null },
+        params: expect.objectContaining({ filter: ["stage:eq:won", "amount:gte:100", "email:isnull"] }),
+      }),
+    );
   });
 
   it("creates a record via POST", async () => {

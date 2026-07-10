@@ -1,9 +1,10 @@
 "use client";
 
-import { Pencil, Plus, Search, Trash2 } from "lucide-react";
+import { Filter, Pencil, Plus, Search, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { DynamicForm, type RelationshipFormField } from "@/components/entities/DynamicForm";
+import { RecordFilterBar } from "@/components/entities/RecordFilterBar";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import {
@@ -27,6 +28,7 @@ import {
   listRecords,
   updateRecord,
   type EntityRecord,
+  type RecordFilter,
 } from "@/lib/api/entityRecords";
 import { getApiErrorMessage } from "@/lib/api/errors";
 
@@ -48,6 +50,8 @@ export function EntityRecordsTable({ entity }: EntityRecordsTableProps) {
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [filters, setFilters] = useState<RecordFilter[]>([]);
+  const [showFilters, setShowFilters] = useState(false);
   const [editing, setEditing] = useState<EntityRecord | "new" | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -78,6 +82,21 @@ export function EntityRecordsTable({ entity }: EntityRecordsTableProps) {
     const handle = setTimeout(() => setDebouncedSearch(search.trim()), 300);
     return () => clearTimeout(handle);
   }, [search]);
+
+  // Only send filter rows the user has finished (a value present, or an
+  // ``isnull`` check that needs none) so a half-typed filter never 400s.
+  const activeFilters = useMemo(
+    () => filters.filter((f) => f.field && (f.op === "isnull" || (f.value ?? "") !== "")),
+    [filters],
+  );
+
+  // Debounce filter edits (like search) so typing a value doesn't fire one
+  // /records request per keystroke.
+  const [debouncedFilters, setDebouncedFilters] = useState<RecordFilter[]>([]);
+  useEffect(() => {
+    const handle = setTimeout(() => setDebouncedFilters(activeFilters), 300);
+    return () => clearTimeout(handle);
+  }, [activeFilters]);
 
   // Load to-one relationships and their target-record options for the picker.
   // Refreshed each time the form opens so newly-created target records appear.
@@ -135,6 +154,7 @@ export function EntityRecordsTable({ entity }: EntityRecordsTableProps) {
     try {
       const result = await listRecords(entity.slug, {
         search: debouncedSearch,
+        filters: debouncedFilters,
         limit: PAGE_SIZE,
       });
       if (reqId !== loadReq.current) return; // superseded by a newer search/load
@@ -146,26 +166,33 @@ export function EntityRecordsTable({ entity }: EntityRecordsTableProps) {
     } finally {
       if (reqId === loadReq.current) setIsLoading(false);
     }
-  }, [entity.slug, debouncedSearch]);
+  }, [entity.slug, debouncedSearch, debouncedFilters]);
 
   // Append the next keyset page (cursor-based; no OFFSET).
   const loadMore = useCallback(async () => {
     if (!nextCursor || loadingMore) return;
     setLoadingMore(true);
+    // Capture the current load generation: if a new load() (search/filter change)
+    // supersedes this fetch mid-flight, drop its rows/cursor instead of appending
+    // stale results onto the reset list.
+    const reqId = loadReq.current;
     try {
       const result = await listRecords(entity.slug, {
         search: debouncedSearch,
+        filters: debouncedFilters,
         cursor: nextCursor,
         limit: PAGE_SIZE,
       });
+      if (reqId !== loadReq.current) return;
       setRecords((prev) => [...prev, ...result.items]);
       setNextCursor(result.next_cursor);
     } catch (e: unknown) {
+      if (reqId !== loadReq.current) return;
       setError(getApiErrorMessage(e, "Failed to load more records"));
     } finally {
       setLoadingMore(false);
     }
-  }, [entity.slug, debouncedSearch, nextCursor, loadingMore]);
+  }, [entity.slug, debouncedSearch, debouncedFilters, nextCursor, loadingMore]);
 
   useEffect(() => {
     void load();
@@ -226,17 +253,34 @@ export function EntityRecordsTable({ entity }: EntityRecordsTableProps) {
           </Button>
         </div>
 
-        {hasSearchable ? (
-          <div className="relative">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              type="search"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder={`Search ${entity.name}…`}
-              className="pl-9"
-              aria-label={`Search ${entity.name} records`}
-            />
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          {hasSearchable ? (
+            <div className="relative flex-1">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                type="search"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder={`Search ${entity.name}…`}
+                className="pl-9"
+                aria-label={`Search ${entity.name} records`}
+              />
+            </div>
+          ) : null}
+          {entity.fields.length > 0 ? (
+            <Button
+              variant={showFilters || activeFilters.length > 0 ? "secondary" : "outline"}
+              onClick={() => setShowFilters((v) => !v)}
+            >
+              <Filter className="h-4 w-4" />
+              Filters{activeFilters.length > 0 ? ` (${activeFilters.length})` : ""}
+            </Button>
+          ) : null}
+        </div>
+
+        {showFilters ? (
+          <div className="rounded-md border bg-muted/30 p-3">
+            <RecordFilterBar fields={entity.fields} filters={filters} onChange={setFilters} />
           </div>
         ) : null}
 

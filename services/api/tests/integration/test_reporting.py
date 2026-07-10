@@ -24,10 +24,11 @@ from api.repositories.custom_entity import (
     EntityRelationshipRepository,
 )
 from api.repositories.dynamic_entity import DynamicEntityRepository
-from api.schemas.aggregate import AggregateQuery, GroupBy, HavingSpec, Metric, OrderSpec
+from api.schemas.aggregate import AggregateQuery, FilterSpec, GroupBy, HavingSpec, Metric, OrderSpec
 from api.schemas.custom_entity import EntityDefinitionCreate, EntityFieldCreate
-from api.schemas.report import ReportCreate, Visualization
+from api.schemas.report import ReportCreate, ReportRunRequest, Visualization
 from api.services.entity_service import EntityService
+from api.services.form_service import FormNotFoundError
 from api.services.migration import CollisionStrategy, MigrationExporter, MigrationImporter
 from api.services.report_service import ReportService
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -129,6 +130,106 @@ class TestServerSideFiltering:
         assert pages == 2
 
 
+async def _seed_scored(admin_session: AsyncSession, org: Org):  # type: ignore[no-untyped-def]
+    """A Lead entity with a nullable integer 'score' — ties (10,10) and NULLs, to
+    exercise keyset pagination under a custom sort."""
+    await set_tenant(admin_session, str(org.id))
+    svc = EntityService(admin_session, org.id)
+    lead = await svc.create_definition(
+        EntityDefinitionCreate(
+            name="Lead",
+            slug="lead",
+            fields=[EntityFieldCreate(name="Score", slug="score", field_type="integer")],
+        )
+    )
+    await admin_session.commit()
+    repo = await _load_repo(admin_session, org.id, lead.id)
+    for score in (10, 10, 20, None, None, 30):
+        await repo.create({"score": score} if score is not None else {})
+    await admin_session.commit()
+    return lead, repo
+
+
+class TestKeysetCustomSort:
+    async def _walk_all(self, repo, **kw):  # type: ignore[no-untyped-def]
+        seen: list[str] = []
+        cursor = None
+        pages = 0
+        while True:
+            items, cursor = await repo.list(cursor=cursor, limit=2, **kw)
+            seen.extend(str(r["id"]) for r in items)
+            pages += 1
+            if cursor is None:
+                break
+            assert pages < 20
+        return seen
+
+    async def test_descending_custom_sort_with_ties_and_nulls(self, admin_session: AsyncSession) -> None:
+        org = await _make_org(admin_session, "keyset-desc")
+        _lead, repo = await _seed_scored(admin_session, org)
+        seen = await self._walk_all(repo, order_by="score", order_dir="desc")
+        assert len(seen) == 6  # every row once
+        assert len(set(seen)) == 6  # no duplicate, no gap across the tie/NULL boundaries
+
+    async def test_ascending_custom_sort_with_ties_and_nulls(self, admin_session: AsyncSession) -> None:
+        org = await _make_org(admin_session, "keyset-asc")
+        _lead, repo = await _seed_scored(admin_session, org)
+        seen = await self._walk_all(repo, order_by="score", order_dir="asc")
+        assert len(set(seen)) == 6
+
+    async def test_picklist_tie_sort(self, admin_session: AsyncSession) -> None:
+        # stage has heavy ties (won×3, open×2, lost×1) — pagination must not drop rows.
+        org = await _make_org(admin_session, "keyset-ties")
+        _deal, repo = await _seed_deals(admin_session, org)
+        seen = await self._walk_all(repo, order_by="stage", order_dir="asc")
+        assert len(set(seen)) == 6
+
+
+class TestCrossOrgIsolation:
+    async def test_aggregate_scoped_to_org(self, admin_session: AsyncSession) -> None:
+        org_a = await _make_org(admin_session, "iso-agg-a")
+        _deal_a, repo_a = await _seed_deals(admin_session, org_a)
+        org_b = await _make_org(admin_session, "iso-agg-b")
+        await _seed_deals(admin_session, org_b)
+        # repo_a is bound to org A; its explicit org_id filter must exclude org B's rows.
+        res = await repo_a.aggregate(AggregateQuery(metrics=[Metric(op="count", alias="c")]))
+        assert res.rows[0]["c"] == 6  # A's 6, not 12
+
+    async def test_report_of_other_org_not_found(self, admin_session: AsyncSession) -> None:
+        org_a = await _make_org(admin_session, "iso-rep-a")
+        deal_a, _repo = await _seed_deals(admin_session, org_a)
+        report = await ReportService(admin_session, org_a.id).create_report(
+            ReportCreate(
+                name="A", slug="a", entity_definition_id=deal_a.id,
+                query=AggregateQuery(metrics=[Metric(op="count", alias="c")]),
+                viz=Visualization(type="metric", series=["c"]),
+            )
+        )
+        await admin_session.commit()
+        org_b = await _make_org(admin_session, "iso-rep-b")
+        with pytest.raises(FormNotFoundError):
+            await ReportService(admin_session, org_b.id).get_report(report.id)
+
+
+class TestRunOverrides:
+    async def test_extra_filter_narrows_result(self, admin_session: AsyncSession) -> None:
+        org = await _make_org(admin_session, "run-ov")
+        deal, _repo = await _seed_deals(admin_session, org)
+        svc = ReportService(admin_session, org.id)
+        report = await svc.create_report(
+            ReportCreate(
+                name="Pipeline", slug="pipeline", entity_definition_id=deal.id,
+                query=AggregateQuery(group_by=[GroupBy(field="stage")], metrics=[Metric(op="count", alias="c")]),
+                viz=Visualization(type="bar", x="stage", series=["c"]),
+            )
+        )
+        await admin_session.commit()
+        res = await svc.run_report(
+            report.id, ReportRunRequest(extra_filters=[FilterSpec(field="stage", op="eq", value="won")])
+        )
+        assert {row["stage"] for row in res.rows} == {"won"}
+
+
 class TestAggregation:
     async def test_group_by_stage_count_and_sum(self, admin_session: AsyncSession) -> None:
         org = await _make_org(admin_session, "agg-group")
@@ -167,6 +268,17 @@ class TestAggregation:
         )
         assert len(res.rows) == 1
         assert res.rows[0]["count"] == 6
+
+    async def test_null_group_key_surfaces(self, admin_session: AsyncSession) -> None:
+        org = await _make_org(admin_session, "agg-null")
+        _lead, repo = await _seed_scored(admin_session, org)
+        res = await repo.aggregate(
+            AggregateQuery(group_by=[GroupBy(field="score")], metrics=[Metric(op="count", alias="c")])
+        )
+        by_score = {row["score"]: row["c"] for row in res.rows}
+        # scores 10,10,20,None,None,30 → the two NULLs form their own group keyed None.
+        assert by_score.get(None) == 2
+        assert by_score.get(10) == 2
 
     async def test_avg_min_max(self, admin_session: AsyncSession) -> None:
         org = await _make_org(admin_session, "agg-stats")

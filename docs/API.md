@@ -763,6 +763,11 @@ List records for an entity (keyset-paginated, any org member).
 - `cursor` (string, optional) — Opaque cursor token from a previous response
 - `limit` (int, default: 50, max: 200) — Records per page
 - `q` (string, optional) — Case-insensitive text search across text columns
+- `order_by` (string, optional) — field slug or base column to sort by; `order_dir` = `asc`|`desc`.
+  Keyset pagination works under any sort (the cursor carries the sort key).
+- `filter` (repeatable) — server-side field filter `<field>:<op>[:<value>]`, e.g.
+  `?filter=stage:eq:won&filter=amount:gte:50000&filter=closed_at:isnull:false`. Operators:
+  `eq, ne, gt, gte, lt, lte, in` (comma-separated values, ≤200), `contains` (text), `isnull`.
 
 **Response:**
 ```json
@@ -799,6 +804,38 @@ Update a record. Triggers workflow automations via the outbox.
 
 ##### DELETE /api/entities/{slug}/records/{record_id}
 Delete a record.
+
+##### POST /api/entities/{slug}/aggregate
+Run a GROUP BY / metric query over an entity (any org member). Body (`AggregateQuery`):
+```json
+{
+  "group_by": [{"field": "stage"}, {"field": "created_at", "bucket": "month"}],
+  "metrics": [{"op": "count"}, {"op": "sum", "field": "amount", "alias": "total"}],
+  "filters": [{"field": "stage", "op": "ne", "value": "lost"}],
+  "having": [{"metric": "total", "op": "gt", "value": 0}],
+  "order_by": [{"key": "total", "dir": "desc"}],
+  "limit": 100
+}
+```
+Metrics: `count, count_distinct, sum, avg, min, max`. Buckets: `hour/day/week/month/quarter/year`.
+**Response:** `{ "group_by": [...], "metrics": [...], "rows": [{...}], "row_count": N }`.
+
+### Reports
+
+Saved aggregation queries + a visualization spec. Writes are org-admin; list/get/run are any member.
+
+##### GET /api/reports · POST /api/reports · GET/PATCH/DELETE /api/reports/{report_id}
+CRUD for reports. Body (`ReportCreate`): `name`, `slug`, `entity_definition_id`, `query` (an
+`AggregateQuery`), `viz` (`{type, x, series, color_by, stacked, number_format, unit}` — type is
+`bar/stacked_bar/grouped_bar/line/area/stacked_area/pie/donut/scatter/table/metric`). Query + viz are
+validated against the entity at save.
+
+##### POST /api/reports/{report_id}/run
+Run a saved report. Optional body: `extra_filters` (ANDed onto the report's filters) and `limit`
+(dashboard drill-down). **Response:** the same `AggregateResult` as `/aggregate`.
+
+##### POST /api/reports/run
+Run an unsaved aggregation (report-builder preview). Body: `{ entity_definition_id, query }`.
 
 ### Workflows
 

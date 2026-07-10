@@ -1,4 +1,4 @@
-"""Backfill (org_id, col) btree indexes on filterable custom-entity columns.
+"""Backfill (org_id, col DESC, id DESC) btree indexes on filterable columns.
 
 New entity tables get a btree index per filterable scalar field at creation time
 (see ``SchemaManager._create_btree_index``), so server-side record filters and the
@@ -6,8 +6,18 @@ reporting/aggregation engine's GROUP BY / HAVING / ORDER BY stay index-backed
 rather than sequentially scanning. This migration brings *already-created* entity
 tables in line by creating the same indexes for existing filterable fields.
 
-It runs on the privileged Alembic connection (BYPASSRLS), so it sees every
-tenant's catalog. Idempotent via ``CREATE INDEX IF NOT EXISTS`` — safe to re-run.
+Indexes are built ``CONCURRENTLY`` inside an ``autocommit_block`` so the backfill
+never holds a table-wide write lock: a plain ``CREATE INDEX`` blocks all writers on
+each ``ce_*`` table for the whole (multi-table) migration under Alembic's single
+transaction, which would be a write outage on a live multi-tenant deployment. It
+runs on the privileged connection (BYPASSRLS), so it sees every tenant's catalog.
+Idempotent via ``IF NOT EXISTS`` — safe to re-run after a mid-build crash.
+
+Note: ``downgrade()`` drops every index matching the deterministic name for a
+currently-filterable field, so a rollback AFTER go-live also removes indexes that
+ordinary field-creation added post-migration. Treat this as a backfill that is not
+cleanly reversible once new fields exist (standard for data/index backfills).
+
 Index names are derived deterministically from the field id (``btree_index_name``),
 matching what the runtime DDL uses so the two never collide.
 
@@ -46,20 +56,24 @@ def _filterable_columns(conn) -> list[tuple[str, str, str]]:
 
 
 def upgrade() -> None:
-    conn = op.get_bind()
     import uuid
 
-    for physical_table, physical_column, field_id_hex in _filterable_columns(conn):
-        qt = identifiers.quote(physical_table)  # validates the generated identifier
-        qc = identifiers.quote(physical_column)
-        ix = identifiers.quote(identifiers.btree_index_name(uuid.UUID(field_id_hex)))
-        conn.execute(text(f"CREATE INDEX IF NOT EXISTS {ix} ON {qt} (org_id, {qc})"))
+    # Read the catalog in the normal transaction, then create indexes CONCURRENTLY
+    # in autocommit (CREATE INDEX CONCURRENTLY cannot run inside a transaction).
+    columns = _filterable_columns(op.get_bind())
+    with op.get_context().autocommit_block():
+        for physical_table, physical_column, field_id_hex in columns:
+            qt = identifiers.quote(physical_table)  # validates the generated identifier
+            qc = identifiers.quote(physical_column)
+            ix = identifiers.quote(identifiers.btree_index_name(uuid.UUID(field_id_hex)))
+            op.execute(f"CREATE INDEX CONCURRENTLY IF NOT EXISTS {ix} ON {qt} (org_id, {qc} DESC, id DESC)")
 
 
 def downgrade() -> None:
-    conn = op.get_bind()
     import uuid
 
-    for _physical_table, _physical_column, field_id_hex in _filterable_columns(conn):
-        ix = identifiers.quote(identifiers.btree_index_name(uuid.UUID(field_id_hex)))
-        conn.execute(text(f"DROP INDEX IF EXISTS {ix}"))
+    columns = _filterable_columns(op.get_bind())
+    with op.get_context().autocommit_block():
+        for _physical_table, _physical_column, field_id_hex in columns:
+            ix = identifiers.quote(identifiers.btree_index_name(uuid.UUID(field_id_hex)))
+            op.execute(f"DROP INDEX CONCURRENTLY IF EXISTS {ix}")

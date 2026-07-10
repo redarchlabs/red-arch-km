@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { useHelpOverride } from "@/context/HelpContext";
 import { helpForElement } from "@/lib/builderHelp";
 import type { EntityDefinition, EntityField, EntityRelationship } from "@/lib/api/entities";
+import { listReports } from "@/lib/api/reports";
 import type {
   ButtonElement,
   CalculatedElement,
@@ -527,15 +528,13 @@ function ReportEditor({ el, onChange }: { el: ReportEl; onChange: (el: FormEleme
 
   useEffect(() => {
     let alive = true;
-    void (async () => {
-      try {
-        const { listReports } = await import("@/lib/api/reports");
-        const rows = await listReports();
+    void listReports()
+      .then((rows) => {
         if (alive) setReports(rows.map((r) => ({ id: r.id, name: r.name })));
-      } catch {
+      })
+      .catch(() => {
         /* leave the list empty; the id can still be typed */
-      }
-    })();
+      });
     return () => {
       alive = false;
     };

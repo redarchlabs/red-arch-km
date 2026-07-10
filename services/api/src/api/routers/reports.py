@@ -10,7 +10,7 @@ rest of the authoring surface.
 from __future__ import annotations
 
 import uuid
-from typing import Annotated
+from typing import Annotated, NoReturn
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -42,7 +42,7 @@ _ERROR_STATUS = {
 }
 
 
-def _raise_http(exc: FormError) -> None:
+def _raise_http(exc: FormError) -> NoReturn:
     code = _ERROR_STATUS.get(type(exc), status.HTTP_400_BAD_REQUEST)
     raise HTTPException(status_code=code, detail=str(exc)) from exc
 

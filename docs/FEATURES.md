@@ -155,6 +155,23 @@ Red Arch Knowledge Manager is an enterprise-grade, AI-powered knowledge manageme
 
 ---
 
+### 9. Reporting & Data Aggregation
+
+**What it does:** Build named GROUP BY queries over custom entities and visualize the results.
+
+**Features:**
+- **Aggregation engine** — group by fields/relationships/base columns with date bucketing
+  (day/week/month/quarter/year); metrics `count / count_distinct / sum / avg / min / max`; filter, HAVING,
+  order, and limit. Runs server-side under tenant RLS (`POST /api/entities/{slug}/aggregate`).
+- **Saved reports** — a stored aggregate query + chart/KPI/table visualization
+  (bar/line/area/pie/donut/scatter/table/metric), managed on the Reports page with a live preview builder.
+- **Dashboards** — drop a `report` element onto any view to embed a live chart/KPI tile; reports travel in
+  the org import/export bundle.
+- **Server-side record filtering** — filter record lists by field with `eq/ne/gt/gte/lt/lte/in/contains/
+  isnull`; keyset pagination works under any sort, index-backed for scale.
+
+---
+
 ## User Interface Features
 
 ### Chat Interface

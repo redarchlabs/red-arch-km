@@ -251,6 +251,24 @@ CREATE TABLE ce_company (
 
 All ce_* tables have RLS policies (tenant_isolation_*) and are RLS-enabled with FORCE ROW LEVEL SECURITY.
 
+Each `ce_*` table also carries, per scalar field: a trigram GIN index on text/long_text/picklist
+columns (substring search) and, per **filterable** field (integer/bigint/numeric/date/timestamptz/uuid/
+picklist), a `(org_id, col DESC, id DESC)` btree that serves equality/range filters, GROUP BY, and keyset
+pagination under a custom sort (migration 025 backfills existing tables `CONCURRENTLY`).
+
+#### reports
+Saved aggregation query + visualization (migration 026). RLS-scoped like every tenant table.
+
+| Column | Type | Notes |
+|---|---|---|
+| id | UUID | PK |
+| name / slug / description | TEXT | unique `(org_id, slug)` |
+| entity_definition_id | UUID | FK → entity_definitions (CASCADE); the entity aggregated over |
+| query | JSONB | the `AggregateQuery` (group_by / metrics / filters / having / order_by / limit) |
+| viz | JSONB | the `Visualization` (chart type, axes, series, number format) |
+| is_active | BOOLEAN | default true |
+| org_id | UUID | FK → orgs (CASCADE); RLS scope |
+
 ### Workflows
 
 #### workflows
@@ -534,8 +552,14 @@ Located in `services/api/alembic/versions/`:
 - `013_workflow_outbox_source.py` — Add `workflow_outbox.source` column (trigger source)
 - `014_workflow_run_delay.py` — Add delayed/scheduled workflow run support
 
-**Forms:**
+**Forms & views:**
 - `011_intake_forms.py` — Create `forms`, `form_links` tables (token_hash indexed globally for public resolution)
+- `021_views.py` — Create `views` (composable screens rendered by the shared form renderer)
+
+**Reporting:**
+- `025_filterable_btree_indexes.py` — Backfill `(org_id, col DESC, id DESC)` btree indexes on filterable
+  scalar custom-entity columns; built `CONCURRENTLY` (autocommit block) to avoid table-wide write locks
+- `026_reports.py` — Create `reports` table (saved aggregation query + visualization) with RLS
 
 **Document permissions:**
 - `015_add_document_permissions.py` — Add per-document permission mask + config columns to `documents` (override folder)

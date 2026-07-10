@@ -17,6 +17,10 @@ tree of typed elements (`schemas/form_elements.py`, mirrored in
 | `calculated` | Derived value from a sandboxed JsonLogic `expression`; `target_slug` persists it |
 | `button` | Action: `submit` / `run_workflow` (workflow_id + input map) / `link` |
 | `form_ref` | Embed another form by id (views) |
+| `input` | Standalone unbound input (text/number/slider/toggle/select) into form state; feeds calculated fields + workflow buttons. Valid in standalone views |
+| `live_value` | Display-only readout polling an HTTP endpoint for live external state (`url`, `json_pointer`, `poll_ms`). Standalone-valid |
+| `record_list` | Read-only live "status board" of an entity's records (`entity`, `fields`, `sort_by`, `poll_ms`, optional per-row `row_workflow_id`). Standalone-valid |
+| `report` | Embed a saved report by `report_id`; renders its chart/KPI/table per the report's `viz` (`title`, `height`, `poll_ms`). Standalone-valid |
 | `section` | A 1:1 related record, inline or modal |
 | `table` | A 1:M child grid; columns from the child entity **and related entities** (cross-join, editable) |
 | `block` | A repeatable group of leaf elements (1:M, stacked) |
