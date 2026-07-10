@@ -93,7 +93,9 @@ export default function FormFillPage({ params }: { params: Promise<{ id: string 
     setNotice(null);
     setSubmitError(null);
     try {
-      await runWorkflow(workflowId, { operation: "update", record_id: recordId || null, after: inputs });
+      // Pass button values as both `after` (entity-triggered) and `inputs`
+      // (manual-trigger workflows read inputs.*); the backend picks by trigger.
+      await runWorkflow(workflowId, { operation: "update", record_id: recordId || null, after: inputs, inputs });
       setNotice("Workflow started.");
     } catch (e: unknown) {
       setSubmitError(getApiErrorMessage(e, "Workflow failed to start"));
