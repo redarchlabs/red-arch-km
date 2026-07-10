@@ -20,6 +20,10 @@ export interface RecordListParams {
   /** Opaque cursor from a prior response's ``next_cursor``. */
   cursor?: string | null;
   limit?: number;
+  /** Field slug (or base column) to sort by; overrides the default created_at sort. */
+  orderBy?: string;
+  /** Sort direction when orderBy is set. */
+  orderDir?: "asc" | "desc";
 }
 
 export async function listRecords(
@@ -31,6 +35,8 @@ export async function listRecords(
       q: params.search || undefined,
       cursor: params.cursor || undefined,
       limit: params.limit ?? 50,
+      order_by: params.orderBy || undefined,
+      order_dir: params.orderBy ? (params.orderDir ?? "desc") : undefined,
     },
   });
   return response.data;

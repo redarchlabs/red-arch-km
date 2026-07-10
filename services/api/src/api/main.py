@@ -36,6 +36,7 @@ from api.routers import (
     memberships,
     migration,
     orgs,
+    reports,
     search,
     setup,
     tags,
@@ -182,6 +183,7 @@ def create_app() -> FastAPI:
     app.include_router(workflows.router, prefix="/api/workflows", tags=["workflows"])
     app.include_router(forms.router, prefix="/api/forms", tags=["forms"])
     app.include_router(views.router, prefix="/api/views", tags=["views"])
+    app.include_router(reports.router, prefix="/api/reports", tags=["reports"])
     # Public, unauthenticated form rendering + submission (org resolved from token).
     app.include_router(forms.public_router, prefix="/api/public/forms", tags=["forms-public"])
     # Public, token-authenticated inbound webhooks that start a workflow run.

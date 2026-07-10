@@ -111,6 +111,7 @@ def index_name(object_id: uuid.UUID) -> str:
 # across processes (required for ``IF NOT EXISTS`` idempotency).
 _KEYSET_INDEX_NS = uuid.UUID("b6c2e3a4-1f5d-4e7c-9a0b-2d3f4e5a6b7c")
 _TRGM_INDEX_NS = uuid.UUID("c7d3f4b5-2a6e-4f8d-8b1c-3e4a5b6c7d8e")
+_BTREE_INDEX_NS = uuid.UUID("d8e4a5c6-3b7f-4a9e-9c2d-4f5b6c7d8e9f")
 
 
 def keyset_index_name(definition_id: uuid.UUID) -> str:
@@ -121,6 +122,12 @@ def keyset_index_name(definition_id: uuid.UUID) -> str:
 def trgm_index_name(field_id: uuid.UUID) -> str:
     """Index name for a per-column trigram (substring-search) GIN index."""
     return index_name(uuid.uuid5(_TRGM_INDEX_NS, field_id.hex))
+
+
+def btree_index_name(field_id: uuid.UUID) -> str:
+    """Index name for a per-column ``(org_id, col)`` btree index that accelerates
+    equality/range filtering and GROUP BY on non-text scalar fields."""
+    return index_name(uuid.uuid5(_BTREE_INDEX_NS, field_id.hex))
 
 
 def is_generated_identifier(name: str) -> bool:

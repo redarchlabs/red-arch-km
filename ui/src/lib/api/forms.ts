@@ -96,6 +96,23 @@ export interface LiveValueElement extends ElementBase {
   width?: FieldWidth | null;
 }
 
+/** Read-only "status board": lists existing records of an entity (newest-first or by
+ * sort_by), optionally re-polling to stay live, with an optional per-row workflow button. */
+export interface RecordListElement extends ElementBase {
+  type: "record_list";
+  entity: string;
+  label?: string | null;
+  fields?: string[];
+  sort_by?: string | null;
+  sort_dir?: "asc" | "desc";
+  limit?: number;
+  poll_ms?: number | null;
+  empty_text?: string | null;
+  row_workflow_id?: string | null;
+  row_action_label?: string | null;
+  width?: FieldWidth | null;
+}
+
 /** Live, per-turn controls for how the answer workflow retrieves/generates. When
  * `show` is set, the chat renders a compact toggle row and forwards the chosen values
  * as workflow `inputs` (synthesize / use_knowledge_graph / answer_model / max_words),
@@ -289,6 +306,7 @@ export type FormElement =
   | CalculatedElement
   | InputElement
   | LiveValueElement
+  | RecordListElement
   | ChatElement
   | ButtonElement
   | FormRefElement

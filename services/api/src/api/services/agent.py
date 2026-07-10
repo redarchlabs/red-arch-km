@@ -524,6 +524,8 @@ TOOLS: list[dict[str, Any]] = [
                                     "enum": [
                                         "create_record",
                                         "update_record_field",
+                                        "update_record",
+                                        "get_record",
                                         "log",
                                         "send_webhook",
                                         "http_request",
@@ -533,7 +535,19 @@ TOOLS: list[dict[str, Any]] = [
                                 },
                                 "target_slug": {
                                     "type": "string",
-                                    "description": "create_record: entity to create a record in.",
+                                    "description": "create_record/update_record/get_record: entity slug to target.",
+                                },
+                                "mode": {
+                                    "type": "string",
+                                    "enum": ["by_id", "latest", "first"],
+                                    "description": "update_record/get_record: how to pick the record (default latest).",
+                                },
+                                "record_id": {
+                                    "description": "mode 'by_id': record id (literal/token/$ref).",
+                                },
+                                "filters": {
+                                    "type": "object",
+                                    "description": "update_record/get_record latest/first: field→value narrowing.",
                                 },
                                 "values": {
                                     "type": "object",
@@ -1099,7 +1113,8 @@ TOOLS: list[dict[str, Any]] = [
             "name": "describe_workflow_actions",
             "description": (
                 "Reference: the workflow action catalog — every action `type` (send_webhook, "
-                "http_request, send_email, send_form, create_record, update_record_field, log) with "
+                "http_request, send_email, send_form, create_record, update_record_field, update_record, "
+                "get_record, log) with "
                 "its `config` keys and when to use it. Call this when authoring a workflow (create_"
                 "workflow / save_workflow_definition) so you pick the right step — e.g. send_webhook "
                 "to POST to a REST endpoint. No arguments."
@@ -1371,6 +1386,10 @@ _ASSISTANT_ACTION_TYPES = frozenset(
     {
         "create_record",
         "update_record_field",
+        # Read a record's live fields into vars (state read-back) / write several
+        # fields of any record by id or latest/first (services/workflow/actions.py).
+        "get_record",
+        "update_record",
         "log",
         # Outbound / messaging actions — the runtime has handlers for these
         # (services/workflow/actions.py); the simple linear builder passes their
@@ -1889,6 +1908,27 @@ class AgentService:
                 if not field_slug:
                     return {"error": "update_record_field action requires field"}
                 config = {"field": field_slug, "value": spec.get("value")}
+            elif action_type == "update_record":
+                values = spec.get("values")
+                if not isinstance(values, dict) or not values:
+                    return {"error": "update_record action requires a non-empty values object"}
+                target_slug = spec.get("target_slug")
+                if target_slug and await entity_repo.get_by_slug(target_slug) is None:
+                    return {"error": f"target entity not found: {target_slug!r}"}
+                config = {"values": values}
+                for k in ("target_slug", "mode", "record_id", "filters"):
+                    if spec.get(k) is not None:
+                        config[k] = spec[k]
+            elif action_type == "get_record":
+                target_slug = spec.get("target_slug")
+                if not target_slug:
+                    return {"error": "get_record action requires target_slug"}
+                if await entity_repo.get_by_slug(target_slug) is None:
+                    return {"error": f"target entity not found: {target_slug!r}"}
+                config = {"target_slug": target_slug}
+                for k in ("mode", "record_id", "filters"):
+                    if spec.get(k) is not None:
+                        config[k] = spec[k]
             elif action_type == "send_webhook":
                 url = spec.get("url")
                 if not url:
@@ -2603,6 +2643,8 @@ class AgentService:
                 "Email a fillable form link": "send_form",
                 "Create a record in another entity": "create_record",
                 "Change a field on the triggering record": "update_record_field",
+                "Write several fields of any record (by id / latest)": "update_record",
+                "Read a record's live fields into vars (state read-back)": "get_record",
                 "Write an audit line": "log",
             },
             "actions": {
@@ -2678,6 +2720,37 @@ class AgentService:
                 "update_record_field": {
                     "config": {"field": "required slug", "value": "value or {$ref:...}"},
                     "use": "Update one field on the triggering record.",
+                },
+                "update_record": {
+                    "config": {
+                        "target_slug": "optional entity slug (omit = the triggering record)",
+                        "mode": "'by_id' (with record_id) | 'latest' | 'first' (default 'latest' when target_slug set)",
+                        "record_id": "for mode 'by_id' — a literal id, {{inputs.id}}, or {$ref:...}",
+                        "filters": "optional field→value to narrow latest/first",
+                        "values": "required object of field→value (tokens/$ref ok) — writes many fields at once",
+                    },
+                    "use": "Write multiple fields of a targeted record (any entity, addressed by id or latest/first).",
+                    "note": (
+                        "Writes fire entity-triggered workflows on that entity — an announcer keyed off it must "
+                        "only READ + act, never write it back, or it loops."
+                    ),
+                },
+                "get_record": {
+                    "config": {
+                        "target_slug": "required entity slug",
+                        "mode": "'latest' (default) | 'first' | 'by_id' (with record_id)",
+                        "record_id": "for mode 'by_id' — a literal id, {{inputs.id}}, or {$ref:...}",
+                        "filters": "optional field→value to narrow latest/first",
+                        "capture (node.data)": "name to publish the record under, e.g. 'state' → {{ vars.state.x }}",
+                    },
+                    "use": (
+                        "Read a record's live field values into a run variable (the read-back the engine "
+                        "otherwise lacks). Output = the record's fields, or {} when none match."
+                    ),
+                    "note": (
+                        "Read-only. Feed live state into a later summarize/llm_decide/http_request via "
+                        "{{vars.<capture>.<field>}}."
+                    ),
                 },
                 "log": {"config": {"message": "text"}, "use": "Emit a log line (no side effects)."},
             },

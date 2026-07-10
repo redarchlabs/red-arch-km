@@ -13,19 +13,27 @@ slugs for the same reason.
 
 from __future__ import annotations
 
+import operator
 import uuid
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
-from typing import Any
+from typing import Any, NamedTuple
 
-from sqlalchemy import Column, MetaData, Table, bindparam, func, or_, select, text, tuple_
+from sqlalchemy import Column, MetaData, Table, and_, bindparam, distinct, false, func, or_, select, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.models.custom_entity import EntityDefinition, EntityField, EntityRelationship
 from api.repositories.workflow import OutboxWriter
+from api.schemas.aggregate import AggregateQuery, AggregateResult
 from api.services import identifiers
 from api.services.schema_manager import SEARCHABLE_FIELD_TYPES, _sa_type
+
+# Aggregate operators whose numeric result requires a numeric column.
+_NUMERIC_AGG_OPS = ("sum", "avg")
+# Field types over which min/max is meaningful (numeric or chronological).
+_ORDERABLE_FIELD_TYPES = ("integer", "bigint", "numeric", "date", "timestamptz")
+_NUMERIC_FIELD_TYPES = ("integer", "bigint", "numeric")
 
 # Case-insensitive string spellings accepted for a JSON-delivered boolean field.
 _TRUE_STRINGS = frozenset({"true", "t", "1", "yes", "y", "on"})
@@ -34,8 +42,38 @@ _FALSE_STRINGS = frozenset({"false", "f", "0", "no", "n", "off"})
 # Base columns present on every entity table, exposed read-only.
 _BASE_READ_COLUMNS = ("id", "created_at", "updated_at")
 
-# A keyset cursor is the (created_at, id) of the last row on the previous page.
-RecordCursor = tuple[datetime, uuid.UUID]
+class RecordCursor(NamedTuple):
+    """Keyset position: the sort key + id of the last row on the previous page.
+
+    Carries the sort ``order_slug``/``order_dir`` so the endpoint can reject a
+    cursor reused under a different sort. ``order_value`` is the raw (JSON string
+    or scalar) form the endpoint serialises; the repository re-coerces it to the
+    column's Python type before comparing.
+    """
+
+    order_slug: str
+    order_dir: str
+    order_value: Any
+    id: uuid.UUID
+
+
+# Filter operators accepted by ``list()``. Mapped to SQL comparisons in
+# ``_filter_condition``; the router validates the raw op string before it here.
+FILTER_OPERATORS = frozenset({"eq", "ne", "gt", "gte", "lt", "lte", "in", "contains", "isnull"})
+
+# A filter clause is (field-slug, operator, value).
+FilterClause = tuple[str, str, Any]
+
+# Scalar comparison operators, shared by filter ``gt/gte/...`` clauses and the
+# aggregation engine's HAVING clauses. Each takes ``(column_expr, value)``.
+_COMPARATORS = {
+    "eq": operator.eq,
+    "ne": operator.ne,
+    "gt": operator.gt,
+    "gte": operator.ge,
+    "lt": operator.lt,
+    "lte": operator.le,
+}
 
 # Guard against pathologically large record payloads (an entity is capped at
 # ~100 fields; this is a generous ceiling well above that).
@@ -121,8 +159,7 @@ class DynamicEntityRepository:
             return value
         if field.field_type == "date":
             try:
-                return (datetime.fromisoformat(value).date() if "T" in value
-                        else date.fromisoformat(value))
+                return datetime.fromisoformat(value).date() if "T" in value else date.fromisoformat(value)
             except ValueError as exc:
                 raise EntityRecordError(f"{field.slug!r} must be a valid date (YYYY-MM-DD)") from exc
         if field.field_type == "timestamptz":
@@ -174,10 +211,7 @@ class DynamicEntityRepository:
             # not a 500. Without this, a required scalar hits the column's NOT NULL
             # constraint (unhandled IntegrityError) and a required relationship —
             # whose FK column is physically nullable — would silently null out.
-            if value is None and (
-                (field is not None and field.is_required)
-                or (rel is not None and rel.is_required)
-            ):
+            if value is None and ((field is not None and field.is_required) or (rel is not None and rel.is_required)):
                 raise EntityRecordError(f"{slug!r} is required and cannot be null")
             if field is not None and field.field_type == "picklist" and value is not None:
                 options = field.picklist_options or []
@@ -212,6 +246,94 @@ class DynamicEntityRepository:
         if col_name is None:
             raise EntityRecordError(f"unknown field: {slug!r}")
         return self._table.c[col_name]
+
+    def _coerce_by_slug(self, slug: str, value: Any) -> Any:
+        """Coerce a filter / cursor value (typically a JSON string) to the Python
+        type the column's asyncpg codec requires.
+
+        Reuses ``_coerce_value`` for catalog scalar fields (which raises a clean
+        ``EntityRecordError`` on a mistyped value). Relationship FK slugs and the
+        base ``id`` column coerce to ``uuid``; ``created_at`` / ``updated_at``
+        coerce to a timezone-aware ``datetime`` — so filtering/sorting a
+        date-range or a related-record id never hands a bare string to the driver.
+        """
+        field = self._field_by_slug.get(slug)
+        if field is not None:
+            return self._coerce_value(field, value)
+        if value is None:
+            return None
+        if slug in self._rel_by_slug or slug == "id":
+            if isinstance(value, uuid.UUID):
+                return value
+            try:
+                return uuid.UUID(str(value))
+            except (ValueError, AttributeError) as exc:
+                raise EntityRecordError(f"{slug!r} must be a valid record id") from exc
+        if slug in ("created_at", "updated_at") and isinstance(value, str):
+            try:
+                dt = datetime.fromisoformat(value)
+            except ValueError as exc:
+                raise EntityRecordError(f"{slug!r} must be a valid date-time") from exc
+            return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
+        return value
+
+    @staticmethod
+    def _normalize_filters(filters: dict[str, Any] | list[FilterClause] | None) -> list[FilterClause]:
+        """Accept either a legacy ``{slug: value}`` dict (implicit ``eq``) or a
+        list of explicit ``(slug, op, value)`` clauses."""
+        if not filters:
+            return []
+        if isinstance(filters, dict):
+            return [(slug, "eq", value) for slug, value in filters.items()]
+        return list(filters)
+
+    def _filter_condition(self, slug: str, op: str, value: Any) -> Any:
+        """Build one SQL predicate for a filter clause, whitelisting the slug and
+        coercing the comparison value to the column type."""
+        col = self._column(slug)  # validates slug (raises on unknown)
+        if op == "isnull":
+            return col.is_(None) if bool(value) else col.isnot(None)
+        if op == "in":
+            values = value if isinstance(value, (list, tuple)) else [value]
+            if not values:
+                return false()  # `IN ()` matches nothing
+            return col.in_([self._coerce_by_slug(slug, v) for v in values])
+        if op == "contains":
+            field = self._field_by_slug.get(slug)
+            if field is None or field.field_type not in SEARCHABLE_FIELD_TYPES:
+                raise EntityRecordError(f"{slug!r} does not support the 'contains' filter")
+            return col.ilike(f"%{_escape_like(str(value))}%", escape="\\")
+        comparator = _COMPARATORS.get(op)
+        if comparator is None:
+            raise EntityRecordError(f"unknown filter operator: {op!r}")
+        return comparator(col, self._coerce_by_slug(slug, value))
+
+    def _keyset_after(self, order_col: Column, order_value: Any, rec_id_value: uuid.UUID, *, descending: bool) -> Any:
+        """Predicate selecting rows strictly *after* ``(order_value, rec_id_value)``
+        under ``ORDER BY order_col <dir> NULLS LAST, id DESC``.
+
+        Handles NULL sort keys explicitly (NULLS LAST): a non-null cursor page
+        continues into any NULL-keyed rows; once the cursor key is NULL only
+        smaller-id NULL rows remain. The ``id`` tiebreaker is always DESC.
+        """
+        id_col = self._table.c.id
+        id_tie = id_col < rec_id_value
+        if order_value is None:
+            return and_(order_col.is_(None), id_tie)
+        beyond = order_col < order_value if descending else order_col > order_value
+        return or_(beyond, order_col.is_(None), and_(order_col == order_value, id_tie))
+
+    def _field_type(self, slug: str) -> str | None:
+        """Catalog ``field_type`` for a slug, or the effective type of a base /
+        relationship column (used to validate aggregate ops and date buckets)."""
+        field = self._field_by_slug.get(slug)
+        if field is not None:
+            return field.field_type
+        if slug in ("created_at", "updated_at"):
+            return "timestamptz"
+        if slug == "id" or slug in self._rel_by_slug:
+            return "uuid"
+        return None
 
     # ------------------------------------------------------------------ #
     # CRUD
@@ -283,9 +405,7 @@ class DynamicEntityRepository:
             # by identifiers.quote(); ids/org are bound parameters (expanding IN).
             sql = f"SELECT id FROM {identifiers.quote(table)} WHERE org_id = :org AND id IN :ids"  # noqa: S608
             stmt = text(sql).bindparams(bindparam("ids", expanding=True))
-            found = set(
-                (await self._session.execute(stmt, {"org": self._org_id, "ids": list(ids)})).scalars().all()
-            )
+            found = set((await self._session.execute(stmt, {"org": self._org_id, "ids": list(ids)})).scalars().all())
             missing = ids - found
             if missing:
                 bad_slug = next(
@@ -317,49 +437,63 @@ class DynamicEntityRepository:
     async def list(
         self,
         *,
-        filters: dict[str, Any] | None = None,
+        filters: dict[str, Any] | list[FilterClause] | None = None,
         search: str | None = None,
         cursor: RecordCursor | None = None,
         limit: int = 50,
+        order_by: str | None = None,
+        order_dir: str = "desc",
     ) -> tuple[list[dict[str, Any]], RecordCursor | None]:
-        """Keyset-paginated record page ordered by ``(created_at, id)`` DESC.
+        """Keyset-paginated, filtered record page.
 
         Returns ``(items, next_cursor)`` where ``next_cursor`` is ``None`` on the
         last page. Uses no ``OFFSET`` and no ``COUNT`` so it stays fast on tables
-        with millions of rows. ``search`` is a case-insensitive substring match
-        across text columns (index-backed by trigram GIN indexes).
+        with millions of rows.
+
+        ``filters`` is either a legacy ``{slug: value}`` dict (implicit ``eq``) or
+        a list of ``(slug, op, value)`` clauses (``eq/ne/gt/gte/lt/lte/in/
+        contains/isnull``); values are coerced with the same rules as writes so a
+        mistyped filter raises a clean ``EntityRecordError`` (HTTP 400).
+        ``search`` is a case-insensitive substring match across text columns
+        (trigram-index-backed).
+
+        ``order_by`` (a field slug or base column) + ``order_dir`` override the
+        sort. Keyset ``cursor`` pagination works under *any* sort and with filters
+        applied — the cursor carries the sort key so a page continues correctly;
+        a cursor reused under a different sort raises ``EntityRecordError``.
         """
         limit = max(1, min(limit, 200))
+        order_slug = order_by or "created_at"
+        order_col = self._column(order_slug)  # validates the slug (raises on unknown)
+        descending = str(order_dir).lower() != "asc"
+        rec_id = self._table.c.id
+
         conditions = [self._table.c.org_id == self._org_id]
-        for slug, value in (filters or {}).items():
-            # Coerce the filter value with the same rules as writes so a
-            # bad-typed filter (e.g. "abc" against an integer column) raises a
-            # clean EntityRecordError (400) rather than an asyncpg codec 500.
-            coerced = self._coerce_value(self._field_by_slug.get(slug), value)
-            conditions.append(self._column(slug) == coerced)
+        for slug, op, value in self._normalize_filters(filters):
+            conditions.append(self._filter_condition(slug, op, value))
 
         if search and search.strip():
             pattern = f"%{_escape_like(search.strip())}%"
             searchable = [
-                self._table.c[f.physical_column]
-                for f in self._fields
-                if f.field_type in SEARCHABLE_FIELD_TYPES
+                self._table.c[f.physical_column] for f in self._fields if f.field_type in SEARCHABLE_FIELD_TYPES
             ]
             if not searchable:
                 return [], None  # nothing to match a text query against
             conditions.append(or_(*[col.ilike(pattern, escape="\\") for col in searchable]))
 
-        created_at = self._table.c.created_at
-        rec_id = self._table.c.id
         if cursor is not None:
-            # Row-value comparison: strictly "older" than the last row of the
-            # previous page under (created_at DESC, id DESC) ordering.
-            conditions.append(tuple_(created_at, rec_id) < tuple_(cursor[0], cursor[1]))
+            if cursor.order_slug != order_slug or (cursor.order_dir == "desc") != descending:
+                raise EntityRecordError("cursor does not match the requested sort order")
+            cursor_value = self._coerce_by_slug(order_slug, cursor.order_value)
+            conditions.append(self._keyset_after(order_col, cursor_value, cursor.id, descending=descending))
 
+        # NULLS LAST keeps the keyset predicate's null handling correct; id is a
+        # stable, unique tiebreaker so equal sort keys order deterministically.
+        primary = (order_col.desc() if descending else order_col.asc()).nullslast()
         stmt = (
             select(*self._table.c)
             .where(*conditions)
-            .order_by(created_at.desc(), rec_id.desc())
+            .order_by(primary, rec_id.desc())
             .limit(limit + 1)  # one extra row tells us whether another page exists
         )
         rows = (await self._session.execute(stmt)).all()
@@ -370,8 +504,124 @@ class DynamicEntityRepository:
         next_cursor: RecordCursor | None = None
         if has_more and page:
             last = page[-1]._mapping
-            next_cursor = (last["created_at"], last["id"])
+            next_cursor = RecordCursor(
+                order_slug=order_slug,
+                order_dir="desc" if descending else "asc",
+                order_value=last[order_col.name],
+                id=last["id"],
+            )
         return items, next_cursor
+
+    # ------------------------------------------------------------------ #
+    # Aggregation (reporting engine)
+    # ------------------------------------------------------------------ #
+    def _aggregate_expr(self, op: str, field: str | None) -> Any:
+        """Build one aggregate SQL expression, validating the op/field-type pair.
+
+        ``count`` needs no field; ``sum``/``avg`` require a numeric field;
+        ``min``/``max`` require a numeric or chronological field; ``count_distinct``
+        works over any column. The field slug is whitelisted by ``_column``.
+        """
+        if op == "count":
+            return func.count()
+        if field is None:
+            raise EntityRecordError(f"aggregate {op!r} requires a field")
+        col = self._column(field)  # validates the slug
+        if op == "count_distinct":
+            return func.count(distinct(col))
+        ftype = self._field_type(field)
+        if op in _NUMERIC_AGG_OPS:
+            if ftype not in _NUMERIC_FIELD_TYPES:
+                raise EntityRecordError(f"{op!r} requires a numeric field, got {field!r} ({ftype})")
+            return func.sum(col) if op == "sum" else func.avg(col)
+        if op in ("min", "max"):
+            if ftype not in _ORDERABLE_FIELD_TYPES:
+                raise EntityRecordError(f"{op!r} requires a numeric or date field, got {field!r} ({ftype})")
+            return func.min(col) if op == "min" else func.max(col)
+        raise EntityRecordError(f"unknown aggregate op: {op!r}")
+
+    def _build_aggregate(self, query: AggregateQuery) -> tuple[Any, list[str], list[str]]:
+        """Build the aggregate SQL statement (no execution) and the ordered group
+        and metric column names. Split out from :meth:`aggregate` so the query
+        construction (and its validation) is unit-testable without a database."""
+        used_names: set[str] = set()
+        order_exprs: dict[str, Any] = {}  # result name -> expression (group or metric)
+        having_exprs: dict[str, Any] = {}  # metric name -> aggregate expression
+
+        def _claim(name: str) -> str:
+            if name in used_names:
+                raise EntityRecordError(f"duplicate result column {name!r}")
+            used_names.add(name)
+            return name
+
+        group_labels: list[str] = []
+        group_exprs: list[Any] = []
+        selected: list[Any] = []
+        for g in query.group_by:
+            col = self._column(g.field)  # validates the slug
+            if g.bucket is not None:
+                if self._field_type(g.field) not in ("date", "timestamptz"):
+                    raise EntityRecordError(f"{g.field!r} is not a date field; cannot bucket by {g.bucket!r}")
+                expr = func.date_trunc(g.bucket, col)
+                default = f"{g.field}_{g.bucket}"
+            else:
+                expr = col
+                default = g.field
+            name = _claim(g.alias or default)
+            group_labels.append(name)
+            group_exprs.append(expr)
+            selected.append(expr.label(name))
+            order_exprs[name] = expr
+
+        metric_labels: list[str] = []
+        for m in query.metrics:
+            expr = self._aggregate_expr(m.op, m.field)
+            default = m.op if m.op == "count" else f"{m.op}_{m.field}"
+            name = _claim(m.alias or default)
+            metric_labels.append(name)
+            selected.append(expr.label(name))
+            order_exprs[name] = expr
+            having_exprs[name] = expr
+
+        conditions = [self._table.c.org_id == self._org_id]
+        for f in query.filters:
+            conditions.append(self._filter_condition(f.field, f.op, f.value))
+
+        stmt = select(*selected).where(*conditions)
+        if group_exprs:
+            stmt = stmt.group_by(*group_exprs)
+
+        for h in query.having:
+            expr = having_exprs.get(h.metric)
+            if expr is None:
+                raise EntityRecordError(f"having references unknown metric {h.metric!r}")
+            stmt = stmt.having(_COMPARATORS[h.op](expr, h.value))
+
+        for o in query.order_by:
+            expr = order_exprs.get(o.key)
+            if expr is None:
+                raise EntityRecordError(f"order_by references unknown column {o.key!r}")
+            stmt = stmt.order_by(expr.desc() if o.dir == "desc" else expr.asc())
+
+        stmt = stmt.limit(query.limit)
+        return stmt, group_labels, metric_labels
+
+    async def aggregate(self, query: AggregateQuery) -> AggregateResult:
+        """Run a GROUP BY / metric query for the reporting engine.
+
+        Returns rows keyed by group-key and metric name. Every field reference is
+        whitelisted to a physical column and every op/bucket comes from a closed
+        Literal set, so no user string reaches SQL as an identifier; the query
+        runs under the tenant's RLS session with an explicit ``org_id`` filter.
+        """
+        stmt, group_labels, metric_labels = self._build_aggregate(query)
+        rows = (await self._session.execute(stmt)).mappings().all()
+        return AggregateResult(
+            group_by=group_labels,
+            metrics=metric_labels,
+            rows=[dict(r) for r in rows],
+            row_count=len(rows),
+        )
 
     async def update(self, record_id: uuid.UUID, patch: dict[str, Any]) -> dict[str, Any] | None:
         await self._validate_relationships(patch)
