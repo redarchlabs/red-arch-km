@@ -14,6 +14,7 @@ import {
   type FormSubmit,
   type InputElement,
   type LiveValueElement,
+  type RecordListElement,
   type SectionElement,
   type TableElement,
 } from "@/lib/api/forms";
@@ -34,7 +35,13 @@ export interface FormRendererProps {
   render: FormRender;
   mode?: "fill" | "preview";
   onSubmit?: (payload: FormSubmit) => Promise<void> | void;
-  onRunWorkflow?: (workflowId: string, inputs: Record<string, unknown>) => Promise<void> | void;
+  onRunWorkflow?: (
+    workflowId: string,
+    inputs: Record<string, unknown>,
+    // Optional record to run the workflow against (an entity-bound view, or a
+    // record-list row action). The host page falls back to its own record when omitted.
+    recordId?: string,
+  ) => Promise<void> | void;
   submitting?: boolean;
   /** When set (fill mode), render a submit button in the footer. */
   defaultSubmitLabel?: string;
@@ -140,6 +147,130 @@ function LiveValueNode({ el }: { el: LiveValueElement }) {
         {value}
         {el.units ? <span className="ml-1 text-muted-foreground">{el.units}</span> : null}
       </div>
+    </div>
+  );
+}
+
+function formatCell(value: unknown): string {
+  if (value == null) return "—";
+  if (typeof value === "boolean") return value ? "Yes" : "No";
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
+}
+
+/** Read-only "status board": lists an entity's records (newest-first or by
+ * sort_by), optionally re-polling to stay live, with an optional per-row workflow
+ * button that runs against that row's record. */
+function RecordListNode({
+  el,
+  onRunWorkflow,
+}: {
+  el: RecordListElement;
+  onRunWorkflow?: FormRendererProps["onRunWorkflow"];
+}) {
+  const [rows, setRows] = useState<EntityRecord[] | null>(null);
+  const [error, setError] = useState(false);
+  const [busyRow, setBusyRow] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!el.entity) {
+      setError(true);
+      return;
+    }
+    let alive = true;
+    const tick = async () => {
+      try {
+        const res = await listRecords(el.entity, {
+          limit: el.limit ?? 20,
+          orderBy: el.sort_by ?? undefined,
+          orderDir: el.sort_dir ?? "desc",
+        });
+        if (!alive) return;
+        setError(false);
+        setRows(res.items);
+      } catch {
+        if (!alive) return;
+        setError(true);
+      }
+    };
+    void tick();
+    // poll_ms turns the board live; otherwise fetch once.
+    const interval = el.poll_ms ? window.setInterval(tick, Math.max(500, el.poll_ms)) : undefined;
+    return () => {
+      alive = false;
+      if (interval) window.clearInterval(interval);
+    };
+  }, [el.entity, el.limit, el.sort_by, el.sort_dir, el.poll_ms]);
+
+  // Columns: the explicit field list, else the field slugs on the first row
+  // (excluding base columns) so an unconfigured board still shows something.
+  const columns =
+    el.fields && el.fields.length > 0
+      ? el.fields
+      : rows && rows[0]
+        ? Object.keys(rows[0]).filter((k) => !["id", "created_at", "updated_at", "org_id"].includes(k))
+        : [];
+
+  const runRow = async (recordId: string) => {
+    if (!el.row_workflow_id || !onRunWorkflow) return;
+    setBusyRow(recordId);
+    try {
+      await onRunWorkflow(el.row_workflow_id, {}, recordId);
+    } finally {
+      setBusyRow(null);
+    }
+  };
+
+  return (
+    <div>
+      {el.label ? <label className="mb-1 block text-sm font-medium">{el.label}</label> : null}
+      {error ? (
+        <div className="rounded-md border bg-muted/40 px-3 py-2 text-sm text-destructive">
+          Unable to load records.
+        </div>
+      ) : rows && rows.length === 0 ? (
+        <div className="rounded-md border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+          {el.empty_text ?? "No records yet."}
+        </div>
+      ) : (
+        <div className="overflow-x-auto rounded-md border">
+          <table className="w-full text-sm">
+            <thead className="bg-muted/50">
+              <tr>
+                {columns.map((c) => (
+                  <th key={c} className="px-3 py-2 text-left font-medium">
+                    {c}
+                  </th>
+                ))}
+                {el.row_workflow_id ? <th className="px-3 py-2" /> : null}
+              </tr>
+            </thead>
+            <tbody>
+              {(rows ?? []).map((row) => (
+                <tr key={String(row.id)} className="border-t">
+                  {columns.map((c) => (
+                    <td key={c} className="px-3 py-2 tabular-nums">
+                      {formatCell(row[c])}
+                    </td>
+                  ))}
+                  {el.row_workflow_id ? (
+                    <td className="px-3 py-2 text-right">
+                      <button
+                        type="button"
+                        className="rounded border px-2 py-1 text-xs hover:bg-muted disabled:opacity-50"
+                        disabled={busyRow === String(row.id)}
+                        onClick={() => void runRow(String(row.id))}
+                      >
+                        {el.row_action_label ?? "Run"}
+                      </button>
+                    </td>
+                  ) : null}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
@@ -885,6 +1016,12 @@ export function FormRenderer({
         return (
           <div className={spanClass(el.width)}>
             <LiveValueNode el={el} />
+          </div>
+        );
+      case "record_list":
+        return (
+          <div className="sm:col-span-12">
+            <RecordListNode el={el} onRunWorkflow={onRunWorkflow} />
           </div>
         );
       case "chat":

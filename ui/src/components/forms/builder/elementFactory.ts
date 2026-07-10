@@ -15,12 +15,13 @@ export type PaletteKind = FormElement["type"];
 export const LEAF_KINDS: PaletteKind[] = ["field", "label", "calculated", "input", "live_value", "button"];
 export const DATA_KINDS: PaletteKind[] = ["section", "table", "block"];
 export const LAYOUT_KINDS: PaletteKind[] = ["tab_group", "panel", "accordion", "columns"];
-// Palette for the view builder: no entity-bound leaves, plus embedded forms. `input` and
-// `live_value` are unbound, so they're valid in standalone views too.
+// Palette for the view builder: no entity-bound leaves, plus embedded forms. `input`,
+// `live_value` and `record_list` are unbound, so they're valid in standalone views too.
 export const VIEW_KINDS: PaletteKind[] = [
   "label",
   "input",
   "live_value",
+  "record_list",
   "chat",
   "button",
   "form_ref",
@@ -33,6 +34,7 @@ export const KIND_LABELS: Record<PaletteKind, string> = {
   calculated: "Calculated",
   input: "Input (slider / toggle / text)",
   live_value: "Live value",
+  record_list: "Record list / status board",
   chat: "Chat",
   button: "Button",
   form_ref: "Embedded form",
@@ -65,6 +67,8 @@ export function newElement(kind: PaletteKind): FormElement {
       return { id, type: "input", key: "", control: "text", label: "Input" };
     case "live_value":
       return { id, type: "live_value", label: "Live value", url: "", poll_ms: 1000 };
+    case "record_list":
+      return { id, type: "record_list", label: "Records", entity: "", fields: [], sort_dir: "desc", limit: 20 };
     case "chat":
       return {
         id,

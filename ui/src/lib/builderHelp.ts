@@ -81,6 +81,21 @@ value pulled from the JSON response — a generic way to display live external s
 - **Units** — an optional suffix shown after the value.
 `,
   ),
+  record_list: topic(
+    "Record list / status board",
+    `
+A **read-only table of an entity's records** — a live status board. Reads the
+newest records (or sorted by a field) and can re-poll to stay current.
+
+- **Entity** — which entity's records to list (by slug).
+- **Fields** — the field slugs to show as columns; empty shows every field.
+- **Sort by / direction** — a field slug (defaults to newest first).
+- **Limit** — how many rows to show.
+- **Poll (ms)** — set to keep the board live; blank fetches once.
+- **Row workflow** — optionally add a per-row button that runs a workflow against
+  that row's record (e.g. re-announce a mission-state row).
+`,
+  ),
   chat: topic(
     "Chat element",
     `

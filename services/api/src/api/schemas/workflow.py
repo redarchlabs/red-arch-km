@@ -31,6 +31,8 @@ class WorkflowUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=2000)
     enabled: bool | None = None
+    # Run this entity-triggered workflow inline on the record change (no beat lag).
+    run_inline_on_change: bool | None = None
     run_permission: RunPermission | None = None
 
 
@@ -52,6 +54,7 @@ class WorkflowRead(BaseModel):
     description: str | None
     entity_definition_id: uuid.UUID | None
     enabled: bool
+    run_inline_on_change: bool = False
     active_version_id: uuid.UUID | None
     run_permission: RunPermission = Field(default_factory=RunPermission)
 
