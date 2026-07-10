@@ -87,6 +87,14 @@ class Workflow(Base, UUIDMixin, TimestampMixin):
         UUID(as_uuid=True), ForeignKey("entity_definitions.id", ondelete="CASCADE"), index=True, nullable=True
     )
     enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    # When true, an entity-change trigger runs INLINE in the request that mutated
+    # the record (right after the write) instead of waiting for the beat sweep —
+    # for latency-sensitive reactions (e.g. a robot announcing a state change).
+    # The record's outbox row is still written, so the sweep dedups the inline run
+    # and still fires any non-inline workflows on the same change.
+    run_inline_on_change: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false"), nullable=False
+    )
     # References workflow_versions.id. No DB FK to avoid a circular dependency
     # with workflow_versions.workflow_id; the service layer keeps it consistent.
     active_version_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)

@@ -348,6 +348,7 @@ async def update_workflow(
         name=body.name,
         description=body.description,
         enabled=body.enabled,
+        run_inline_on_change=body.run_inline_on_change,
         run_permission=body.run_permission.model_dump(mode="json") if body.run_permission is not None else None,
     )
     return WorkflowRead.model_validate(wf)
