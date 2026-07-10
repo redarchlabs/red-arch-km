@@ -35,6 +35,14 @@ _NUMERIC_AGG_OPS = ("sum", "avg")
 # Field types over which min/max is meaningful (numeric or chronological).
 _ORDERABLE_FIELD_TYPES = ("integer", "bigint", "numeric", "date", "timestamptz")
 _NUMERIC_FIELD_TYPES = ("integer", "bigint", "numeric")
+# Date-shaped field types (date_trunc bucketing; date-typed min/max aggregates).
+_DATE_FIELD_TYPES = ("date", "timestamptz")
+# Field types too large / unstructured to GROUP BY (no supporting index, would
+# force an unbounded hash/sort over blob columns).
+_NON_GROUPABLE_FIELD_TYPES = ("json", "long_text")
+# Cap on the number of values in an ``in`` filter, to bound the generated
+# ``IN (...)`` clause from an untrusted request.
+_MAX_IN_VALUES = 200
 
 # Case-insensitive string spellings accepted for a JSON-delivered boolean field.
 _TRUE_STRINGS = frozenset({"true", "t", "1", "yes", "y", "on"})
@@ -300,14 +308,37 @@ class DynamicEntityRepository:
 
     def _filter_condition(self, slug: str, op: str, value: Any) -> Any:
         """Build one SQL predicate for a filter clause, whitelisting the slug and
-        coercing the comparison value to the column type."""
+        coercing the comparison value to the column type.
+
+        Normalizes ``isnull`` and ``in`` centrally so BOTH entry points behave the
+        same: the query-string path (``_parse_filters``) and the report/aggregate
+        path (``FilterSpec``, whose ``value`` arrives raw — bool/str/list).
+        """
         col = self._column(slug)  # validates slug (raises on unknown)
         if op == "isnull":
-            return col.is_(None) if bool(value) else col.isnot(None)
+            # A bool wins; otherwise a missing/empty/true-ish token means IS NULL
+            # (matching _parse_filters' value-less default and the docstring), so a
+            # report `isnull` filter isn't silently inverted to IS NOT NULL.
+            want_null = (
+                value
+                if isinstance(value, bool)
+                else value in (None, "") or str(value).strip().casefold() in _TRUE_STRINGS
+            )
+            return col.is_(None) if want_null else col.isnot(None)
         if op == "in":
-            values = value if isinstance(value, (list, tuple)) else [value]
+            # Accept a list, or a comma-separated string (the report path sends the
+            # raw "a,b,c" string; without the split it became a single IN member
+            # that matched nothing).
+            if isinstance(value, str):
+                values: list[Any] = [v for v in value.split(",") if v != ""]
+            elif isinstance(value, (list, tuple)):
+                values = list(value)
+            else:
+                values = [value]
             if not values:
                 return false()  # `IN ()` matches nothing
+            if len(values) > _MAX_IN_VALUES:
+                raise EntityRecordError(f"'in' filter accepts at most {_MAX_IN_VALUES} values")
             return col.in_([self._coerce_by_slug(slug, v) for v in values])
         if op == "contains":
             field = self._field_by_slug.get(slug)
@@ -321,18 +352,27 @@ class DynamicEntityRepository:
 
     def _keyset_after(self, order_col: Column, order_value: Any, rec_id_value: uuid.UUID, *, descending: bool) -> Any:
         """Predicate selecting rows strictly *after* ``(order_value, rec_id_value)``
-        under ``ORDER BY order_col <dir> NULLS LAST, id DESC``.
+        under ``ORDER BY order_col <dir>, id DESC`` using Postgres' NATURAL null
+        placement (DESC → NULLS FIRST, ASC → NULLS LAST).
 
-        Handles NULL sort keys explicitly (NULLS LAST): a non-null cursor page
-        continues into any NULL-keyed rows; once the cursor key is NULL only
-        smaller-id NULL rows remain. The ``id`` tiebreaker is always DESC.
+        Natural nulls (rather than an explicit NULLS LAST) let the default
+        ``created_at DESC, id DESC`` page be served by the existing keyset index —
+        an explicit ``DESC NULLS LAST`` matches no plain btree and forces a seq
+        scan. The predicate below is direction-aware so pagination stays correct
+        when a nullable custom sort column is used. The ``id`` tiebreaker is DESC.
         """
-        id_col = self._table.c.id
-        id_tie = id_col < rec_id_value
+        id_tie = self._table.c.id < rec_id_value
         if order_value is None:
+            if descending:
+                # NULLS FIRST: remaining nulls (smaller id), then every non-null row.
+                return or_(and_(order_col.is_(None), id_tie), order_col.isnot(None))
+            # NULLS LAST: the null block is last, so only smaller-id nulls remain.
             return and_(order_col.is_(None), id_tie)
-        beyond = order_col < order_value if descending else order_col > order_value
-        return or_(beyond, order_col.is_(None), and_(order_col == order_value, id_tie))
+        if descending:
+            # NULLS FIRST: nulls already consumed; strictly smaller, or equal + smaller id.
+            return or_(order_col < order_value, and_(order_col == order_value, id_tie))
+        # ASC, NULLS LAST: strictly greater, OR any null (sorts after), OR equal + smaller id.
+        return or_(order_col > order_value, order_col.is_(None), and_(order_col == order_value, id_tie))
 
     def _field_type(self, slug: str) -> str | None:
         """Catalog ``field_type`` for a slug, or the effective type of a base /
@@ -498,10 +538,10 @@ class DynamicEntityRepository:
             cursor_value = self._coerce_by_slug(order_slug, cursor.order_value)
             conditions.append(self._keyset_after(order_col, cursor_value, cursor.id, descending=descending))
 
-        # NULLS LAST keeps the keyset predicate's null handling correct; id is a
-        # stable, unique tiebreaker so equal sort keys order deterministically.
-        # (The tiebreaker stays id DESC to match _keyset_after's cursor predicate.)
-        primary = (order_col.desc() if descending else order_col.asc()).nullslast()
+        # Postgres-natural null placement (DESC→NULLS FIRST, ASC→NULLS LAST) so the
+        # default created_at DESC page matches the (created_at DESC, id DESC) keyset
+        # index; _keyset_after mirrors this. id DESC is the stable tiebreaker.
+        primary = order_col.desc() if descending else order_col.asc()
         stmt = (
             select(*self._table.c)
             .where(*conditions)
@@ -552,13 +592,14 @@ class DynamicEntityRepository:
             return func.min(col) if op == "min" else func.max(col)
         raise EntityRecordError(f"unknown aggregate op: {op!r}")
 
-    def _build_aggregate(self, query: AggregateQuery) -> tuple[Any, list[str], list[str]]:
+    def build_aggregate(self, query: AggregateQuery) -> tuple[Any, list[str], list[str]]:
         """Build the aggregate SQL statement (no execution) and the ordered group
-        and metric column names. Split out from :meth:`aggregate` so the query
-        construction (and its validation) is unit-testable without a database."""
+        and metric column names. Public so callers can validate a query by building
+        it without running (e.g. ``ReportService`` at save time)."""
         used_names: set[str] = set()
         order_exprs: dict[str, Any] = {}  # result name -> expression (group or metric)
         having_exprs: dict[str, Any] = {}  # metric name -> aggregate expression
+        having_ftypes: dict[str, str | None] = {}  # metric name -> underlying field type
 
         def _claim(name: str) -> str:
             if name in used_names:
@@ -571,12 +612,15 @@ class DynamicEntityRepository:
         selected: list[Any] = []
         for g in query.group_by:
             col = self._column(g.field)  # validates the slug
+            ftype = self._field_type(g.field)
             if g.bucket is not None:
-                if self._field_type(g.field) not in ("date", "timestamptz"):
+                if ftype not in _DATE_FIELD_TYPES:
                     raise EntityRecordError(f"{g.field!r} is not a date field; cannot bucket by {g.bucket!r}")
                 expr = func.date_trunc(g.bucket, col)
                 default = f"{g.field}_{g.bucket}"
             else:
+                if ftype in _NON_GROUPABLE_FIELD_TYPES:
+                    raise EntityRecordError(f"cannot group by {g.field!r} ({ftype})")
                 expr = col
                 default = g.field
             name = _claim(g.alias or default)
@@ -594,6 +638,7 @@ class DynamicEntityRepository:
             selected.append(expr.label(name))
             order_exprs[name] = expr
             having_exprs[name] = expr
+            having_ftypes[name] = self._field_type(m.field) if m.field else None
 
         conditions = [self._table.c.org_id == self._org_id]
         for f in query.filters:
@@ -607,13 +652,24 @@ class DynamicEntityRepository:
             expr = having_exprs.get(h.metric)
             if expr is None:
                 raise EntityRecordError(f"having references unknown metric {h.metric!r}")
+            # HavingSpec.value is numeric; a date-typed min/max metric would build
+            # `min(date) > 5.0` which Postgres rejects at execute time (an unhandled
+            # 500). Reject it as a clean 400 here instead.
+            if having_ftypes.get(h.metric) in _DATE_FIELD_TYPES:
+                raise EntityRecordError(f"cannot apply a numeric HAVING to date metric {h.metric!r}")
             stmt = stmt.having(_COMPARATORS[h.op](expr, h.value))
 
-        for o in query.order_by:
-            expr = order_exprs.get(o.key)
-            if expr is None:
-                raise EntityRecordError(f"order_by references unknown column {o.key!r}")
-            stmt = stmt.order_by(expr.desc() if o.dir == "desc" else expr.asc())
+        if query.order_by:
+            for o in query.order_by:
+                expr = order_exprs.get(o.key)
+                if expr is None:
+                    raise EntityRecordError(f"order_by references unknown column {o.key!r}")
+                stmt = stmt.order_by((expr.desc() if o.dir == "desc" else expr.asc()).nullslast())
+        elif group_exprs:
+            # No explicit order: order by the group keys so a LIMIT truncates
+            # deterministically instead of cutting an arbitrary set of groups.
+            for expr in group_exprs:
+                stmt = stmt.order_by(expr.asc().nullslast())
 
         stmt = stmt.limit(query.limit)
         return stmt, group_labels, metric_labels
@@ -626,7 +682,7 @@ class DynamicEntityRepository:
         Literal set, so no user string reaches SQL as an identifier; the query
         runs under the tenant's RLS session with an explicit ``org_id`` filter.
         """
-        stmt, group_labels, metric_labels = self._build_aggregate(query)
+        stmt, group_labels, metric_labels = self.build_aggregate(query)
         rows = (await self._session.execute(stmt)).mappings().all()
         return AggregateResult(
             group_by=group_labels,

@@ -132,6 +132,14 @@ async def get_tenant_db(
                 text("SELECT set_config('app.current_tenant_id', :tid, true)"),
                 {"tid": str(org_id)},
             )
+            # Pin the session timezone so date_trunc() bucket boundaries in the
+            # reporting engine are deterministic and reproducible across pooled
+            # connections (created_at/updated_at are UTC). SET LOCAL is txn-scoped.
+            await session.execute(text("SET LOCAL TIME ZONE 'UTC'"))
+            # Bound any single runaway query (e.g. a pathological GROUP BY from the
+            # reporting engine) so one request can't hold a connection indefinitely.
+            # Generous for OLTP + reporting; kills only genuinely stuck statements.
+            await session.execute(text("SET LOCAL statement_timeout = '30s'"))
             yield session
             await session.commit()
         except HTTPException:

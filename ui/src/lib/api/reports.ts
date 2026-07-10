@@ -1,9 +1,11 @@
 import apiClient from "./client";
+import type { FilterOp } from "./filterOps";
+
+export type { FilterOp };
 
 /** ---- Aggregation query contract (mirrors api/schemas/aggregate.py) ---- */
 export type DateBucket = "hour" | "day" | "week" | "month" | "quarter" | "year";
 export type AggOp = "count" | "count_distinct" | "sum" | "avg" | "min" | "max";
-export type FilterOp = "eq" | "ne" | "gt" | "gte" | "lt" | "lte" | "in" | "contains" | "isnull";
 export type CompareOp = "eq" | "ne" | "gt" | "gte" | "lt" | "lte";
 
 export interface GroupBy {

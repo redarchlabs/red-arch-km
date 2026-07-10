@@ -88,6 +88,34 @@ class TestValidationBounds:
         assert resp.status_code == 400
 
 
+class TestAggregateEndpoint:
+    async def test_aggregate_happy_path(self) -> None:
+        repo = MagicMock()
+        repo.aggregate = AsyncMock(
+            return_value={
+                "group_by": ["stage"], "metrics": ["count"],
+                "rows": [{"stage": "won", "count": 2}], "row_count": 1,
+            }
+        )
+        with patch.object(entity_records, "_repo_for", AsyncMock(return_value=(repo, MagicMock()))):
+            async with _client(_app()) as client:
+                resp = await client.post(
+                    "/api/entities/deal/aggregate",
+                    json={"group_by": [{"field": "stage"}], "metrics": [{"op": "count"}]},
+                )
+        assert resp.status_code == 200
+        assert resp.json()["rows"] == [{"stage": "won", "count": 2}]
+
+    async def test_aggregate_entity_error_is_400(self) -> None:
+        repo = MagicMock()
+        repo.aggregate = AsyncMock(side_effect=EntityRecordError("bad group field"))
+        with patch.object(entity_records, "_repo_for", AsyncMock(return_value=(repo, MagicMock()))):
+            async with _client(_app()) as client:
+                resp = await client.post("/api/entities/deal/aggregate", json={"group_by": [{"field": "ghost"}]})
+        assert resp.status_code == 400
+        assert resp.json()["detail"] == "bad group field"
+
+
 class TestErrorMapping:
     async def test_inactive_slug_is_404(self) -> None:
         # _repo_for (real) raises 404 for an inactive/missing definition.

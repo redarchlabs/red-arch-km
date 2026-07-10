@@ -2,6 +2,7 @@
 
 import {
   ArrowLeftRight,
+  BarChart3,
   ClipboardList,
   Database,
   FileText,
@@ -38,6 +39,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/entities", label: "Entities", icon: Database },
   { href: "/forms", label: "Forms", icon: ClipboardList },
   { href: "/views", label: "Views", icon: LayoutDashboard },
+  { href: "/reports", label: "Reports", icon: BarChart3 },
   { href: "/workflows", label: "Workflows", icon: Workflow },
   { href: "/chat", label: "Chat", icon: MessageCircle },
   { href: "/import-export", label: "Import / Export", icon: ArrowLeftRight, requiresOrgAdmin: true },

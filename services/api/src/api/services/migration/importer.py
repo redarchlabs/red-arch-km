@@ -20,6 +20,7 @@ import logging
 import uuid
 from typing import Any
 
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.config import Settings
@@ -95,8 +96,11 @@ class MigrationImporter:
         await self._import_folders(resources.get("folders") or [], strategy, summary)
         await self._import_workflows(resources.get("workflows") or [], strategy, summary)
         await self._import_inbound_endpoints(resources.get("inbound_endpoints") or [], strategy, summary)
-        await self._import_forms(resources.get("forms") or [], strategy, summary)
+        # Reports before forms/views: a form or view can embed a saved report
+        # (ReportElement.report_id), so the reports id-map must be populated first
+        # for those configs to remap the reference.
         await self._import_reports(resources.get("reports") or [], strategy, summary)
+        await self._import_forms(resources.get("forms") or [], strategy, summary)
         await self._import_views(resources.get("views") or [], strategy, summary)
         await self._import_records(resources.get("entities") or [], resources.get("records") or [], summary)
         await self._import_documents(resources.get("documents") or [], strategy, summary, dry_run=dry_run)
@@ -552,14 +556,32 @@ class MigrationImporter:
                 out.record("failed")
                 summary.errors.append(f"report {slug!r}: entity not in bundle")
                 continue
-            # query/viz hold field slugs (stable per entity), not ids — no remap.
-            query = AggregateQuery.model_validate(report.get("query") or {})
-            viz = Visualization.model_validate(report.get("viz") or {})
+            is_active = bool(report.get("is_active", True))
             try:
+                # query/viz hold field slugs (stable per entity), not ids — no remap.
+                # Validate inside the try so a forward-version/hand-edited bundle
+                # records one `failed` rather than aborting the whole import.
+                query = AggregateQuery.model_validate(report.get("query") or {})
+                viz = Visualization.model_validate(report.get("viz") or {})
                 if found is not None and strategy is CollisionStrategy.OVERWRITE:
+                    # ReportUpdate can't rebind the entity; overwriting a same-slug
+                    # report bound to a DIFFERENT entity would validate the query
+                    # against the wrong entity. Refuse rather than corrupt.
+                    if str(found.entity_definition_id) != entity_new:
+                        out.record("failed")
+                        summary.errors.append(
+                            f"report {slug!r}: existing report is bound to a different entity; not overwritten"
+                        )
+                        continue
                     updated = await service.update_report(
                         found.id,
-                        ReportUpdate(name=report["name"], description=report.get("description"), query=query, viz=viz),
+                        ReportUpdate(
+                            name=report["name"],
+                            description=report.get("description"),
+                            query=query,
+                            viz=viz,
+                            is_active=is_active,
+                        ),
                     )
                     self._ids.put("reports", report["id"], updated.id)
                     out.record("overwritten")
@@ -574,12 +596,13 @@ class MigrationImporter:
                         entity_definition_id=uuid.UUID(entity_new),
                         query=query,
                         viz=viz,
+                        is_active=is_active,
                     )
                 )
                 existing[new_slug] = created
                 self._ids.put("reports", report["id"], created.id)
                 out.record("created" if found is None else "renamed")
-            except FormError as exc:
+            except (FormError, ValidationError) as exc:
                 out.record("failed")
                 summary.errors.append(f"report {slug!r}: {exc}")
 

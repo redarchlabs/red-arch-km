@@ -1,6 +1,6 @@
 """Unit tests for the reporting engine's aggregate SQL builder + filter clauses.
 
-These exercise ``DynamicEntityRepository._build_aggregate`` / ``_filter_condition``
+These exercise ``DynamicEntityRepository.build_aggregate`` / ``_filter_condition``
 in isolation (no database): the repository builds its SQLAlchemy ``Table`` from the
 catalog in ``__init__`` and the builders only construct statements, so a dummy
 session is sufficient. We compile the statement to Postgres SQL and assert on its
@@ -47,7 +47,7 @@ def _repo(fields, rels=None):  # type: ignore[no-untyped-def]
 
 
 def _sql(repo, query: AggregateQuery) -> str:  # type: ignore[no-untyped-def]
-    stmt, _g, _m = repo._build_aggregate(query)
+    stmt, _g, _m = repo.build_aggregate(query)
     return str(stmt.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
 
 
@@ -61,7 +61,7 @@ def _crm_repo():  # type: ignore[no-untyped-def]
 class TestAggregateBuilder:
     def test_group_metrics_and_labels(self) -> None:
         repo = _crm_repo()
-        stmt, groups, metrics = repo._build_aggregate(
+        stmt, groups, metrics = repo.build_aggregate(
             AggregateQuery(
                 group_by=[GroupBy(field="stage")],
                 metrics=[Metric(op="count"), Metric(op="sum", field="amount", alias="total")],
@@ -86,7 +86,7 @@ class TestAggregateBuilder:
 
     def test_default_metric_is_count(self) -> None:
         repo = _crm_repo()
-        _stmt, _g, metrics = repo._build_aggregate(AggregateQuery(group_by=[GroupBy(field="stage")]))
+        _stmt, _g, metrics = repo.build_aggregate(AggregateQuery(group_by=[GroupBy(field="stage")]))
         assert metrics == ["count"]
 
     def test_having_and_order_reference_metric(self) -> None:
@@ -129,41 +129,70 @@ class TestAggregateValidation:
     def test_sum_on_non_numeric_raises(self) -> None:
         repo = _crm_repo()
         with pytest.raises(EntityRecordError):
-            repo._build_aggregate(AggregateQuery(metrics=[Metric(op="sum", field="stage")]))
+            repo.build_aggregate(AggregateQuery(metrics=[Metric(op="sum", field="stage")]))
 
     def test_bucket_on_non_date_raises(self) -> None:
         repo = _crm_repo()
         with pytest.raises(EntityRecordError):
-            repo._build_aggregate(AggregateQuery(group_by=[GroupBy(field="stage", bucket="month")]))
+            repo.build_aggregate(AggregateQuery(group_by=[GroupBy(field="stage", bucket="month")]))
 
     def test_unknown_field_raises(self) -> None:
         repo = _crm_repo()
         with pytest.raises(EntityRecordError):
-            repo._build_aggregate(AggregateQuery(group_by=[GroupBy(field="ghost")]))
+            repo.build_aggregate(AggregateQuery(group_by=[GroupBy(field="ghost")]))
 
     def test_unknown_order_key_raises(self) -> None:
         repo = _crm_repo()
         with pytest.raises(EntityRecordError):
-            repo._build_aggregate(
+            repo.build_aggregate(
                 AggregateQuery(metrics=[Metric(op="count", alias="c")], order_by=[OrderSpec(key="nope")])
             )
 
     def test_having_unknown_metric_raises(self) -> None:
         repo = _crm_repo()
         with pytest.raises(EntityRecordError):
-            repo._build_aggregate(
+            repo.build_aggregate(
                 AggregateQuery(metrics=[Metric(op="count", alias="c")], having=[HavingSpec(metric="nope", value=1)])
             )
 
     def test_duplicate_result_name_raises(self) -> None:
         repo = _crm_repo()
         with pytest.raises(EntityRecordError):
-            repo._build_aggregate(
+            repo.build_aggregate(
                 AggregateQuery(
                     group_by=[GroupBy(field="stage", alias="x")],
                     metrics=[Metric(op="count", alias="x")],
                 )
             )
+
+    def test_duplicate_unaliased_metric_raises(self) -> None:
+        # two count metrics both default to the name "count"
+        repo = _crm_repo()
+        with pytest.raises(EntityRecordError):
+            repo.build_aggregate(AggregateQuery(metrics=[Metric(op="count"), Metric(op="count")]))
+
+    def test_group_by_json_field_rejected(self) -> None:
+        repo = _repo([_field("blob", "json")])
+        with pytest.raises(EntityRecordError):
+            repo.build_aggregate(AggregateQuery(group_by=[GroupBy(field="blob")]))
+
+    def test_having_on_date_metric_rejected(self) -> None:
+        # min/max over a date field can't be compared to a numeric HAVING threshold
+        repo = _repo([_field("closed_at", "timestamptz")])
+        with pytest.raises(EntityRecordError):
+            repo.build_aggregate(
+                AggregateQuery(
+                    metrics=[Metric(op="max", field="closed_at", alias="latest")],
+                    having=[HavingSpec(metric="latest", op="gt", value=1)],
+                )
+            )
+
+    def test_no_order_by_defaults_to_group_order(self) -> None:
+        # a LIMIT with no explicit order must still ORDER BY the group key so
+        # truncation is deterministic, not an arbitrary set of groups.
+        repo = _crm_repo()
+        sql = _sql(repo, AggregateQuery(group_by=[GroupBy(field="stage")], limit=5))
+        assert "ORDER BY" in sql
 
 
 class TestAggregateSchema:

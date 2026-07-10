@@ -8,6 +8,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Reporting engine & server-side record filtering
+
+- **Aggregation engine**: `POST /api/entities/{slug}/aggregate` runs GROUP BY / metric queries over a custom
+  entity — group by fields/relationships/base columns with optional date bucketing (`hour/day/week/month/
+  quarter/year`), metrics `count/count_distinct/sum/avg/min/max`, `filters`, `having`, `order_by`, `limit`.
+  Every field is whitelisted to a physical column and every op/bucket comes from a closed set, so no user
+  string reaches SQL as an identifier; runs under the tenant's RLS session (`DynamicEntityRepository.
+  build_aggregate` / `aggregate`).
+- **Saved reports**: `reports` table (migration 026) + `GET/POST/PATCH/DELETE /api/reports`, `POST /api/reports/
+  {id}/run` (with optional filter/limit overrides for dashboard drill-down) and `POST /api/reports/run`
+  (ad-hoc preview). A report couples an aggregate query with a `Visualization` spec (bar/stacked/line/area/
+  pie/donut/scatter/table/metric). Query + viz are validated at save. Admin-gated writes, member-gated run.
+- **Server-side record filtering**: `GET /api/entities/{slug}/records` now accepts repeatable
+  `filter=<field>:<op>[:<value>]` params — operators `eq/ne/gt/gte/lt/lte/in` (comma-separated), `contains`
+  (text), `isnull`. Keyset pagination now works under **any** `order_by` (composite cursor), not just the
+  default `created_at` sort.
+- **Filterable indexes** (migration 025): a `(org_id, col DESC, id DESC)` btree per filterable scalar field
+  (integer/bigint/numeric/date/timestamptz/uuid/picklist), created `CONCURRENTLY` so the backfill takes no
+  table-wide write lock.
+- **`report` view element**: embed a saved report on any dashboard view; renders its chart/KPI/table per the
+  report's viz. Reports travel in the org **import/export** bundle (id-remapped).
+- **Frontend**: a Reports page + live-preview report builder, a record-list filter bar, and a dependency-free
+  SVG chart renderer (`ReportChart`) with a signed value axis for negative aggregates.
+
 ### Added — Knowledge engine, custom entities, workflow automation, intake forms, and tenant hardening (Slices 1, 5–7)
 
 Marks the completion of **5 major slices** adding enterprise automation and knowledge-extraction capabilities:

@@ -56,7 +56,9 @@ class Visualization(BaseModel):
     compare_to: str | None = None
     unit: str | None = Field(default=None, max_length=16)
     number_format: NumberFormat = "plain"
-    # freeform presentation hints (palette, axis labels, legend on/off, decimals…)
+    # Reserved passthrough for future presentation hints. Persisted and returned
+    # as-is; the current renderer does not read it yet (kept so saved reports can
+    # carry options forward without a schema change).
     options: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -69,6 +71,7 @@ class ReportCreate(BaseModel):
     entity_definition_id: uuid.UUID
     query: AggregateQuery = Field(default_factory=AggregateQuery)
     viz: Visualization = Field(default_factory=Visualization)
+    is_active: bool = True
 
 
 class ReportUpdate(BaseModel):

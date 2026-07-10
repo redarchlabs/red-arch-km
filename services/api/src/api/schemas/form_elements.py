@@ -531,7 +531,7 @@ def iter_elements(elements: list[Any]):
             elif etype == "columns":
                 for col in el.columns:
                     yield from _walk(col.elements, depth + 1)
-            elif etype in ("panel",) or etype in ("section", "block"):
+            elif etype in ("panel", "section", "block"):
                 yield from _walk(el.elements, depth + 1)
 
     yield from _walk(elements, 0)

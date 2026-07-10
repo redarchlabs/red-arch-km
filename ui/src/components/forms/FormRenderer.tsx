@@ -20,7 +20,7 @@ import {
   type TableElement,
 } from "@/lib/api/forms";
 import { createRecord, listRecords, type EntityRecord } from "@/lib/api/entityRecords";
-import { runReport, type AggregateResult, type Visualization } from "@/lib/api/reports";
+import { getReport, runReport, type AggregateResult, type Visualization } from "@/lib/api/reports";
 import { callConnection, runWorkflow } from "@/lib/api/workflows";
 import { ReportChart } from "@/components/reports/ReportChart";
 import { buildCatalog, fieldMeta, relatedEntityId } from "@/lib/forms/catalog";
@@ -318,11 +318,10 @@ function ReportNode({ el }: { el: ReportElement }) {
     let alive = true;
     void (async () => {
       try {
-        const { getReport } = await import("@/lib/api/reports");
         const report = await getReport(el.report_id);
         if (alive) setViz(report.viz);
       } catch {
-        /* chart falls back to a bar default if viz can't load */
+        /* the chart waits on viz below; a run error already surfaces separately */
       }
     })();
     return () => {
@@ -335,8 +334,10 @@ function ReportNode({ el }: { el: ReportElement }) {
       {el.title ? <div className="mb-2 text-sm font-medium">{el.title}</div> : null}
       {error ? (
         <div className="px-1 py-2 text-sm text-destructive">{error}</div>
-      ) : result ? (
-        <ReportChart result={result} viz={viz ?? { type: "bar", series: [] }} height={el.height ?? 320} />
+      ) : result && viz ? (
+        // Wait for BOTH the data and the viz spec so a pie/metric/table report
+        // doesn't briefly flash as the bar-chart fallback.
+        <ReportChart result={result} viz={viz} height={el.height ?? 320} />
       ) : (
         <div className="px-1 py-2 text-sm text-muted-foreground">Loading…</div>
       )}

@@ -215,13 +215,16 @@ class SchemaManager:
         )
 
     async def _create_btree_index(self, table_name: str, field: EntityField) -> None:
-        # Composite (org_id, col): every tenant-scoped query filters org_id first,
-        # so this serves `WHERE org_id = ? AND col <op> ?` and GROUP BY col.
+        # Composite (org_id, col DESC, id DESC): every tenant-scoped query filters
+        # org_id first, so this serves `WHERE org_id = ? AND col <op> ?` and GROUP BY
+        # col; the trailing `col DESC, id DESC` also matches the keyset ORDER BY the
+        # record list emits for a custom descending sort (`ORDER BY col DESC, id
+        # DESC`), so a filtered/sorted page is an ordered index scan, not a sort.
         qt = identifiers.quote(table_name)
         qc = identifiers.quote(field.physical_column)
         ix = identifiers.quote(identifiers.btree_index_name(field.id))
         await self._session.execute(
-            text(f"CREATE INDEX IF NOT EXISTS {ix} ON {qt} (org_id, {qc})")
+            text(f"CREATE INDEX IF NOT EXISTS {ix} ON {qt} (org_id, {qc} DESC, id DESC)")
         )
 
     async def drop_entity_table(self, definition: EntityDefinition) -> None:

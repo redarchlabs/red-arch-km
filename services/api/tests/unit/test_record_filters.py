@@ -107,3 +107,36 @@ class TestKeysetPredicate:
         repo = _repo([_field("amount", "numeric")])
         with pytest.raises(EntityRecordError):
             repo._coerce_by_slug("created_at", "not-a-date")
+
+
+class TestFilterNormalization:
+    """Regression tests: the report (FilterSpec) path sends isnull with no/empty
+    value and `in` as a raw comma string; both must normalize like the query path."""
+
+    def _sql(self, cond) -> str:  # type: ignore[no-untyped-def]
+        return str(cond.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
+
+    def test_isnull_empty_value_means_is_null(self) -> None:
+        repo = _repo([_field("email", "text")])
+        assert "IS NULL" in self._sql(repo._filter_condition("email", "isnull", ""))
+        assert "IS NULL" in self._sql(repo._filter_condition("email", "isnull", None))
+        assert "IS NULL" in self._sql(repo._filter_condition("email", "isnull", True))
+
+    def test_isnull_false_means_is_not_null(self) -> None:
+        repo = _repo([_field("email", "text")])
+        assert "IS NOT NULL" in self._sql(repo._filter_condition("email", "isnull", False))
+
+    def test_in_splits_comma_string(self) -> None:
+        repo = _repo([_field("stage", "picklist")])
+        sql = self._sql(repo._filter_condition("stage", "in", "won,open,lost"))
+        assert "IN (" in sql
+        assert sql.count("'won'") == 1 and "'open'" in sql and "'lost'" in sql
+
+    def test_in_string_empty_matches_nothing(self) -> None:
+        repo = _repo([_field("stage", "picklist")])
+        assert "false" in self._sql(repo._filter_condition("stage", "in", "")).lower()
+
+    def test_in_over_cap_raises(self) -> None:
+        repo = _repo([_field("n", "integer")])
+        with pytest.raises(EntityRecordError):
+            repo._filter_condition("n", "in", ",".join(str(i) for i in range(300)))

@@ -28,7 +28,7 @@ from api.repositories.custom_entity import (
 from api.repositories.dynamic_entity import DynamicEntityRepository, EntityRecordError
 from api.repositories.report import ReportRepository
 from api.schemas.aggregate import AggregateQuery, AggregateResult
-from api.schemas.report import ReportCreate, ReportRunRequest, ReportUpdate
+from api.schemas.report import ReportCreate, ReportRunRequest, ReportUpdate, Visualization
 from api.services.form_service import (
     FormConflictError,
     FormNotFoundError,
@@ -60,29 +60,37 @@ class ReportService:
     async def create_report(self, body: ReportCreate) -> Report:
         if await self._reports.count() >= MAX_REPORTS_PER_ORG:
             raise FormConflictError(f"max {MAX_REPORTS_PER_ORG} reports per org")
-        await self._validate_query(body.entity_definition_id, body.query)
+        await self._validate_report(body.entity_definition_id, body.query, body.viz)
         if await self._reports.get_by_slug(body.slug) is not None:
             raise FormConflictError(f"report slug already exists: {body.slug!r}")
         try:
-            return await self._reports.create(
-                Report(
-                    id=uuid.uuid4(),
-                    name=body.name,
-                    slug=body.slug,
-                    description=body.description,
-                    entity_definition_id=body.entity_definition_id,
-                    query=body.query.model_dump(mode="json"),
-                    viz=body.viz.model_dump(mode="json"),
+            # Savepoint (not a full rollback): a slug race here must not discard an
+            # enclosing transaction's work — ReportService is reused inside import.
+            async with self._session.begin_nested():
+                return await self._reports.create(
+                    Report(
+                        id=uuid.uuid4(),
+                        name=body.name,
+                        slug=body.slug,
+                        description=body.description,
+                        entity_definition_id=body.entity_definition_id,
+                        query=body.query.model_dump(mode="json"),
+                        viz=body.viz.model_dump(mode="json"),
+                        is_active=body.is_active,
+                    )
                 )
-            )
         except IntegrityError as exc:
-            await self._session.rollback()
             raise FormConflictError(f"report slug already exists: {body.slug!r}") from exc
 
     async def update_report(self, report_id: uuid.UUID, body: ReportUpdate) -> Report:
         report = await self.get_report(report_id)
+        if body.query is not None or body.viz is not None:
+            # Validate the effective (new-or-existing) query+viz together so a viz
+            # column reference is checked against the columns the query produces.
+            eff_query = body.query if body.query is not None else AggregateQuery.model_validate(report.query)
+            eff_viz = body.viz if body.viz is not None else Visualization.model_validate(report.viz)
+            await self._validate_report(report.entity_definition_id, eff_query, eff_viz)
         if body.query is not None:
-            await self._validate_query(report.entity_definition_id, body.query)
             report.query = body.query.model_dump(mode="json")
         if body.viz is not None:
             report.viz = body.viz.model_dump(mode="json")
@@ -101,6 +109,8 @@ class ReportService:
     # -- Running ------------------------------------------------------- #
     async def run_report(self, report_id: uuid.UUID, overrides: ReportRunRequest | None = None) -> AggregateResult:
         report = await self.get_report(report_id)
+        if not report.is_active:
+            raise FormValidationError("report is not active")
         query = AggregateQuery.model_validate(report.query)
         if overrides is not None and (overrides.extra_filters or overrides.limit is not None):
             query = query.model_copy(
@@ -123,14 +133,26 @@ class ReportService:
         rels = await self._rels.list_for_source(definition.id)
         return DynamicEntityRepository(self._session, self._org_id, definition, fields, rels)
 
-    async def _validate_query(self, entity_definition_id: uuid.UUID, query: AggregateQuery) -> None:
+    async def _validate_report(
+        self, entity_definition_id: uuid.UUID, query: AggregateQuery, viz: Visualization
+    ) -> None:
         """Build (without executing) the aggregate statement so an invalid field
-        slug / op / date-bucket is rejected at save time."""
+        slug / op / date-bucket is rejected at save time, then check the
+        visualization only references columns the query actually produces."""
         repo = await self._entity_repo(entity_definition_id)
         try:
-            repo._build_aggregate(query)
+            _stmt, group_labels, metric_labels = repo.build_aggregate(query)
         except EntityRecordError as exc:
             raise FormValidationError(str(exc)) from exc
+        labels = set(group_labels) | set(metric_labels)
+        refs: dict[str, str | None] = {"x": viz.x, "color_by": viz.color_by, "compare_to": viz.compare_to}
+        for i, series in enumerate(viz.series):
+            refs[f"series[{i}]"] = series
+        for name, ref in refs.items():
+            if ref is not None and ref not in labels:
+                raise FormValidationError(
+                    f"visualization {name}={ref!r} is not a query column ({sorted(labels)})"
+                )
 
     async def _run(self, entity_definition_id: uuid.UUID, query: AggregateQuery) -> AggregateResult:
         repo = await self._entity_repo(entity_definition_id)
