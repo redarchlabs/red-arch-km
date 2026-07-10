@@ -51,6 +51,24 @@ describe("entityRecords API client", () => {
     });
   });
 
+  it("sends order_by + order_dir when orderBy is set", async () => {
+    get.mockResolvedValue({ data: { items: [], next_cursor: null, limit: 50 } });
+    await listRecords("widgets", { orderBy: "phase", orderDir: "asc" });
+    expect(get).toHaveBeenCalledWith("/entities/widgets/records", {
+      paramsSerializer: { indexes: null },
+      params: expect.objectContaining({ order_by: "phase", order_dir: "asc" }),
+    });
+  });
+
+  it("defaults order_dir to desc when orderBy is set without a direction", async () => {
+    get.mockResolvedValue({ data: { items: [], next_cursor: null, limit: 50 } });
+    await listRecords("widgets", { orderBy: "created_at" });
+    expect(get).toHaveBeenCalledWith("/entities/widgets/records", {
+      paramsSerializer: { indexes: null },
+      params: expect.objectContaining({ order_by: "created_at", order_dir: "desc" }),
+    });
+  });
+
   it("serializes complete filters to repeated field:op[:value] params", async () => {
     get.mockResolvedValue({ data: { items: [], next_cursor: null, limit: 50 } });
     await listRecords("widgets", {

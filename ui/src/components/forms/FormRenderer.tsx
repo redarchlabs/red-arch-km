@@ -181,7 +181,14 @@ function RecordListNode({
       return;
     }
     let alive = true;
-    const tick = async () => {
+    let timer: number | undefined;
+    let failures = 0;
+    // poll_ms turns the board live; 0 => fetch once.
+    const base = el.poll_ms ? Math.max(500, el.poll_ms) : 0;
+
+    const fetchOnce = async () => {
+      // Pause while the tab is hidden — don't hammer the DB for a board no one sees.
+      if (typeof document !== "undefined" && document.hidden) return;
       try {
         const res = await listRecords(el.entity, {
           limit: el.limit ?? 20,
@@ -189,19 +196,40 @@ function RecordListNode({
           orderDir: el.sort_dir ?? "desc",
         });
         if (!alive) return;
+        failures = 0;
         setError(false);
         setRows(res.items);
       } catch {
         if (!alive) return;
+        failures += 1;
         setError(true);
       }
     };
-    void tick();
-    // poll_ms turns the board live; otherwise fetch once.
-    const interval = el.poll_ms ? window.setInterval(tick, Math.max(500, el.poll_ms)) : undefined;
+
+    // Recursive setTimeout (not setInterval): one fetch completes before the next
+    // is scheduled, so responses can't overlap or arrive out of order. Consecutive
+    // failures back off exponentially (capped ~30s) instead of re-hitting a failing
+    // endpoint every poll_ms.
+    const loop = async () => {
+      await fetchOnce();
+      if (!alive || !base) return;
+      const delay = Math.min(base * 2 ** Math.min(failures, 5), 30_000);
+      timer = window.setTimeout(loop, delay);
+    };
+    void loop();
+
+    const onVisible = () => {
+      if (base && alive && !document.hidden) {
+        if (timer) window.clearTimeout(timer);
+        void loop();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisible);
+
     return () => {
       alive = false;
-      if (interval) window.clearInterval(interval);
+      if (timer) window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, [el.entity, el.limit, el.sort_by, el.sort_dir, el.poll_ms]);
 
