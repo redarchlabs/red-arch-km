@@ -2,6 +2,7 @@
 
 import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { use, useCallback, useEffect, useState } from "react";
 
 import { FormRenderer } from "@/components/forms/FormRenderer";
@@ -16,6 +17,10 @@ import { runWorkflow } from "@/lib/api/workflows";
  * workflows or navigate; embedded forms render inline. */
 export default function ViewViewerPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
+  // An entity-bound view can target a specific record via `?record_id=` — its
+  // fields prefill, and run_workflow buttons run against that record (so an
+  // update_record/update_record_field step writes it).
+  const recordId = useSearchParams().get("record_id") ?? undefined;
   const [render, setRender] = useState<FormRender | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -25,26 +30,31 @@ export default function ViewViewerPage({ params }: { params: Promise<{ id: strin
     setLoading(true);
     setError(null);
     try {
-      setRender(await getViewRender(id));
+      setRender(await getViewRender(id, recordId));
     } catch (e: unknown) {
       setError(getApiErrorMessage(e, "Failed to load view"));
     } finally {
       setLoading(false);
     }
-  }, [id]);
+  }, [id, recordId]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  const handleRunWorkflow = async (workflowId: string, inputs: Record<string, unknown>) => {
+  const handleRunWorkflow = async (
+    workflowId: string,
+    inputs: Record<string, unknown>,
+    rowRecordId?: string,
+  ) => {
     setNotice(null);
     try {
-      // A view button is an ad-hoc "run now" with no record context. The run
-      // endpoint requires a real CRUD operation (it bypasses trigger matching,
-      // so the value is cosmetic); "update" is the schema default. Button
-      // `inputs` ride along as `after` for workflows that reference them.
-      await runWorkflow(workflowId, { operation: "update", after: inputs });
+      // Target the row's record (record-list action), else the page's record
+      // (`?record_id=`), else no record — an ad-hoc "run now". The run endpoint
+      // needs a CRUD operation ("update" is the default); button `inputs` ride
+      // along as `after` for workflows that reference them.
+      const target = rowRecordId ?? recordId ?? null;
+      await runWorkflow(workflowId, { operation: "update", record_id: target, after: inputs });
       setNotice("Workflow started.");
     } catch (e: unknown) {
       setError(getApiErrorMessage(e, "Workflow failed to start"));

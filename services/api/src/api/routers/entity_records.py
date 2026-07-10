@@ -72,17 +72,26 @@ async def list_records(
     q: Annotated[str | None, Query(max_length=200)] = None,
     cursor: Annotated[str | None, Query()] = None,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    order_by: Annotated[str | None, Query(max_length=63)] = None,
+    order_dir: Annotated[str, Query(pattern="^(asc|desc)$")] = "desc",
 ) -> dict[str, Any]:
     """Keyset-paginated, optionally-searched record page.
 
     Pages by an opaque ``cursor`` (no OFFSET) so it scales to millions of rows;
     ``next_cursor`` is the token for the following page, or ``null`` at the end.
     ``q`` does a case-insensitive substring search across text columns.
+
+    ``order_by`` (a field slug or a base column) + ``order_dir`` override the sort
+    — used by the record-list view element (e.g. a "latest record" status board).
+    A custom sort returns a single page (``next_cursor`` is ``null``); keyset
+    pagination applies only to the default ``created_at`` DESC ordering.
     """
     repo = await _repo_for(session, ctx.org_id, slug)
     decoded = _decode_cursor(cursor) if cursor else None
     try:
-        items, next_cursor = await repo.list(search=q, cursor=decoded, limit=limit)
+        items, next_cursor = await repo.list(
+            search=q, cursor=decoded, limit=limit, order_by=order_by, order_dir=order_dir
+        )
     except EntityRecordError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return {
