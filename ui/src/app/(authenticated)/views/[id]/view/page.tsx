@@ -55,7 +55,11 @@ export default function ViewViewerPage({ params }: { params: Promise<{ id: strin
       // needs a CRUD operation ("update" is the default); button `inputs` ride
       // along as `after` for workflows that reference them.
       const target = rowRecordId ?? recordId ?? null;
-      await runWorkflow(workflowId, { operation: "update", record_id: target, after: inputs });
+      // Pass the button values as BOTH `after` (entity-triggered workflows that
+      // reference after.*) and `inputs` (manual-trigger workflows whose declared
+      // inputs read inputs.*). The backend routes to the right one by trigger
+      // type and drops undeclared keys, so sending both is safe.
+      await runWorkflow(workflowId, { operation: "update", record_id: target, after: inputs, inputs });
       setNotice("Workflow started.");
     } catch (e: unknown) {
       setError(getApiErrorMessage(e, "Workflow failed to start"));
