@@ -41,7 +41,7 @@ ui/tests/e2e/.state.json
 docker/secrets/
 
 # Node / UI
-ui/node_modules/
+ui/node_modules
 ui/.next/
 ui/out/
 ui/next-env.d.ts
