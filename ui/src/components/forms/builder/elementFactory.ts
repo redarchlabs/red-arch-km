@@ -21,6 +21,7 @@ export const VIEW_KINDS: PaletteKind[] = [
   "label",
   "input",
   "live_value",
+  "chat",
   "button",
   "form_ref",
   ...LAYOUT_KINDS,
@@ -32,6 +33,7 @@ export const KIND_LABELS: Record<PaletteKind, string> = {
   calculated: "Calculated",
   input: "Input (slider / toggle / text)",
   live_value: "Live value",
+  chat: "Chat",
   button: "Button",
   form_ref: "Embedded form",
   section: "Related record (1:1)",
@@ -63,6 +65,30 @@ export function newElement(kind: PaletteKind): FormElement {
       return { id, type: "input", key: "", control: "text", label: "Input" };
     case "live_value":
       return { id, type: "live_value", label: "Live value", url: "", poll_ms: 1000 };
+    case "chat":
+      return {
+        id,
+        type: "chat",
+        title: "Chat",
+        conversation_entity: "robot_conversation",
+        message_entity: "robot_message",
+        conversation_relationship: "conversation",
+        role_field: "role",
+        text_field: "text",
+        channel_field: "channel",
+        answer_workflow_id: null,
+        answer_controls: {
+          show: false,
+          fast_mode: true,
+          knowledge_graph: false,
+          concise: true,
+          models: ["gpt-5-nano", "gpt-5-mini"],
+          concise_words: 20,
+          verbose_words: 45,
+        },
+        poll_ms: 1500,
+        placeholder: "Message the robot…",
+      };
     case "button":
       return { id, type: "button", label: "Submit", action: { kind: "submit" }, style: "primary" };
     case "form_ref":

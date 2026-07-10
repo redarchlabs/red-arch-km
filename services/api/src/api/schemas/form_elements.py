@@ -362,6 +362,73 @@ class FormRefElement(_Element):
     label: str | None = None
 
 
+class ChatAnswerControls(BaseModel):
+    """Live, per-turn controls the chat card can render so a viewer trades answer
+    quality for speed without editing the workflow. When ``show`` is set the chat
+    forwards the chosen values as extra workflow ``inputs`` (``synthesize`` = NOT
+    ``fast_mode``, ``use_knowledge_graph``, ``max_words``, ``answer_model``); the
+    other fields seed each control's initial state. The answer workflow's
+    ``knowledge_search``/``summarize`` nodes must reference those inputs for the
+    toggles to take effect."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    show: bool = False
+    fast_mode: bool = True  # retrieval-only (synthesize:false): one LLM call, no graph hop
+    knowledge_graph: bool = False  # only affects the non-fast synthesis path
+    concise: bool = True  # cap spoken reply to concise_words vs verbose_words
+    speak: bool = True  # have the robot say the answer aloud (forwarded as inputs.speak)
+    models: list[str] = Field(default_factory=list)  # first entry = default answer model
+    concise_words: int = 20
+    verbose_words: int = 45
+
+
+class ChatFiller(BaseModel):
+    """Perceived-latency filler. While ``answer_workflow_id`` runs (RAG + one or more
+    LLM hops can take many seconds), the chat can show — and, when ``speak_connection``
+    is set, verbalize through a saved connection — short randomized "one moment…" lines
+    so a slow answer still feels responsive. Fillers are ephemeral chatter: nothing is
+    persisted and they clear the instant the real reply lands. The first fires after
+    ``delay_ms`` and successive ones every ``interval_ms``; ``phrases`` overrides the
+    default pool, where ``{q}`` is replaced with the person's question."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    show: bool = False
+    delay_ms: int = 1400
+    interval_ms: int = 6000
+    max_lines: int = 2  # stop after a couple lines; endless chatter annoys
+    phrases: list[str] = Field(default_factory=list)
+    speak_connection: str | None = None  # saved connection slug to speak the filler
+    speak_path: str = "/say"  # connection path that makes the robot talk
+    speak_field: str = "text"  # request-body field carrying the phrase
+
+
+class ChatElement(_Element):
+    """A conversation panel backed by two entities: a ``conversation_entity`` (a
+    session) and a ``message_entity`` (its turns, linked back via
+    ``conversation_relationship``). It lists the active conversation's messages as
+    chat bubbles (polling ``poll_ms``), and its input SENDS a message: it creates a
+    ``person`` message record, then runs ``answer_workflow_id`` with
+    ``{text, conversation_id}`` so the robot answers, speaks, and records its turn —
+    a full remote-control chat. Not entity-bound, so it is valid in a standalone view."""
+
+    type: Literal["chat"] = "chat"
+    title: str | None = "Chat"
+    conversation_entity: str = "robot_conversation"
+    message_entity: str = "robot_message"
+    conversation_relationship: str = "conversation"  # message → conversation (to-one) slug
+    role_field: str = "role"  # picklist person|robot
+    text_field: str = "text"
+    channel_field: str = "channel"  # picklist heard|typed|spoken
+    answer_workflow_id: uuid.UUID | None = None  # run on send (e.g. "Robot: Chat Answer")
+    answer_controls: ChatAnswerControls | None = None  # optional live answer-speed toggle row
+    filler: ChatFiller | None = None  # optional "one moment…" chatter while the robot works
+    poll_ms: int = 1500
+    placeholder: str = "Message the robot…"
+    width: FieldWidth | None = None
+
+
 # ------------------------------------------------------------------ #
 # The recursive element union
 # ------------------------------------------------------------------ #
@@ -372,6 +439,7 @@ FormElement = Annotated[
         CalculatedElement,
         InputElement,
         LiveValueElement,
+        ChatElement,
         ButtonElement,
         FormRefElement,
         TableElement,

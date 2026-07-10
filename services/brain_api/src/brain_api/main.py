@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
@@ -37,6 +38,19 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     except Exception as e:
         logger.error("Failed to initialize brain-api stores: %s", e)
         raise
+
+    # Warm the actual query path (embedding + Qdrant + Neo4j + chat). Construction
+    # above only builds clients; the first *real* round-trip pays connection/TLS/
+    # pool setup (~20s cold vs ~3s warm) that we don't want a user's first question
+    # to absorb. Best-effort and off the critical path — failures only log.
+    try:
+        from brain_api.services.search_service import SearchService
+
+        warmer = SearchService(stores, stores.settings)
+        await asyncio.to_thread(warmer.warm_up)
+        logger.info("Brain API query path warmed")
+    except Exception as e:  # noqa: BLE001 - warm-up must never block startup
+        logger.warning("Brain API warm-up skipped: %s", e)
 
     yield
 

@@ -93,6 +93,7 @@ class TokenEngine:
         public_base_url: str = "",
         email_sender: Any = None,
         org_encryption_key: str = "",
+        settings: Any = None,
         worker_id: str | None = None,
     ) -> None:
         self._session = session
@@ -103,6 +104,7 @@ class TokenEngine:
             public_base_url=public_base_url,
             email_sender=email_sender,
             org_encryption_key=org_encryption_key,
+            settings=settings,
         )
         self._worker_id = worker_id or f"engine-{uuid.uuid4().hex[:8]}"
 
@@ -505,6 +507,9 @@ class TokenEngine:
             before=snapshot.get("before"),
             after=snapshot.get("after"),
             inputs=snapshot.get("inputs") or {},
+            # Variables captured from earlier steps (a node's ``capture``), so a
+            # downstream action can template them as ``{{ vars.<key> }}``.
+            variables=run.variables or {},
             entity_definition_id=await self._entity_of(run),
             origin_run_id=run.id,
         )

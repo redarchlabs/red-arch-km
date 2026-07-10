@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  ArrowLeftRight,
   ClipboardList,
   Database,
   FileText,
@@ -28,6 +29,7 @@ interface NavItem {
   label: string;
   icon: typeof FileText;
   requiresSiteAdmin?: boolean;
+  requiresOrgAdmin?: boolean;
 }
 
 const NAV_ITEMS: NavItem[] = [
@@ -38,6 +40,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/views", label: "Views", icon: LayoutDashboard },
   { href: "/workflows", label: "Workflows", icon: Workflow },
   { href: "/chat", label: "Chat", icon: MessageCircle },
+  { href: "/import-export", label: "Import / Export", icon: ArrowLeftRight, requiresOrgAdmin: true },
   { href: "/admin", label: "Admin", icon: Shield, requiresSiteAdmin: true },
   { href: "/site-admin", label: "Site Admin", icon: Globe, requiresSiteAdmin: true },
 ];
@@ -50,7 +53,7 @@ interface SidebarProps {
 
 export function Sidebar({ open, onClose }: SidebarProps) {
   const pathname = usePathname();
-  const { isSiteAdmin } = useOrg();
+  const { isSiteAdmin, isOrgAdmin } = useOrg();
   const { theme } = useTheme();
 
   // Escape closes the mobile drawer (MobileDrawer also handles this, but keep
@@ -64,7 +67,9 @@ export function Sidebar({ open, onClose }: SidebarProps) {
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose]);
 
-  const items = NAV_ITEMS.filter((i) => !i.requiresSiteAdmin || isSiteAdmin);
+  const items = NAV_ITEMS.filter(
+    (i) => (!i.requiresSiteAdmin || isSiteAdmin) && (!i.requiresOrgAdmin || isOrgAdmin),
+  );
   // Highlight only the most specific matching route so that, e.g.,
   // /documents/search lights up "Search" and not also "Documents".
   const activeHref = items

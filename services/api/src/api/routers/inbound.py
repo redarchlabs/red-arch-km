@@ -47,15 +47,14 @@ async def receive_inbound_webhook(
                 org_encryption_key=settings.org_encryption_key.get_secret_value(),
                 webhook_allowlist=tuple(settings.workflow_webhook_allowlist or ()),
                 trusted_local_hosts=tuple(settings.workflow_trusted_local_hosts or ()),
+                settings=settings,
             )
             await session.commit()
         except SignatureError:
             # Missing/invalid/stale signature on a signed endpoint. One opaque 401
             # for every variant so a caller gets no oracle about which check failed.
             await session.rollback()
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid signature"
-            ) from None
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid signature") from None
         except Exception:
             await session.rollback()
             logger.exception("inbound webhook processing failed")

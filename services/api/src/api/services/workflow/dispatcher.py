@@ -96,6 +96,7 @@ class WorkflowDispatchService:
         org_encryption_key: str = "",
         token_engine_enabled: bool = True,
         trusted_local_hosts: tuple[str, ...] = (),
+        settings: Any = None,
     ) -> None:
         self._session = session
         self._webhook_allowlist = webhook_allowlist
@@ -104,6 +105,9 @@ class WorkflowDispatchService:
         self._email_sender = email_sender
         self._org_encryption_key = org_encryption_key
         self._token_engine_enabled = token_engine_enabled
+        # App Settings — threaded to the token engine + legacy actions so the
+        # knowledge_search action can reach brain-api. None ⇒ search unavailable.
+        self._settings = settings
 
     # ---- dual-engine selection ------------------------------------------ #
     def _use_token_engine(self, definition: dict[str, Any]) -> bool:
@@ -124,6 +128,7 @@ class WorkflowDispatchService:
             public_base_url=self._public_base_url,
             email_sender=self._email_sender,
             org_encryption_key=self._org_encryption_key,
+            settings=self._settings,
         )
 
     async def _run_token_engine(self, run: WorkflowRun, definition: dict[str, Any]) -> int:
@@ -136,6 +141,74 @@ class WorkflowDispatchService:
         return sum(1 for step in steps if step.status == "succeeded")
 
     # ---- connection resolution (mirrors WorkflowRunner) ------------------ #
+    async def _search_knowledge(self, org_id: uuid.UUID, opts: dict[str, Any]) -> dict[str, Any]:
+        """Org-scoped hybrid RAG lookup for the knowledge_search action (legacy
+        walker path). Mirrors ``ActionExecutor._search_knowledge`` — unrestricted
+        within the org, deferred brain-api import. ``opts`` = ``{query, use_knowledge_graph}``."""
+        from api.services.workflow.actions import ActionError
+
+        if self._settings is None:
+            raise ActionError("knowledge search requires Settings (not wired in this context)")
+        from api.services.brain_client import BrainAPIClient
+
+        client = BrainAPIClient(self._settings)
+        return await client.vector_chat(
+            tenant_id=str(org_id),
+            query=str(opts.get("query", "")),
+            access_keys=None,
+            use_knowledge_graph=bool(opts.get("use_knowledge_graph", True)),
+        )
+
+    async def _retrieve_knowledge(self, org_id: uuid.UUID, query: str) -> dict[str, Any]:
+        """Retrieval-only KB lookup for knowledge_search(synthesize=False) (legacy
+        walker path). Mirrors ``ActionExecutor._retrieve_knowledge``."""
+        from api.services.workflow.actions import ActionError
+        from api.services.workflow.runner import _format_passages, _passage_sources
+
+        if self._settings is None:
+            raise ActionError("knowledge retrieval requires Settings (not wired in this context)")
+        from api.services.brain_client import BrainAPIClient
+
+        client = BrainAPIClient(self._settings)
+        result = await client.vector_search(tenant_id=str(org_id), query=query, access_keys=None)
+        hits = result.get("hits", [])
+        return {"answer": _format_passages(hits), "sources": _passage_sources(hits), "passages": hits}
+
+    async def _summarize(self, org_id: uuid.UUID, opts: dict[str, Any]) -> str:
+        """Small-LLM condensation for the summarize action (legacy walker path).
+        Mirrors ``ActionExecutor._summarize`` — org OpenAI key then central."""
+        from api.services.workflow.actions import ActionError
+
+        if self._settings is None:
+            raise ActionError("summarization requires Settings (not wired in this context)")
+        key = await self._org_openai_key(org_id) or self._settings.openai_api_key.get_secret_value()
+        if not key:
+            raise ActionError("summarization requires an OpenAI API key (org or central)")
+        from openai import AsyncOpenAI
+
+        from api.services.spoken_summary import summarize_for_speech
+
+        client = AsyncOpenAI(api_key=key)
+        model = opts.get("model") or self._settings.openai_summary_model
+        return await summarize_for_speech(
+            client,
+            model,
+            text=str(opts.get("text") or ""),
+            question=opts.get("question"),
+            max_words=int(opts.get("max_words") or 30),
+            instruction=opts.get("instruction"),
+        )
+
+    async def _org_openai_key(self, org_id: uuid.UUID) -> str | None:
+        from api.models.org import Org
+        from api.services.crypto import decrypt_secret
+
+        org = await self._session.get(Org, org_id)
+        stored = org.openai_api_key if org else None
+        if not stored:
+            return None
+        return decrypt_secret(stored, self._settings.org_encryption_key.get_secret_value())
+
     async def _resolve_connection(self, org_id: uuid.UUID, name: str) -> Any:
         """Load a named connection (org-scoped) and decrypt its secret. Returns a
         ResolvedConnection or None. Mirrors ``WorkflowRunner._resolve_connection``
@@ -447,6 +520,7 @@ class WorkflowDispatchService:
                 before=_as_dict(event["before_data"]),
                 after=_as_dict(event["after_data"]),
                 inputs=event.get("inputs") or {},
+                vars=(run.variables or {}),
                 config=data.get("config", {}),
                 trigger_repo=_trigger_repo,
                 repo_for_slug=_repo_for_slug,
@@ -455,6 +529,9 @@ class WorkflowDispatchService:
                 mint_form_link=lambda form_id, rid, email: self._mint_form_link(org_id, form_id, rid, email),
                 send_email=self._send_email,
                 resolve_connection=lambda name: self._resolve_connection(org_id, name),
+                search_knowledge=lambda opts: self._search_knowledge(org_id, opts),
+                retrieve_knowledge=lambda query: self._retrieve_knowledge(org_id, query),
+                summarize=lambda opts: self._summarize(org_id, opts),
             )
             try:
                 if handler is None:

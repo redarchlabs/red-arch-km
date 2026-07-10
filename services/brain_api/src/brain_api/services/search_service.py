@@ -73,6 +73,37 @@ class SearchService:
         self._settings = settings
         self._llm = OpenAI(api_key=settings.openai_api_key)
 
+    def warm_up(self) -> None:
+        """Exercise the read path once so the first *real* user query is warm.
+
+        Store construction (done in the app lifespan) only builds the clients; the
+        first real embedding, Qdrant search, Neo4j query, and chat completion each
+        pay a one-time connection/TLS/pool cost — observed as ~20s cold vs ~3s warm
+        on the robot's first question. Issue a tiny throwaway of each against a
+        synthetic tenant (retrieval returns empty, mutates nothing) so a visitor's
+        first turn doesn't absorb that. Best-effort: every probe is isolated and a
+        failure only logs — warm-up must never keep the service from starting.
+        """
+        probe = "warm up probe"
+        tenant = "__warmup__"  # no such tenant: search returns empty / 404, writes nothing
+        try:
+            query_vector = self._stores.embedder.embed(probe)
+            self._stores.vector.search(tenant_id=tenant, query_vector=query_vector, limit=1)
+        except Exception as e:  # noqa: BLE001 - warm-up is best-effort
+            logger.info("warm-up retrieval path skipped: %s", e)
+        try:
+            self._stores.graph.fuzzy_relationship_search(tenant, probe)
+        except Exception as e:  # noqa: BLE001
+            logger.info("warm-up graph path skipped: %s", e)
+        try:
+            self._llm.chat.completions.create(
+                model=self._settings.openai_chat_model,
+                messages=[{"role": "user", "content": "hi"}],
+                max_tokens=1,
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.info("warm-up chat path skipped: %s", e)
+
     def vector_search(
         self,
         *,
