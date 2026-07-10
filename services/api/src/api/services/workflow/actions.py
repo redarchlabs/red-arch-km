@@ -8,11 +8,13 @@ flag sprinkled through ``execute``.
 
 from __future__ import annotations
 
+import datetime as dt
 import ipaddress
 import re
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import Any, Protocol
 from urllib.parse import urlparse
 
@@ -232,6 +234,52 @@ def _as_int(value: Any, default: int) -> int:
         return default
 
 
+def _jsonable(value: Any) -> Any:
+    """Recursively convert a record's Python-typed field values into JSON-safe
+    scalars so a read (``get_record``) can be stored as a step output / run
+    variable. Records carry ``uuid.UUID`` ids, ``datetime``/``date`` timestamps,
+    and ``Decimal`` numerics that the run-step JSON writer can't serialize as-is."""
+    if isinstance(value, uuid.UUID):
+        return str(value)
+    if isinstance(value, (dt.datetime, dt.date)):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, dict):
+        return {key: _jsonable(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_jsonable(item) for item in value]
+    return value
+
+
+def _resolve_record_id(ctx: ActionContext, context: dict[str, Any], *, action: str) -> uuid.UUID:
+    """Resolve + parse a ``record_id`` config value (literal / ``$ref`` / ``{{ }}``)
+    into a UUID, raising a clean ActionError on a missing or malformed id."""
+    raw = _resolve_dynamic(ctx.config.get("record_id"), context)
+    if raw is None or raw == "":
+        raise ActionError(f"{action} mode 'by_id' requires record_id")
+    try:
+        return uuid.UUID(str(raw))
+    except ValueError as exc:
+        raise ActionError(f"{action}: invalid record_id {raw!r}") from exc
+
+
+async def _resolve_singleton_id(
+    repo: DynamicEntityRepository, ctx: ActionContext, context: dict[str, Any], mode: str
+) -> dict[str, Any] | None:
+    """Return the record for a ``latest`` / ``first`` lookup (newest / oldest by
+    ``created_at``), honouring an optional resolved ``filters`` map. ``None`` when
+    the entity has no matching record."""
+    filters = _resolve_values(ctx.config.get("filters", {}) or {}, context)
+    items, _ = await repo.list(
+        filters=filters or None,
+        limit=1,
+        order_by="created_at",
+        order_dir="desc" if mode == "latest" else "asc",
+    )
+    return items[0] if items else None
+
+
 @register
 class UpdateRecordField:
     type = "update_record_field"
@@ -272,6 +320,109 @@ class CreateRecord:
         return {
             "target_slug": ctx.config.get("target_slug"),
             "values": _resolve_values(ctx.config.get("values", {}), _trigger_context(ctx)),
+        }
+
+
+@register
+class GetRecord:
+    """Read a record's current field values into a run variable.
+
+    The read-back the engine otherwise lacks: ``update_record_field`` only touches
+    the triggering record and there is no other way to load a record's live state.
+    Capture the output and read fields as ``{{ vars.state.<slug> }}`` — e.g. feed a
+    live "mission status" into a downstream ``summarize`` / ``llm_decide`` / ``/say``.
+
+    Config: ``{"target_slug": "mission_state", "mode": "latest", "capture": "state"}``.
+    ``mode``: ``"latest"`` (newest by created_at, the default when no ``record_id``),
+    ``"first"`` (oldest), or ``"by_id"`` with ``record_id`` (literal / ``$ref`` /
+    ``{{ }}``). ``filters`` optionally narrows ``latest``/``first``. Output is the
+    record's slug-keyed fields (plus ``id``/``created_at``/``updated_at``), or ``{}``
+    when no record matches — so a gateway can branch on ``{{ vars.state.id }}``.
+    Read-only."""
+
+    type = "get_record"
+
+    async def execute(self, ctx: ActionContext) -> dict[str, Any]:
+        target_slug = ctx.config.get("target_slug")
+        if not target_slug:
+            raise ActionError("get_record requires target_slug")
+        context = _trigger_context(ctx)
+        mode = str(ctx.config.get("mode") or ("by_id" if ctx.config.get("record_id") is not None else "latest")).lower()
+        repo = await ctx.repo_for_slug(str(target_slug))
+        if mode == "by_id":
+            record = await repo.get(_resolve_record_id(ctx, context, action="get_record"))
+        elif mode in ("latest", "first"):
+            record = await _resolve_singleton_id(repo, ctx, context, mode)
+        else:
+            raise ActionError(f"get_record: unknown mode {mode!r}")
+        return _jsonable(record) if record else {}
+
+    def simulate(self, ctx: ActionContext) -> dict[str, Any]:
+        # Read-only, but keep the dry run out of the DB for symmetry with the
+        # other network/DB actions.
+        return {"target_slug": ctx.config.get("target_slug"), "mode": ctx.config.get("mode", "latest"), "id": None}
+
+
+@register
+class UpdateRecord:
+    """Write multiple fields of a targeted record in one node.
+
+    Richer sibling of ``update_record_field`` (which writes ONE field of the
+    triggering record only). Targets an arbitrary entity + record so a manual or
+    entity-triggered workflow can maintain shared state (e.g. a mission-state row).
+
+    Config: ``{"target_slug": "mission_state", "mode": "latest",
+    "values": {"alert_level": {"$ref": "inputs.alert_level"}, "phase": "Crisis"}}``.
+    Target resolution mirrors ``get_record``: ``mode`` ``"latest"``/``"first"``/
+    ``"by_id"`` (with ``record_id``) + optional ``filters``. Omit ``target_slug`` to
+    update the TRIGGERING record (back-compat with ``update_record_field``). Each
+    value may be a literal, a ``$ref`` envelope, or a ``{{ }}`` template.
+
+    Writes emit a record-change event (fires entity-triggered workflows) — an
+    announcer keyed off this entity must only READ + act, never write it back, or
+    it will loop."""
+
+    type = "update_record"
+
+    async def execute(self, ctx: ActionContext) -> dict[str, Any]:
+        values_cfg = ctx.config.get("values")
+        if not isinstance(values_cfg, dict) or not values_cfg:
+            raise ActionError("update_record requires a non-empty values map")
+        context = _trigger_context(ctx)
+        values = _resolve_values(values_cfg, context)
+        target_slug = ctx.config.get("target_slug")
+        if target_slug:
+            repo = await ctx.repo_for_slug(str(target_slug))
+            record_id = await self._target_id(ctx, repo, context)
+        else:
+            if ctx.record_id is None:
+                raise ActionError("update_record requires a triggering record or a target_slug")
+            repo = await ctx.trigger_repo()
+            record_id = ctx.record_id
+        updated = await repo.update(record_id, values)
+        return {
+            "target_slug": target_slug,
+            "record_id": str(record_id),
+            "updated": updated is not None,
+            "values": _jsonable(values),
+        }
+
+    async def _target_id(self, ctx: ActionContext, repo: DynamicEntityRepository, context: dict[str, Any]) -> uuid.UUID:
+        mode = str(ctx.config.get("mode") or ("by_id" if ctx.config.get("record_id") is not None else "latest")).lower()
+        if mode == "by_id":
+            return _resolve_record_id(ctx, context, action="update_record")
+        if mode in ("latest", "first"):
+            record = await _resolve_singleton_id(repo, ctx, context, mode)
+            if record is None:
+                slug = ctx.config.get("target_slug")
+                raise ActionError(f"update_record: no record found for mode {mode!r} on {slug!r}")
+            return uuid.UUID(str(record["id"]))
+        raise ActionError(f"update_record: unknown mode {mode!r}")
+
+    def simulate(self, ctx: ActionContext) -> dict[str, Any]:
+        return {
+            "target_slug": ctx.config.get("target_slug"),
+            "values": _jsonable(_resolve_values(ctx.config.get("values", {}) or {}, _trigger_context(ctx))),
         }
 
 
