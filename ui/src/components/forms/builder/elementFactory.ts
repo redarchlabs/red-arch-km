@@ -21,6 +21,7 @@ export const VIEW_KINDS: PaletteKind[] = [
   "label",
   "input",
   "live_value",
+  "report",
   "record_list",
   "chat",
   "button",
@@ -34,6 +35,7 @@ export const KIND_LABELS: Record<PaletteKind, string> = {
   calculated: "Calculated",
   input: "Input (slider / toggle / text)",
   live_value: "Live value",
+  report: "Report / chart",
   record_list: "Record list / status board",
   chat: "Chat",
   button: "Button",
@@ -67,6 +69,8 @@ export function newElement(kind: PaletteKind): FormElement {
       return { id, type: "input", key: "", control: "text", label: "Input" };
     case "live_value":
       return { id, type: "live_value", label: "Live value", url: "", poll_ms: 1000 };
+    case "report":
+      return { id, type: "report", report_id: "", title: "Report", height: 320 };
     case "record_list":
       return { id, type: "record_list", label: "Records", entity: "", fields: [], sort_dir: "desc", limit: 20 };
     case "chat":

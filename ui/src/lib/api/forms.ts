@@ -96,6 +96,17 @@ export interface LiveValueElement extends ElementBase {
   width?: FieldWidth | null;
 }
 
+/** Embeds a saved report on a dashboard — renders its chart / KPI tile / table per
+ * the report's own visualization spec. Not entity-bound, so valid in standalone views. */
+export interface ReportElement extends ElementBase {
+  type: "report";
+  report_id: string;
+  title?: string | null;
+  height?: number | null;
+  poll_ms?: number | null;
+  width?: FieldWidth | null;
+}
+
 /** Read-only "status board": lists existing records of an entity (newest-first or by
  * sort_by), optionally re-polling to stay live, with an optional per-row workflow button. */
 export interface RecordListElement extends ElementBase {
@@ -306,6 +317,7 @@ export type FormElement =
   | CalculatedElement
   | InputElement
   | LiveValueElement
+  | ReportElement
   | RecordListElement
   | ChatElement
   | ButtonElement

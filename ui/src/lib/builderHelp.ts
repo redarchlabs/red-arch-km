@@ -81,6 +81,19 @@ value pulled from the JSON response — a generic way to display live external s
 - **Units** — an optional suffix shown after the value.
 `,
   ),
+  report: topic(
+    "Report / chart",
+    `
+Embeds a **saved report** on a dashboard and draws its chart, KPI tile, or table
+per the report's own visualization spec.
+
+- **Report** — pick a saved report (build them on the Reports page).
+- **Title** — an optional heading above the chart.
+- **Height (px)** — chart height.
+- **Poll (ms)** — re-run the report on a cadence for a live dashboard; blank runs
+  once. The report defines the entity, the group-by / metrics, and the chart type.
+`,
+  ),
   record_list: topic(
     "Record list / status board",
     `

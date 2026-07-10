@@ -12,7 +12,7 @@ import pytest
 from api.auth.dependencies import OrgContext, require_org_access
 from api.config import get_settings
 from api.dependencies import get_tenant_db
-from api.repositories.dynamic_entity import EntityRecordError
+from api.repositories.dynamic_entity import EntityRecordError, RecordCursor
 from api.routers import entity_records
 from api.routers.entity_records import _decode_cursor, _encode_cursor
 from fastapi import FastAPI, HTTPException
@@ -22,8 +22,12 @@ class TestCursorCodec:
     def test_roundtrip(self) -> None:
         from datetime import UTC, datetime
 
-        cur = (datetime(2026, 7, 6, 12, 0, tzinfo=UTC), uuid.uuid4())
-        assert _decode_cursor(_encode_cursor(cur)) == cur
+        cur = RecordCursor("created_at", "desc", datetime(2026, 7, 6, 12, 0, tzinfo=UTC), uuid.uuid4())
+        back = _decode_cursor(_encode_cursor(cur))
+        # order_value serialises to its ISO string form; the rest round-trips exactly.
+        assert back.order_slug == cur.order_slug
+        assert back.order_dir == cur.order_dir
+        assert back.id == cur.id
 
     def test_malformed_cursor_is_400(self) -> None:
         with pytest.raises(HTTPException) as exc:

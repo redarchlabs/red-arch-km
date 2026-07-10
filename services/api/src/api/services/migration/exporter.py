@@ -21,6 +21,7 @@ from api.repositories.document import DocumentRepository
 from api.repositories.dynamic_entity import DynamicEntityRepository
 from api.repositories.folder import FolderRepository
 from api.repositories.form import FormRepository
+from api.repositories.report import ReportRepository
 from api.repositories.tag import TagRepository
 from api.repositories.view import ViewRepository
 from api.repositories.workflow import (
@@ -75,6 +76,7 @@ class MigrationExporter:
             "workflows": await self._export_workflows(),
             "inbound_endpoints": await self._export_inbound_endpoints(),
             "forms": await self._export_forms(),
+            "reports": await self._export_reports(),
             "views": await self._export_views(),
             "records": await self._export_records(entities, warnings, record_slugs) if include_records else [],
             "documents": await self._export_documents(warnings, doc_ids) if include_documents else [],
@@ -104,6 +106,7 @@ class MigrationExporter:
         workflows = await self._export_workflows()
         endpoints = await self._export_inbound_endpoints()
         forms = await self._export_forms()
+        reports = await self._export_reports()
         views = await self._export_views()
         tags = await self._export_tags()
         return {
@@ -114,6 +117,7 @@ class MigrationExporter:
             "workflows": [{"id": w["id"], "name": w["name"]} for w in workflows],
             "inbound_endpoints": [{"id": e["id"], "name": e["name"]} for e in endpoints],
             "forms": [{"id": f["id"], "name": f["name"], "slug": f["slug"]} for f in forms],
+            "reports": [{"id": r["id"], "name": r["name"], "slug": r["slug"]} for r in reports],
             "views": [{"id": v["id"], "name": v["name"], "slug": v["slug"]} for v in views],
             "records": await self._record_counts(entities),
             "documents": await self._document_index(),
@@ -296,6 +300,22 @@ class MigrationExporter:
                 "is_active": f.is_active,
             }
             for f in forms
+        ]
+
+    async def _export_reports(self) -> list[dict[str, Any]]:
+        reports = await ReportRepository(self._session, self._org_id).list_all()
+        return [
+            {
+                "id": str(r.id),
+                "name": r.name,
+                "slug": r.slug,
+                "description": r.description,
+                "entity_definition_id": str(r.entity_definition_id),
+                "query": json_safe(r.query or {}),
+                "viz": json_safe(r.viz or {}),
+                "is_active": r.is_active,
+            }
+            for r in reports
         ]
 
     async def _export_views(self) -> list[dict[str, Any]]:
