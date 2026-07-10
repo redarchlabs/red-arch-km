@@ -188,7 +188,11 @@ class WorkflowDispatchService:
 
         from api.services.spoken_summary import summarize_for_speech
 
-        client = AsyncOpenAI(api_key=key)
+        # Explicit timeout: the SDK default is 600s, which — on the inline
+        # (run_inline_on_change) path — would hold the request's pooled DB
+        # connection for minutes. The inline dispatch also has an overall budget
+        # (see entity_records._dispatch_inline_workflows), this bounds a single call.
+        client = AsyncOpenAI(api_key=key, timeout=30.0)
         model = opts.get("model") or self._settings.openai_summary_model
         return await summarize_for_speech(
             client,
