@@ -6,6 +6,7 @@ from api.models.custom_entity import EntityDefinition, EntityField, EntityRelati
 from api.models.document import Document, DocumentAccess, DocumentAttributeDefinition, Folder, Tag
 from api.models.form import Form, FormLink
 from api.models.org import Department, Group, Org, Region, Role
+from api.models.report import Report
 from api.models.user import UserOrgMembership, UserProfile
 from api.models.view import View
 from api.models.workflow import (
@@ -32,6 +33,7 @@ __all__ = [
     "Group",
     "Org",
     "Region",
+    "Report",
     "Role",
     "Tag",
     "UserOrgMembership",
