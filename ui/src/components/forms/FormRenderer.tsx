@@ -238,21 +238,21 @@ function RecordListNode({
       ) : (
         <div className="overflow-x-auto rounded-md border">
           <table className="w-full text-sm">
-            <thead className="bg-muted/50">
+            <thead className="border-b bg-muted/50">
               <tr>
                 {columns.map((c) => (
                   <th key={c} className="px-3 py-2 text-left font-medium">
                     {c}
                   </th>
                 ))}
-                {el.row_workflow_id ? <th className="px-3 py-2" /> : null}
+                {el.row_workflow_id ? <th className="w-24 px-3 py-2" /> : null}
               </tr>
             </thead>
             <tbody>
               {(rows ?? []).map((row) => (
-                <tr key={String(row.id)} className="border-t">
+                <tr key={String(row.id)} className="border-b last:border-0">
                   {columns.map((c) => (
-                    <td key={c} className="px-3 py-2 tabular-nums">
+                    <td key={c} className="px-3 py-2">
                       {formatCell(row[c])}
                     </td>
                   ))}
@@ -260,7 +260,7 @@ function RecordListNode({
                     <td className="px-3 py-2 text-right">
                       <button
                         type="button"
-                        className="rounded border px-2 py-1 text-xs hover:bg-muted disabled:opacity-50"
+                        className="rounded-md border bg-background px-2 py-1 text-xs font-medium hover:bg-muted disabled:opacity-60"
                         disabled={busyRow === String(row.id)}
                         onClick={() => void runRow(String(row.id))}
                       >

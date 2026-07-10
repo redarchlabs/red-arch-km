@@ -18,7 +18,6 @@ from decimal import Decimal
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth.dependencies import OrgContext, require_org_access
@@ -137,68 +136,53 @@ async def _repo_for(
 async def _dispatch_inline_workflows(
     session: AsyncSession,
     org_id: uuid.UUID,
-    definition: EntityDefinition,
-    record_id: uuid.UUID,
-    operation: str,
+    event_row: WorkflowOutbox | None,
     settings: Settings,
 ) -> None:
     """Run any ``run_inline_on_change`` workflows for a just-written change NOW,
     in-request, so a latency-sensitive reaction (e.g. a robot announcing a state
     change) fires without the beat-sweep delay.
 
-    Cheap gate first (EXISTS): most writes have no inline workflow and pay nothing
-    extra. Otherwise it finds the freshly-written outbox row for this change (a user
-    write has ``origin_run_id IS NULL``) and drives the matching inline workflows in
-    a savepoint — a workflow/robot failure is logged and swallowed so the record
-    write still commits. The real outbox row is left ``pending`` so the beat sweep
-    dedups these runs and still fires any non-inline workflows on the same change."""
-    wf_repo = WorkflowRepository(session, org_id)
-    if not await wf_repo.has_inline_for_entity(definition.id):
+    ``event_row`` is the EXACT outbox row this request wrote (``repo.last_change_event``)
+    — keying off it avoids re-querying "the row I just wrote", which races a
+    concurrent writer on the same record. A cheap EXISTS gate skips the work when
+    no workflow opted in. Drives the matching inline workflows in a savepoint; the
+    whole body is guarded so a workflow/robot failure is logged and swallowed and the
+    record write still commits. The real outbox row is left ``pending`` so the beat
+    sweep dedups these runs and still fires any non-inline workflows on the change."""
+    if event_row is None:
         return
-    row = (
-        await session.execute(
-            select(WorkflowOutbox)
-            .where(
-                WorkflowOutbox.org_id == org_id,
-                WorkflowOutbox.record_id == record_id,
-                WorkflowOutbox.operation == operation,
-                WorkflowOutbox.origin_run_id.is_(None),
-                WorkflowOutbox.status == "pending",
-            )
-            .order_by(WorkflowOutbox.seq.desc())
-            .limit(1)
-        )
-    ).scalar_one_or_none()
-    if row is None:
-        return
-    event = {
-        "id": row.id,
-        "seq": row.seq,
-        "created_at": row.created_at,
-        "org_id": org_id,
-        "entity_definition_id": row.entity_definition_id,
-        "entity_table": row.entity_table,
-        "record_id": row.record_id,
-        "operation": row.operation,
-        "before_data": row.before_data,
-        "after_data": row.after_data,
-        "origin_run_id": row.origin_run_id,
-        "source": row.source,
-    }
-    dispatcher = WorkflowDispatchService(
-        session,
-        webhook_allowlist=tuple(settings.workflow_webhook_allowlist or ()),
-        trusted_local_hosts=tuple(settings.workflow_trusted_local_hosts or ()),
-        public_base_url=settings.public_base_url,
-        email_sender=EmailSender(settings),
-        org_encryption_key=settings.org_encryption_key.get_secret_value(),
-        settings=settings,
-    )
     try:
+        wf_repo = WorkflowRepository(session, org_id)
+        if not await wf_repo.has_inline_for_entity(event_row.entity_definition_id):
+            return
+        event = {
+            "id": event_row.id,
+            "seq": event_row.seq,
+            "created_at": event_row.created_at,
+            "org_id": org_id,
+            "entity_definition_id": event_row.entity_definition_id,
+            "entity_table": event_row.entity_table,
+            "record_id": event_row.record_id,
+            "operation": event_row.operation,
+            "before_data": event_row.before_data,
+            "after_data": event_row.after_data,
+            "origin_run_id": event_row.origin_run_id,
+            "source": event_row.source,
+        }
+        dispatcher = WorkflowDispatchService(
+            session,
+            webhook_allowlist=tuple(settings.workflow_webhook_allowlist or ()),
+            trusted_local_hosts=tuple(settings.workflow_trusted_local_hosts or ()),
+            public_base_url=settings.public_base_url,
+            email_sender=EmailSender(settings),
+            org_encryption_key=settings.org_encryption_key.get_secret_value(),
+            settings=settings,
+        )
         async with session.begin_nested():
             await dispatcher.run_inline_for_change(event)
     except Exception:  # noqa: BLE001 — inline reaction failure must not fail the record write
-        logger.exception("inline workflow dispatch failed for %s %s", operation, record_id)
+        logger.exception("inline workflow dispatch failed for org %s", org_id)
 
 
 @router.get("/{slug}/records")
@@ -274,14 +258,12 @@ async def create_record(
     session: Annotated[AsyncSession, Depends(get_tenant_db)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> dict[str, Any]:
-    repo, definition = await _repo_for(session, ctx.org_id, slug)
+    repo, _definition = await _repo_for(session, ctx.org_id, slug)
     try:
         created = await repo.create(body)
     except EntityRecordError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    await _dispatch_inline_workflows(
-        session, ctx.org_id, definition, uuid.UUID(str(created["id"])), "create", settings
-    )
+    await _dispatch_inline_workflows(session, ctx.org_id, repo.last_change_event, settings)
     return created
 
 
@@ -308,14 +290,14 @@ async def update_record(
     session: Annotated[AsyncSession, Depends(get_tenant_db)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> dict[str, Any]:
-    repo, definition = await _repo_for(session, ctx.org_id, slug)
+    repo, _definition = await _repo_for(session, ctx.org_id, slug)
     try:
         record = await repo.update(record_id, body)
     except EntityRecordError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     if record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="record not found")
-    await _dispatch_inline_workflows(session, ctx.org_id, definition, record_id, "update", settings)
+    await _dispatch_inline_workflows(session, ctx.org_id, repo.last_change_event, settings)
     return record
 
 
@@ -327,7 +309,7 @@ async def delete_record(
     session: Annotated[AsyncSession, Depends(get_tenant_db)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> None:
-    repo, definition = await _repo_for(session, ctx.org_id, slug)
+    repo, _definition = await _repo_for(session, ctx.org_id, slug)
     if not await repo.delete(record_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="record not found")
-    await _dispatch_inline_workflows(session, ctx.org_id, definition, record_id, "delete", settings)
+    await _dispatch_inline_workflows(session, ctx.org_id, repo.last_change_event, settings)

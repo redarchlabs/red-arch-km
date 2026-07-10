@@ -62,7 +62,11 @@ class OutboxWriter:
         actor_user_id: uuid.UUID | None = None,
         origin_run_id: uuid.UUID | None = None,
         source: str = "record",
-    ) -> None:
+    ) -> WorkflowOutbox:
+        """Insert + flush the outbox row and RETURN it. The flush populates the
+        DB-assigned ``seq``/``created_at`` (``id`` is client-generated), so the
+        caller can key an inline dispatch to this exact event rather than
+        re-querying for "the row I just wrote" (which races a concurrent writer)."""
         row = WorkflowOutbox(
             org_id=org_id,
             entity_definition_id=entity_definition_id,
@@ -77,6 +81,7 @@ class OutboxWriter:
         )
         self._session.add(row)
         await self._session.flush()
+        return row
 
 
 class WorkflowRepository:
