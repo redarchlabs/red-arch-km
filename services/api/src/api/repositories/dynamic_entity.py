@@ -474,6 +474,12 @@ class DynamicEntityRepository:
         a cursor reused under a different sort raises ``EntityRecordError``.
         """
         limit = max(1, min(limit, 200))
+        # order_by is whitelisted to a catalog slug / base column by _column (no
+        # injection). PERF NOTE: ordering by a non-indexed field type (text/long_text/
+        # json/boolean have no btree index — see FILTERABLE_FIELD_TYPES) forces a sort
+        # of the org-filtered set. It stays bounded by LIMIT (top-N heapsort), but a
+        # "status board" over a large entity should prefer an indexed sort column
+        # (created_at/updated_at, or a picklist/number/date field).
         order_slug = order_by or "created_at"
         order_col = self._column(order_slug)  # validates the slug (raises on unknown)
         descending = str(order_dir).lower() != "asc"

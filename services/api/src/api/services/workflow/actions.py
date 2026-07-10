@@ -164,8 +164,19 @@ def _resolve_ref(value: Any, context: dict[str, Any]) -> Any:
 
 
 def _resolve_values(values: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
-    """Resolve every value in an action's ``values`` map (literals unchanged)."""
+    """Resolve every value in an action's ``values`` map (literals unchanged).
+
+    Only unwraps ``{"$ref": ...}`` envelopes — does NOT render ``{{ }}`` templates.
+    Use :func:`_resolve_value_map` where the config documents ``{{ }}`` support."""
     return {key: _resolve_ref(value, context) for key, value in values.items()}
+
+
+def _resolve_value_map(values: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    """Resolve every value in a map, rendering BOTH ``{"$ref": ...}`` envelopes and
+    ``{{ }}`` template strings (via :func:`_resolve_dynamic`). Used for action config
+    that documents template support (e.g. ``update_record`` values, record filters),
+    so ``{"note": "Hi {{after.name}}"}`` writes the rendered value, not the literal."""
+    return {key: _resolve_dynamic(value, context) for key, value in values.items()}
 
 
 # ``{{ after.first_name }}`` / ``{{ inputs.amount }}`` / ``{{ vars.answer }}``
@@ -270,7 +281,7 @@ async def _resolve_singleton_id(
     """Return the record for a ``latest`` / ``first`` lookup (newest / oldest by
     ``created_at``), honouring an optional resolved ``filters`` map. ``None`` when
     the entity has no matching record."""
-    filters = _resolve_values(ctx.config.get("filters", {}) or {}, context)
+    filters = _resolve_value_map(ctx.config.get("filters", {}) or {}, context)
     items, _ = await repo.list(
         filters=filters or None,
         limit=1,
@@ -347,7 +358,9 @@ class GetRecord:
         if not target_slug:
             raise ActionError("get_record requires target_slug")
         context = _trigger_context(ctx)
-        mode = str(ctx.config.get("mode") or ("by_id" if ctx.config.get("record_id") is not None else "latest")).lower()
+        # Empty-string record_id (e.g. an unresolved template) is treated as absent
+        # so mode falls back to latest rather than hard-erroring in by_id.
+        mode = str(ctx.config.get("mode") or ("by_id" if ctx.config.get("record_id") else "latest")).lower()
         repo = await ctx.repo_for_slug(str(target_slug))
         if mode == "by_id":
             record = await repo.get(_resolve_record_id(ctx, context, action="get_record"))
@@ -389,7 +402,7 @@ class UpdateRecord:
         if not isinstance(values_cfg, dict) or not values_cfg:
             raise ActionError("update_record requires a non-empty values map")
         context = _trigger_context(ctx)
-        values = _resolve_values(values_cfg, context)
+        values = _resolve_value_map(values_cfg, context)
         target_slug = ctx.config.get("target_slug")
         if target_slug:
             repo = await ctx.repo_for_slug(str(target_slug))
@@ -408,7 +421,7 @@ class UpdateRecord:
         }
 
     async def _target_id(self, ctx: ActionContext, repo: DynamicEntityRepository, context: dict[str, Any]) -> uuid.UUID:
-        mode = str(ctx.config.get("mode") or ("by_id" if ctx.config.get("record_id") is not None else "latest")).lower()
+        mode = str(ctx.config.get("mode") or ("by_id" if ctx.config.get("record_id") else "latest")).lower()
         if mode == "by_id":
             return _resolve_record_id(ctx, context, action="update_record")
         if mode in ("latest", "first"):
@@ -422,7 +435,7 @@ class UpdateRecord:
     def simulate(self, ctx: ActionContext) -> dict[str, Any]:
         return {
             "target_slug": ctx.config.get("target_slug"),
-            "values": _jsonable(_resolve_values(ctx.config.get("values", {}) or {}, _trigger_context(ctx))),
+            "values": _jsonable(_resolve_value_map(ctx.config.get("values", {}) or {}, _trigger_context(ctx))),
         }
 
 

@@ -16,6 +16,7 @@ tree of typed elements (`schemas/form_elements.py`, mirrored in
 | `label` | Static text (heading/subheading/paragraph/divider) |
 | `calculated` | Derived value from a sandboxed JsonLogic `expression`; `target_slug` persists it |
 | `button` | Action: `submit` / `run_workflow` (workflow_id + input map) / `link` |
+| `record_list` | Read-only "status board": a polling table of an entity's records (`entity`, `fields`, `sort_by`/`sort_dir`, `limit`, `poll_ms`) with an optional per-row `row_workflow_id` button. Unbound — valid in standalone views. |
 | `form_ref` | Embed another form by id (views) |
 | `section` | A 1:1 related record, inline or modal |
 | `table` | A 1:M child grid; columns from the child entity **and related entities** (cross-join, editable) |

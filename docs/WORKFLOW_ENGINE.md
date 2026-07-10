@@ -149,6 +149,18 @@ user-task inbox: `ui/.../workflows/inbox` + `UserTaskActions`, Approve/Reject �
 - **Inbound webhooks** (migration 020, `workflow_inbound_endpoints`, hashed token) — a public `POST /api/inbound/{token}` (routers/inbound.py) resolves the endpoint by token hash on a privileged session, **downgrades to the endpoint's org**, and seeds a run with the JSON body as input (`trigger_operation="webhook"`); the sweep drives it. Admin CRUD mints the token once.
 - **Call activity / sub-process** — a `call`/`subProcess` task starts a **child workflow run** (`parent_run_id`/`parent_token_id`/`depth+1`). Synchronous inline drive when the child completes within the parent's transaction (the child is freshly created, so its advisory lock is uncontended — no deadlock). If the child parks on its own wait, the parent parks `waiting/subprocess` and `_signal_parent` (a conditional raw UPDATE, safe without the parent lock since the token is parked) reactivates it when the child terminates. `MAX_TOKEN_DEPTH` bounds recursion.
 
+### Record read/write actions (record-state platform)
+
+- **`get_record`** (read-only) — load a record's live fields into a run variable: `{target_slug, mode: by_id|latest|first, record_id?, filters?, capture}`. Output is the record's slug-keyed fields (or `{}` when none match) → read downstream as `{{ vars.<capture>.<field> }}`. The read-back the engine otherwise lacked (`update_record_field` only ever touched the triggering record).
+- **`update_record`** — write **multiple** fields of a targeted record: `{target_slug?, mode, record_id?/filters?, values}`. Omit `target_slug` to update the triggering record. `values`/`filters` render `{"$ref": ...}` **and** `{{ }}` templates. Writes emit an outbox change event — an announcer keyed off the same entity must only READ, never write it back (loop).
+- Both resolve the target entity via `ctx.repo_for_slug` (org-scoped, RLS) — same-org any-entity, never cross-tenant.
+
+### Inline dispatch on entity change (`run_inline_on_change`)
+
+- A workflow flagged `run_inline_on_change` (migration **024**; `PATCH /workflows`, MCP `km2_update_workflow`) fires **synchronously in the record-write request** (`entity_records._dispatch_inline_workflows`) instead of waiting for the beat sweep — for latency-sensitive reactions (a robot announcing a state change the instant it's saved).
+- It keys off the **exact outbox row this request wrote** (`repo.last_change_event`, not a re-query — avoids racing a concurrent writer), runs in a `begin_nested()` savepoint under a hard time budget (`_INLINE_DISPATCH_BUDGET_SECONDS`), and swallows failures so the **record write always commits**. The real outbox row stays `pending`, so the beat sweep **dedups** the inline runs (same `workflow × outbox event`) and still fires any non-inline workflows on the same change. A cheap partial-indexed EXISTS gate (migration **027**) keeps the per-write cost flat.
+- **Semantics:** side effects are **at-least-once** and fire **before** the request commits — keep inline workflows short (a few fast steps) and idempotent-friendly (announcements, not payments); heavy multi-step LLM work belongs on the async beat path.
+
 ---
 
 ## 10. Live-run visualization
@@ -200,6 +212,8 @@ forms-tools pattern), with the **same permission boundaries as the REST API**:
 - **018** — `workflow_run_tokens` (partitioned + FORCE RLS + partition maintenance); `workflow_runs` variables/step_seq/parent_*/dead_letter; `workflow_run_steps.token_id`.
 - **019** — `workflow_connections` (Fernet secret, RLS).
 - **020** — `workflow_inbound_endpoints` (hashed token, RLS).
+- **024** — `workflows.run_inline_on_change` (boolean, default false) — the inline-dispatch flag.
+- **027** — partial index `ix_workflows_inline_entity` on `(org_id, entity_definition_id) WHERE enabled AND run_inline_on_change` — flat-cost EXISTS gate for the per-record-write inline check.
 
 Integration tests use `Base.metadata.create_all` (not migrations), so every model
 is registered with the metadata and the new tables are added to the conftest RLS
