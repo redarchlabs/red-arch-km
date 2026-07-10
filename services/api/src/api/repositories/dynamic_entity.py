@@ -121,8 +121,7 @@ class DynamicEntityRepository:
             return value
         if field.field_type == "date":
             try:
-                return (datetime.fromisoformat(value).date() if "T" in value
-                        else date.fromisoformat(value))
+                return datetime.fromisoformat(value).date() if "T" in value else date.fromisoformat(value)
             except ValueError as exc:
                 raise EntityRecordError(f"{field.slug!r} must be a valid date (YYYY-MM-DD)") from exc
         if field.field_type == "timestamptz":
@@ -174,10 +173,7 @@ class DynamicEntityRepository:
             # not a 500. Without this, a required scalar hits the column's NOT NULL
             # constraint (unhandled IntegrityError) and a required relationship —
             # whose FK column is physically nullable — would silently null out.
-            if value is None and (
-                (field is not None and field.is_required)
-                or (rel is not None and rel.is_required)
-            ):
+            if value is None and ((field is not None and field.is_required) or (rel is not None and rel.is_required)):
                 raise EntityRecordError(f"{slug!r} is required and cannot be null")
             if field is not None and field.field_type == "picklist" and value is not None:
                 options = field.picklist_options or []
@@ -283,9 +279,7 @@ class DynamicEntityRepository:
             # by identifiers.quote(); ids/org are bound parameters (expanding IN).
             sql = f"SELECT id FROM {identifiers.quote(table)} WHERE org_id = :org AND id IN :ids"  # noqa: S608
             stmt = text(sql).bindparams(bindparam("ids", expanding=True))
-            found = set(
-                (await self._session.execute(stmt, {"org": self._org_id, "ids": list(ids)})).scalars().all()
-            )
+            found = set((await self._session.execute(stmt, {"org": self._org_id, "ids": list(ids)})).scalars().all())
             missing = ids - found
             if missing:
                 bad_slug = next(
@@ -321,6 +315,8 @@ class DynamicEntityRepository:
         search: str | None = None,
         cursor: RecordCursor | None = None,
         limit: int = 50,
+        order_by: str | None = None,
+        order_dir: str = "desc",
     ) -> tuple[list[dict[str, Any]], RecordCursor | None]:
         """Keyset-paginated record page ordered by ``(created_at, id)`` DESC.
 
@@ -328,8 +324,18 @@ class DynamicEntityRepository:
         last page. Uses no ``OFFSET`` and no ``COUNT`` so it stays fast on tables
         with millions of rows. ``search`` is a case-insensitive substring match
         across text columns (index-backed by trigram GIN indexes).
+
+        ``order_by`` (a catalog field slug or a base column) overrides the sort;
+        ``order_dir`` is ``"asc"`` / ``"desc"``. Keyset ``cursor`` pagination is
+        only honoured under the DEFAULT ``created_at DESC`` ordering — a custom
+        sort returns a single (first) page (``next_cursor`` is always ``None``),
+        which is what the small "latest record" / status-board callers need.
         """
         limit = max(1, min(limit, 200))
+        order_slug = order_by or "created_at"
+        order_col = self._column(order_slug)  # validates the slug (raises on unknown)
+        descending = str(order_dir).lower() != "asc"
+        is_default_order = order_slug == "created_at" and descending
         conditions = [self._table.c.org_id == self._org_id]
         for slug, value in (filters or {}).items():
             # Coerce the filter value with the same rules as writes so a
@@ -341,9 +347,7 @@ class DynamicEntityRepository:
         if search and search.strip():
             pattern = f"%{_escape_like(search.strip())}%"
             searchable = [
-                self._table.c[f.physical_column]
-                for f in self._fields
-                if f.field_type in SEARCHABLE_FIELD_TYPES
+                self._table.c[f.physical_column] for f in self._fields if f.field_type in SEARCHABLE_FIELD_TYPES
             ]
             if not searchable:
                 return [], None  # nothing to match a text query against
@@ -351,15 +355,18 @@ class DynamicEntityRepository:
 
         created_at = self._table.c.created_at
         rec_id = self._table.c.id
-        if cursor is not None:
+        if cursor is not None and is_default_order:
             # Row-value comparison: strictly "older" than the last row of the
-            # previous page under (created_at DESC, id DESC) ordering.
+            # previous page under (created_at DESC, id DESC) ordering. Only valid
+            # under the default sort; a custom order_by does not keyset-paginate.
             conditions.append(tuple_(created_at, rec_id) < tuple_(cursor[0], cursor[1]))
 
+        primary = order_col.desc() if descending else order_col.asc()
         stmt = (
             select(*self._table.c)
             .where(*conditions)
-            .order_by(created_at.desc(), rec_id.desc())
+            # id is a stable, unique tiebreaker so equal sort keys order deterministically.
+            .order_by(primary, rec_id.desc())
             .limit(limit + 1)  # one extra row tells us whether another page exists
         )
         rows = (await self._session.execute(stmt)).all()
@@ -368,7 +375,7 @@ class DynamicEntityRepository:
         page = rows[:limit]
         items = [self._to_public(r) for r in page]
         next_cursor: RecordCursor | None = None
-        if has_more and page:
+        if is_default_order and has_more and page:
             last = page[-1]._mapping
             next_cursor = (last["created_at"], last["id"])
         return items, next_cursor
