@@ -57,6 +57,23 @@ _VALID_ON_DELETE = ("CASCADE", "SET NULL", "RESTRICT")
 # repository's search predicate.
 SEARCHABLE_FIELD_TYPES = ("text", "long_text", "picklist")
 
+# Scalar field types that benefit from a plain btree index for equality/range
+# filtering, GROUP BY, and ORDER BY (the reporting/aggregation engine and
+# server-side record filters). Text types already get a trigram GIN index, but
+# ``picklist`` is included here too: it is short, low-cardinality, and the most
+# common CRM group-by / equality filter (e.g. deal stage), which btree serves
+# far better than trigram. ``boolean`` is omitted (too low-cardinality to index);
+# ``json`` and ``long_text`` are omitted (not meaningfully filterable/groupable).
+FILTERABLE_FIELD_TYPES = (
+    "integer",
+    "bigint",
+    "numeric",
+    "date",
+    "timestamptz",
+    "uuid",
+    "picklist",
+)
+
 # Fail fast rather than pile up behind a busy table's locks.
 _LOCK_TIMEOUT = "5s"
 
@@ -173,10 +190,13 @@ class SchemaManager:
         # without OFFSET, so this stays O(log n) on tables with millions of rows.
         await self._create_keyset_index(table_name, definition)
         # Trigram GIN indexes so case-insensitive substring search (ILIKE '%q%')
-        # is index-backed rather than a full scan.
+        # is index-backed rather than a full scan; plain btree indexes so
+        # equality/range filters and GROUP BY on scalar fields stay index-backed.
         for field in fields:
             if field.field_type in SEARCHABLE_FIELD_TYPES:
                 await self._create_trgm_index(table_name, field)
+            if field.field_type in FILTERABLE_FIELD_TYPES:
+                await self._create_btree_index(table_name, field)
         await self._apply_rls(table_name)
 
     async def _create_keyset_index(self, table_name: str, definition: EntityDefinition) -> None:
@@ -192,6 +212,16 @@ class SchemaManager:
         ix = identifiers.quote(identifiers.trgm_index_name(field.id))
         await self._session.execute(
             text(f"CREATE INDEX IF NOT EXISTS {ix} ON {qt} USING gin ({qc} gin_trgm_ops)")
+        )
+
+    async def _create_btree_index(self, table_name: str, field: EntityField) -> None:
+        # Composite (org_id, col): every tenant-scoped query filters org_id first,
+        # so this serves `WHERE org_id = ? AND col <op> ?` and GROUP BY col.
+        qt = identifiers.quote(table_name)
+        qc = identifiers.quote(field.physical_column)
+        ix = identifiers.quote(identifiers.btree_index_name(field.id))
+        await self._session.execute(
+            text(f"CREATE INDEX IF NOT EXISTS {ix} ON {qt} (org_id, {qc})")
         )
 
     async def drop_entity_table(self, definition: EntityDefinition) -> None:
@@ -218,6 +248,8 @@ class SchemaManager:
             await self._session.execute(text(f"ALTER TABLE {qt} ADD CONSTRAINT {uq} UNIQUE (org_id, {qc})"))
         if field.field_type in SEARCHABLE_FIELD_TYPES:
             await self._create_trgm_index(definition.physical_table, field)
+        if field.field_type in FILTERABLE_FIELD_TYPES:
+            await self._create_btree_index(definition.physical_table, field)
 
     async def drop_field_column(self, definition: EntityDefinition, field: EntityField) -> None:
         await self._set_lock_timeout()
