@@ -24,6 +24,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.models.custom_entity import EntityDefinition, EntityField, EntityRelationship
+from api.models.workflow import WorkflowOutbox
 from api.repositories.workflow import OutboxWriter
 from api.schemas.aggregate import AggregateQuery, AggregateResult
 from api.services import identifiers
@@ -115,6 +116,11 @@ class DynamicEntityRepository:
         self._actor_user_id = actor_user_id
         self._origin_run_id = origin_run_id
         self._outbox_source = outbox_source
+        # The outbox row written by the most recent create/update/delete on this
+        # repo instance (one repo == one request). Lets an inline dispatcher key
+        # off THIS write's exact event instead of re-querying (which races a
+        # concurrent writer on the same record). ``None`` until the first write.
+        self._last_change_event: WorkflowOutbox | None = None
 
         # slug <-> physical maps for writable columns (fields + to-one FKs).
         self._slug_to_col: dict[str, str] = {f.slug: f.physical_column for f in fields}
@@ -122,6 +128,11 @@ class DynamicEntityRepository:
         self._col_to_slug = {v: k for k, v in self._slug_to_col.items()}
         self._field_by_slug = {f.slug: f for f in fields}
         self._rel_by_slug = {r.slug: r for r in self._relationships}
+
+    @property
+    def last_change_event(self) -> WorkflowOutbox | None:
+        """The ``workflow_outbox`` row from this repo's most recent write (or None)."""
+        return self._last_change_event
 
     def _build_table(self) -> Table:
         md = MetaData()
@@ -343,7 +354,7 @@ class DynamicEntityRepository:
     ) -> None:
         if self._outbox is None:
             return
-        await self._outbox.write(
+        self._last_change_event = await self._outbox.write(
             org_id=self._org_id,
             entity_definition_id=self._definition.id,
             entity_table=self._definition.physical_table,
@@ -489,6 +500,7 @@ class DynamicEntityRepository:
 
         # NULLS LAST keeps the keyset predicate's null handling correct; id is a
         # stable, unique tiebreaker so equal sort keys order deterministically.
+        # (The tiebreaker stays id DESC to match _keyset_after's cursor predicate.)
         primary = (order_col.desc() if descending else order_col.asc()).nullslast()
         stmt = (
             select(*self._table.c)
