@@ -318,7 +318,9 @@ class WorkflowDispatchService:
                 counters["skipped"] = counters.get("skipped", 0) + 1
         return counters
 
-    async def _process_event(self, event: dict[str, Any], *, max_depth: int) -> dict[str, int]:
+    async def _process_event(
+        self, event: dict[str, Any], *, max_depth: int, only_inline: bool = False
+    ) -> dict[str, int]:
         org_id: uuid.UUID = event["org_id"]
         operation: str = event["operation"]
         before = _as_dict(event["before_data"])
@@ -334,6 +336,12 @@ class WorkflowDispatchService:
 
         delta = {"runs": 0, "actions": 0, "skipped": 0}
         for workflow, version in matches:
+            # Inline pass (in-request, right after the write): only the workflows
+            # that opted into run_inline_on_change. The later beat sweep runs the
+            # full set — the inline runs dedup out (same workflow x outbox event)
+            # and the non-inline ones fire then.
+            if only_inline and not workflow.run_inline_on_change:
+                continue
             if not trigger_matches(_trigger_data(version.definition), operation, changed, source=source):
                 continue
 
@@ -374,6 +382,18 @@ class WorkflowDispatchService:
             delta["actions"] += executed
             await self._settle_run(run, result, ok)
         return delta
+
+    async def run_inline_for_change(self, event: dict[str, Any], *, max_depth: int = MAX_DEPTH) -> dict[str, int]:
+        """Run ONLY the ``run_inline_on_change`` workflows for a just-written record
+        change, synchronously, from within the mutating request.
+
+        ``event`` is the real ``workflow_outbox`` row (id/seq/created_at/before/after/
+        …) so each inline run is keyed to that outbox event — when the beat sweep
+        later processes the same row it dedups these runs and fires only the
+        non-inline workflows. Call this AFTER the record write has flushed its
+        outbox row; the caller should isolate it in a savepoint so a workflow/robot
+        failure cannot roll back the record write."""
+        return await self._process_event(event, max_depth=max_depth, only_inline=True)
 
     async def _settle_run(self, run: WorkflowRun, result: Any, ok: bool) -> None:
         """After running a path's actions, either fail, suspend at a delay, or succeed."""

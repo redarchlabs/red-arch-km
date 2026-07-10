@@ -113,6 +113,23 @@ class WorkflowRepository:
         result = await self._session.execute(stmt)
         return [(row[0], row[1]) for row in result.all()]
 
+    async def has_inline_for_entity(self, entity_definition_id: uuid.UUID) -> bool:
+        """True if the entity has an enabled workflow flagged ``run_inline_on_change``.
+
+        A cheap EXISTS gate so a record write only pays the inline-dispatch cost
+        when at least one workflow opted in."""
+        stmt = select(
+            select(Workflow.id)
+            .where(
+                Workflow.org_id == self._org_id,
+                Workflow.entity_definition_id == entity_definition_id,
+                Workflow.enabled.is_(True),
+                Workflow.run_inline_on_change.is_(True),
+            )
+            .exists()
+        )
+        return bool((await self._session.execute(stmt)).scalar())
+
     async def create(
         self, *, name: str, entity_definition_id: uuid.UUID | None, description: str | None
     ) -> Workflow:
@@ -133,6 +150,7 @@ class WorkflowRepository:
         name: str | None = None,
         description: str | None = None,
         enabled: bool | None = None,
+        run_inline_on_change: bool | None = None,
         active_version_id: uuid.UUID | None = None,
         run_permission: dict[str, Any] | None = None,
     ) -> Workflow:
@@ -142,6 +160,8 @@ class WorkflowRepository:
             wf.description = description
         if enabled is not None:
             wf.enabled = enabled
+        if run_inline_on_change is not None:
+            wf.run_inline_on_change = run_inline_on_change
         if active_version_id is not None:
             wf.active_version_id = active_version_id
         if run_permission is not None:
