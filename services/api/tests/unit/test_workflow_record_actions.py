@@ -184,3 +184,78 @@ class TestUpdateRecord:
         handler = ACTION_REGISTRY["update_record"]
         with pytest.raises(ActionError):
             await handler.execute(_ctx({"target_slug": "x", "mode": "latest", "values": {"a": 1}}, repo=FakeRepo([])))
+
+
+class TestUpdateRecordTemplates:
+    """Finish-feature fixes: update_record/get_record must render {{ }} templates,
+    not just $ref envelopes, and treat empty-string record_id as absent."""
+
+    @pytest.mark.asyncio
+    async def test_update_record_renders_curly_templates(self) -> None:
+        # {{ after.x }} in a values map must be rendered, not written literally.
+        rid = uuid.uuid4()
+        repo = FakeRepo([{"id": rid}])
+        handler = ACTION_REGISTRY["update_record"]
+        ctx = _ctx(
+            {"target_slug": "mission_state", "mode": "latest", "values": {"note": "Hi {{after.name}}"}},
+            repo=repo,
+            after={"name": "Ada"},
+        )
+        await handler.execute(ctx)
+        assert repo.update_calls == [(rid, {"note": "Hi Ada"})]
+
+    @pytest.mark.asyncio
+    async def test_update_record_renders_inputs_template(self) -> None:
+        rid = uuid.uuid4()
+        repo = FakeRepo([{"id": rid}])
+        handler = ACTION_REGISTRY["update_record"]
+        ctx = _ctx(
+            {"target_slug": "s", "mode": "latest", "values": {"phase": "{{inputs.phase}}"}},
+            repo=repo,
+            inputs={"phase": "Crisis"},
+        )
+        await handler.execute(ctx)
+        assert repo.update_calls[0][1] == {"phase": "Crisis"}
+
+    @pytest.mark.asyncio
+    async def test_get_record_filters_render_templates(self) -> None:
+        repo = FakeRepo([{"id": uuid.uuid4()}])
+        handler = ACTION_REGISTRY["get_record"]
+        ctx = _ctx(
+            {"target_slug": "s", "filters": {"mission_name": "{{inputs.name}}"}},
+            repo=repo,
+            inputs={"name": "Deep Horizon"},
+        )
+        await handler.execute(ctx)
+        assert repo.list_calls[0]["filters"] == {"mission_name": "Deep Horizon"}
+
+    @pytest.mark.asyncio
+    async def test_empty_record_id_falls_back_to_latest(self) -> None:
+        # An empty-string record_id (e.g. unresolved template) must not force by_id.
+        repo = FakeRepo([{"id": uuid.uuid4(), "phase": "Returning"}])
+        handler = ACTION_REGISTRY["get_record"]
+        out = await handler.execute(_ctx({"target_slug": "s", "record_id": ""}, repo=repo))
+        assert out["phase"] == "Returning"
+        assert repo.list_calls[0]["order_dir"] == "desc"  # latest, not a by_id error
+
+    @pytest.mark.asyncio
+    async def test_update_record_first_mode_orders_ascending(self) -> None:
+        repo = FakeRepo([{"id": uuid.uuid4()}])
+        handler = ACTION_REGISTRY["update_record"]
+        await handler.execute(
+            _ctx({"target_slug": "s", "mode": "first", "values": {"a": 1}}, repo=repo)
+        )
+        assert repo.list_calls[0]["order_dir"] == "asc"
+
+    def test_update_record_simulate_does_not_write(self) -> None:
+        repo = FakeRepo([{"id": uuid.uuid4()}])
+        handler = ACTION_REGISTRY["update_record"]
+        ctx = _ctx(
+            {"target_slug": "s", "values": {"alert": {"$ref": "inputs.a"}, "note": "{{after.n}}"}},
+            repo=repo,
+            inputs={"a": "Red"},
+            after={"n": "hi"},
+        )
+        out = handler.simulate(ctx)
+        assert repo.update_calls == []  # dry run touches nothing
+        assert out["values"] == {"alert": "Red", "note": "hi"}
