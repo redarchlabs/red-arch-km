@@ -96,7 +96,20 @@ for pair in "km2_redis redis" "km2_qdrant qdrant" "km2_postgres postgres" "km2_n
   fi
 done
 
-# --- 1b. optional image rebuild (--rebuild) ----------------------------------
+# --- 1b. database migrations --------------------------------------------------
+# Bring the schema to head before anything reads it. Without this, a freshly
+# pulled migration (a new table/column) leaves the API 500ing with
+# "relation ... does not exist" until someone runs `make migrate` by hand.
+# `make migrate` includes .env and targets postgres on localhost:5433.
+say "waiting for postgres…"
+for _ in $(seq 1 30); do
+  docker exec km2_postgres pg_isready -q >/dev/null 2>&1 && break
+  sleep 1
+done
+say "migrations (alembic upgrade head)…"
+make migrate
+
+# --- 1c. optional image rebuild (--rebuild) ----------------------------------
 # Rebuild the app images from source and drop the running app containers so the
 # steps below recreate them from the fresh image. Needed after changing worker/
 # brain-api code, since this script otherwise reuses the existing image and the
