@@ -10,15 +10,43 @@ actions use. Secrets are decrypted by the caller and held only on the transient
 from __future__ import annotations
 
 import logging
+import socket
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlparse
 
 from api.config import Settings
-from api.services.workflow.actions import ActionError, assert_outbound_host_allowed
+from api.services.workflow.actions import _is_private_host
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_ips(host: str) -> list[str]:
+    """Resolve a host to its IP strings (patched in tests to avoid real DNS)."""
+    return [info[4][0] for info in socket.getaddrinfo(host, None)]
+
+
+def assert_public_host(host: str, scheme: str, settings: Settings) -> None:
+    """SSRF guard for outbound MCP/OAuth: allow any PUBLIC host, block private ones.
+
+    Unlike the workflow allow-list guard, MCP connects to arbitrary SaaS by design,
+    so there is no allow-list requirement — but the host must not resolve to a
+    private/loopback/link-local/reserved address (blocks the cloud metadata endpoint
+    and internal services). Hosts in ``workflow_trusted_local_hosts`` bypass the
+    check (self-hosted/dev MCP on localhost/LAN)."""
+    if scheme not in ("http", "https"):
+        raise McpError(f"unsupported MCP scheme: {scheme!r}")
+    if host in settings.workflow_trusted_local_hosts:
+        return
+    if _is_private_host(host):  # literal private IP
+        raise McpError(f"MCP host resolves to a private address: {host}")
+    try:
+        resolved = _resolve_ips(host)
+    except OSError as exc:
+        raise McpError(f"could not resolve MCP host: {host}") from exc
+    if any(_is_private_host(ip) for ip in resolved):
+        raise McpError(f"MCP host resolves to a private address: {host}")
 
 
 @dataclass
@@ -61,16 +89,7 @@ def _guard_url(url: str | None, settings: Settings) -> str:
     if not url:
         raise McpError("MCP server has no URL")
     parsed = urlparse(url)
-    try:
-        assert_outbound_host_allowed(
-            parsed.hostname or "",
-            parsed.scheme,
-            webhook_allowlist=settings.workflow_webhook_allowlist,
-            trusted_local_hosts=settings.workflow_trusted_local_hosts,
-            action="mcp",
-        )
-    except ActionError as exc:
-        raise McpError(str(exc)) from exc
+    assert_public_host(parsed.hostname or "", parsed.scheme, settings)
     return url
 
 

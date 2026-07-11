@@ -36,19 +36,36 @@ def test_build_headers_bearer_and_api_key():
     assert build_headers(apikey)["X-Key"] == "tok"
 
 
-def test_ssrf_guard_blocks_unlisted_host():
+def test_ssrf_guard_blocks_literal_private_ip():
     from api.services.agents.mcp.client import _guard_url
 
-    # Nothing allow-listed -> deny by default.
     with pytest.raises(McpError):
-        _guard_url("http://evil.example.com/mcp", _settings())
+        _guard_url("http://169.254.169.254/latest/meta-data", _settings())  # cloud metadata
+    with pytest.raises(McpError):
+        _guard_url("http://10.0.0.5/mcp", _settings())
 
 
-def test_ssrf_guard_allows_listed_host():
+def test_ssrf_guard_blocks_host_resolving_private(monkeypatch):
+    from api.services.agents.mcp import client as mcp_mod
+
+    monkeypatch.setattr(mcp_mod, "_resolve_ips", lambda host: ["10.1.2.3"])
+    with pytest.raises(McpError):
+        mcp_mod._guard_url("https://internal.example.com/mcp", _settings())
+
+
+def test_ssrf_guard_allows_public_host(monkeypatch):
+    from api.services.agents.mcp import client as mcp_mod
+
+    # Any PUBLIC host is allowed (no allow-list needed) — arbitrary SaaS by design.
+    monkeypatch.setattr(mcp_mod, "_resolve_ips", lambda host: ["93.184.216.34"])
+    assert mcp_mod._guard_url("https://mcp.linear.app/sse", _settings()) == "https://mcp.linear.app/sse"
+
+
+def test_ssrf_guard_allows_trusted_local():
     from api.services.agents.mcp.client import _guard_url
 
-    s = _settings(workflow_webhook_allowlist_raw="mcp.example.com")
-    assert _guard_url("https://mcp.example.com/mcp", s) == "https://mcp.example.com/mcp"
+    s = _settings(workflow_trusted_local_hosts_raw="localhost")
+    assert _guard_url("http://localhost:9000/mcp", s) == "http://localhost:9000/mcp"
 
 
 class _StubClient:
