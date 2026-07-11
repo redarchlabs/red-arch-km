@@ -19,6 +19,10 @@ class Org(Base, UUIDMixin, TimestampMixin):
     use_knowledge_graph: Mapped[bool] = mapped_column(Boolean, default=True)
     openai_api_key: Mapped[str | None] = mapped_column(String(800), nullable=True)
     permission_number: Mapped[int] = mapped_column(SmallInteger, default=0)
+    # Optional workflow fired on bubbled agent escalations/approvals (Slack/etc.).
+    # Plain UUID (no FK) to avoid a second orgs<->workflows FK path that would make
+    # ORM joins ambiguous; a stale/deleted id simply no-ops the channel.
+    agent_notify_workflow_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
 
     # Relationships
     regions: Mapped[list[Region]] = relationship(back_populates="org", cascade="all, delete-orphan")

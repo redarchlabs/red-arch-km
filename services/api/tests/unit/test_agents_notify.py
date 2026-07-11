@@ -13,6 +13,11 @@ from api.services.agents import notify
 pytestmark = pytest.mark.unit
 
 
+class _Result:
+    def scalar_one_or_none(self):
+        return None  # no Org / no UserProfile row
+
+
 class _FakeSession:
     def __init__(self):
         self.added = []
@@ -22,6 +27,9 @@ class _FakeSession:
 
     async def flush(self):
         pass
+
+    async def execute(self, *args, **kwargs):
+        return _Result()
 
 
 def _settings(**over) -> Settings:

@@ -1,6 +1,6 @@
 "use client";
 
-import { Bot, ClipboardList, Inbox, MessageSquare, Pencil, Plug, Plus, Trash2 } from "lucide-react";
+import { Bot, ClipboardList, Inbox, MessageSquare, Network, Pencil, Plug, Plus, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
@@ -84,6 +84,11 @@ export default function AgentsPage() {
             workflows and call MCP servers.
           </p>
         </div>
+        <Link href="/agents/org">
+          <Button size="sm" variant="outline">
+            <Network className="h-4 w-4" /> Org chart
+          </Button>
+        </Link>
         <Link href="/agents/work-orders">
           <Button size="sm" variant="outline">
             <ClipboardList className="h-4 w-4" /> Work orders
