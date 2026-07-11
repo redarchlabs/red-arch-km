@@ -129,7 +129,10 @@ class AgentRunExecutor:
             session=session, org_id=org_id, settings=self._settings, agent=agent,
             actor_user_id=run.actor_user_id, run_id=run.id, work_order_id=run.work_order_id,
         )
-        specs = available_tools(agent, await load_agent_tools(session, org_id, agent, self._settings))
+        specs = available_tools(
+            agent,
+            await load_agent_tools(session, org_id, agent, self._settings, actor_user_id=run.actor_user_id),
+        )
 
         # Resume a parked turn (human approved) or start fresh from the task.
         resume = run.input.get("resume") if isinstance(run.input, dict) else None
