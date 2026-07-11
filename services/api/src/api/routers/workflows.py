@@ -52,9 +52,7 @@ from api.schemas.workflow import (
     WorkflowVersionRead,
 )
 from api.services.email import EmailSender
-from api.services.workflow.actions import SIDE_EFFECTING_ACTIONS
-from api.services.workflow.dispatcher import WorkflowDispatchService
-from api.services.workflow.manual_inputs import InputValidationError, coerce_inputs, is_manual_trigger
+from api.services.workflow.manual_run import execute_workflow_run, resolve_published_version
 from api.services.workflow.permissions import can_run
 from api.services.workflow.service import (
     WorkflowConflictError,
@@ -195,8 +193,9 @@ async def call_connection(
     pass the same SSRF allow-list (``WORKFLOW_WEBHOOK_ALLOWLIST`` /
     ``WORKFLOW_TRUSTED_LOCAL_HOSTS``), and the connection's secret is injected
     server-side and never exposed to the browser."""
-    import httpx
     from urllib.parse import urlsplit
+
+    import httpx
 
     from api.services.crypto import decrypt_secret
     from api.services.workflow.actions import (
@@ -376,102 +375,16 @@ async def run_workflow(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You don't have permission to run this workflow",
         )
-    if wf.active_version_id is None:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="workflow has no published version")
-    version = await WorkflowVersionRepository(session, ctx.org_id).get(wf.active_version_id)
-    if version is None or version.status != "published":
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="workflow has no published version")
+    version = await resolve_published_version(session, ctx.org_id, wf)
 
-    allowlist = tuple(settings.workflow_webhook_allowlist or ())
-    dispatcher = WorkflowDispatchService(
+    return await execute_workflow_run(
         session,
-        webhook_allowlist=allowlist,
-        trusted_local_hosts=tuple(settings.workflow_trusted_local_hosts or ()),
-        public_base_url=settings.public_base_url,
-        email_sender=EmailSender(settings),
-        org_encryption_key=settings.org_encryption_key.get_secret_value(),
-        settings=settings,
-    )
-
-    # A manual (BPMN "none" start event) workflow runs on demand with the caller-
-    # supplied input variables the trigger declares. Detected by the trigger's
-    # source (so an entity-bound workflow whose trigger is switched to manual also
-    # runs this way); an entity-less workflow can only ever be manual. The record
-    # fields are irrelevant and ignored; inputs are validated/coerced against the
-    # declared schema (undeclared keys dropped, required ones enforced) so a caller
-    # can only supply the variables the author designed. run_permission still gates
-    # WHO may run it.
-    if is_manual_trigger(version.definition) or wf.entity_definition_id is None:
-        try:
-            inputs = coerce_inputs(version.definition, body.inputs)
-        except InputValidationError as exc:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
-        run, executed = await dispatcher.run_version_manually(
-            ctx.org_id,
-            wf,
-            version,
-            operation="manual",
-            record_id=None,
-            before=None,
-            after=None,
-            inputs=inputs,
-            actor_user_id=ctx.user.profile_id,
-        )
-        return ManualRunResult(
-            run_id=run.id,
-            status=run.status,
-            conditions_matched=bool(run.conditions_matched),
-            actions_executed=executed,
-            error=run.error,
-        )
-
-    # SECURITY: never trust client-supplied record data for an entity-bound run.
-    #  * With a record_id, load before/after from the real entity table scoped
-    #    to this org + the workflow's entity — a cross-org/cross-entity id can't
-    #    resolve, and the client's before/after are ignored entirely.
-    #  * Without a record_id, a side-effecting action (email/webhook/http/form)
-    #    still runs (e.g. a view "run now" button), but its record context is
-    #    NULLED — the client's before/after are dropped so only the workflow's
-    #    own author-defined config can leave the org. A member could otherwise
-    #    push arbitrary fabricated data outward; run_permission stays the gate
-    #    on who may trigger the run at all.
-    if body.record_id is not None:
-        record = await dispatcher.load_trigger_record(ctx.org_id, wf.entity_definition_id, body.record_id)
-        if record is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="record not found for this workflow's entity",
-            )
-        before, after = record, record
-    else:
-        # Legacy `action` nodes and v2 `task` nodes both carry an action_type;
-        # inspect both so a side-effecting step in either vocabulary is caught.
-        action_types = {
-            node.get("data", {}).get("action_type")
-            for node in version.definition.get("nodes", [])
-            if node.get("type") in ("action", "task")
-        }
-        if action_types & SIDE_EFFECTING_ACTIONS:
-            before, after = None, None  # never trust client data outbound
-        else:
-            before, after = body.before, body.after
-
-    run, executed = await dispatcher.run_version_manually(
         ctx.org_id,
         wf,
         version,
-        operation=body.operation,
-        record_id=body.record_id,
-        before=before,
-        after=after,
+        request=body,
         actor_user_id=ctx.user.profile_id,
-    )
-    return ManualRunResult(
-        run_id=run.id,
-        status=run.status,
-        conditions_matched=bool(run.conditions_matched),
-        actions_executed=executed,
-        error=run.error,
+        settings=settings,
     )
 
 

@@ -37,6 +37,21 @@ class Settings(BaseSettings):
     cors_origins: list[str] = Field(default=["http://localhost:3000"])
     rate_limit_per_minute: int = Field(default=60)
 
+    # Enterprise API (/api/v1, authenticated by org API keys).
+    # Per-key request quota, enforced across workers via Redis. Distinct env var
+    # from the legacy API_RATE_LIMIT_PER_MINUTE (which feeds rate_limit_per_minute
+    # above) so the two limits don't collide on one variable.
+    api_rate_limit_per_minute: int = Field(default=600, validation_alias="API_KEY_RATE_LIMIT_PER_MINUTE")
+    # Coarse per-client-IP quota applied BEFORE key resolution, so a flood of
+    # invalid/unknown keys can't hammer the auth lookup unbounded. Generous by
+    # design (a legitimate high-throughput client behind one IP must not trip it).
+    api_ip_rate_limit_per_minute: int = Field(
+        default=1200, validation_alias="API_IP_RATE_LIMIT_PER_MINUTE"
+    )
+    # Whether to serve the public API docs (/api/v1/docs).
+    # On by default; set false to hide the interactive docs in a hardened deploy.
+    api_docs_enabled: bool = Field(default=True, validation_alias="API_DOCS_ENABLED")
+
     # Shared infrastructure (read from unprefixed env vars)
     database_url: str = Field(default="", validation_alias="DATABASE_URL")
     redis_url: str = Field(default="redis://localhost:6379/0", validation_alias="REDIS_URL")
@@ -54,6 +69,30 @@ class Settings(BaseSettings):
     # `summarize` action that compresses a RAG answer into one spoken line for a
     # robot). Falls back to the chat model if the env var is unset.
     openai_summary_model: str = Field(default="gpt-5-nano", validation_alias="OPENAI_SUMMARY_MODEL")
+
+    # Additional LLM providers for the multi-provider agent org (services/agents/).
+    # Each central key is a fallback; an org's own key (org_provider_credentials)
+    # takes precedence, mirroring the openai_api_key convention above. Model ids
+    # are LiteLLM-format ("<provider>/<model>"); see services/agents/llm/catalog.py.
+    anthropic_api_key: SecretStr = Field(default=SecretStr(""), validation_alias="ANTHROPIC_API_KEY")
+    anthropic_model: str = Field(default="anthropic/claude-sonnet-5", validation_alias="ANTHROPIC_CHAT_MODEL")
+    gemini_api_key: SecretStr = Field(default=SecretStr(""), validation_alias="GEMINI_API_KEY")
+    gemini_model: str = Field(default="gemini/gemini-2.5-pro", validation_alias="GEMINI_CHAT_MODEL")
+
+    # Agent runtime budgets + escalation backstops (services/agents/). The
+    # iteration cap mirrors the config assistant's MAX_ITERATIONS; the escalation
+    # timers auto-bubble a stalled escalation to a human (see services/agents/notify.py).
+    agent_max_iterations: int = Field(default=32, validation_alias="AGENT_MAX_ITERATIONS")
+    agent_run_concurrency: int = Field(default=4, validation_alias="AGENT_RUN_CONCURRENCY")
+    agent_escalation_timeout_seconds: int = Field(
+        default=2700, validation_alias="AGENT_ESCALATION_TIMEOUT_SECONDS"
+    )
+    agent_supervisor_idle_seconds: int = Field(
+        default=1200, validation_alias="AGENT_SUPERVISOR_IDLE_SECONDS"
+    )
+    # Default recipient for bubbled escalations/approvals when no org admin email
+    # resolves; empty means fall back to the org admins only.
+    agent_notify_email: str = Field(default="", validation_alias="AGENT_NOTIFY_EMAIL")
 
     # Application-level encryption secret for per-org third-party credentials at
     # rest (e.g. orgs.openai_api_key). Derives a Fernet key (see services/crypto.py).

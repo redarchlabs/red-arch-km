@@ -1,7 +1,7 @@
 """Unit tests for the inline entity-change dispatch path
-(`entity_records._dispatch_inline_workflows`) and `OutboxWriter.write` returning
-its row — the wiring that lets an inline run key off THIS request's exact outbox
-event instead of re-querying (which would race a concurrent writer)."""
+(`entity_records_helpers.dispatch_inline_workflows`) and `OutboxWriter.write`
+returning its row — the wiring that lets an inline run key off THIS request's exact
+outbox event instead of re-querying (which would race a concurrent writer)."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from api.routers import entity_records
+from api.services import entity_records_helpers
 
 
 class _AsyncCM:
@@ -59,8 +59,8 @@ class TestDispatchInlineWorkflows:
     @pytest.mark.asyncio
     async def test_none_event_is_noop(self) -> None:
         # No outbox row captured (e.g. a no-op update) → never touches the DB/dispatcher.
-        with patch.object(entity_records, "WorkflowRepository") as wf_repo:
-            await entity_records._dispatch_inline_workflows(_session(), uuid.uuid4(), None, _settings())
+        with patch.object(entity_records_helpers, "WorkflowRepository") as wf_repo:
+            await entity_records_helpers.dispatch_inline_workflows(_session(), uuid.uuid4(), None, _settings())
         wf_repo.assert_not_called()
 
     @pytest.mark.asyncio
@@ -70,12 +70,12 @@ class TestDispatchInlineWorkflows:
         wf_repo = MagicMock()
         wf_repo.has_inline_for_entity = AsyncMock(return_value=False)
         with (
-            patch.object(entity_records, "WorkflowRepository", return_value=wf_repo),
-            patch.object(entity_records, "WorkflowDispatchService") as disp,
+            patch.object(entity_records_helpers, "WorkflowRepository", return_value=wf_repo),
+            patch.object(entity_records_helpers, "build_dispatch_service") as build_disp,
         ):
-            await entity_records._dispatch_inline_workflows(_session(), org_id, row, _settings())
+            await entity_records_helpers.dispatch_inline_workflows(_session(), org_id, row, _settings())
         wf_repo.has_inline_for_entity.assert_awaited_once_with(row.entity_definition_id)
-        disp.assert_not_called()  # gated out before building a dispatcher
+        build_disp.assert_not_called()  # gated out before building a dispatcher
 
     @pytest.mark.asyncio
     async def test_dispatches_this_rows_event(self) -> None:
@@ -88,11 +88,10 @@ class TestDispatchInlineWorkflows:
         dispatcher = MagicMock()
         dispatcher.run_inline_for_change = AsyncMock(return_value={"runs": 1})
         with (
-            patch.object(entity_records, "WorkflowRepository", return_value=wf_repo),
-            patch.object(entity_records, "WorkflowDispatchService", return_value=dispatcher),
-            patch.object(entity_records, "EmailSender", MagicMock()),
+            patch.object(entity_records_helpers, "WorkflowRepository", return_value=wf_repo),
+            patch.object(entity_records_helpers, "build_dispatch_service", return_value=dispatcher),
         ):
-            await entity_records._dispatch_inline_workflows(_session(), org_id, row, _settings())
+            await entity_records_helpers.dispatch_inline_workflows(_session(), org_id, row, _settings())
         dispatcher.run_inline_for_change.assert_awaited_once()
         event = dispatcher.run_inline_for_change.await_args.args[0]
         assert event["id"] == row.id
@@ -113,12 +112,11 @@ class TestDispatchInlineWorkflows:
         dispatcher = MagicMock()
         dispatcher.run_inline_for_change = AsyncMock(side_effect=RuntimeError("robot down"))
         with (
-            patch.object(entity_records, "WorkflowRepository", return_value=wf_repo),
-            patch.object(entity_records, "WorkflowDispatchService", return_value=dispatcher),
-            patch.object(entity_records, "EmailSender", MagicMock()),
+            patch.object(entity_records_helpers, "WorkflowRepository", return_value=wf_repo),
+            patch.object(entity_records_helpers, "build_dispatch_service", return_value=dispatcher),
         ):
             # Must not raise.
-            await entity_records._dispatch_inline_workflows(_session(), org_id, row, _settings())
+            await entity_records_helpers.dispatch_inline_workflows(_session(), org_id, row, _settings())
 
 
 class TestOutboxWriterReturnsRow:

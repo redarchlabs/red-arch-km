@@ -438,6 +438,27 @@ The `documents` table has four additional columns (migration 015) for per-docume
 **Precedence:** If a per-document config is set (not null), it overrides the folder's masks for this document.
 If null, the document's access falls back to its folder's masks.
 
+### API Keys (Enterprise API credentials)
+
+The `api_keys` table (migration 028) holds org-scoped credentials for the `/api/v1` surface. Only the hash of
+a key is stored — never the plaintext.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| id | UUID | PK |
+| org_id | UUID | FK orgs (CASCADE); RLS tenant column |
+| name | VARCHAR(120) | Human label |
+| key_prefix | VARCHAR(20) | Non-secret display prefix (e.g. `km2_AbC123`) |
+| key_hash | VARCHAR(64) | SHA-256 hex of the full key; **globally unique** (serves the by-hash auth lookup) |
+| scopes | JSONB | Granted permission scopes |
+| created_by_profile_id | UUID | FK user_profiles (SET NULL) — audit |
+| last_used_at / expires_at / revoked_at | TIMESTAMPTZ | Lifecycle timestamps (nullable) |
+| created_at / updated_at | TIMESTAMPTZ | Standard timestamps |
+
+**Auth path:** a presented key is hashed and resolved by `key_hash` on a privileged (BYPASSRLS) session —
+cross-tenant, before the org is known — then all data work runs on an org-scoped RLS session. The unique
+constraint on `key_hash` provides the lookup index (no separate index).
+
 ## Row-Level Security
 
 ### RLS-Enabled Tables
@@ -448,6 +469,7 @@ The following tables have RLS policies enforced:
 - **Custom entities:** entity_definitions, entity_fields, entity_relationships, ce_* (all dynamic tables)
 - **Workflows:** workflows, workflow_versions, workflow_outbox, workflow_runs, workflow_run_steps
 - **Forms:** forms, form_links
+- **Reporting & API:** reports, api_keys
 
 ### Policy Structure
 

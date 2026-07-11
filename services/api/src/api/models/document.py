@@ -47,7 +47,7 @@ class ProcessingStatus(StrEnum):
     CANCELLED = "CANCELLED"
 
     @classmethod
-    def terminal(cls) -> frozenset["ProcessingStatus"]:
+    def terminal(cls) -> frozenset[ProcessingStatus]:
         """States a document rests in once ingestion has concluded.
 
         These are **sticky** against the worker's status callback: a duplicate

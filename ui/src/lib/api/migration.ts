@@ -22,6 +22,7 @@ export interface Manifest {
   workflows: { id: string; name: string }[];
   inbound_endpoints: { id: string; name: string }[];
   forms: { id: string; name: string; slug: string }[];
+  reports: { id: string; name: string; slug: string }[];
   views: { id: string; name: string; slug: string }[];
   records: { entity_slug: string; name: string; count: number }[];
   documents: { id: string; title: string }[];

@@ -8,6 +8,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Enterprise API (Phase 1: REST + API keys)
+
+- **Org API keys**: `api_keys` table (migration 028, RLS + `FORCE ROW LEVEL SECURITY`) storing only the
+  **SHA-256 hash** of a `km2_…` key — the plaintext is shown to the creating admin exactly once and never
+  logged or returned on reads. Keys carry a scope set + optional expiry and are attributed to the creating
+  admin. Managed under **Admin → API & Keys** (org-admin only): `GET/POST/DELETE /api/api-keys` +
+  `GET /api/api-keys/scopes`.
+- **Versioned public surface** `GET /api/v1/**` — a stable, API-key-authenticated contract that reuses the
+  same services as the first-party UI: entities (read), records (CRUD + aggregate, with inline-workflow
+  dispatch), reports (list/get/run/ad-hoc), workflows (list/get/run/runs/steps), search + RAG chat, and the
+  knowledge base (folders/documents/chunks/summary). Present the key as `Authorization: Bearer km2_…` or
+  `X-API-Key`.
+- **Scopes**: `entities:read`, `records:read`, `records:write`, `reports:read`, `reports:run`,
+  `workflows:read`, `workflows:run` (high-privilege — runs any workflow in the org), `search:read`,
+  `knowledge:read`. `domain:*` / `*` wildcards supported. Org service keys act with **org-wide data
+  visibility** (operations gated by scope; surfaced to admins at creation time).
+- **Rate limiting**: per-key Redis fixed-window quota (`API_KEY_RATE_LIMIT_PER_MINUTE`, default 600) with
+  `X-RateLimit-*` + `Retry-After` headers, plus a coarse pre-auth per-IP guard (`API_IP_RATE_LIMIT_PER_MINUTE`,
+  default 1200) so an invalid-key flood can't hammer the auth lookup. Both fail open on a Redis outage.
+- **Always-on docs**: Swagger UI at `/api/v1/docs` (+ `/api/v1/openapi.json`) covering only the public
+  surface, gated by `API_DOCS_ENABLED`; the internal `/docs` stays debug-only.
+- **Reuse refactor**: extracted shared helpers so `/api/v1` and the internal routers share one implementation
+  — `services/entity_records_helpers.py`, `services/search_access.py`, `services/workflow/factory.py`
+  (`build_dispatch_service`), and `services/workflow/manual_run.py` (`execute_workflow_run` +
+  `resolve_published_version`); shared `SecretField` UI component for one-time secret reveal.
+- New env: `API_KEY_RATE_LIMIT_PER_MINUTE`, `API_IP_RATE_LIMIT_PER_MINUTE`, `API_DOCS_ENABLED`.
+
 ### Added — Reporting engine & server-side record filtering
 
 - **Aggregation engine**: `POST /api/entities/{slug}/aggregate` runs GROUP BY / metric queries over a custom
