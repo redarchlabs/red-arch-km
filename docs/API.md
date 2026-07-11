@@ -20,6 +20,41 @@ Brain API endpoints require an API key:
 X-API-Key: ${BRAIN_API_KEY}
 ```
 
+### Enterprise API Authentication (`/api/v1`)
+
+The versioned public surface (`/api/v1/**`) is authenticated by an **organization API key**, not a Clerk
+session — external systems present a `km2_…` key created under **Admin → API & Keys** (org-admin only):
+
+```http
+Authorization: Bearer km2_xxxxxxxx...      # primary
+X-API-Key: km2_xxxxxxxx...                 # alternative
+```
+
+Only the SHA-256 hash of the key is stored (`api_keys` table, migration 028); the plaintext is shown once at
+creation. A key resolves to its org (no `X-Org-ID` header needed) and acts with **org-wide data visibility**,
+with each operation gated by the key's **scopes**:
+
+| Scope | Grants |
+|-------|--------|
+| `entities:read` | list/read entity definitions |
+| `records:read` / `records:write` | read / create-update-delete entity records |
+| `reports:read` / `reports:run` | read reports / execute reports + ad-hoc aggregations |
+| `workflows:read` / `workflows:run` | inspect workflows+runs / trigger runs (runs **any** workflow in the org) |
+| `search:read` | semantic search + RAG chat |
+| `knowledge:read` | list/read folders + documents + chunks/summary |
+
+`domain:*` and `*` wildcards are supported. Missing scope → `403`; unknown/revoked/expired/missing key →
+opaque `401`.
+
+**Rate limiting.** Per-key quota (`API_KEY_RATE_LIMIT_PER_MINUTE`, default 600) returns `X-RateLimit-Limit`,
+`X-RateLimit-Remaining`, and `Retry-After` (on `429`); a coarse pre-auth per-IP guard
+(`API_IP_RATE_LIMIT_PER_MINUTE`, default 1200) caps invalid-key floods. Both fail open if Redis is down.
+
+**Docs.** Interactive Swagger UI for the public surface is served at `GET /api/v1/docs`
+(+ `GET /api/v1/openapi.json`), gated by `API_DOCS_ENABLED` (default on). Endpoints mirror the internal
+`/api/*` routes (entities, records+aggregate, reports, workflows, search, knowledge) under the `/api/v1`
+prefix.
+
 ## Main API Endpoints
 
 Base URL: `http://localhost:8000`

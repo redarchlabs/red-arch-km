@@ -6,6 +6,7 @@ task NOT re-exported here is never registered and its messages are discarded
 as "unregistered task".
 """
 
+from worker.tasks.agents import advance_runs as agents_advance_runs
 from worker.tasks.extract import task_extract_and_ingest
 from worker.tasks.ingest import task_ingest_document
 from worker.tasks.metadata import task_update_document_metadata
@@ -23,4 +24,6 @@ __all__ = [
     "maintain_partitions",
     "run_timers",
     "sweep_outbox",
+    # Agent-org run sweep (same rule: must be re-exported to be registered).
+    "agents_advance_runs",
 ]

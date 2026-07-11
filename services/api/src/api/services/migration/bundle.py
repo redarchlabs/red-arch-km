@@ -30,6 +30,8 @@ RESOURCE_ORDER: tuple[str, ...] = (
     "reports",
     "forms",
     "views",
+    "mcp_servers",
+    "agents",
     "records",
     "documents",
 )

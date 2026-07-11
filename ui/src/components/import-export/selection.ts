@@ -22,6 +22,7 @@ export interface SelectableGroup {
 const GROUPS: ReadonlyArray<{ type: string; label: string }> = [
   { type: "entities", label: "Entities" },
   { type: "forms", label: "Forms" },
+  { type: "reports", label: "Reports" },
   { type: "views", label: "Views" },
   { type: "workflows", label: "Workflows" },
   { type: "connections", label: "Connections" },
@@ -41,6 +42,7 @@ export function manifestToGroups(manifest: Manifest): SelectableGroup[] {
   const byType: Record<string, SelectableItem[]> = {
     entities: manifest.entities.map(nameSlug),
     forms: manifest.forms.map(nameSlug),
+    reports: manifest.reports.map(nameSlug),
     views: manifest.views.map(nameSlug),
     workflows: manifest.workflows.map((w) => ({ id: w.id, label: w.name })),
     connections: manifest.connections.map((c) => ({ id: c.id, label: c.name })),
@@ -61,6 +63,7 @@ export function manifestToGroups(manifest: Manifest): SelectableGroup[] {
 interface BundleResources {
   entities?: { id: string; name: string; slug: string }[];
   forms?: { id: string; name: string; slug: string }[];
+  reports?: { id: string; name: string; slug: string }[];
   views?: { id: string; name: string; slug: string }[];
   workflows?: { id: string; name: string }[];
   connections?: { id: string; name: string }[];
@@ -76,6 +79,7 @@ export function bundleToGroups(resources: BundleResources): SelectableGroup[] {
   const byType: Record<string, SelectableItem[]> = {
     entities: (resources.entities ?? []).map(nameSlug),
     forms: (resources.forms ?? []).map(nameSlug),
+    reports: (resources.reports ?? []).map(nameSlug),
     views: (resources.views ?? []).map(nameSlug),
     workflows: (resources.workflows ?? []).map((w) => ({ id: w.id, label: w.name })),
     connections: (resources.connections ?? []).map((c) => ({ id: c.id, label: c.name })),

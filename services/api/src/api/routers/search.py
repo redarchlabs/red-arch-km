@@ -3,18 +3,16 @@
 from __future__ import annotations
 
 import logging
-import uuid
 from collections.abc import AsyncIterator
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth.dependencies import OrgContext, require_org_access
 from api.config import Settings, get_settings
 from api.dependencies import get_tenant_db
-from api.models.org import Org
 from api.schemas.search import (
     AgentChatRequest,
     AgentChatResponse,
@@ -25,29 +23,11 @@ from api.schemas.search import (
     SearchResult,
 )
 from api.services.brain_client import BrainAPIClient
-from api.services.permission_config import calculate_user_masks_from_membership
+from api.services.search_access import folder_tags as _folder_tags
+from api.services.search_access import resolve_user_access_keys as _get_user_access_keys
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-
-
-async def _get_user_access_keys(session: AsyncSession, ctx: OrgContext) -> list[int] | None:
-    """Return the user's access masks, or None for admins (unrestricted)."""
-    if ctx.is_org_admin:
-        return None
-    org = await session.get(Org, ctx.org_id)
-    if org is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Org not found")
-    return calculate_user_masks_from_membership(ctx.membership, org.permission_number)
-
-
-def _folder_tags(folder_ids: list[uuid.UUID]) -> list[str] | None:
-    """Translate folder ids into the synthetic `folder:<id>` tags used at ingest.
-
-    Returned as an OR-filter (any of these) so a chat/search can be scoped to a
-    set of folders. None when no folder scope was requested.
-    """
-    return [f"folder:{fid}" for fid in folder_ids] or None
 
 
 @router.post("/", response_model=SearchResponse)

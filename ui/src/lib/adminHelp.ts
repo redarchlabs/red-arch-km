@@ -8,7 +8,16 @@ import type { HelpTopic } from "@/lib/help";
 
 const topic = (title: string, body: string): HelpTopic => ({ prefix: "", title, body });
 
-type AdminTabKey = "regions" | "departments" | "roles" | "groups" | "tags" | "attributes" | "members";
+type AdminTabKey =
+  | "regions"
+  | "departments"
+  | "roles"
+  | "groups"
+  | "tags"
+  | "attributes"
+  | "members"
+  | "import_export"
+  | "api";
 type SiteAdminTabKey = "orgs" | "users" | "memberships" | "system" | "celery" | "emails";
 
 // Regions / Departments / Roles / Groups all use the same DimensionManager, so
@@ -65,6 +74,34 @@ Manage **who belongs to this organization** and what they can see.
 - The per-dimension toggles (regions, departments, roles, groups) set **which
   permission values** that member can access — this is what gates the folders
   and documents they can view or contribute to.
+`,
+  ),
+  import_export: topic(
+    "Import / Export",
+    `
+Migrate this organization's **configuration and data** to or from a portable
+JSON bundle.
+
+- **Export** selected resources — entities, forms, reports, views, workflows,
+  connections, records, documents and more — into one downloadable file.
+- **Import** a bundle into this org, choosing how to resolve name/slug
+  collisions (skip, overwrite, or rename). Secrets are never exported.
+`,
+  ),
+  api: topic(
+    "API & Keys",
+    `
+Grant **external systems** programmatic access to this organization over the
+REST API.
+
+- **Create a key** with a name, a set of **scopes** (what it may do), and an
+  optional **expiry**. The secret is shown **once** — copy it immediately.
+- A key acts with **organization-wide data access**, limited to its scopes. It
+  is *not* tied to a person; treat it like a shared service credential.
+- **Revoke** a key at any time to cut off access instantly.
+
+Callers authenticate with \`Authorization: Bearer km2_…\`. Full endpoint
+documentation is linked from the **Using the API** panel.
 `,
   ),
 };

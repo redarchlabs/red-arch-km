@@ -8,6 +8,7 @@ import { registerDocumentTools } from "./documents.js";
 import { registerFolderTools } from "./folders.js";
 import { registerFormTools } from "./forms.js";
 import { registerViewTools } from "./views.js";
+import { registerReportTools } from "./reports.js";
 import { registerEntityTools } from "./entities.js";
 import { registerSearchTools } from "./search.js";
 
@@ -19,6 +20,7 @@ export function registerAllTools(server: McpServer, ctx: AppContext): void {
   registerFolderTools(server, ctx);
   registerFormTools(server, ctx);
   registerViewTools(server, ctx);
+  registerReportTools(server, ctx);
   registerEntityTools(server, ctx);
   registerSearchTools(server, ctx);
 }
