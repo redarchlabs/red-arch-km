@@ -89,6 +89,14 @@ app.conf.beat_schedule = {
         "schedule": float(os.environ.get("WORKFLOW_TOKEN_INTERVAL", "10")),
         "options": {"expires": 30},
     },
+    # Agent org: claim + drive queued agent runs (delegated children, scheduled,
+    # and work-order runs). Interactive console runs finish inline; this sweep
+    # drives everything queued for background execution.
+    "agents-advance-runs": {
+        "task": "worker.tasks.agents.advance_runs",
+        "schedule": float(os.environ.get("AGENT_RUN_INTERVAL", "10")),
+        "options": {"expires": 30},
+    },
     # Liveness beacon for the site-admin console: proves beat -> broker -> worker
     # is healthy. A stale/absent heartbeat there means beat is down.
     "beat-heartbeat": {

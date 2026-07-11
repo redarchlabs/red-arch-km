@@ -2,11 +2,14 @@
 
 import { useEffect, useState } from "react";
 
+import { ApiKeysManager } from "@/components/admin/ApiKeysManager";
 import { AttributeManager } from "@/components/admin/AttributeManager";
 import { DimensionManager } from "@/components/admin/DimensionManager";
 import { MembershipManager } from "@/components/admin/MembershipManager";
 import { TagManager } from "@/components/admin/TagManager";
+import { ImportExportConsole } from "@/components/import-export/ImportExportConsole";
 import { useHelpOverride } from "@/context/HelpContext";
+import { useOrg } from "@/context/OrgContext";
 import { ADMIN_TAB_HELP } from "@/lib/adminHelp";
 import type { DimensionKind } from "@/lib/api/dimensions";
 import { cn } from "@/lib/utils";
@@ -18,7 +21,9 @@ type AdminTab =
   | "groups"
   | "tags"
   | "attributes"
-  | "members";
+  | "members"
+  | "import_export"
+  | "api";
 
 const DIMENSION_LABELS: Record<DimensionKind, string> = {
   regions: "Regions",
@@ -35,7 +40,11 @@ const TABS: ReadonlyArray<{ key: AdminTab; label: string }> = [
   { key: "tags", label: "Tags" },
   { key: "attributes", label: "Attributes" },
   { key: "members", label: "Members" },
+  { key: "import_export", label: "Import / Export" },
 ];
+
+// API-key management is org-admin only, so its tab is appended conditionally.
+const API_TAB = { key: "api", label: "API & Keys" } as const;
 
 function isDimension(key: AdminTab): key is DimensionKind {
   return key === "regions" || key === "departments" || key === "roles" || key === "groups";
@@ -43,11 +52,15 @@ function isDimension(key: AdminTab): key is DimensionKind {
 
 export default function AdminPage() {
   const [active, setActive] = useState<AdminTab>("regions");
+  const { isOrgAdmin } = useOrg();
+
+  // The API tab is only offered to org admins (the backend also enforces this).
+  const tabs = isOrgAdmin ? [...TABS, API_TAB] : TABS;
 
   // Show help for the active tab (clears when leaving the page).
   const setHelp = useHelpOverride();
   useEffect(() => {
-    setHelp(ADMIN_TAB_HELP[active]);
+    setHelp(ADMIN_TAB_HELP[active] ?? null);
     return () => setHelp(null);
   }, [active, setHelp]);
 
@@ -61,7 +74,7 @@ export default function AdminPage() {
       </div>
 
       <div className="flex flex-wrap gap-1 border-b" role="tablist">
-        {TABS.map((tab) => (
+        {tabs.map((tab) => (
           <button
             key={tab.key}
             type="button"
@@ -86,6 +99,8 @@ export default function AdminPage() {
       {active === "tags" ? <TagManager /> : null}
       {active === "attributes" ? <AttributeManager /> : null}
       {active === "members" ? <MembershipManager /> : null}
+      {active === "import_export" ? <ImportExportConsole /> : null}
+      {active === "api" ? <ApiKeysManager /> : null}
     </div>
   );
 }

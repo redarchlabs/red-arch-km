@@ -24,12 +24,16 @@ from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.config import Settings
+from api.models.agent import Agent
+from api.models.mcp_server import McpServer
+from api.repositories.agent import AgentRepository
 from api.repositories.custom_entity import (
     EntityDefinitionRepository,
     EntityFieldRepository,
     EntityRelationshipRepository,
 )
 from api.repositories.document import DocumentRepository
+from api.repositories.mcp_server import McpServerRepository
 from api.repositories.dynamic_entity import DynamicEntityRepository, EntityRecordError
 from api.repositories.folder import FolderRepository
 from api.repositories.tag import TagRepository
@@ -102,6 +106,10 @@ class MigrationImporter:
         await self._import_reports(resources.get("reports") or [], strategy, summary)
         await self._import_forms(resources.get("forms") or [], strategy, summary)
         await self._import_views(resources.get("views") or [], strategy, summary)
+        # MCP servers before agents (agents reference them); both after workflows so
+        # the workflow_allowlist ids remap.
+        await self._import_mcp_servers(resources.get("mcp_servers") or [], strategy, summary)
+        await self._import_agents(resources.get("agents") or [], strategy, summary)
         await self._import_records(resources.get("entities") or [], resources.get("records") or [], summary)
         await self._import_documents(resources.get("documents") or [], strategy, summary, dry_run=dry_run)
         return summary
@@ -662,6 +670,135 @@ class MigrationImporter:
         """Remap embedded ids (relationship_id, form_id, workflow_id, …) then parse."""
         remapped = remap_refs(resource.get("config") or {}, self._ids, summary.warnings)
         return FormConfig.model_validate(remapped)
+
+    # ------------------------------------------------------------------ #
+    # MCP servers (secrets NEVER imported)
+    # ------------------------------------------------------------------ #
+    async def _import_mcp_servers(
+        self, servers: list[dict], strategy: CollisionStrategy, summary: ImportSummary
+    ) -> None:
+        repo = McpServerRepository(self._session, self._org_id)
+        existing = {s.name: s for s in await repo.list_all()}
+        out = summary.outcome("mcp_servers")
+        for srv in servers:
+            name = srv["name"]
+            found = existing.get(name)
+            if found is not None and strategy is CollisionStrategy.SKIP:
+                self._ids.put("mcp_servers", srv["id"], found.id)
+                out.record("skipped")
+                continue
+            if found is not None and strategy is CollisionStrategy.OVERWRITE:
+                found.description = srv.get("description")
+                found.transport = srv.get("transport", "http")
+                found.command = srv.get("command")
+                found.url = srv.get("url")
+                found.config = srv.get("config") or {}
+                found.enabled = srv.get("enabled", True)
+                await repo.flush()
+                self._ids.put("mcp_servers", srv["id"], found.id)
+                out.record("overwritten")
+                self._note_mcp_secret(srv, name, summary)
+                continue
+            new_name = name if found is None else suffix_name(name, set(existing), max_len=120)
+            created = await repo.create(
+                McpServer(
+                    name=new_name,
+                    description=srv.get("description"),
+                    transport=srv.get("transport", "http"),
+                    command=srv.get("command"),
+                    url=srv.get("url"),
+                    config=srv.get("config") or {},
+                    secret_encrypted=None,
+                    enabled=srv.get("enabled", True),
+                )
+            )
+            existing[new_name] = created
+            self._ids.put("mcp_servers", srv["id"], created.id)
+            out.record("created" if found is None else "renamed")
+            self._note_mcp_secret(srv, new_name, summary)
+
+    @staticmethod
+    def _note_mcp_secret(srv: dict, name: str, summary: ImportSummary) -> None:
+        if srv.get("has_secret"):
+            summary.warnings.append(f"MCP server {name!r} needs its secret re-entered (not exported)")
+
+    # ------------------------------------------------------------------ #
+    # Agents (two passes: create + remap tool/mcp/workflow refs, then supervisors)
+    # ------------------------------------------------------------------ #
+    async def _import_agents(
+        self, agents: list[dict], strategy: CollisionStrategy, summary: ImportSummary
+    ) -> None:
+        repo = AgentRepository(self._session, self._org_id)
+        existing = {a.name: a for a in await repo.list_all()}
+        out = summary.outcome("agents")
+
+        # Pass 1: create/find + remap mcp_server_ids + workflow_allowlist.
+        for agent in agents:
+            name = agent["name"]
+            found = existing.get(name)
+            if found is not None and strategy is CollisionStrategy.SKIP:
+                self._ids.put("agents", agent["id"], found.id)
+                out.record("skipped")
+                continue
+            mcp_ids = self._remap_id_list("mcp_servers", agent.get("mcp_server_ids"))
+            wf_ids = self._remap_id_list("workflows", agent.get("workflow_allowlist"), summary, agent["name"])
+            if found is not None and strategy is CollisionStrategy.OVERWRITE:
+                self._apply_agent_fields(found, agent, mcp_ids, wf_ids)
+                await repo.flush()
+                self._ids.put("agents", agent["id"], found.id)
+                out.record("overwritten")
+                continue
+            new_name = name if found is None else suffix_slug(name, set(existing), sep="-")
+            model = Agent(name=new_name, provider=agent["provider"], model=agent["model"])
+            self._apply_agent_fields(model, agent, mcp_ids, wf_ids)
+            created = await repo.create(model)
+            existing[new_name] = created
+            self._ids.put("agents", agent["id"], created.id)
+            out.record("created" if found is None else "renamed")
+
+        # Pass 2: supervisors (all agents now exist + are mapped).
+        for agent in agents:
+            new_id = self._ids.get("agents", agent["id"])
+            if new_id is None or not agent.get("supervisor_id"):
+                continue
+            sup_new = self._ids.get("agents", agent["supervisor_id"])
+            if sup_new is None:
+                summary.warnings.append(f"agent {agent['name']!r}: supervisor not in bundle; left unassigned")
+                continue
+            row = await repo.get(uuid.UUID(new_id))
+            if row is not None:
+                row.supervisor_id = uuid.UUID(sup_new)
+        await repo.flush()
+
+    def _remap_id_list(
+        self, namespace: str, old_ids: list | None, summary: ImportSummary | None = None, agent_name: str = ""
+    ) -> list[str]:
+        out: list[str] = []
+        for old in old_ids or []:
+            mapped = self._ids.get(namespace, old)
+            if mapped is not None:
+                out.append(mapped)
+            elif summary is not None:
+                summary.warnings.append(
+                    f"agent {agent_name!r}: a {namespace} reference was not in the bundle and was dropped"
+                )
+        return out
+
+    @staticmethod
+    def _apply_agent_fields(model: Agent, agent: dict, mcp_ids: list[str], wf_ids: list[str]) -> None:
+        model.display_name = agent.get("display_name")
+        model.description = agent.get("description")
+        model.kind = agent.get("kind", "operator")
+        model.persona = agent.get("persona")
+        model.provider = agent["provider"]
+        model.model = agent["model"]
+        model.params = agent.get("params") or {}
+        model.avatar = agent.get("avatar")
+        model.accent = agent.get("accent")
+        model.enabled = agent.get("enabled", True)
+        model.grants = agent.get("grants") or {}
+        model.mcp_server_ids = mcp_ids
+        model.workflow_allowlist = wf_ids
 
     # ------------------------------------------------------------------ #
     # Records (best-effort: dependency order + deferred FK second pass)

@@ -43,6 +43,19 @@ _RLS_TABLES = [
     "workflow_connections",
     "workflow_inbound_endpoints",
     "reports",
+    "api_keys",
+    "org_provider_credentials",
+    "agents",
+    "mcp_servers",
+    "work_orders",
+    "work_order_tasks",
+    "work_order_entries",
+    "work_order_artifacts",
+    "agent_runs",
+    "agent_run_steps",
+    "agent_approvals",
+    "agent_notifications",
+    "agent_schedules",
 ]
 
 

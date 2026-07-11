@@ -24,6 +24,59 @@ export interface HelpTopic {
 
 const TOPICS: HelpTopic[] = [
   {
+    prefix: "/agents/work-orders",
+    title: "Work orders",
+    body: `
+**Work orders** are the durable unit of work your agent org executes.
+
+- **File a work order** with a title + details, and optionally assign a
+  **supervisor agent** to own it.
+- The supervisor decomposes it into **tasks** and **delegates** them to its
+  direct reports; progress is tracked as tasks complete.
+- The **diary** records what each agent did, including delegated sub-runs.
+- Move a work order through **draft → approved → in progress → done** with the
+  status buttons.
+`,
+  },
+  {
+    prefix: "/agents/approvals",
+    title: "Approvals & escalations",
+    body: `
+When an agent tries a step that needs a human, it **pauses** and the request
+lands here.
+
+- **Approve** to let the paused run continue with that action; **Deny** to stop
+  it. Approvals never auto-clear — a person must decide.
+- **Escalations & reviews** are notices agents raised to a supervisor or to you;
+  **Resolve** them once handled.
+`,
+  },
+  {
+    prefix: "/agents",
+    title: "Agents",
+    body: `
+**Agents** is your roster of AI agents — the same authority model as a real org:
+supervisors, delegation, and human approval gates.
+
+### Set up a provider
+Each agent uses an LLM **provider** (Anthropic, OpenAI, or Gemini). Add your org
+API key in the **Providers** panel; a provider marked *no key* can't run until
+you set one (or a central key is configured).
+
+### Create an agent
+- **Role** sets what it may do: **operator** (executes), **advisory** (reads +
+  recommends, never mutates), **coordinator** (plans + delegates only).
+- **Supervisor** places it in the org chart — it escalates upward and can only
+  delegate to its direct reports.
+- **Capabilities** grant what it can actually do — run workflows (and which
+  ones), write records — and whether an action needs **human approval** first.
+
+### Use an agent
+Open its **Console** to chat with it live, or **File a work order** and assign it
+as supervisor. Agents can run KM2 **workflows** and call **MCP-server** tools.
+`,
+  },
+  {
     prefix: "/folders",
     title: "Resources & folders",
     body: `

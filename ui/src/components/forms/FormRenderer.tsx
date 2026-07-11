@@ -1151,7 +1151,7 @@ export function FormRenderer({
               {el.columns.map((col, ci) => (
                 <div
                   key={ci}
-                  className="sm:col-auto"
+                  className="min-w-0 sm:col-auto"
                   style={{ gridColumn: `span ${Math.round((Math.max(1, col.span) / totalSpan) * 12)} / span ${Math.round((Math.max(1, col.span) / totalSpan) * 12)}` }}
                 >
                   {renderList(col.elements, scope)}

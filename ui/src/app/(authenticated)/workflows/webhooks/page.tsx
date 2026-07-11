@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, Copy, Plus, Trash2, Webhook } from "lucide-react";
+import { ArrowLeft, Plus, Trash2, Webhook } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { SecretField } from "@/components/ui/secret-field";
 import { Skeleton } from "@/components/ui/skeleton";
 import { getApiErrorMessage } from "@/lib/api/errors";
 import {
@@ -162,37 +163,6 @@ export default function WebhooksPage() {
       )}
 
       {created ? <TokenDialog created={created} onClose={() => setCreated(null)} /> : null}
-    </div>
-  );
-}
-
-function SecretField({ label, value }: { label: string; value: string }) {
-  const [copied, setCopied] = useState(false);
-  const copy = async () => {
-    try {
-      await navigator.clipboard?.writeText(value);
-      setCopied(true);
-    } catch {
-      setCopied(false);
-    }
-  };
-  return (
-    <div className="rounded-md border bg-muted/40 p-3">
-      <p className="mb-1 text-xs font-medium text-muted-foreground">{label}</p>
-      <div className="flex items-center gap-2">
-        <code className="flex-1 break-all rounded bg-background px-2 py-1 text-xs">{value}</code>
-        <Button
-          type="button"
-          variant="outline"
-          size="icon"
-          className="h-7 w-7 shrink-0"
-          onClick={() => void copy()}
-          aria-label={`Copy ${label}`}
-        >
-          <Copy className="h-4 w-4" />
-        </Button>
-      </div>
-      {copied ? <p className="mt-1 text-xs text-emerald-600 dark:text-emerald-400">Copied.</p> : null}
     </div>
   );
 }
