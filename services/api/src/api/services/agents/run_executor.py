@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import func, select, update
@@ -42,7 +43,9 @@ class AgentRunExecutor:
         self._settings = settings
 
     async def advance(self, session: AsyncSession, limit: int = 10) -> dict[str, int]:
-        """Claim + drive a batch of queued runs. Returns counts."""
+        """Claim + drive a batch of queued runs, after re-bubbling stale waits."""
+        reminded = await self._backstop(session, limit)
+        await session.commit()
         claimed = await self._claim(session, limit)
         await session.commit()
         executed = errors = 0
@@ -57,7 +60,32 @@ class AgentRunExecutor:
                 await self._mark_error(session, org_id, run_id)
                 await session.commit()
                 errors += 1
-        return {"claimed": len(claimed), "executed": executed, "errors": errors}
+        return {"claimed": len(claimed), "executed": executed, "errors": errors, "reminded": reminded}
+
+    async def _backstop(self, session: AsyncSession, limit: int) -> int:
+        """Re-bubble runs that have been ``waiting`` longer than the escalation
+        timeout, so a stalled approval/escalation isn't silently forgotten. Throttled
+        by bumping ``last_activity_at``, so each stale run re-notifies at most once per
+        timeout window rather than every sweep."""
+        cutoff = datetime.now(UTC) - timedelta(seconds=self._settings.agent_escalation_timeout_seconds)
+        rows = (
+            await session.execute(
+                select(AgentRun)
+                .where(AgentRun.status == "waiting", AgentRun.last_activity_at < cutoff)
+                .order_by(AgentRun.last_activity_at)
+                .limit(limit)
+            )
+        ).scalars().all()
+        for run in rows:
+            await create_notification(
+                session, run.org_id, kind="escalation",
+                title="Reminder: an agent run is still waiting for you",
+                body=f"Run {run.id} has been waiting ({run.wait_kind}) past the timeout.",
+                run_id=run.id, work_order_id=run.work_order_id, recipient_role="org_admin",
+                settings=self._settings,
+            )
+            run.last_activity_at = datetime.now(UTC)
+        return len(rows)
 
     async def _claim(self, session: AsyncSession, limit: int) -> list[tuple[uuid.UUID, uuid.UUID]]:
         rows = (

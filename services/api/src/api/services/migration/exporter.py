@@ -17,9 +17,11 @@ from api.repositories.custom_entity import (
     EntityFieldRepository,
     EntityRelationshipRepository,
 )
+from api.repositories.agent import AgentRepository
 from api.repositories.document import DocumentRepository
 from api.repositories.dynamic_entity import DynamicEntityRepository
 from api.repositories.folder import FolderRepository
+from api.repositories.mcp_server import McpServerRepository
 from api.repositories.form import FormRepository
 from api.repositories.report import ReportRepository
 from api.repositories.tag import TagRepository
@@ -78,6 +80,8 @@ class MigrationExporter:
             "forms": await self._export_forms(),
             "reports": await self._export_reports(),
             "views": await self._export_views(),
+            "mcp_servers": await self._export_mcp_servers(),
+            "agents": await self._export_agents(),
             "records": await self._export_records(entities, warnings, record_slugs) if include_records else [],
             "documents": await self._export_documents(warnings, doc_ids) if include_documents else [],
         }
@@ -109,6 +113,8 @@ class MigrationExporter:
         reports = await self._export_reports()
         views = await self._export_views()
         tags = await self._export_tags()
+        mcp_servers = await self._export_mcp_servers()
+        agents = await self._export_agents()
         return {
             "tags": [{"id": t["id"], "name": t["name"]} for t in tags],
             "entities": [{"id": e["id"], "name": e["name"], "slug": e["slug"]} for e in entities],
@@ -119,6 +125,8 @@ class MigrationExporter:
             "forms": [{"id": f["id"], "name": f["name"], "slug": f["slug"]} for f in forms],
             "reports": [{"id": r["id"], "name": r["name"], "slug": r["slug"]} for r in reports],
             "views": [{"id": v["id"], "name": v["name"], "slug": v["slug"]} for v in views],
+            "mcp_servers": [{"id": s["id"], "name": s["name"]} for s in mcp_servers],
+            "agents": [{"id": a["id"], "name": a["name"]} for a in agents],
             "records": await self._record_counts(entities),
             "documents": await self._document_index(),
         }
@@ -331,6 +339,49 @@ class MigrationExporter:
                 "is_active": v.is_active,
             }
             for v in views
+        ]
+
+    async def _export_mcp_servers(self) -> list[dict[str, Any]]:
+        servers = await McpServerRepository(self._session, self._org_id).list_all()
+        return [
+            {
+                "id": str(s.id),
+                "name": s.name,
+                "description": s.description,
+                "transport": s.transport,
+                "command": s.command,
+                "url": s.url,
+                "config": json_safe(s.config or {}),
+                "enabled": s.enabled,
+                "has_secret": bool(s.secret_encrypted),  # value never exported
+            }
+            for s in servers
+        ]
+
+    async def _export_agents(self) -> list[dict[str, Any]]:
+        agents = await AgentRepository(self._session, self._org_id).list_all()
+        # supervisor_id / mcp_server_ids / workflow_allowlist are ORIGINAL ids,
+        # remapped on import. grants holds tool NAMES (not ids) → no remap.
+        return [
+            {
+                "id": str(a.id),
+                "name": a.name,
+                "display_name": a.display_name,
+                "description": a.description,
+                "kind": a.kind,
+                "persona": a.persona,
+                "provider": a.provider,
+                "model": a.model,
+                "params": json_safe(a.params or {}),
+                "supervisor_id": str(a.supervisor_id) if a.supervisor_id else None,
+                "avatar": a.avatar,
+                "accent": a.accent,
+                "enabled": a.enabled,
+                "grants": json_safe(a.grants or {}),
+                "mcp_server_ids": [str(x) for x in (a.mcp_server_ids or [])],
+                "workflow_allowlist": [str(x) for x in (a.workflow_allowlist or [])],
+            }
+            for a in agents
         ]
 
     # ------------------------------------------------------------------ #
