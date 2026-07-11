@@ -29,6 +29,7 @@ def _sanitize(value: str) -> str:
 
 
 def resolve_server(row: Any, settings: Settings) -> ResolvedMcpServer:
+    """Static-secret resolution (bearer/api-key/none). OAuth uses resolve_for_call."""
     secret = (
         decrypt_secret(row.secret_encrypted, settings.org_encryption_key.get_secret_value())
         if row.secret_encrypted
@@ -43,6 +44,27 @@ def resolve_server(row: Any, settings: Settings) -> ResolvedMcpServer:
         config=row.config or {},
         secret=secret,
     )
+
+
+async def resolve_for_call(
+    session, org_id: uuid.UUID, row: Any, settings: Settings, actor_user_id: uuid.UUID | None
+) -> ResolvedMcpServer | None:
+    """Resolve a server for an actual call. For OAuth servers this mints a fresh
+    access token (refreshing if needed); returns None when the identity hasn't
+    connected, so the run simply doesn't get that server's tools."""
+    cfg = row.config or {}
+    if cfg.get("auth_type") == "oauth":
+        from api.services.agents.mcp.oauth_service import McpOAuthService
+
+        token = await McpOAuthService(session, org_id, settings).ensure_access_token(row, actor_user_id)
+        if not token:
+            logger.info("MCP server %s not connected (oauth); its tools are unavailable this run", row.name)
+            return None
+        return ResolvedMcpServer(
+            id=str(row.id), name=row.name, transport=row.transport, command=row.command,
+            url=row.url, config={**cfg, "auth_type": "bearer"}, secret=token,
+        )
+    return resolve_server(row, settings)
 
 
 def _make_spec(server: ResolvedMcpServer, tool: McpToolDef, client: McpClient) -> ToolSpec:
@@ -70,9 +92,12 @@ async def build_mcp_tool_specs(
     agent: Agent,
     settings: Settings,
     *,
+    actor_user_id: uuid.UUID | None = None,
     client: McpClient | None = None,
 ) -> list[ToolSpec]:
-    """ToolSpecs for every tool on the agent's enabled, allow-listed MCP servers."""
+    """ToolSpecs for every tool on the agent's enabled, allow-listed MCP servers.
+
+    ``actor_user_id`` selects the per-user OAuth token for user-identity servers."""
     wanted = {str(x) for x in (agent.mcp_server_ids or [])}
     if not wanted:
         return []
@@ -84,7 +109,9 @@ async def build_mcp_tool_specs(
     ]
     specs: list[ToolSpec] = []
     for row in rows:
-        server = resolve_server(row, settings)
+        server = await resolve_for_call(session, org_id, row, settings, actor_user_id)
+        if server is None:  # OAuth server the identity hasn't connected
+            continue
         try:
             tools = await client.list_tools(server)
         except Exception:  # noqa: BLE001 - one bad server must not kill the run

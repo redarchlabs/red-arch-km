@@ -11,7 +11,7 @@ from api.models.agent_run import (
 from api.models.api_key import ApiKey
 from api.models.base import Base
 from api.models.chat import ChatSession
-from api.models.mcp_server import McpServer
+from api.models.mcp_server import McpOAuthFlow, McpServer, McpServerUserToken
 from api.models.custom_entity import EntityDefinition, EntityField, EntityRelationship
 from api.models.document import Document, DocumentAccess, DocumentAttributeDefinition, Folder, Tag
 from api.models.form import Form, FormLink
@@ -45,7 +45,9 @@ __all__ = [
     "Base",
     "ChatSession",
     "Department",
+    "McpOAuthFlow",
     "McpServer",
+    "McpServerUserToken",
     "Document",
     "DocumentAccess",
     "DocumentAttributeDefinition",

@@ -94,7 +94,9 @@ class AgentConsoleService:
                 await emit({"type": "run_started", "run_id": str(run.id)})
 
                 provider = LLMProvider(api_key=key)
-                all_specs = await load_agent_tools(session, self._org_id, agent, self._settings)
+                all_specs = await load_agent_tools(
+                    session, self._org_id, agent, self._settings, actor_user_id=self._actor_user_id
+                )
                 specs = available_tools(agent, all_specs)
                 ctx = ToolContext(
                     session=session, org_id=self._org_id, settings=self._settings,

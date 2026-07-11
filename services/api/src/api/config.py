@@ -94,6 +94,12 @@ class Settings(BaseSettings):
     # resolves; empty means fall back to the org admins only.
     agent_notify_email: str = Field(default="", validation_alias="AGENT_NOTIFY_EMAIL")
 
+    # Public base URL of THIS API service — used to build the OAuth redirect URI for
+    # the MCP "Connect" flow (the provider redirects the browser back to
+    # {api_public_url}/api/agents/mcp-servers/oauth/callback). Must be reachable from
+    # the user's browser + registered with the provider in production.
+    api_public_url: str = Field(default="http://localhost:8000", validation_alias="API_PUBLIC_URL")
+
     # Application-level encryption secret for per-org third-party credentials at
     # rest (e.g. orgs.openai_api_key). Derives a Fernet key (see services/crypto.py).
     # A dev default keeps local/test envs working; production MUST set the env var.
