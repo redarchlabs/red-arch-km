@@ -19,6 +19,7 @@ from api.auth.dependencies import OrgContext, require_org_access, require_org_ad
 from api.config import get_settings
 from api.dependencies import get_db
 from api.routers import workflows
+from api.services.workflow import manual_run
 from fastapi import FastAPI
 
 pytestmark = pytest.mark.unit
@@ -161,10 +162,10 @@ async def test_run_404_when_cross_entity_or_cross_org_record_id() -> None:
     disp.load_trigger_record = AsyncMock(return_value=None)  # id not in this entity/org
     with (
         patch.object(workflows, "WorkflowRepository", return_value=_wf_repo(wf)),
-        patch.object(workflows, "WorkflowVersionRepository", return_value=_wf_repo(version)),
+        patch.object(manual_run, "WorkflowVersionRepository", return_value=_wf_repo(version)),
         patch.object(workflows, "can_run", return_value=True),
-        patch.object(workflows, "EmailSender", return_value=MagicMock()),
-        patch.object(workflows, "WorkflowDispatchService", return_value=disp),
+        # The dispatcher is now built inside execute_workflow_run (manual_run.py).
+        patch.object(manual_run, "build_dispatch_service", return_value=disp),
     ):
         async with _client(_app()) as client:
             resp = await client.post(
@@ -190,10 +191,10 @@ async def test_run_side_effecting_without_record_nulls_client_data() -> None:
     disp.run_version_manually = AsyncMock(return_value=(run, 1))
     with (
         patch.object(workflows, "WorkflowRepository", return_value=_wf_repo(wf)),
-        patch.object(workflows, "WorkflowVersionRepository", return_value=_wf_repo(version)),
+        patch.object(manual_run, "WorkflowVersionRepository", return_value=_wf_repo(version)),
         patch.object(workflows, "can_run", return_value=True),
-        patch.object(workflows, "EmailSender", return_value=MagicMock()),
-        patch.object(workflows, "WorkflowDispatchService", return_value=disp),
+        # The dispatcher is now built inside execute_workflow_run (manual_run.py).
+        patch.object(manual_run, "build_dispatch_service", return_value=disp),
     ):
         async with _client(_app()) as client:
             # No record_id + a send_webhook action + fabricated `after` → runs,
@@ -229,10 +230,10 @@ async def test_run_manual_trigger_uses_inputs_even_when_entity_bound() -> None:
     disp.run_version_manually = AsyncMock(return_value=(run, 1))
     with (
         patch.object(workflows, "WorkflowRepository", return_value=_wf_repo(wf)),
-        patch.object(workflows, "WorkflowVersionRepository", return_value=_wf_repo(version)),
+        patch.object(manual_run, "WorkflowVersionRepository", return_value=_wf_repo(version)),
         patch.object(workflows, "can_run", return_value=True),
-        patch.object(workflows, "EmailSender", return_value=MagicMock()),
-        patch.object(workflows, "WorkflowDispatchService", return_value=disp),
+        # The dispatcher is now built inside execute_workflow_run (manual_run.py).
+        patch.object(manual_run, "build_dispatch_service", return_value=disp),
     ):
         async with _client(_app()) as client:
             resp = await client.post(
@@ -259,10 +260,10 @@ async def test_run_manual_missing_required_input_422() -> None:
     disp.run_version_manually = AsyncMock()
     with (
         patch.object(workflows, "WorkflowRepository", return_value=_wf_repo(wf)),
-        patch.object(workflows, "WorkflowVersionRepository", return_value=_wf_repo(version)),
+        patch.object(manual_run, "WorkflowVersionRepository", return_value=_wf_repo(version)),
         patch.object(workflows, "can_run", return_value=True),
-        patch.object(workflows, "EmailSender", return_value=MagicMock()),
-        patch.object(workflows, "WorkflowDispatchService", return_value=disp),
+        # The dispatcher is now built inside execute_workflow_run (manual_run.py).
+        patch.object(manual_run, "build_dispatch_service", return_value=disp),
     ):
         async with _client(_app()) as client:
             resp = await client.post(f"/api/workflows/{uuid.uuid4()}/run", json={"inputs": {}})
@@ -288,10 +289,10 @@ async def test_run_loads_record_server_side_and_ignores_client_data() -> None:
     disp.run_version_manually = AsyncMock(return_value=(run, 1))
     with (
         patch.object(workflows, "WorkflowRepository", return_value=_wf_repo(wf)),
-        patch.object(workflows, "WorkflowVersionRepository", return_value=_wf_repo(version)),
+        patch.object(manual_run, "WorkflowVersionRepository", return_value=_wf_repo(version)),
         patch.object(workflows, "can_run", return_value=True),
-        patch.object(workflows, "EmailSender", return_value=MagicMock()),
-        patch.object(workflows, "WorkflowDispatchService", return_value=disp),
+        # The dispatcher is now built inside execute_workflow_run (manual_run.py).
+        patch.object(manual_run, "build_dispatch_service", return_value=disp),
     ):
         async with _client(_app()) as client:
             resp = await client.post(

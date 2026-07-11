@@ -1,8 +1,8 @@
 "use client";
 
 import {
-  ArrowLeftRight,
   BarChart3,
+  Bot,
   ClipboardList,
   Database,
   FileText,
@@ -41,8 +41,8 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/views", label: "Views", icon: LayoutDashboard },
   { href: "/reports", label: "Reports", icon: BarChart3 },
   { href: "/workflows", label: "Workflows", icon: Workflow },
+  { href: "/agents", label: "Agents", icon: Bot, requiresOrgAdmin: true },
   { href: "/chat", label: "Chat", icon: MessageCircle },
-  { href: "/import-export", label: "Import / Export", icon: ArrowLeftRight, requiresOrgAdmin: true },
   { href: "/admin", label: "Admin", icon: Shield, requiresSiteAdmin: true },
   { href: "/site-admin", label: "Site Admin", icon: Globe, requiresSiteAdmin: true },
 ];

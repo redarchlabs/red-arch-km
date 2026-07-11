@@ -21,6 +21,10 @@ from api.observability import setup_observability
 from api.routers import (
     admin,
     agent,
+    agent_approvals,
+    agent_console,
+    agents,
+    api_keys,
     attributes,
     auth,
     chat,
@@ -33,6 +37,7 @@ from api.routers import (
     health,
     inbound,
     internal,
+    mcp_servers,
     memberships,
     migration,
     orgs,
@@ -42,8 +47,11 @@ from api.routers import (
     tags,
     users,
     views,
+    work_orders,
     workflows,
 )
+from api.routers import v1 as v1_router
+from api.services.openapi_v1 import register_v1_docs
 from api.services.setup_token import ensure_setup_token
 
 logger = logging.getLogger(__name__)
@@ -143,6 +151,7 @@ def create_app() -> FastAPI:
             "X-Test-User",
             "X-Test-Secret",
             "X-Internal-API-Key",
+            "X-API-Key",
         ],
     )
     app.add_middleware(RequestLoggingMiddleware)
@@ -189,10 +198,23 @@ def create_app() -> FastAPI:
     # Public, token-authenticated inbound webhooks that start a workflow run.
     app.include_router(inbound.router, prefix="/api/inbound", tags=["inbound"])
     app.include_router(agent.router, prefix="/api/agent", tags=["agent"])
+    # Order matters: routers with single-segment literal paths (mcp-servers,
+    # approvals, notifications) MUST be registered before agents.router, whose
+    # GET /{agent_id} would otherwise shadow them.
+    app.include_router(agent_console.router, prefix="/api/agents", tags=["agents"])
+    app.include_router(mcp_servers.router, prefix="/api/agents", tags=["agents"])
+    app.include_router(agent_approvals.router, prefix="/api/agents", tags=["agents"])
+    app.include_router(agents.router, prefix="/api/agents", tags=["agents"])
+    app.include_router(work_orders.router, prefix="/api/work-orders", tags=["work-orders"])
     app.include_router(internal.router, prefix="/api/internal", tags=["internal"])
     app.include_router(setup.router, prefix="/api/setup", tags=["setup"])
     app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
     app.include_router(migration.router, prefix="/api/migration", tags=["migration"])
+    # API-key management (org-admin, Clerk-authed) for the Admin Area "API" tab.
+    app.include_router(api_keys.router, prefix="/api/api-keys", tags=["api-keys"])
+    # Public, API-key-authenticated enterprise surface + its own always-on docs.
+    app.include_router(v1_router.router, prefix="/api/v1")
+    register_v1_docs(app)
 
     return app
 

@@ -14,7 +14,9 @@ from api.config import get_settings
 from api.dependencies import get_tenant_db
 from api.repositories.dynamic_entity import EntityRecordError, RecordCursor
 from api.routers import entity_records
-from api.routers.entity_records import _decode_cursor, _encode_cursor
+from api.services import entity_records_helpers
+from api.services.entity_records_helpers import decode_cursor as _decode_cursor
+from api.services.entity_records_helpers import encode_cursor as _encode_cursor
 from fastapi import FastAPI, HTTPException
 
 
@@ -58,7 +60,7 @@ class TestValidationBounds:
     async def test_limit_below_min_422(self) -> None:
         repo = MagicMock()
         repo.list = AsyncMock(return_value=([], None))
-        with patch.object(entity_records, "_repo_for", AsyncMock(return_value=(repo, MagicMock()))):
+        with patch.object(entity_records, "build_record_repo", AsyncMock(return_value=(repo, MagicMock()))):
             async with _client(_app()) as client:
                 resp = await client.get("/api/entities/thing/records?limit=0")
         assert resp.status_code == 422
@@ -66,7 +68,7 @@ class TestValidationBounds:
     async def test_limit_above_max_422(self) -> None:
         repo = MagicMock()
         repo.list = AsyncMock(return_value=([], None))
-        with patch.object(entity_records, "_repo_for", AsyncMock(return_value=(repo, MagicMock()))):
+        with patch.object(entity_records, "build_record_repo", AsyncMock(return_value=(repo, MagicMock()))):
             async with _client(_app()) as client:
                 resp = await client.get("/api/entities/thing/records?limit=201")
         assert resp.status_code == 422
@@ -74,7 +76,7 @@ class TestValidationBounds:
     async def test_q_too_long_422(self) -> None:
         repo = MagicMock()
         repo.list = AsyncMock(return_value=([], None))
-        with patch.object(entity_records, "_repo_for", AsyncMock(return_value=(repo, MagicMock()))):
+        with patch.object(entity_records, "build_record_repo", AsyncMock(return_value=(repo, MagicMock()))):
             async with _client(_app()) as client:
                 resp = await client.get(f"/api/entities/thing/records?q={'x' * 201}")
         assert resp.status_code == 422
@@ -82,7 +84,7 @@ class TestValidationBounds:
     async def test_malformed_cursor_400(self) -> None:
         repo = MagicMock()
         repo.list = AsyncMock(return_value=([], None))
-        with patch.object(entity_records, "_repo_for", AsyncMock(return_value=(repo, MagicMock()))):
+        with patch.object(entity_records, "build_record_repo", AsyncMock(return_value=(repo, MagicMock()))):
             async with _client(_app()) as client:
                 resp = await client.get("/api/entities/thing/records?cursor=%21%21bad")
         assert resp.status_code == 400
@@ -97,7 +99,7 @@ class TestAggregateEndpoint:
                 "rows": [{"stage": "won", "count": 2}], "row_count": 1,
             }
         )
-        with patch.object(entity_records, "_repo_for", AsyncMock(return_value=(repo, MagicMock()))):
+        with patch.object(entity_records, "build_record_repo", AsyncMock(return_value=(repo, MagicMock()))):
             async with _client(_app()) as client:
                 resp = await client.post(
                     "/api/entities/deal/aggregate",
@@ -109,7 +111,7 @@ class TestAggregateEndpoint:
     async def test_aggregate_entity_error_is_400(self) -> None:
         repo = MagicMock()
         repo.aggregate = AsyncMock(side_effect=EntityRecordError("bad group field"))
-        with patch.object(entity_records, "_repo_for", AsyncMock(return_value=(repo, MagicMock()))):
+        with patch.object(entity_records, "build_record_repo", AsyncMock(return_value=(repo, MagicMock()))):
             async with _client(_app()) as client:
                 resp = await client.post("/api/entities/deal/aggregate", json={"group_by": [{"field": "ghost"}]})
         assert resp.status_code == 400
@@ -118,10 +120,11 @@ class TestAggregateEndpoint:
 
 class TestErrorMapping:
     async def test_inactive_slug_is_404(self) -> None:
-        # _repo_for (real) raises 404 for an inactive/missing definition.
+        # build_record_repo (the real _repo_for) raises 404 for an inactive/missing
+        # definition — it now lives in services/entity_records_helpers.py.
         defs_repo = MagicMock()
         defs_repo.get_by_slug = AsyncMock(return_value=MagicMock(is_active=False))
-        with patch.object(entity_records, "EntityDefinitionRepository", return_value=defs_repo):
+        with patch.object(entity_records_helpers, "EntityDefinitionRepository", return_value=defs_repo):
             async with _client(_app()) as client:
                 resp = await client.get("/api/entities/inactive/records")
         assert resp.status_code == 404
@@ -129,7 +132,7 @@ class TestErrorMapping:
     async def test_create_record_error_is_400(self) -> None:
         repo = MagicMock()
         repo.create = AsyncMock(side_effect=EntityRecordError("bad payload"))
-        with patch.object(entity_records, "_repo_for", AsyncMock(return_value=(repo, MagicMock()))):
+        with patch.object(entity_records, "build_record_repo", AsyncMock(return_value=(repo, MagicMock()))):
             async with _client(_app()) as client:
                 resp = await client.post("/api/entities/thing/records", json={"x": 1})
         assert resp.status_code == 400

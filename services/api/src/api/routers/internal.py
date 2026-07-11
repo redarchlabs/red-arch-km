@@ -293,6 +293,39 @@ async def advance_workflow_tokens(
             raise
 
 
+class AgentRunSweepResult(BaseModel):
+    claimed: int = 0
+    executed: int = 0
+    errors: int = 0
+
+
+@router.post(
+    "/agents/advance-runs",
+    dependencies=[Depends(require_internal_api_key)],
+    response_model=AgentRunSweepResult,
+)
+async def advance_agent_runs(
+    settings: Annotated[Settings, Depends(get_settings)],
+    limit: Annotated[int, Query(ge=1, le=200)] = 20,
+) -> AgentRunSweepResult:
+    """Claim + drive queued agent runs (delegated children, scheduled, work-order).
+
+    Privileged session for the cross-org claim; the executor scopes every repo by
+    ``org_id`` explicitly, mirroring the interactive console and the workflow run
+    path (which also runs on the privileged connection)."""
+    from api.services.agents.run_executor import AgentRunExecutor
+
+    factory = get_session_factory(settings)
+    async with factory() as session:
+        try:
+            result = await AgentRunExecutor(settings).advance(session, limit=limit)
+            return AgentRunSweepResult(**result)
+        except Exception:
+            await session.rollback()
+            logger.exception("agent advance-runs sweep failed")
+            raise
+
+
 @router.post(
     "/workflows/maintain-partitions",
     dependencies=[Depends(require_internal_api_key)],

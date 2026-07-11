@@ -21,7 +21,6 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from api.schemas.form_elements import FormElement
 from api.services.email import is_valid_email
 
-
 # ------------------------------------------------------------------ #
 # Legacy (pre-v2) layout upgrade
 # ------------------------------------------------------------------ #

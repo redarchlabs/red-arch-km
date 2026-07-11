@@ -9,8 +9,10 @@ from unittest.mock import MagicMock
 
 import pytest
 from api.repositories.dynamic_entity import DynamicEntityRepository, EntityRecordError, RecordCursor
-from api.routers.entity_records import _decode_cursor, _encode_cursor, _parse_filters
 from api.services import identifiers
+from api.services.entity_records_helpers import decode_cursor as _decode_cursor
+from api.services.entity_records_helpers import encode_cursor as _encode_cursor
+from api.services.entity_records_helpers import parse_filters as _parse_filters
 from fastapi import HTTPException
 from sqlalchemy.dialects import postgresql
 
