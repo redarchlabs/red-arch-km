@@ -20,6 +20,7 @@ from typing import Any
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api import db_scope
 from api.config import Settings
 from api.models.agent_run import AgentApproval, AgentRun
 from api.repositories.agent import AgentRepository
@@ -43,20 +44,30 @@ class AgentRunExecutor:
         self._settings = settings
 
     async def advance(self, session: AsyncSession, limit: int = 10) -> dict[str, int]:
-        """Claim + drive a batch of queued runs, after re-bubbling stale waits."""
+        """Claim + drive a batch of queued runs, after re-bubbling stale waits.
+
+        RLS scope is set per transaction (SET LOCAL resets on each commit): the
+        cross-org backstop + claim run with the bypass GUC on; each run then
+        executes scoped to its own org (still on km_app so agent tools that author
+        ce_* entity tables can run their DDL), so RLS is a real per-run backstop.
+        """
+        await db_scope.enter_bypass(session)
         reminded = await self._backstop(session, limit)
         await session.commit()
+        await db_scope.enter_bypass(session)
         claimed = await self._claim(session, limit)
         await session.commit()
         executed = errors = 0
         for run_id, org_id in claimed:
             try:
+                await db_scope.enter_tenant_owner(session, org_id)
                 await self._execute_one(session, org_id, run_id)
                 await session.commit()
                 executed += 1
             except Exception:  # noqa: BLE001 - one bad run must not stop the sweep
                 logger.exception("agent run %s failed", run_id)
                 await session.rollback()
+                await db_scope.enter_tenant_owner(session, org_id)
                 await self._mark_error(session, org_id, run_id)
                 await session.commit()
                 errors += 1
@@ -134,6 +145,13 @@ class AgentRunExecutor:
             await load_agent_tools(session, org_id, agent, self._settings, actor_user_id=run.actor_user_id),
         )
 
+        # The org's autonomy posture (default high_touch) gates side-effecting tools
+        # at call time: under high_touch every outbound action asks the human.
+        from api.models.org import Org
+
+        org = await session.get(Org, org_id)
+        autonomy = (getattr(org, "agent_autonomy", None) or "high_touch") if org else "high_touch"
+
         # Resume a parked turn (human approved) or start fresh from the task.
         resume = run.input.get("resume") if isinstance(run.input, dict) else None
         if resume:
@@ -160,6 +178,7 @@ class AgentRunExecutor:
                 max_tokens=(agent.params or {}).get("max_tokens"),
                 approval_strategy=self._make_strategy(session, org_id, run, approved_names),
                 resume_tool_calls=resume_tool_calls,
+                autonomy=autonomy,
             )
         except RunParked as parked:
             run.input = {

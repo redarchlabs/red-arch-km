@@ -74,8 +74,12 @@ services:
       - neo4j-logs:/logs
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "cypher-shell -u ${NEO4J_USER:-neo4j} -p ${NEO4J_PASSWORD} 'RETURN 1' || exit 1"]
-      interval: 10s
+      # Lightweight TCP check on the Bolt port. Avoids cold-starting a
+      # cypher-shell JVM every interval (that pinned 3-4 cores for ~1s each
+      # time against an otherwise-idle DB). bash is invoked explicitly because
+      # the image's default /bin/sh (dash) does not support /dev/tcp.
+      test: ["CMD-SHELL", "timeout 3 bash -c '</dev/tcp/localhost/7687' || exit 1"]
+      interval: 30s
       timeout: 5s
       retries: 10
       start_period: 30s

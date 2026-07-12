@@ -18,3 +18,9 @@ from worker.tasks.workflow import _post
 def advance_runs(limit: int = 20) -> dict[str, Any] | None:
     """Claim + drive a batch of queued agent runs via the API."""
     return _post("/api/internal/agents/advance-runs", {"limit": limit})
+
+
+@app.task  # type: ignore[untyped-decorator]  # celery's app.task is untyped
+def run_schedules(limit: int = 200) -> dict[str, Any] | None:
+    """Fire due cron-triggered agent schedules via the API (enqueues schedule runs)."""
+    return _post("/api/internal/agents/run-schedules", {"limit": limit})
