@@ -48,8 +48,8 @@ class AgentRunExecutor:
 
         RLS scope is set per transaction (SET LOCAL resets on each commit): the
         cross-org backstop + claim run with the bypass GUC on; each run then
-        executes scoped to its own org (still on km_app so agent tools that author
-        ce_* entity tables can run their DDL), so RLS is a real per-run backstop.
+        executes downgraded to app_user, scoped to its own org, so RLS is a real
+        per-run backstop even if application-level org_id scoping had a bug.
         """
         await db_scope.enter_bypass(session)
         reminded = await self._backstop(session, limit)
@@ -60,14 +60,14 @@ class AgentRunExecutor:
         executed = errors = 0
         for run_id, org_id in claimed:
             try:
-                await db_scope.enter_tenant_owner(session, org_id)
+                await db_scope.enter_tenant(session, org_id)
                 await self._execute_one(session, org_id, run_id)
                 await session.commit()
                 executed += 1
             except Exception:  # noqa: BLE001 - one bad run must not stop the sweep
                 logger.exception("agent run %s failed", run_id)
                 await session.rollback()
-                await db_scope.enter_tenant_owner(session, org_id)
+                await db_scope.enter_tenant(session, org_id)
                 await self._mark_error(session, org_id, run_id)
                 await session.commit()
                 errors += 1

@@ -101,12 +101,6 @@ variable "data_vm_image" {
   default     = "ubuntu-os-cloud/ubuntu-2204-lts"
 }
 
-variable "postgres_disk_gb" {
-  description = "Persistent SSD size for Postgres data."
-  type        = number
-  default     = 50
-}
-
 variable "qdrant_disk_gb" {
   description = "Persistent SSD size for Qdrant storage."
   type        = number
@@ -156,18 +150,55 @@ variable "brain_min_instances" {
 }
 
 # ---------------------------------------------------------------------------
-# Database identity (self-hosted Postgres on the data VM)
+# Cloud SQL for PostgreSQL (managed; the app's FORCE-RLS model runs on a
+# non-superuser km_app role, so no BYPASSRLS connection is needed).
 # ---------------------------------------------------------------------------
-variable "postgres_user" {
-  description = "Postgres superuser/login role the app connects as (needs BYPASSRLS — implicit for the image's initial superuser)."
-  type        = string
-  default     = "redarch"
-}
-
 variable "postgres_db" {
   description = "Application database name."
   type        = string
   default     = "redarch_km"
+}
+
+variable "km_app_user" {
+  description = "Non-superuser runtime DB role the app connects as (RLS-enforced)."
+  type        = string
+  default     = "km_app"
+}
+
+variable "postgres_admin_user" {
+  description = "Cloud SQL admin/migration role (gets cloudsqlsuperuser). Runs Alembic."
+  type        = string
+  default     = "postgres"
+}
+
+variable "postgres_version" {
+  description = "Cloud SQL Postgres version. RLS + pg_trgm work on 15+; 17 is a safe default (raise to POSTGRES_18 if available in your region)."
+  type        = string
+  default     = "POSTGRES_17"
+}
+
+variable "cloudsql_tier" {
+  description = "Cloud SQL machine tier."
+  type        = string
+  default     = "db-custom-1-3840"
+}
+
+variable "cloudsql_availability_type" {
+  description = "ZONAL (small prod) or REGIONAL (HA)."
+  type        = string
+  default     = "ZONAL"
+}
+
+variable "cloudsql_disk_gb" {
+  description = "Cloud SQL data disk size (GB, autoresizes)."
+  type        = number
+  default     = 50
+}
+
+variable "cloudsql_deletion_protection" {
+  description = "Block accidental deletion of the Cloud SQL instance."
+  type        = bool
+  default     = true
 }
 
 variable "neo4j_user" {

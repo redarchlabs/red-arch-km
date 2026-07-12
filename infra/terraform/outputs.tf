@@ -13,8 +13,18 @@ output "brain_api_url" {
   value       = module.cloud_run.brain_uri
 }
 
+output "cloudsql_instance" {
+  description = "Cloud SQL for PostgreSQL instance name."
+  value       = module.database.instance_name
+}
+
+output "cloudsql_private_ip" {
+  description = "Cloud SQL private IP (reached over the VPC)."
+  value       = module.database.private_ip
+}
+
 output "data_vm_name" {
-  description = "Name of the data VM (Postgres + Qdrant + Neo4j + worker + beat)."
+  description = "Name of the data VM (Qdrant + Neo4j + worker + beat)."
   value       = module.data_vm.instance_name
 }
 
@@ -31,11 +41,6 @@ output "redis_host" {
 output "documents_bucket" {
   description = "GCS bucket holding uploaded document originals."
   value       = module.storage.documents_bucket
-}
-
-output "backups_bucket" {
-  description = "GCS bucket holding nightly pg_dump backups."
-  value       = module.storage.backups_bucket
 }
 
 output "artifact_repo_url" {

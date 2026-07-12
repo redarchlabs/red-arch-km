@@ -25,13 +25,13 @@ variable "api_docs_enabled" { type = bool }
 variable "workflow_webhook_allowlist" { type = string }
 
 locals {
-  redis_url    = "redis://${var.redis_host}:${var.redis_port}/0"
-  celery_bkr   = "redis://${var.redis_host}:${var.redis_port}/0"
-  celery_bake  = "redis://${var.redis_host}:${var.redis_port}/1"
-  qdrant_url   = "http://${var.data_vm_internal_ip}:6333"
-  neo4j_uri    = "bolt://${var.data_vm_internal_ip}:7687"
-  has_domain = var.domain != ""
-  ui_public  = local.has_domain ? "https://${var.domain}" : google_cloud_run_v2_service.ui.uri
+  redis_url   = "redis://${var.redis_host}:${var.redis_port}/0"
+  celery_bkr  = "redis://${var.redis_host}:${var.redis_port}/0"
+  celery_bake = "redis://${var.redis_host}:${var.redis_port}/1"
+  qdrant_url  = "http://${var.data_vm_internal_ip}:6333"
+  neo4j_uri   = "bolt://${var.data_vm_internal_ip}:7687"
+  has_domain  = var.domain != ""
+  ui_public   = local.has_domain ? "https://${var.domain}" : google_cloud_run_v2_service.ui.uri
   # Domain-only to avoid a self-reference cycle (api -> local.api_public -> api).
   # Without a domain, API_PUBLIC_URL is left empty; it only feeds the optional
   # MCP-OAuth callback URL, which needs a stable public domain anyway.

@@ -6,8 +6,11 @@ variable "subnet_id" { type = string }
 variable "sa_email" { type = string }
 variable "secret_ids" { type = map(string) }
 
-# One-shot job that runs Alembic migrations against the VM Postgres. Not run by
-# Terraform — execute on demand: gcloud run jobs execute <name> --region <r> --wait
+# One-shot job that runs Alembic migrations against Cloud SQL as the ADMIN user
+# (cloudsqlsuperuser) — it creates app_user + RLS policies (migration 007/034),
+# makes the partition fn SECURITY DEFINER, and grants km_app its memberships
+# (migration 035). Not run by Terraform — execute on demand via scripts/db-init.sh:
+#   gcloud run jobs execute <name> --region <r> --wait
 resource "google_cloud_run_v2_job" "migrate" {
   name                = "${var.name}-db-migrate"
   location            = var.region
@@ -34,7 +37,7 @@ resource "google_cloud_run_v2_job" "migrate" {
           name = "DATABASE_URL"
           value_source {
             secret_key_ref {
-              secret  = var.secret_ids["database_url"]
+              secret  = var.secret_ids["admin_database_url"]
               version = "latest"
             }
           }

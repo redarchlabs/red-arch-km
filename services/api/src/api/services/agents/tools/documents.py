@@ -20,6 +20,7 @@ import logging
 import uuid
 from typing import Any
 
+from api import db_scope
 from api.repositories.document import DocumentRepository
 from api.repositories.folder import FolderRepository
 from api.services.agents.tools.spec import Category, ToolContext, ToolSpec
@@ -75,9 +76,12 @@ async def _create_document(ctx: ToolContext, args: dict[str, Any]) -> dict[str, 
     metadata = doc.metadata_ or {}
 
     # Commit before dispatching so the ingest worker can read the row (mirrors the
-    # router). The runtime session is privileged + explicit-org-scoped, so an
-    # intra-turn commit is safe.
+    # router). The commit ends the transaction and reverts all SET LOCAL scope, so
+    # re-apply the tenant scope before returning — the caller (run_executor /
+    # console) keeps writing (tool_result step, finalize) on this same session and
+    # would otherwise hit RLS unscoped. See api/db_scope.py.
     await ctx.session.commit()
+    await db_scope.enter_tenant(ctx.session, ctx.org_id)
 
     ingest = "skipped_no_text"
     if text:
