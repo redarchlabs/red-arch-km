@@ -118,8 +118,9 @@ class SchemaManager:
     # RLS
     # ------------------------------------------------------------------ #
     async def _apply_rls(self, table_name: str) -> None:
-        """ENABLE+FORCE RLS, (re)create the four tenant_isolation policies, and
-        grant CRUD to app_user. Idempotent via DROP POLICY IF EXISTS."""
+        """ENABLE+FORCE RLS, (re)create the four tenant_isolation policies + the
+        GUC-gated admin_bypass_all policy, and grant CRUD to app_user. Idempotent
+        via DROP POLICY IF EXISTS."""
         qt = identifiers.quote(table_name)  # validates + quotes
         await self._session.execute(text(f"ALTER TABLE {qt} ENABLE ROW LEVEL SECURITY"))
         await self._session.execute(text(f"ALTER TABLE {qt} FORCE ROW LEVEL SECURITY"))
@@ -128,6 +129,18 @@ class SchemaManager:
             await self._session.execute(
                 text(f"CREATE POLICY tenant_isolation_{suffix} ON {qt} FOR {action} {clause} ({_HARDENED})")
             )
+        # Permissive cross-org bypass, gated on the app.bypass GUC — mirrors
+        # migration 034 so the privileged paths (get_db, sweeps) can reach entity
+        # rows across orgs. OR-combined with tenant_isolation, so normal (GUC-off)
+        # requests stay fully org-scoped. See api/db_scope.py.
+        await self._session.execute(text(f"DROP POLICY IF EXISTS admin_bypass_all ON {qt}"))
+        await self._session.execute(
+            text(
+                f"CREATE POLICY admin_bypass_all ON {qt} "
+                "USING (current_setting('app.bypass', true) = 'on') "
+                "WITH CHECK (current_setting('app.bypass', true) = 'on')"
+            )
+        )
         await self._session.execute(text(f"GRANT SELECT, INSERT, UPDATE, DELETE ON {qt} TO app_user"))
 
     @staticmethod

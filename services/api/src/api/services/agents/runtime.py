@@ -101,6 +101,7 @@ async def run_agent_loop(
     max_tokens: int | None = None,
     approval_strategy: ApprovalStrategy = _approve_inline,
     resume_tool_calls: list[ToolCallRequest] | None = None,
+    autonomy: str = "high_touch",
 ) -> RunResult:
     """Drive ``agent`` to quiescence. ``messages`` already includes the system prompt.
 
@@ -141,7 +142,9 @@ async def run_agent_loop(
             tool_calls = list(completion.tool_calls)
 
         # Phase 1: authority-gate every call BEFORE any executes (parks cleanly).
-        plans = await _gate_tools(agent, tool_calls, specs_by_name, emit, approval_strategy, messages)
+        plans = await _gate_tools(
+            agent, tool_calls, specs_by_name, emit, approval_strategy, messages, autonomy
+        )
         # Phase 2: execute (or return the pre-set deny/error output).
         for tc, spec, preset in plans:
             result.tool_calls += 1
@@ -172,7 +175,9 @@ async def _stream_turn(provider, model, messages, schemas, temperature, max_toke
     return completion
 
 
-async def _gate_tools(agent, tool_calls, specs_by_name, emit, approval_strategy, messages):
+async def _gate_tools(
+    agent, tool_calls, specs_by_name, emit, approval_strategy, messages, autonomy="high_touch"
+):
     """Return a plan of (tc, spec, preset_output|None). Raises RunParked to suspend."""
     plans: list[tuple[ToolCallRequest, ToolSpec | None, dict[str, Any] | None]] = []
     for tc in tool_calls:
@@ -181,7 +186,7 @@ async def _gate_tools(agent, tool_calls, specs_by_name, emit, approval_strategy,
         if spec is None:
             plans.append((tc, None, {"error": f"Unknown tool: {tc.name}"}))
             continue
-        verdict = decide(agent, spec)
+        verdict = decide(agent, spec, autonomy=autonomy)
         if verdict.decision is Decision.DENY:
             plans.append((tc, spec, {"error": f"Not permitted: {verdict.reason}"}))
             continue

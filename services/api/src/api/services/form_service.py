@@ -25,6 +25,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api import db_scope
 from api.models.custom_entity import EntityDefinition, EntityField
 from api.models.form import Form, FormLink
 from api.repositories.custom_entity import (
@@ -100,12 +101,10 @@ def _as_uuid(value: Any) -> uuid.UUID:
 
 
 async def _scope_to_org(session: AsyncSession, org_id: uuid.UUID) -> None:
-    """Drop to app_user + set the tenant GUC so RLS scopes everything that
-    follows to ``org_id`` (mirrors get_tenant_db, but org comes from the token)."""
-    await session.execute(text("SET LOCAL ROLE app_user"))
-    await session.execute(
-        text("SELECT set_config('app.current_tenant_id', :tid, true)"), {"tid": str(org_id)}
-    )
+    """Drop to app_user + set the tenant GUC (bypass off) so RLS scopes everything
+    that follows to ``org_id``. The token→org lookup that precedes this runs on the
+    get_db (bypass) session; here we downgrade before any scoped write. See db_scope."""
+    await db_scope.enter_tenant(session, org_id)
 
 
 # ------------------------------------------------------------------ #

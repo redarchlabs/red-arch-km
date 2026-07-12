@@ -35,6 +35,21 @@ class AuthorityVerdict:
 _ROLE_PROVIDED = frozenset({Category.DELEGATE, Category.ESCALATE, Category.PLAN})
 
 
+def _granted(allowed: set[str], name: str) -> bool:
+    """Is tool ``name`` covered by the agent's ``grants.tools``?
+
+    Exact match, or — for dynamically-named MCP tools ``mcp__<server>__<tool>`` —
+    a server wildcard ``mcp__<server>__*`` (or the catch-all ``mcp__*``). Wildcards
+    let the roster pre-authorize a whole MCP server before it is connected (its
+    exact tool names aren't known until the server lists them)."""
+    if name in allowed:
+        return True
+    if name.startswith("mcp__"):
+        server_wildcard = name.rsplit("__", 1)[0] + "__*"  # mcp__<server>__*
+        return server_wildcard in allowed or "mcp__*" in allowed
+    return False
+
+
 def _is_available(agent: Agent, spec: ToolSpec) -> bool:
     grants = agent.grants or {}
     if spec.always_allowed:
@@ -45,12 +60,21 @@ def _is_available(agent: Agent, spec: ToolSpec) -> bool:
         return True
     allowed = set(grants.get("tools") or [])
     if spec.category == Category.WRITE:
-        return spec.name in allowed and bool(grants.get("records_write"))
-    return spec.name in allowed
+        return _granted(allowed, spec.name) and bool(grants.get("records_write"))
+    return _granted(allowed, spec.name)
 
 
-def decide(agent: Agent, spec: ToolSpec) -> AuthorityVerdict:
-    """Resolve whether ``agent`` may invoke ``spec`` — allow, ask, or deny."""
+def decide(agent: Agent, spec: ToolSpec, *, autonomy: str = "high_touch") -> AuthorityVerdict:
+    """Resolve whether ``agent`` may invoke ``spec`` — allow, ask, or deny.
+
+    ``autonomy`` is the org-level posture (``high_touch`` | ``balanced`` |
+    ``hands_off``). Under **high_touch**, any *side-effecting* tool (an action that
+    leaves the company — sending email, posting to Slack, running an external MCP
+    tool) is forced to ASK even if it is not listed per-agent in
+    ``approval_required``, so a single human gates every outbound action without
+    each agent having to enumerate them. Internal writes (record/document tools,
+    ``side_effecting=False``) are never forced — they stay ALLOW.
+    """
     denial = kind_gate(agent.kind, spec)
     if denial:
         return AuthorityVerdict(Decision.DENY, denial)
@@ -59,6 +83,8 @@ def decide(agent: Agent, spec: ToolSpec) -> AuthorityVerdict:
     approval = set((agent.grants or {}).get("approval_required") or [])
     if spec.name in approval:
         return AuthorityVerdict(Decision.ASK, "requires human approval")
+    if autonomy == "high_touch" and spec.side_effecting:
+        return AuthorityVerdict(Decision.ASK, "high-touch: external action requires human approval")
     return AuthorityVerdict(Decision.ALLOW)
 
 

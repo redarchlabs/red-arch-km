@@ -17,6 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api import db_scope
 from api.auth.dependencies import OrgContext, require_org_access, require_org_admin
 from api.config import Settings, get_settings
 from api.db import get_session_factory
@@ -610,6 +611,7 @@ async def stream_run(
         try:
             for _ in range(max_ticks):
                 async with factory() as session:
+                    await db_scope.enter_tenant(session, org_id)
                     snapshot = await _run_stream_snapshot(session, org_id, run_id)
                 if snapshot is None:
                     yield b'event: error\ndata: {"detail": "run not found"}\n\n'

@@ -20,6 +20,13 @@ import { getApiErrorMessage } from "@/lib/api/errors";
 const X_SPACING = 230;
 const Y_SPACING = 130;
 
+/** Border accent per role class, so the chart reads at a glance. */
+const KIND_COLOR: Record<string, string> = {
+  coordinator: "#6366f1", // indigo — plans & delegates
+  advisory: "#0ea5e9", // sky — researches & recommends
+  operator: "#10b981", // emerald — carries out work
+};
+
 /** Depth = distance up the supervisor chain (cycle-guarded), so roots sit at top. */
 function depthOf(agent: Agent, byId: Map<string, Agent>): number {
   const seen = new Set<string>();
@@ -50,6 +57,14 @@ function layout(agents: Agent[]): { nodes: Node[]; edges: Edge[] } {
         fontSize: 12,
         borderRadius: 8,
         opacity: a.enabled ? 1 : 0.5,
+        // Explicit theme-aware colors: without these the node falls back to
+        // React Flow's white default while text inherits the dark-theme light
+        // foreground → invisible white-on-white.
+        padding: 8,
+        width: 190,
+        background: "var(--color-muted)",
+        color: "var(--color-foreground)",
+        border: `1px solid ${KIND_COLOR[a.kind] ?? "var(--color-border)"}`,
       },
     };
   });

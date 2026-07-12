@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api import db_scope
 from api.config import get_settings
 from api.db import dispose_engine, get_engine, get_session_factory
 from api.dependencies import close_redis_client, get_redis_client
@@ -66,6 +67,9 @@ async def _announce_setup_token_if_needed() -> None:
         async with asyncio.timeout(10):
             factory = get_session_factory(settings)
             async with factory() as session:
+                # Boot-time adminless-recovery check spans the whole instance
+                # (cross-org), so opt into the RLS bypass.
+                await db_scope.enter_bypass(session)
                 token = await ensure_setup_token(
                     session,
                     get_redis_client(settings),

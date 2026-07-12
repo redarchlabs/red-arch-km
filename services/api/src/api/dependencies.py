@@ -12,6 +12,7 @@ from redis.asyncio import Redis
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api import db_scope
 from api.config import Settings, get_settings
 from api.db import get_session_factory
 
@@ -51,17 +52,20 @@ async def get_db(
     Use this for endpoints that don't need org scoping (e.g. /api/auth/me,
     /healthz, site-admin operations that span orgs).
 
-    Unlike get_tenant_db, this session stays on the privileged connection role
-    (superuser/BYPASSRLS, as in the shipped compose files) and does NOT drop to
-    app_user. That is intentional: cross-org reads of RLS-forced tables
-    (e.g. user_org_memberships in require_org_access) must bypass RLS. Under a
-    restricted role those reads would fail closed to empty results. Tenant-scoped
-    requests go through get_tenant_db instead, which drops to app_user so RLS is
-    enforced. See docs/DATABASE.md.
+    Unlike get_tenant_db, this session opts into the cross-org RLS bypass
+    (``SET LOCAL app.bypass='on'`` → the permissive ``admin_bypass_all`` policy).
+    That is intentional: cross-org reads/writes of RLS-forced tables
+    (e.g. user_org_memberships in require_org_access, site-admin, entity/workflow
+    authoring, import) must see every org. Without the GUC these would fail
+    closed to empty results. Tenant-scoped requests go through get_tenant_db
+    instead, which drops to app_user with the bypass OFF so RLS is enforced.
+    The app connects as the non-superuser km_app role; see api/db_scope.py and
+    docs/DATABASE.md.
     """
     factory = get_session_factory(settings)
     async with factory() as session:
         try:
+            await db_scope.enter_bypass(session)
             yield session
             await session.commit()
         except HTTPException:
@@ -121,17 +125,10 @@ async def get_tenant_db(
     factory = get_session_factory(settings)
     async with factory() as session:
         try:
-            # Drop to app_user first so RLS is enforced for everything that
-            # follows. SET LOCAL is transaction-scoped and auto-resets on
-            # commit/rollback, keeping pooled connections clean.
-            await session.execute(text("SET LOCAL ROLE app_user"))
-            # set_config(name, value, is_local=true) supports bind parameters
-            # where SET LOCAL does not. The transaction-local scope ensures
-            # the setting is cleared when the session's transaction ends.
-            await session.execute(
-                text("SELECT set_config('app.current_tenant_id', :tid, true)"),
-                {"tid": str(org_id)},
-            )
+            # Drop to app_user + pin the tenant GUC (bypass OFF) so RLS enforces
+            # for everything that follows. SET LOCAL is transaction-scoped and
+            # auto-resets on commit/rollback, keeping pooled connections clean.
+            await db_scope.enter_tenant(session, org_id)
             # Pin the session timezone so date_trunc() bucket boundaries in the
             # reporting engine are deterministic and reproducible across pooled
             # connections (created_at/updated_at are UTC). SET LOCAL is txn-scoped.
