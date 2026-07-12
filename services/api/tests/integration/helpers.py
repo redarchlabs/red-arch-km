@@ -23,3 +23,12 @@ async def set_tenant(session: AsyncSession, tenant_id: str | None) -> None:
             text("SELECT set_config('app.current_tenant_id', :tid, true)"),
             {"tid": tenant_id},
         )
+
+
+async def set_bypass(session: AsyncSession, on: bool) -> None:
+    """Toggle the ``app.bypass`` GUC the permissive ``admin_bypass_all`` policy
+    honors (migration 034). ``on`` widens visibility across every org for reads
+    and writes; ``off`` leaves only the per-tenant policies in force. Mirrors
+    ``api.db_scope.enter_bypass`` / the bypass-off half of ``enter_tenant``.
+    """
+    await session.execute(text(f"SET LOCAL app.bypass = '{'on' if on else 'off'}'"))

@@ -35,6 +35,7 @@ from redis.asyncio import Redis
 from sqlalchemy import or_, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api import db_scope
 from api.config import Settings, get_settings
 from api.db import get_session_factory
 from api.dependencies import get_redis
@@ -116,6 +117,10 @@ async def require_api_key(
 
     factory = get_session_factory(settings)
     async with factory() as session:
+        # Resolve the key by hash across every org (the org is unknown until we
+        # find the row); api_keys is RLS-forced, so this needs the bypass. The
+        # endpoint's own data work runs separately on get_apikey_tenant_db.
+        await db_scope.enter_bypass(session)
         api_key = await lookup_by_key_hash(session, hash_key(presented))
         if api_key is None or api_key.revoked_at is not None or is_expired(api_key):
             raise _UNAUTHORIZED
@@ -204,11 +209,7 @@ async def get_apikey_tenant_db(
     factory = get_session_factory(settings)
     async with factory() as session:
         try:
-            await session.execute(text("SET LOCAL ROLE app_user"))
-            await session.execute(
-                text("SELECT set_config('app.current_tenant_id', :tid, true)"),
-                {"tid": str(principal.org_id)},
-            )
+            await db_scope.enter_tenant(session, principal.org_id)
             await session.execute(text("SET LOCAL TIME ZONE 'UTC'"))
             await session.execute(text("SET LOCAL statement_timeout = '30s'"))
             yield session

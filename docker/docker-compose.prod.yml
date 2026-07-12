@@ -36,7 +36,9 @@ services:
     env_file:
       - ../.env
     environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-redarch}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-redarch_km}
+      # App connects as the non-superuser runtime role so RLS is enforced;
+      # migrations run separately as the admin. See docker/init-db.sql + migration 034.
+      DATABASE_URL: postgresql+asyncpg://${APP_DB_USER:-km_app}:${APP_DB_PASSWORD:?Set APP_DB_PASSWORD}@postgres:5432/${POSTGRES_DB:-redarch_km}
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/1
@@ -267,8 +269,11 @@ services:
       - neo4j-data:/data
       - neo4j-logs:/logs
     healthcheck:
-      test: ["CMD-SHELL", "cypher-shell -u ${NEO4J_USER:-neo4j} -p ${NEO4J_PASSWORD} 'RETURN 1' || exit 1"]
-      interval: 15s
+      # Lightweight TCP check on the Bolt port. Avoids cold-starting a
+      # cypher-shell JVM every interval. bash is invoked explicitly because
+      # the image's default /bin/sh (dash) does not support /dev/tcp.
+      test: ["CMD-SHELL", "timeout 3 bash -c '</dev/tcp/localhost/7687' || exit 1"]
+      interval: 30s
       timeout: 5s
       retries: 10
       start_period: 30s

@@ -1,0 +1,77 @@
+# Builds + pushes the four KM2 service images to Artifact Registry.
+# Invoked by scripts/build-images.sh (which fills the substitutions). Build
+# context is the repo root; Dockerfiles live under docker/.
+#
+#   Substitutions:
+#     _REGION, _REPO, _TAG
+#     _NEXT_PUBLIC_API_URL, _NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY, _NEXT_PUBLIC_CLERK_JWT_TEMPLATE
+
+steps:
+  - id: api
+    name: gcr.io/cloud-builders/docker
+    waitFor: ["-"]
+    args:
+      - build
+      - -f
+      - docker/api.Dockerfile
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/km2-api:${_TAG}
+      - .
+
+  - id: brain-api
+    name: gcr.io/cloud-builders/docker
+    waitFor: ["-"]
+    args:
+      - build
+      - -f
+      - docker/brain-api.Dockerfile
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/km2-brain-api:${_TAG}
+      - .
+
+  - id: worker
+    name: gcr.io/cloud-builders/docker
+    waitFor: ["-"]
+    args:
+      - build
+      - -f
+      - docker/worker.Dockerfile
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/km2-worker:${_TAG}
+      - .
+
+  - id: ui
+    name: gcr.io/cloud-builders/docker
+    waitFor: ["-"]
+    args:
+      - build
+      - -f
+      - docker/ui.Dockerfile
+      - --build-arg
+      - NEXT_PUBLIC_API_URL=${_NEXT_PUBLIC_API_URL}
+      - --build-arg
+      - NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=${_NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY}
+      - --build-arg
+      - NEXT_PUBLIC_CLERK_JWT_TEMPLATE=${_NEXT_PUBLIC_CLERK_JWT_TEMPLATE}
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/km2-ui:${_TAG}
+      - .
+
+images:
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/km2-api:${_TAG}
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/km2-brain-api:${_TAG}
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/km2-worker:${_TAG}
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/km2-ui:${_TAG}
+
+substitutions:
+  _REGION: us-central1
+  _REPO: km2
+  _TAG: "2.0.0"
+  _NEXT_PUBLIC_API_URL: ""
+  _NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ""
+  _NEXT_PUBLIC_CLERK_JWT_TEMPLATE: "redarch-km"
+
+options:
+  machineType: E2_HIGHCPU_8
+
+timeout: 3600s

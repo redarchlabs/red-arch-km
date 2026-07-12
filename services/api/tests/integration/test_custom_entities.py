@@ -91,7 +91,7 @@ class TestRuntimeTableRLS:
         ).scalar_one()
         assert forced is True
 
-        # All four tenant_isolation policies present.
+        # All four tenant_isolation policies + the GUC-gated cross-org bypass.
         policies = (
             await admin_session.execute(
                 text("SELECT policyname FROM pg_policies WHERE tablename = :t"), {"t": table}
@@ -102,6 +102,7 @@ class TestRuntimeTableRLS:
             "tenant_isolation_insert",
             "tenant_isolation_update",
             "tenant_isolation_delete",
+            "admin_bypass_all",
         }
 
         # app_user has CRUD grants.

@@ -69,9 +69,13 @@ def test_read_tool_always_allowed():
 
 
 def test_execute_denied_without_grant_then_allowed_with_grant():
+    # Grant mechanics in isolation (hands_off posture, so side-effecting isn't force-gated).
     spec = _spec("run_workflow", Category.EXECUTE, side_effecting=True)
-    assert decide(_agent("operator"), spec).decision is Decision.DENY
-    assert decide(_agent("operator", tools=["run_workflow"]), spec).decision is Decision.ALLOW
+    assert decide(_agent("operator"), spec, autonomy="hands_off").decision is Decision.DENY
+    assert (
+        decide(_agent("operator", tools=["run_workflow"]), spec, autonomy="hands_off").decision
+        is Decision.ALLOW
+    )
 
 
 def test_execute_asks_when_in_approval_list():
@@ -84,7 +88,39 @@ def test_write_needs_records_write_flag():
     spec = _spec("update_record", Category.WRITE, side_effecting=True)
     assert decide(_agent("operator", tools=["update_record"]), spec).decision is Decision.DENY
     granted = _agent("operator", tools=["update_record"], records_write=True)
-    assert decide(granted, spec).decision is Decision.ALLOW
+    # hands_off isolates the records_write mechanic from the high-touch overlay.
+    assert decide(granted, spec, autonomy="hands_off").decision is Decision.ALLOW
+
+
+# --- high-touch autonomy overlay ------------------------------------------
+
+
+def test_high_touch_forces_ask_on_side_effecting_action():
+    # A granted, allowed EXECUTE tool is still gated to ASK under high_touch,
+    # even without being listed in approval_required.
+    spec = _spec("send_email", Category.EXECUTE, side_effecting=True)
+    agent = _agent("operator", tools=["send_email"])
+    assert decide(agent, spec, autonomy="high_touch").decision is Decision.ASK
+    assert decide(agent, spec, autonomy="hands_off").decision is Decision.ALLOW
+
+
+def test_high_touch_does_not_gate_internal_writes():
+    # Record/document writes are side_effecting=False → never force-gated.
+    spec = _spec("create_record", Category.WRITE, side_effecting=False)
+    agent = _agent("operator", tools=["create_record"], records_write=True)
+    assert decide(agent, spec, autonomy="high_touch").decision is Decision.ALLOW
+
+
+def test_mcp_server_wildcard_grant():
+    agent = _agent("operator", tools=["mcp__perplexity__*"])
+    # A read-only search tool under the server wildcard runs even under high-touch.
+    search = _spec("mcp__perplexity__search", Category.EXECUTE, side_effecting=False)
+    assert decide(agent, search, autonomy="high_touch").decision is Decision.ALLOW
+    # A side-effecting tool under the same wildcard still asks under high-touch.
+    post = _spec("mcp__perplexity__post", Category.EXECUTE, side_effecting=True)
+    assert decide(agent, post, autonomy="high_touch").decision is Decision.ASK
+    # Without any grant, the MCP tool is denied.
+    assert decide(_agent("operator"), search).decision is Decision.DENY
 
 
 def test_kind_gate_beats_grant():

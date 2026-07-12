@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api import db_scope
 from api.auth.dependencies import require_internal_api_key
 from api.config import Settings, get_settings
 from api.db import get_session_factory
@@ -327,6 +328,33 @@ async def advance_agent_runs(
 
 
 @router.post(
+    "/agents/run-schedules",
+    dependencies=[Depends(require_internal_api_key)],
+)
+async def run_agent_schedules(
+    settings: Annotated[Settings, Depends(get_settings)],
+    limit: Annotated[int, Query(ge=1, le=500)] = 200,
+) -> dict[str, int]:
+    """Fire due cron-triggered agent schedules.
+
+    Enqueues a ``schedule``-triggered run for every due ``agent_schedules`` row;
+    the ``advance-runs`` sweep then drives them. Privileged cross-org session, each
+    repo scoped by the schedule's ``org_id`` (mirrors ``advance-runs``)."""
+    from api.services.agents.scheduler import run_due_schedules
+
+    factory = get_session_factory(settings)
+    async with factory() as session:
+        try:
+            result = await run_due_schedules(session, limit=limit)
+            await session.commit()
+            return result
+        except Exception:
+            await session.rollback()
+            logger.exception("agent run-schedules sweep failed")
+            raise
+
+
+@router.post(
     "/workflows/maintain-partitions",
     dependencies=[Depends(require_internal_api_key)],
     status_code=status.HTTP_204_NO_CONTENT,
@@ -346,11 +374,7 @@ async def _set_tenant(session: AsyncSession, tenant_id: uuid.UUID) -> None:
     """Scope the session to the given tenant for RLS enforcement.
 
     Mirrors get_tenant_db: drop to the non-superuser app_user role so RLS is
-    actually enforced (the connection role bypasses it otherwise), then set the
-    tenant GUC the policies compare against. Both are transaction-local.
+    actually enforced, force the bypass GUC off, then set the tenant GUC the
+    policies compare against. All transaction-local (see api/db_scope.py).
     """
-    await session.execute(text("SET LOCAL ROLE app_user"))
-    await session.execute(
-        text("SELECT set_config('app.current_tenant_id', :tid, true)"),
-        {"tid": str(tenant_id)},
-    )
+    await db_scope.enter_tenant(session, tenant_id)

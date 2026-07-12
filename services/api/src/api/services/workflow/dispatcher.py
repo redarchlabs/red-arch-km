@@ -22,6 +22,7 @@ from typing import Any
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api import db_scope
 from api.models.custom_entity import EntityDefinition
 from api.models.workflow import Workflow, WorkflowRun, WorkflowVersion
 from api.repositories.custom_entity import (
@@ -251,24 +252,24 @@ class WorkflowDispatchService:
         scoping had a bug. ``SET LOCAL`` is transaction-scoped; it is rolled back
         automatically if the enclosing savepoint rolls back, and we RESET it
         explicitly (``_exit_tenant``) after a successful unit."""
-        await self._session.execute(text("SET LOCAL ROLE app_user"))
-        await self._session.execute(
-            text("SELECT set_config('app.current_tenant_id', :tid, true)"),
-            {"tid": str(org_id)},
-        )
+        await db_scope.enter_tenant(self._session, org_id)
 
     async def _exit_tenant(self) -> None:
-        """Restore the privileged connection role so the next unit's cross-org
-        claim/bookkeeping runs unscoped again.
+        """Restore the cross-org (bypass) mode so the next unit's claim/bookkeeping
+        runs unscoped again: RESET ROLE + re-enable the ``app.bypass`` GUC.
 
         We deliberately leave the tenant GUC as-is: cross-org work between units
-        runs on the privileged (BYPASSRLS) role where the GUC is irrelevant, and
-        ``_enter_tenant`` always re-sets the GUC to the correct org for the next
-        unit — so a stale value can never widen a downgraded unit's visibility."""
-        await self._session.execute(text("RESET ROLE"))
+        runs with bypass on where the GUC is irrelevant, and ``_enter_tenant``
+        always re-sets the GUC (and forces bypass off) for the next unit — so a
+        stale value can never widen a downgraded unit's visibility."""
+        await db_scope.exit_to_bypass(self._session)
 
     async def process_pending(self, *, limit: int = 100, max_depth: int = MAX_DEPTH) -> dict[str, int]:
         """Claim and process a batch of pending outbox events. Returns counters."""
+        # The claim below spans every org in one statement, so it needs the RLS
+        # bypass. Per-event work then runs downgraded (_enter_tenant sets bypass
+        # off), so RLS stays a real backstop.
+        await db_scope.enter_bypass(self._session)
         claimed = (
             (
                 await self._session.execute(
@@ -623,6 +624,8 @@ class WorkflowDispatchService:
         under ``FOR UPDATE SKIP LOCKED`` and only process what we claimed. A
         concurrent sweep skips the locked rows and, once we commit, sees them as
         ``running`` (no longer ``waiting``) — exactly-once resume."""
+        # Cross-org claim → needs the RLS bypass; per-run work below downgrades.
+        await db_scope.enter_bypass(self._session)
         now = datetime.now(UTC)
         claimed = (
             (
@@ -749,6 +752,9 @@ class WorkflowDispatchService:
         workflow per commit window; the other skips. The last-scheduled-run
         timestamp is then re-confirmed under the lock so a run another sweep just
         committed can't be double-fired."""
+        # Cross-org scan of published workflows → needs the RLS bypass; each fire
+        # below runs downgraded to its workflow's org via _enter_tenant.
+        await db_scope.enter_bypass(self._session)
         rows = (
             await self._session.execute(
                 select(Workflow, WorkflowVersion)

@@ -97,6 +97,14 @@ app.conf.beat_schedule = {
         "schedule": float(os.environ.get("AGENT_RUN_INTERVAL", "10")),
         "options": {"expires": 30},
     },
+    # Fire due cron-triggered agent schedules (e.g. the daily briefing). Enqueues
+    # schedule runs that agents-advance-runs then drives. Interval only needs to be
+    # finer than the shortest agent schedule (minute-granularity cron).
+    "agents-run-schedules": {
+        "task": "worker.tasks.agents.run_schedules",
+        "schedule": float(os.environ.get("AGENT_SCHEDULE_INTERVAL", "30")),
+        "options": {"expires": 60},
+    },
     # Liveness beacon for the site-admin console: proves beat -> broker -> worker
     # is healthy. A stale/absent heartbeat there means beat is down.
     "beat-heartbeat": {

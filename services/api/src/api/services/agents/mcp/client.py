@@ -67,6 +67,10 @@ class McpToolDef:
     name: str
     description: str
     input_schema: dict[str, Any]
+    # From the tool's MCP ``annotations.readOnlyHint`` (default False = treat as
+    # mutating). A read-only tool (e.g. a web search) does not egress company data
+    # or commit resources, so it is not force-gated under a high-touch org.
+    read_only: bool = False
 
 
 class McpError(RuntimeError):
@@ -126,6 +130,7 @@ class McpClient:
                     name=t.name,
                     description=t.description or "",
                     input_schema=getattr(t, "inputSchema", None) or {"type": "object", "properties": {}},
+                    read_only=bool(getattr(getattr(t, "annotations", None), "readOnlyHint", False)),
                 )
                 for t in resp.tools
             ]

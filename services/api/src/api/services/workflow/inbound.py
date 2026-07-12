@@ -26,6 +26,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api import db_scope
 from api.repositories.workflow import (
     WorkflowInboundEndpointRepository,
     WorkflowRepository,
@@ -63,6 +64,9 @@ async def trigger_from_inbound(
     :class:`webhook_signing.SignatureError` when a signature is required but
     missing/invalid (the caller maps that to 401).
     """
+    # The token→endpoint lookup spans every org, so opt into the RLS bypass; we
+    # downgrade to the endpoint's org (bypass off) below before any tenant write.
+    await db_scope.enter_bypass(session)
     endpoint = await WorkflowInboundEndpointRepository(session).get_by_token_hash(hash_token(token))
     if endpoint is None or not endpoint.enabled:
         return None
@@ -84,8 +88,9 @@ async def trigger_from_inbound(
     workflow_id = endpoint.workflow_id
 
     # Downgrade to the endpoint's tenant for all subsequent writes (RLS-enforced).
-    await session.execute(text("SET LOCAL ROLE app_user"))
-    await session.execute(text("SELECT set_config('app.current_tenant_id', :tid, true)"), {"tid": str(org_id)})
+    # The endpoint was resolved cross-org by the caller's bypass session; here we
+    # drop to app_user + tenant GUC (bypass off). See api/db_scope.py.
+    await db_scope.enter_tenant(session, org_id)
 
     wf = await WorkflowRepository(session, org_id).get(workflow_id)
     if wf is None or wf.active_version_id is None:

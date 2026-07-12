@@ -23,6 +23,11 @@ class Org(Base, UUIDMixin, TimestampMixin):
     # Plain UUID (no FK) to avoid a second orgs<->workflows FK path that would make
     # ORM joins ambiguous; a stale/deleted id simply no-ops the channel.
     agent_notify_workflow_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    # Agent-org autonomy posture: high_touch (every external/side-effecting action
+    # asks the human) | balanced | hands_off. Enforced in agents/authority.py.
+    agent_autonomy: Mapped[str] = mapped_column(
+        String(16), default="high_touch", server_default="high_touch"
+    )
 
     # Relationships
     regions: Mapped[list[Region]] = relationship(back_populates="org", cascade="all, delete-orphan")
