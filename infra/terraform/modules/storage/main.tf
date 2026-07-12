@@ -17,22 +17,6 @@ resource "google_storage_bucket" "documents" {
   versioning { enabled = true }
 }
 
-# Nightly pg_dump backups from the data VM.
-resource "google_storage_bucket" "backups" {
-  name                        = "${var.project_id}-${var.name}-backups"
-  location                    = var.region
-  uniform_bucket_level_access = true
-  force_destroy               = false
-  labels                      = var.labels
-
-  versioning { enabled = true }
-
-  lifecycle_rule {
-    condition { age = 30 }
-    action { type = "Delete" }
-  }
-}
-
 # --- HMAC identity (S3-compatible access for the app's boto3 client) --------
 resource "google_service_account" "gcs" {
   account_id   = "${var.name}-gcs"
@@ -46,22 +30,8 @@ resource "google_storage_bucket_iam_member" "gcs_documents" {
   member = "serviceAccount:${google_service_account.gcs.email}"
 }
 
-resource "google_storage_bucket_iam_member" "gcs_backups" {
-  bucket = google_storage_bucket.backups.name
-  role   = "roles/storage.objectAdmin"
-  member = "serviceAccount:${google_service_account.gcs.email}"
-}
-
 resource "google_storage_hmac_key" "app" {
   service_account_email = google_service_account.gcs.email
-}
-
-# The VM writes pg_dumps to the backups bucket using its own SA identity (gcloud
-# storage cp), so grant vm_sa native object access there.
-resource "google_storage_bucket_iam_member" "vm_backups" {
-  bucket = google_storage_bucket.backups.name
-  role   = "roles/storage.objectAdmin"
-  member = "serviceAccount:${var.vm_sa_email}"
 }
 
 # --- STORAGE_ACCESS_KEY / STORAGE_SECRET_KEY secrets ------------------------
@@ -113,10 +83,6 @@ resource "google_secret_manager_secret_iam_member" "secret_key_readers" {
 
 output "documents_bucket" {
   value = google_storage_bucket.documents.name
-}
-
-output "backups_bucket" {
-  value = google_storage_bucket.backups.name
 }
 
 output "secret_ids" {

@@ -66,6 +66,12 @@ async def run_due_schedules(
     for sched in schedules:
         if not is_schedule_due({"cron": sched.cron}, sched.last_run_at, moment):
             continue
+        # Downgrade to this schedule's org so the create_run + schedule-update
+        # writes are RLS-scoped (a real backstop, mirroring the workflow sweeps).
+        # The scheds were SELECTed cross-org under bypass, so flush each fire under
+        # its own scope before the next iteration re-scopes — otherwise a later
+        # tenant's autoflush would try to write this org's dirty row and fail RLS.
+        await db_scope.enter_tenant(session, sched.org_id)
         agent = await AgentRepository(session, sched.org_id).get(sched.agent_id)
         if agent is None or not agent.enabled:
             continue
@@ -80,6 +86,7 @@ async def run_due_schedules(
         )
         sched.last_run_at = moment
         sched.next_run_at = _next_cron(sched.cron, moment)
+        await session.flush()
         fired += 1
         logger.info("agent schedule %s fired for agent %s (org %s)", sched.id, sched.agent_id, sched.org_id)
 

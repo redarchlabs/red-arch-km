@@ -85,6 +85,46 @@ async def test_due_schedule_enqueues_a_queued_run(admin_session: AsyncSession) -
     )
 
 
+async def test_scheduler_fires_across_orgs_on_non_superuser_session(
+    admin_session: AsyncSession, session: AsyncSession
+) -> None:
+    """In production the sweep runs on the non-superuser km_app role, so run it
+    here on the RLS-enforced ``session`` fixture (not the superuser
+    ``admin_session``). Two due schedules in two different orgs must BOTH fire:
+    the cross-org claim needs the ``app.bypass`` GUC (drop it and this returns
+    zero rows under RLS — a regression the superuser fixture can't catch), and
+    each fire is then written scoped to its own org (a real RLS backstop)."""
+    seeded = []
+    for _ in range(2):
+        org, agent = await _org_and_agent(admin_session)
+        await set_tenant(admin_session, str(org.id))
+        admin_session.add(
+            AgentSchedule(
+                agent_id=agent.id, org_id=org.id, cron="0 7 * * *",
+                task=f"briefing {org.id}", enabled=True,
+            )
+        )
+        await admin_session.commit()
+        seeded.append((org, agent))
+    await set_tenant(admin_session, None)
+
+    # Run the sweep on the non-superuser (RLS-enforced) session.
+    result = await run_due_schedules(session)
+    await session.commit()
+    assert result["fired"] >= 2
+
+    # Each org got exactly its own queued run, scoped correctly.
+    for org, agent in seeded:
+        runs = (
+            await admin_session.execute(
+                select(AgentRun).where(AgentRun.agent_id == agent.id, AgentRun.trigger == "schedule")
+            )
+        ).scalars().all()
+        assert len(runs) == 1
+        assert runs[0].org_id == org.id
+        assert runs[0].status == "queued"
+
+
 async def test_disabled_schedule_never_fires(admin_session: AsyncSession) -> None:
     org, agent = await _org_and_agent(admin_session)
     admin_session.add(

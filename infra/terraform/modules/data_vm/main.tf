@@ -6,7 +6,6 @@ variable "machine_type" { type = string }
 variable "image" { type = string }
 variable "subnet_id" { type = string }
 variable "internal_ip" { type = string }
-variable "postgres_disk_gb" { type = number }
 variable "qdrant_disk_gb" { type = number }
 variable "neo4j_disk_gb" { type = number }
 variable "repo_url" { type = string }
@@ -16,27 +15,16 @@ variable "redis_port" { type = number }
 variable "brain_api_url" { type = string }
 variable "api_url" { type = string }
 variable "vm_sa_email" { type = string }
-variable "postgres_user" { type = string }
-variable "postgres_db" { type = string }
 variable "neo4j_user" { type = string }
 variable "worker_concurrency" { type = number }
 variable "openai_chat_model" { type = string }
 variable "openai_embedding_model" { type = string }
 variable "documents_bucket" { type = string }
-variable "backups_bucket" { type = string }
 variable "storage_region" { type = string }
 variable "secret_ids" { type = map(string) }
 variable "labels" { type = map(string) }
 
 # --- Persistent data disks --------------------------------------------------
-resource "google_compute_disk" "pg" {
-  name   = "${var.name}-pg-data"
-  type   = "pd-ssd"
-  zone   = var.zone
-  size   = var.postgres_disk_gb
-  labels = var.labels
-}
-
 resource "google_compute_disk" "qdrant" {
   name   = "${var.name}-qdrant-data"
   type   = "pd-ssd"
@@ -75,12 +63,6 @@ resource "google_compute_resource_policy" "snapshots" {
   }
 }
 
-resource "google_compute_disk_resource_policy_attachment" "pg" {
-  name = google_compute_resource_policy.snapshots.name
-  disk = google_compute_disk.pg.name
-  zone = var.zone
-}
-
 resource "google_compute_disk_resource_policy_attachment" "qdrant" {
   name = google_compute_resource_policy.snapshots.name
   disk = google_compute_disk.qdrant.name
@@ -113,10 +95,6 @@ resource "google_compute_instance" "data" {
     }
   }
 
-  attached_disk {
-    source      = google_compute_disk.pg.id
-    device_name = "pgdata"
-  }
   attached_disk {
     source      = google_compute_disk.qdrant.id
     device_name = "qdrantdata"
@@ -151,8 +129,6 @@ resource "google_compute_instance" "data" {
     region                 = var.region
     repo_url               = var.repo_url
     image_tag              = var.image_tag
-    postgres_user          = var.postgres_user
-    postgres_db            = var.postgres_db
     neo4j_user             = var.neo4j_user
     worker_concurrency     = var.worker_concurrency
     redis_host             = var.redis_host
@@ -160,11 +136,10 @@ resource "google_compute_instance" "data" {
     brain_api_url          = var.brain_api_url
     api_url                = var.api_url
     documents_bucket       = var.documents_bucket
-    backups_bucket         = var.backups_bucket
     storage_region         = var.storage_region
     openai_chat_model      = var.openai_chat_model
     openai_embedding_model = var.openai_embedding_model
-    sec_postgres_password  = var.secret_ids["postgres_password"]
+    sec_database_url       = var.secret_ids["database_url"]
     sec_neo4j_password     = var.secret_ids["neo4j_password"]
     sec_openai_api_key     = var.secret_ids["openai_api_key"]
     sec_brain_api_key      = var.secret_ids["brain_api_key"]

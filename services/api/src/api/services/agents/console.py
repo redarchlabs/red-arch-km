@@ -76,7 +76,7 @@ class AgentConsoleService:
                 # Scope to the console's org, staying on km_app so agent tools that
                 # author ce_* entity tables can DDL. RLS is a real backstop. Re-set
                 # after each commit below (SET LOCAL resets on commit). See db_scope.
-                await db_scope.enter_tenant_owner(session, self._org_id)
+                await db_scope.enter_tenant(session, self._org_id)
                 agent = await AgentRepository(session, self._org_id).get(agent_id)
                 if agent is None:
                     await emit({"type": "error", "error": "Agent not found"})
@@ -96,7 +96,7 @@ class AgentConsoleService:
                     trigger="manual", input={"messages": len(history)}, actor_user_id=self._actor_user_id,
                 )
                 await session.commit()
-                await db_scope.enter_tenant_owner(session, self._org_id)  # re-scope: commit reset SET LOCAL
+                await db_scope.enter_tenant(session, self._org_id)  # re-scope: commit reset SET LOCAL
                 await emit({"type": "run_started", "run_id": str(run.id)})
 
                 provider = LLMProvider(api_key=key)
@@ -126,7 +126,7 @@ class AgentConsoleService:
                 except Exception as exc:  # noqa: BLE001 - report + persist error state
                     logger.exception("Agent console run %s failed", run.id)
                     await session.rollback()
-                    await db_scope.enter_tenant_owner(session, self._org_id)  # rollback reset SET LOCAL
+                    await db_scope.enter_tenant(session, self._org_id)  # rollback reset SET LOCAL
                     failed = await run_repo.get_run(run.id)
                     if failed is not None:
                         await run_repo.finalize_run(failed, status="error", error=str(exc))
