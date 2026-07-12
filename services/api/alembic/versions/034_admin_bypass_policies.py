@@ -85,9 +85,26 @@ $$;
 """
 
 
+# workflow_ensure_partitions() runs CREATE TABLE ... PARTITION OF, which requires
+# ownership of the parent tables. Under the old superuser connection that was
+# implicit; the app now connects as the non-owner km_app, so make the function
+# SECURITY DEFINER (runs as its owner = the migration/admin role that owns the
+# tables). search_path is pinned per the SECURITY DEFINER hardening guideline.
+_DEFINER_ON = """
+ALTER FUNCTION workflow_ensure_partitions(int) SECURITY DEFINER;
+ALTER FUNCTION workflow_ensure_partitions(int) SET search_path = public, pg_temp;
+"""
+_DEFINER_OFF = """
+ALTER FUNCTION workflow_ensure_partitions(int) SECURITY INVOKER;
+ALTER FUNCTION workflow_ensure_partitions(int) RESET search_path;
+"""
+
+
 def upgrade() -> None:
     op.execute(_APPLY)
+    op.execute(_DEFINER_ON)
 
 
 def downgrade() -> None:
+    op.execute(_DEFINER_OFF)
     op.execute(_DROP)

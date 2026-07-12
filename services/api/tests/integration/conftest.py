@@ -113,6 +113,16 @@ async def _enable_rls(engine: AsyncEngine) -> None:
                     {clause} (org_id = nullif(current_setting('app.current_tenant_id', true), '')::uuid)
                 """)
                 )
+            # Permissive cross-org bypass gated on the app.bypass GUC (mirrors
+            # migration 034). OR-combined with tenant_isolation, so it only widens
+            # visibility when a privileged path opts in via the GUC.
+            await conn.execute(
+                text(f"""
+                CREATE POLICY admin_bypass_all ON {tbl}
+                USING (current_setting('app.bypass', true) = 'on')
+                WITH CHECK (current_setting('app.bypass', true) = 'on')
+            """)
+            )
 
 
 async def _grant_app_user(engine: AsyncEngine) -> None:

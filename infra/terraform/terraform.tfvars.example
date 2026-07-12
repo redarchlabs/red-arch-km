@@ -1,0 +1,35 @@
+# Copy to terraform.tfvars and fill in. Do NOT commit terraform.tfvars.
+
+project_id = "my-km2-project"       # REQUIRED
+region     = "us-central1"
+zone       = "us-central1-a"
+
+# Custom domain (strongly recommended). Leave "" to use run.app URLs (two-phase
+# UI build — see README).
+#   ui  -> https://km.example.com
+#   api -> https://api.km.example.com
+domain = ""                          # e.g. "km.example.com"
+
+# Image tag pushed to Artifact Registry by scripts/build-images.sh
+image_tag = "2.0.0"
+
+# --- Clerk (identity provider) ---
+# Publishable key is browser-exposed and is baked into the UI image at build time.
+clerk_jwt_issuer      = ""           # e.g. https://your-slug.clerk.accounts.dev
+clerk_publishable_key = ""           # pk_live_... / pk_test_...
+clerk_jwt_template    = "redarch-km"
+
+# --- Sizing (defaults are tuned for small production; override as needed) ---
+# data_vm_machine_type = "e2-standard-4"
+# postgres_disk_gb     = 50
+# redis_tier           = "BASIC"       # or STANDARD_HA
+# redis_memory_gb      = 1
+# worker_concurrency   = 2
+# cloud_run_min_instances = 1
+
+# --- Hardening ---
+# api_docs_enabled = false
+# workflow_webhook_allowlist = "hooks.slack.com,api.example.com"
+
+# NOTE: OpenAI + Clerk SECRET keys are NOT set here (they'd land in Terraform
+# state). Add them after `terraform apply` with scripts/add-external-secrets.sh.
