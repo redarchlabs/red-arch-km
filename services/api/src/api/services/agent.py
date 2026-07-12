@@ -22,6 +22,7 @@ from pydantic import ValidationError
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from api import db_scope
 from api.config import Settings
 
 if TYPE_CHECKING:
@@ -1562,24 +1563,18 @@ def _prepare_authored_definition(raw: Any) -> dict[str, Any]:
 
 
 async def apply_tenant_scope(session: AsyncSession, org_id: uuid.UUID) -> None:
-    """Set the tenant GUC on a session, matching the original agent session role.
+    """Scope the config-assistant session to one org, keeping DDL privileges.
 
-    IMPORTANT: unlike ``get_tenant_db``, this deliberately does NOT
-    ``SET LOCAL ROLE app_user``. The config-assistant's tools include
-    ``create_entity`` / ``add_entity_field``, which run physical DDL
-    (``CREATE TABLE``/``ALTER TABLE`` on the ``ce_*`` tables) — see
-    ``entity_service`` ("Runs on the privileged get_db session"). ``app_user``
-    lacks ``CREATE`` on ``public`` and would fail those tools, and the original
-    router already ran on the privileged ``get_db`` session (no role drop, no
-    RLS). We preserve that exactly. Tenant isolation is enforced by the
-    org-bound repositories (every query carries ``self._org_id``), unchanged by
-    this refactor. Setting the GUC (transaction-local) is defence-in-depth for
-    any trigger/read that consults ``app.current_tenant_id``.
+    Unlike ``get_tenant_db``, this deliberately does NOT ``SET LOCAL ROLE
+    app_user``: the config-assistant's tools include ``create_entity`` /
+    ``add_entity_field``, which run physical DDL (``CREATE TABLE``/``ALTER TABLE``
+    on the ``ce_*`` tables), and ``app_user`` lacks ``CREATE`` on ``public``. So
+    it stays on the base ``km_app`` role (which HAS ``CREATE``) and sets the
+    tenant GUC with the bypass off — see ``db_scope.enter_tenant_owner``. Because
+    ``km_app`` is a non-superuser, PostgreSQL RLS is now a real backstop here too
+    (scoped to ``org_id``), on top of the org-bound repositories.
     """
-    await session.execute(
-        text("SELECT set_config('app.current_tenant_id', :tid, true)"),
-        {"tid": str(org_id)},
-    )
+    await db_scope.enter_tenant_owner(session, org_id)
 
 
 class AgentService:

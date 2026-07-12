@@ -31,6 +31,7 @@ from typing import Any
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api import db_scope
 from api.models.workflow import WorkflowRun, WorkflowRunStep, WorkflowRunToken
 from api.repositories.workflow import (
     WorkflowRepository,
@@ -110,13 +111,10 @@ class TokenEngine:
 
     # ---- per-tenant RLS downgrade (mirrors the dispatcher) --------------- #
     async def _enter_tenant(self, org_id: uuid.UUID) -> None:
-        await self._session.execute(text("SET LOCAL ROLE app_user"))
-        await self._session.execute(
-            text("SELECT set_config('app.current_tenant_id', :tid, true)"), {"tid": str(org_id)}
-        )
+        await db_scope.enter_tenant(self._session, org_id)
 
     async def _exit_tenant(self) -> None:
-        await self._session.execute(text("RESET ROLE"))
+        await db_scope.exit_to_bypass(self._session)
 
     async def _lock_run(self, run_id: uuid.UUID) -> bool:
         """Non-blocking per-run advisory lock: serializes all of a run's token
@@ -242,6 +240,8 @@ class TokenEngine:
     # ---- the sweep ------------------------------------------------------- #
     async def advance_tokens(self, *, limit: int = 100) -> dict[str, int]:
         """Claim a cross-org batch of active tokens and advance each one node."""
+        # Cross-org claim → RLS bypass; each token advances downgraded (_enter_tenant).
+        await db_scope.enter_bypass(self._session)
         claimed = (
             (
                 await self._session.execute(
@@ -289,6 +289,8 @@ class TokenEngine:
     async def resume_due_tokens(self, *, limit: int = 100) -> dict[str, int]:
         """Reactivate parked tokens whose wait elapsed (timers/boundaries/retries)
         and crashed 'running' leases past the TTL. Mirrors resume_waiting_runs."""
+        # Cross-org claim → RLS bypass; each token resumes downgraded per-org.
+        await db_scope.enter_bypass(self._session)
         now = datetime.now(UTC)
         claimed = (
             (

@@ -610,6 +610,7 @@ async def stream_run(
         try:
             for _ in range(max_ticks):
                 async with factory() as session:
+                    await db_scope.enter_tenant(session, org_id)
                     snapshot = await _run_stream_snapshot(session, org_id, run_id)
                 if snapshot is None:
                     yield b'event: error\ndata: {"detail": "run not found"}\n\n'

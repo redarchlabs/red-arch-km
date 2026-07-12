@@ -76,13 +76,19 @@ def _make_spec(server: ResolvedMcpServer, tool: McpToolDef, client: McpClient) -
         except Exception as exc:  # noqa: BLE001 - surface as tool error
             return {"error": f"MCP call failed: {exc}"}
 
+    # A read-only tool (the MCP ``readOnlyHint``, or a whole server flagged
+    # ``read_only`` in its config for pure lookup/search servers like Perplexity)
+    # does not egress data or commit resources, so it is NOT side-effecting and a
+    # high-touch org lets it run without approval. Everything else is gated.
+    read_only = tool.read_only or bool(server.config.get("read_only"))
+
     return ToolSpec(
         name=qualified,
         description=f"[{server.name}] {tool.description}".strip(),
         parameters=tool.input_schema or {"type": "object", "properties": {}},
         category=Category.EXECUTE,
         handler=handler,
-        side_effecting=True,
+        side_effecting=not read_only,
     )
 
 

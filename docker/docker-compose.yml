@@ -12,7 +12,9 @@ services:
     env_file:
       - ../.env
     environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-redarch}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-redarch_km}
+      # App connects as non-superuser km_app (RLS enforced); migrations run as
+      # POSTGRES_USER. Password matches docker/init-db.sql.
+      DATABASE_URL: postgresql+asyncpg://km_app:km_app_dev@postgres:5432/${POSTGRES_DB:-redarch_km}
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/1
