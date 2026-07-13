@@ -10,6 +10,12 @@ export interface DocumentCreateInput {
   tag_ids?: string[];
   metadata?: Record<string, unknown>;
   use_knowledge_graph?: boolean | null;
+  /**
+   * Optional stable key shared with the vector store and emitted in citations.
+   * Defaults to a random UUID server-side. Must be unique within the org and
+   * URL/path-safe (letters, digits, '.', '_', '-'); a duplicate returns 409.
+   */
+  document_key?: string;
 }
 
 export interface DocumentUpdateInput {

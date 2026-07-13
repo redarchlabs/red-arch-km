@@ -103,7 +103,13 @@ class DocumentRepository:
         use_knowledge_graph: bool | None = None,
         metadata: dict[str, Any] | None = None,
         tag_ids: list[uuid.UUID] | None = None,
+        document_key: str | None = None,
     ) -> Document:
+        # ``document_key`` is the stable id shared with the vector store and
+        # emitted in citations. A caller may pin it (e.g. a seed that ingested
+        # into brain-api under a known slug); otherwise we mint a random UUID.
+        # Uniqueness within the org is enforced by uq_doc_key_per_org — a clash
+        # surfaces as an IntegrityError for the caller to translate to 409.
         doc = Document(
             title=title,
             org_id=self._org_id,
@@ -113,7 +119,7 @@ class DocumentRepository:
             uploaded_by_id=uploaded_by_id,
             use_knowledge_graph=use_knowledge_graph,
             metadata_=metadata or {},
-            document_key=str(uuid.uuid4()),
+            document_key=document_key or str(uuid.uuid4()),
         )
         self._session.add(doc)
         await self._session.flush()

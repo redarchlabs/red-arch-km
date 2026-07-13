@@ -46,6 +46,17 @@ export function registerDocumentTools(server: McpServer, ctx: AppContext): void 
       tag_ids: z.array(uuid).optional(),
       metadata: z.record(z.any()).optional(),
       use_knowledge_graph: z.boolean().optional(),
+      document_key: z
+        .string()
+        .min(1)
+        .max(255)
+        .regex(/^[A-Za-z0-9._-]+$/)
+        .optional()
+        .describe(
+          "Stable key shared with the vector store and emitted in chat/search citations. " +
+            "Defaults to a random UUID. Set this to match the key an out-of-band ingest used " +
+            "so citations resolve back to this document. Must be unique within the org.",
+        ),
     },
     handler: (args) => ctx.api.post("/documents/", { body: pruneUndefined(args) }),
   });
