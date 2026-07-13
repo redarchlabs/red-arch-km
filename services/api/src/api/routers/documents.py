@@ -15,6 +15,7 @@ import mammoth
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from redis.asyncio import Redis
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth.dependencies import OrgContext, require_org_access
@@ -33,6 +34,7 @@ from api.schemas.document import (
     JobLogEntry,
     JobLogsRead,
     UploadBatchRead,
+    validate_document_key,
 )
 from api.services.brain_client import BrainAPIClient
 from api.services.folder_service import compute_folder_masks
@@ -195,16 +197,33 @@ async def create_document(
         # Encode folder membership as a tag for graph-level filtering
         tag_names.append(f"folder:{folder.id}")
 
-    doc = await doc_repo.create(
-        title=body.title,
-        text=body.text,
-        description=body.description,
-        folder_id=body.folder_id,
-        uploaded_by_id=ctx.user.profile_id,
-        use_knowledge_graph=body.use_knowledge_graph,
-        metadata=body.metadata,
-        tag_ids=body.tag_ids,
-    )
+    # An explicit key must be unique within the org. Pre-check for a clean 409
+    # message; the DB constraint (caught below) is the authoritative backstop
+    # against a race between the check and the insert.
+    if body.document_key is not None and await doc_repo.get_by_key(body.document_key) is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A document with this document_key already exists in this organization",
+        )
+
+    try:
+        doc = await doc_repo.create(
+            title=body.title,
+            text=body.text,
+            description=body.description,
+            folder_id=body.folder_id,
+            uploaded_by_id=ctx.user.profile_id,
+            use_knowledge_graph=body.use_knowledge_graph,
+            metadata=body.metadata,
+            tag_ids=body.tag_ids,
+            document_key=body.document_key,
+        )
+    except IntegrityError as e:
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A document with this document_key already exists in this organization",
+        ) from e
 
     # Byte-length of pasted text (uploaded files set this from the file size).
     doc.size_bytes = len(body.text.encode("utf-8")) if body.text else None
@@ -353,6 +372,7 @@ async def _stage_document(
     translation_method: str,
     tags: list[str],
     access_keys: list[int],
+    document_key: str | None = None,
 ) -> tuple[Any, dict[str, Any]]:
     """Create a document row, store its original, and build its dispatch payload.
 
@@ -366,6 +386,7 @@ async def _stage_document(
         description=description,
         folder_id=folder_uuid,
         uploaded_by_id=ctx.user.profile_id,
+        document_key=document_key,
     )
     doc.size_bytes = len(content)  # original file size, for the explorer's size column
 
@@ -411,6 +432,7 @@ async def upload_document(
     description: Annotated[str | None, Form()] = None,
     folder_id: Annotated[str | None, Form()] = None,
     translation_method: Annotated[str, Form()] = "ocr",
+    document_key: Annotated[str | None, Form()] = None,
 ) -> DocumentRead | UploadBatchRead:
     """Upload a file, store the original, and enqueue extraction + ingestion.
 
@@ -487,6 +509,26 @@ async def upload_document(
     doc_repo = DocumentRepository(session, ctx.org_id)
     storage = StorageClient(settings)
 
+    # An explicit document_key can only pin a SINGLE document — a .zip fans out
+    # into many, so there is no one key to assign. Validate format the same way
+    # the JSON create path does (Form params bypass the pydantic schema), and
+    # reject a duplicate up front for a clean 409.
+    if document_key is not None:
+        if is_zip:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="document_key cannot be applied to a multi-file .zip upload",
+            )
+        try:
+            validate_document_key(document_key)
+        except ValueError as e:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+        if await doc_repo.get_by_key(document_key) is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="A document with this document_key already exists in this organization",
+            )
+
     if is_zip:
         members, skipped = _read_zip_members(content, max_bytes)
     else:
@@ -512,6 +554,8 @@ async def upload_document(
             translation_method=translation_method,
             tags=tag_names,
             access_keys=access_keys,
+            # Only a single-file upload can carry an explicit key (guarded above).
+            document_key=None if is_zip else document_key,
         )
         staged.append((doc, payload))
 

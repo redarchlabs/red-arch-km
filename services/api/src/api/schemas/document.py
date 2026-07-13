@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import uuid
 from typing import Any
 
@@ -15,6 +16,37 @@ def _no_dots(name: str) -> str:
     return name
 
 
+# ``document_key`` is the stable identifier shared with the vector store and
+# emitted in chat/search citations. It ends up in URLs (``/documents/<key>``),
+# object-storage keys (``<org_id>/<key>/<filename>``), and brain-api payloads,
+# so it must be URL- and path-safe. A few literal sibling routes under
+# ``/documents`` are reserved so a key can never shadow them.
+_DOCUMENT_KEY_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+_RESERVED_DOCUMENT_KEYS = frozenset({"upload", "search", "by-key"})
+
+
+def validate_document_key(value: str) -> str:
+    """Validate a caller-supplied document key; return it unchanged if valid.
+
+    Raises ``ValueError`` (→ 422 at the schema boundary, translated to 400 for
+    multipart form callers) for anything that would be unsafe in a URL/object
+    key or that collides with a reserved route.
+    """
+    if not 1 <= len(value) <= 255:
+        msg = "document_key must be 1–255 characters"
+        raise ValueError(msg)
+    if not _DOCUMENT_KEY_RE.match(value):
+        msg = "document_key may contain only letters, digits, '.', '_' and '-'"
+        raise ValueError(msg)
+    if ".." in value:
+        msg = "document_key cannot contain '..'"
+        raise ValueError(msg)
+    if value.lower() in _RESERVED_DOCUMENT_KEYS:
+        msg = f"document_key '{value}' is reserved"
+        raise ValueError(msg)
+    return value
+
+
 class DocumentCreate(BaseModel):
     title: str = Field(min_length=1, max_length=255)
     description: str | None = None
@@ -23,6 +55,15 @@ class DocumentCreate(BaseModel):
     tag_ids: list[uuid.UUID] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
     use_knowledge_graph: bool | None = None
+    # Optional stable key shared with the vector store / citations. Defaults to
+    # a random UUID when omitted (see DocumentRepository.create). Must be unique
+    # within the org (enforced by uq_doc_key_per_org).
+    document_key: str | None = None
+
+    @field_validator("document_key")
+    @classmethod
+    def _validate_document_key(cls, v: str | None) -> str | None:
+        return validate_document_key(v) if v is not None else None
 
 
 class DocumentUpdate(BaseModel):
