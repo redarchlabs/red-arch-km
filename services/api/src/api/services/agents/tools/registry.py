@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from api.services.agents.tools.batch_generate import BATCH_GENERATE, CHECK_BATCH
 from api.services.agents.tools.claude_code import RUN_CLAUDE_CODE
 from api.services.agents.tools.documents import CREATE_DOCUMENT
 from api.services.agents.tools.knowledge import SEARCH_KNOWLEDGE
@@ -19,6 +20,7 @@ from api.services.agents.tools.records import (
     UPDATE_RECORD,
 )
 from api.services.agents.tools.spec import ToolSpec
+from api.services.agents.tools.web_research import WEB_RESEARCH
 from api.services.agents.tools.workflows import LIST_WORKFLOWS, RUN_WORKFLOW
 
 if TYPE_CHECKING:
@@ -45,6 +47,9 @@ def base_tool_specs(settings: Settings | None = None) -> list[ToolSpec]:
         CREATE_DOCUMENT,
         LIST_WORKFLOWS,
         RUN_WORKFLOW,
+        WEB_RESEARCH,
+        BATCH_GENERATE,
+        CHECK_BATCH,
     ]
     # Powerful local-exec tool: registered only when explicitly enabled, and even then
     # only ever *offered* to an agent that also holds the run_claude_code grant.

@@ -68,6 +68,15 @@ CUSTOM_PERSONA: dict[str, str] = {
     ),
 }
 
+# Extra base tools granted to specific operators beyond the default OP_TOOLS.
+# web_research = Gemini Google Search grounding on the free 1,500/day AI Studio quota;
+# batch_generate = 50%-off async single-shot generation. Both are grant-gated base tools.
+EXTRA_TOOLS: dict[str, tuple[str, ...]] = {
+    "market-research-analyst": ("web_research", "batch_generate"),
+    "competitive-intel-analyst": ("web_research", "batch_generate"),
+    "content-writer": ("batch_generate",),
+}
+
 # Each blueprint row: (name, display, kind, model, supervisor, mcp[], schedules[])
 # mcp labels become "mcp__<label>__*" wildcard grants (activate when the human
 # connects a server of that name and adds it to the agent's mcp_server_ids).
@@ -154,7 +163,7 @@ def _grants(name: str, kind: str, mcp: list[str]) -> AgentGrants:
         # writes and no MCP wildcards beyond what is listed here.
         return AgentGrants(tools=list(CUSTOM_TOOLS[name]), records_write=False)
     if kind == "operator":
-        tools = [*OP_TOOLS, *[f"mcp__{label}__*" for label in mcp]]
+        tools = [*OP_TOOLS, *EXTRA_TOOLS.get(name, ()), *[f"mcp__{label}__*" for label in mcp]]
         return AgentGrants(tools=tools, records_write=True)
     # coordinators plan/delegate, advisors research/recommend: reads + role-provided
     # tools only, no write/execute grants.
