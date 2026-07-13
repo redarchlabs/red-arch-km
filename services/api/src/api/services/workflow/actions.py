@@ -84,17 +84,21 @@ class ActionContext:
     # ``{"answer": str, "sources": [...]}``. Built by the runner from Settings +
     # the brain-api client; None on the dry-run test path (so simulate() makes no
     # network call).
-    # Hybrid RAG lookup: given ``{"query": str, "use_knowledge_graph": bool}`` returns
-    # ``{"answer", "sources"}``. ``use_knowledge_graph`` lets a per-run toggle skip the
-    # (sequential) graph hop for speed. None on the dry-run test path.
+    # Hybrid RAG lookup: given ``{"query": str, "use_knowledge_graph": bool,
+    # "folder_tags"?, "tags"?, "access_keys"?}`` returns ``{"answer", "sources"}``.
+    # ``use_knowledge_graph`` lets a per-run toggle skip the (sequential) graph hop for
+    # speed; the optional ``folder_tags``/``tags``/``access_keys`` scope retrieval to a
+    # subset of the org's KB (None/absent = whole-org). None on the dry-run test path.
     search_knowledge: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]] | None = None
-    # Retrieval-ONLY KB lookup (no brain-api LLM synthesis): returns the matched
-    # passages pre-formatted as context — ``{"answer": <passage text>, "sources":
-    # [...], "passages": [...]}``. Used by ``knowledge_search`` when
-    # ``synthesize: false`` so a downstream ``llm_decide`` grounds on the raw
-    # passages and does the ONE generation itself (one LLM call per turn instead of
-    # brain-api RAG + llm_decide). None on the dry-run test path.
-    retrieve_knowledge: Callable[[str], Awaitable[dict[str, Any]]] | None = None
+    # Retrieval-ONLY KB lookup (no brain-api LLM synthesis): given ``{"query": str,
+    # "folder_tags"?, "tags"?, "access_keys"?}`` returns the matched passages
+    # pre-formatted as context — ``{"answer": <passage text>, "sources": [...],
+    # "passages": [...]}``. Used by ``knowledge_search`` when ``synthesize: false`` so a
+    # downstream ``llm_decide`` grounds on the raw passages and does the ONE generation
+    # itself (one LLM call per turn instead of brain-api RAG + llm_decide). The optional
+    # scope keys restrict retrieval to a subset of the org's KB (None/absent = whole-org).
+    # None on the dry-run test path.
+    retrieve_knowledge: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]] | None = None
     # Compresses text into one short spoken line via a small LLM (opts: text,
     # question, max_words, instruction, model) → the condensed string. Built by the
     # runner from Settings + the org's OpenAI key; None on the dry-run test path.
@@ -104,6 +108,17 @@ class ActionContext:
     # ``{say, gesture, mood, done, reason}`` with gesture/mood locked to the passed
     # vocabulary. Built by the runner; None on the dry-run test path.
     decide: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]] | None = None
+    # Constrained-LLM grading of a learner's free-text answer: given
+    # ``{answer, question, rubric, model}`` returns ``{score, feedback}`` (score is an
+    # int clamped to 0..100). The action applies the pass threshold. Built by the
+    # runner; None on the dry-run test path.
+    grade: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]] | None = None
+    # Role-play persona + coach for a training simulator: given ``{persona, scenario,
+    # objective, grounding, history, user_message, model}`` returns a structured
+    # ``{reply, coach, done}`` — the persona's in-character line, a formative tip for the
+    # learner, and whether the objective is met. Built by the runner; None on the dry-run
+    # test path.
+    respond: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]] | None = None
 
 
 class ActionHandler(Protocol):
@@ -243,6 +258,39 @@ def _as_int(value: Any, default: int) -> int:
         return int(float(value))
     except (TypeError, ValueError):
         return default
+
+
+def _as_str_list(value: Any) -> list[str] | None:
+    """Coerce a resolved config value to a list of non-empty strings, or ``None``.
+
+    ``None``/blank/empty → ``None`` so an unset scope stays whole-org (back-compat). A
+    list/tuple is stringified element-wise; a template that rendered to a comma-string
+    (e.g. ``"course-101, unit-3"``) is split on commas. Blank items are dropped."""
+    if value is None or value == "":
+        return None
+    items = [str(item).strip() for item in value] if isinstance(value, (list, tuple)) else str(value).split(",")
+    cleaned = [str(item).strip() for item in items if str(item).strip()]
+    return cleaned or None
+
+
+def _as_int_list(value: Any) -> list[int] | None:
+    """Coerce a resolved config value to a list of ints, or ``None``.
+
+    ``None``/blank/empty → ``None`` (whole-org, back-compat). Accepts a list/tuple or a
+    comma-string (a rendered ``{{ ... }}`` template); non-numeric items are skipped."""
+    if value is None or value == "":
+        return None
+    raw = value if isinstance(value, (list, tuple)) else str(value).split(",")
+    out: list[int] = []
+    for item in raw:
+        text = str(item).strip()
+        if not text:
+            continue
+        try:
+            out.append(int(float(text)))
+        except (TypeError, ValueError):
+            continue
+    return out or None
 
 
 def _jsonable(value: Any) -> Any:
@@ -647,7 +695,13 @@ class KnowledgeSearch:
     to compose the answer. Set ``synthesize: false`` for RETRIEVAL-ONLY: ``answer``
     is then the raw matched passages (no brain-api LLM), meant to feed a downstream
     ``llm_decide`` that does the single grounded generation itself — one LLM call
-    per turn instead of two (brain-api RAG synthesis + llm_decide)."""
+    per turn instead of two (brain-api RAG synthesis + llm_decide).
+
+    Optional ``folder_tags``, ``tags``, and ``access_keys`` SCOPE the retrieval to a
+    subset of the org's knowledge base — e.g. a per-course tutor grounds only in its
+    course folder. Each may be a literal list, a ``{{ ... }}`` template, or a ``$ref``
+    envelope (a rendered comma-string or a list both coerce). All absent → whole-org
+    (behaviour byte-for-byte unchanged)."""
 
     type = "knowledge_search"
 
@@ -656,6 +710,18 @@ class KnowledgeSearch:
         context = _trigger_context(ctx)
         resolved = _resolve_ref(raw, context) if isinstance(raw, dict) else _render_template(str(raw or ""), context)
         return str(resolved or "").strip()
+
+    def _scope(self, ctx: ActionContext) -> dict[str, Any]:
+        """Optional retrieval scoping (``folder_tags``/``tags``/``access_keys``) so a
+        course-specific tutor grounds ONLY in its folders/tags. Each key is optional and
+        may be a literal list, a ``{{ ... }}`` template, or a ``$ref`` envelope; a rendered
+        comma-string or a list both coerce. All absent → ``None`` → whole-org (back-compat)."""
+        context = _trigger_context(ctx)
+        return {
+            "folder_tags": _as_str_list(_resolve_dynamic(ctx.config.get("folder_tags"), context)),
+            "tags": _as_str_list(_resolve_dynamic(ctx.config.get("tags"), context)),
+            "access_keys": _as_int_list(_resolve_dynamic(ctx.config.get("access_keys"), context)),
+        }
 
     async def execute(self, ctx: ActionContext) -> dict[str, Any]:
         query = self._query(ctx)
@@ -670,10 +736,11 @@ class KnowledgeSearch:
         # downstream step (llm_decide or summarize) — one LLM call instead of two.
         synthesize = _as_bool(_resolve_dynamic(ctx.config.get("synthesize"), context), True)
         use_knowledge_graph = _as_bool(_resolve_dynamic(ctx.config.get("use_knowledge_graph"), context), True)
+        scope = self._scope(ctx)
         if not synthesize:
             if ctx.retrieve_knowledge is None:
                 raise ActionError("knowledge retrieval is not available in this context")
-            result = await ctx.retrieve_knowledge(query)
+            result = await ctx.retrieve_knowledge({"query": query, **scope})
             return {
                 "query": query,
                 "answer": result.get("answer", ""),
@@ -682,7 +749,7 @@ class KnowledgeSearch:
             }
         if ctx.search_knowledge is None:
             raise ActionError("knowledge search is not available in this context")
-        result = await ctx.search_knowledge({"query": query, "use_knowledge_graph": use_knowledge_graph})
+        result = await ctx.search_knowledge({"query": query, "use_knowledge_graph": use_knowledge_graph, **scope})
         return {
             "query": query,
             "answer": result.get("answer", ""),
@@ -804,6 +871,128 @@ class LlmDecide:
             "done": True,
             "reason": "dry-run",
         }
+
+
+@register
+class LlmGrade:
+    """Grade a learner's free-text answer with the org's LLM (structured output).
+
+    An assessment / course-tutor workflow captures a learner's response, then this node
+    scores it 0..100 against the ``question`` and an optional ``rubric`` (expected answer
+    or grading criteria) and returns a STRUCTURED ``{score, passed, feedback}`` — the LLM
+    judges ``score``/``feedback``, and the workflow owns the pass policy: ``passed`` is
+    ``score >= pass_threshold``. Wire the node's ``capture`` (e.g. ``"grade"``) so a
+    downstream exclusive gateway can branch on ``{{vars.grade.passed}}`` and a ``/say`` or
+    email step can relay ``{{vars.grade.feedback}}``.
+
+    Config: ``{"answer": "{{inputs.answer}}", "question": "{{vars.q.text}}",
+    "rubric": "<expected answer / criteria>", "pass_threshold": 70, "model"?: "..."}``.
+    ``answer``/``question``/``rubric`` may be literals, ``{{ }}`` templates, or ``$ref``
+    envelopes; ``pass_threshold`` (default 70) and ``model`` may be per-run values too.
+    Read-only (calls the LLM, mutates nothing)."""
+
+    type = "llm_grade"
+
+    def _field(self, ctx: ActionContext, key: str) -> str:
+        raw = ctx.config.get(key)
+        context = _trigger_context(ctx)
+        resolved = _resolve_ref(raw, context) if isinstance(raw, dict) else _render_template(str(raw or ""), context)
+        return str(resolved or "").strip()
+
+    async def execute(self, ctx: ActionContext) -> dict[str, Any]:
+        if ctx.grade is None:
+            raise ActionError("llm_grade is not available in this context")
+        answer = self._field(ctx, "answer")
+        if not answer:
+            raise ActionError("llm_grade requires a non-empty answer")
+        context = _trigger_context(ctx)
+        # ``pass_threshold`` and ``model`` may be literals or per-run values
+        # (``{{ inputs.threshold }}`` / ``{"$ref": "inputs.grade_model"}``). A blank
+        # ``model`` resolves to None → the runner falls back to the org's chat model.
+        pass_threshold = _as_int(_resolve_dynamic(ctx.config.get("pass_threshold"), context), 70)
+        model = str(_resolve_dynamic(ctx.config.get("model"), context) or "").strip() or None
+        result = await ctx.grade(
+            {
+                "answer": answer,
+                "question": self._field(ctx, "question") or None,
+                "rubric": self._field(ctx, "rubric") or None,
+                "model": model,
+            }
+        )
+        # The LLM judges (score + feedback); the workflow owns the pass policy — apply the
+        # threshold here (and re-clamp defensively) so a downstream gateway branches on a
+        # trustworthy 0..100 score and bool.
+        score = max(0, min(100, _as_int(result.get("score"), 0)))
+        return {"score": score, "passed": score >= pass_threshold, "feedback": str(result.get("feedback") or "")}
+
+    def simulate(self, ctx: ActionContext) -> dict[str, Any]:
+        # Never call the LLM in a dry run.
+        return {"score": 0, "passed": False, "feedback": ""}
+
+
+@register
+class LlmRespond:
+    """Role-play a persona + coach the learner for a training SIMULATOR.
+
+    The learner converses with a simulated persona (e.g. an angry customer) and gets
+    in-the-moment coaching. Given the ``persona`` (who the LLM plays + how they behave),
+    the ``scenario`` setup, the learning ``objective``, optional ``grounding`` (retrieved
+    SOP/policy text to keep replies factually accurate), the conversation ``history``, and
+    the learner's latest ``user_message``, this node returns a STRUCTURED
+    ``{reply, coach, done}``: the persona's next IN-CHARACTER line, a brief formative tip
+    addressed to the LEARNER (a separate voice from the persona), and whether the objective
+    has been met (or the conversation reached a natural close). Wire the node's ``capture``
+    (e.g. ``"turn"``) so a downstream gateway loops on ``{{vars.turn.done}}`` and ``/say`` +
+    display steps show ``{{vars.turn.reply}}`` / ``{{vars.turn.coach}}``.
+
+    Config: ``{"persona": "<who + how they behave>", "scenario": "...", "objective": "...",
+    "grounding": "{{vars.sop.answer}}", "history": [...], "user_message": "{{inputs.text}}",
+    "model"?: "..."}``. String fields may be literals, ``{{ }}`` templates, or ``$ref``
+    envelopes. Read-only (calls the LLM, mutates nothing)."""
+
+    type = "llm_respond"
+
+    def _field(self, ctx: ActionContext, key: str) -> str:
+        raw = ctx.config.get(key)
+        context = _trigger_context(ctx)
+        resolved = _resolve_ref(raw, context) if isinstance(raw, dict) else _render_template(str(raw or ""), context)
+        return str(resolved or "").strip()
+
+    async def execute(self, ctx: ActionContext) -> dict[str, Any]:
+        if ctx.respond is None:
+            raise ActionError("llm_respond is not available in this context")
+        persona = self._field(ctx, "persona")
+        if not persona:
+            raise ActionError("llm_respond requires a non-empty persona")
+        user_message = self._field(ctx, "user_message")
+        if not user_message:
+            raise ActionError("llm_respond requires a non-empty user_message")
+        context = _trigger_context(ctx)
+        # ``model`` may be a literal or a per-run value (``{{ inputs.model }}`` / $ref); blank
+        # → None so the runner falls back to the org's chat model. ``history`` may be a literal
+        # list or a $ref/template resolving to one (the captured conversation so far).
+        model = str(_resolve_dynamic(ctx.config.get("model"), context) or "").strip() or None
+        result = await ctx.respond(
+            {
+                "persona": persona,
+                "scenario": self._field(ctx, "scenario") or None,
+                "objective": self._field(ctx, "objective") or None,
+                "grounding": self._field(ctx, "grounding") or None,
+                "history": _resolve_dynamic(ctx.config.get("history"), context),
+                "user_message": user_message,
+                "model": model,
+            }
+        )
+        # Defensive shaping so a downstream /say + gateway always read a well-formed turn.
+        return {
+            "reply": str(result.get("reply") or ""),
+            "coach": str(result.get("coach") or ""),
+            "done": bool(result.get("done")),
+        }
+
+    def simulate(self, ctx: ActionContext) -> dict[str, Any]:
+        # Never call the LLM in a dry run.
+        return {"reply": "", "coach": "", "done": False}
 
 
 @register
