@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { ToolResult } from "@/components/agents/console/ToolResult";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -132,11 +133,7 @@ export default function AgentConsolePage() {
                 <pre className="mt-1 overflow-x-auto whitespace-pre-wrap text-muted-foreground">
                   {JSON.stringify(b.args, null, 2)}
                 </pre>
-                {b.result ? (
-                  <pre className="mt-1 overflow-x-auto whitespace-pre-wrap">
-                    {JSON.stringify(b.result, null, 2)}
-                  </pre>
-                ) : null}
+                {b.result ? <ToolResult name={b.name} result={b.result} /> : null}
               </div>
             ) : (
               <div
