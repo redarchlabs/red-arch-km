@@ -253,11 +253,11 @@ async def test_retrieval_only_single_llm_path_drives_robot(
     port, received = robot_bridge
     passages = "[1] Sun Facts\nThe Sun is about 1.4 million kilometers across."
 
-    async def _boom_search(self, org_id, query):  # noqa: ANN001 - synthesis path must NOT be used
+    async def _boom_search(self, org_id, opts):  # noqa: ANN001 - synthesis path must NOT be used
         raise AssertionError("synthesize:false must not call the RAG-synthesis path")
 
-    async def _fake_retrieve(self, org_id, query):  # noqa: ANN001
-        assert query == "how big is the sun?"  # templated from {{after.text}}
+    async def _fake_retrieve(self, org_id, opts):  # noqa: ANN001
+        assert opts["query"] == "how big is the sun?"  # templated from {{after.text}}
         return {"answer": passages, "sources": [{"number": 1}], "passages": []}
 
     async def _fake_decide(self, org_id, opts):  # noqa: ANN001

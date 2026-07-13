@@ -146,9 +146,11 @@ class ActionExecutor:
             send_email=self._send_email,
             resolve_connection=lambda name: self._resolve_connection(org_id, name),
             search_knowledge=lambda opts: self._search_knowledge(org_id, opts),
-            retrieve_knowledge=lambda query: self._retrieve_knowledge(org_id, query),
+            retrieve_knowledge=lambda opts: self._retrieve_knowledge(org_id, opts),
             summarize=lambda opts: self._summarize(org_id, opts),
             decide=lambda opts: self._decide(org_id, opts),
+            grade=lambda opts: self._grade(org_id, opts),
+            respond=lambda opts: self._respond(org_id, opts),
         )
         try:
             output = await handler.execute(ctx)
@@ -160,11 +162,12 @@ class ActionExecutor:
     async def _search_knowledge(self, org_id: uuid.UUID, opts: dict[str, Any]) -> dict[str, Any]:
         """Org-scoped hybrid RAG lookup for the knowledge_search action.
 
-        Runs unrestricted within the org (``access_keys=None``): a workflow is a
-        trusted org-level automation, not an end user, so it sees the org's whole
-        knowledge base. ``opts`` carries the ``query`` and a ``use_knowledge_graph``
-        toggle (default true) so a per-run switch can skip the sequential graph hop.
-        Deferred import keeps brain-api off the hot import path."""
+        Defaults to the org's WHOLE knowledge base (``access_keys=None``): a workflow is
+        a trusted org-level automation, not an end user. ``opts`` carries the ``query``, a
+        ``use_knowledge_graph`` toggle (default true) so a per-run switch can skip the
+        sequential graph hop, and optional ``folder_tags``/``tags``/``access_keys`` that
+        scope retrieval to a subset of the KB (e.g. a per-course tutor). Deferred import
+        keeps brain-api off the hot import path."""
         if self._settings is None:
             raise ActionError("knowledge search requires Settings (not wired in this context)")
         from api.services.brain_client import BrainAPIClient
@@ -173,21 +176,31 @@ class ActionExecutor:
         return await client.vector_chat(
             tenant_id=str(org_id),
             query=str(opts.get("query", "")),
-            access_keys=None,
+            access_keys=opts.get("access_keys"),
+            tags=opts.get("tags"),
+            folder_tags=opts.get("folder_tags"),
             use_knowledge_graph=bool(opts.get("use_knowledge_graph", True)),
         )
 
-    async def _retrieve_knowledge(self, org_id: uuid.UUID, query: str) -> dict[str, Any]:
+    async def _retrieve_knowledge(self, org_id: uuid.UUID, opts: dict[str, Any]) -> dict[str, Any]:
         """Retrieval-ONLY KB lookup for knowledge_search(synthesize=False): vector
         search → formatted passage context, with NO brain-api LLM synthesis. Pairs
         with a downstream llm_decide that does the single grounded generation, so a
-        robot turn costs one LLM call instead of two (brain-api RAG + llm_decide)."""
+        robot turn costs one LLM call instead of two (brain-api RAG + llm_decide).
+        ``opts`` carries the ``query`` and optional ``folder_tags``/``tags``/``access_keys``
+        scope (None/absent = whole-org)."""
         if self._settings is None:
             raise ActionError("knowledge retrieval requires Settings (not wired in this context)")
         from api.services.brain_client import BrainAPIClient
 
         client = BrainAPIClient(self._settings)
-        result = await client.vector_search(tenant_id=str(org_id), query=query, access_keys=None)
+        result = await client.vector_search(
+            tenant_id=str(org_id),
+            query=str(opts.get("query", "")),
+            access_keys=opts.get("access_keys"),
+            tags=opts.get("tags"),
+            folder_tags=opts.get("folder_tags"),
+        )
         hits = result.get("hits", [])
         return {"answer": _format_passages(hits), "sources": _passage_sources(hits), "passages": hits}
 
@@ -236,6 +249,56 @@ class ActionExecutor:
             gestures=list(opts.get("gestures") or []),
             moods=list(opts.get("moods") or []),
             system=opts.get("system"),
+            history=opts.get("history"),
+        )
+
+    async def _grade(self, org_id: uuid.UUID, opts: dict[str, Any]) -> dict[str, Any]:
+        """Constrained-LLM grading for the llm_grade action. Uses the org's OpenAI key
+        (falls back to the central key) and the chat model, mirroring _decide's wiring.
+        Returns ``{score, feedback}`` (score clamped 0..100); the action applies the
+        pass threshold."""
+        if self._settings is None:
+            raise ActionError("llm_grade requires Settings (not wired in this context)")
+        key = await self._org_openai_key(org_id) or self._settings.openai_api_key.get_secret_value()
+        if not key:
+            raise ActionError("llm_grade requires an OpenAI API key (org or central)")
+        from openai import AsyncOpenAI
+
+        from api.services.llm_grade import grade_answer
+
+        client = AsyncOpenAI(api_key=key)
+        model = opts.get("model") or self._settings.openai_model
+        return await grade_answer(
+            client,
+            model,
+            answer=str(opts.get("answer") or ""),
+            question=str(opts.get("question") or ""),
+            rubric=str(opts.get("rubric") or ""),
+        )
+
+    async def _respond(self, org_id: uuid.UUID, opts: dict[str, Any]) -> dict[str, Any]:
+        """Role-play persona + coaching for the llm_respond action (training simulator).
+        Uses the org's OpenAI key (falls back to the central key) and the chat model,
+        mirroring _decide's wiring. Returns a structured ``{reply, coach, done}`` turn."""
+        if self._settings is None:
+            raise ActionError("llm_respond requires Settings (not wired in this context)")
+        key = await self._org_openai_key(org_id) or self._settings.openai_api_key.get_secret_value()
+        if not key:
+            raise ActionError("llm_respond requires an OpenAI API key (org or central)")
+        from openai import AsyncOpenAI
+
+        from api.services.llm_respond import respond_action
+
+        client = AsyncOpenAI(api_key=key)
+        model = opts.get("model") or self._settings.openai_model
+        return await respond_action(
+            client,
+            model,
+            persona=str(opts.get("persona") or ""),
+            user_message=str(opts.get("user_message") or ""),
+            scenario=str(opts.get("scenario") or ""),
+            objective=str(opts.get("objective") or ""),
+            grounding=str(opts.get("grounding") or ""),
             history=opts.get("history"),
         )
 
