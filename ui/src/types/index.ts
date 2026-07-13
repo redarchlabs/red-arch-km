@@ -7,6 +7,8 @@ export interface Org {
   name: string;
   description: string | null;
   use_knowledge_graph: boolean;
+  /** Optional per-org landing view; drives the sidebar "Home" nav item. */
+  home_view_id?: string | null;
 }
 
 export interface UserProfile {

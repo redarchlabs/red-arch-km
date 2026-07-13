@@ -10,6 +10,8 @@ interface OrgSummary {
   id: string;
   name: string;
   is_admin: boolean;
+  /** Optional per-org landing view; drives the sidebar "Home" nav item. */
+  home_view_id?: string | null;
 }
 
 interface OrgState {

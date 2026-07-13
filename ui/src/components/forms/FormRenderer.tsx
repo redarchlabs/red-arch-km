@@ -1330,6 +1330,8 @@ export function FormRenderer({
     const childEntity = relatedEntityId(catalog, relId);
     if (!childEntity) return null;
     const rows = rowsOf(relId);
+    // Table-level lock: whole grid renders read-only in fill mode (no add/remove row, all cells locked).
+    const locked = preview || Boolean(el.read_only);
     return (
       <div className="sm:col-span-12 space-y-2 border-t pt-4">
         <h2 className="text-lg font-semibold">{el.label ?? "Items"}</h2>
@@ -1342,7 +1344,7 @@ export function FormRenderer({
                     {col.label ?? col.slug}
                   </th>
                 ))}
-                {!preview ? <th className="w-8" /> : null}
+                {!locked ? <th className="w-8" /> : null}
               </tr>
             </thead>
             <tbody>
@@ -1358,7 +1360,7 @@ export function FormRenderer({
                             meta={meta}
                             label=""
                             required={false}
-                            readOnly={col.read_only || preview}
+                            readOnly={col.read_only || locked}
                             display={col.display}
                             value={row.values[col.slug]}
                             onChange={(v) => setRowValue(relId, ri, col.slug, v)}
@@ -1377,7 +1379,7 @@ export function FormRenderer({
                           meta={meta}
                           label=""
                           required={false}
-                          readOnly={!col.editable || preview}
+                          readOnly={!col.editable || locked}
                           display={col.display}
                           value={row.related?.[col.relationship_id]?.values?.[col.slug]}
                           onChange={(v) => setRowRelated(relId, ri, col.relationship_id, col.slug, v)}
@@ -1386,7 +1388,7 @@ export function FormRenderer({
                       </td>
                     );
                   })}
-                  {!preview ? (
+                  {!locked ? (
                     <td className="px-1 py-1.5">
                       <button
                         type="button"
@@ -1403,7 +1405,7 @@ export function FormRenderer({
             </tbody>
           </table>
         </div>
-        {!preview ? (
+        {!locked ? (
           <button
             type="button"
             onClick={() => setRows(relId, [...rows, { values: {} }])}
