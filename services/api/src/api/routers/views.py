@@ -105,9 +105,27 @@ async def render_view(
     view_id: uuid.UUID,
     ctx: Annotated[OrgContext, Depends(require_org_access)],
     session: Annotated[AsyncSession, Depends(get_tenant_db)],
-    record_id: uuid.UUID | None = None,
+    record_id: str | None = None,
 ) -> FormRenderRead:
+    # The sentinel ``record_id=me`` auto-binds the view to the current user's own
+    # record in its root entity (matched by the entity's ``email`` field). Any
+    # other value must parse as a UUID, so a malformed id still fails validation
+    # (422) exactly as before.
+    resolve_me = record_id == "me"
+    parsed_id: uuid.UUID | None = None
+    if record_id is not None and not resolve_me:
+        try:
+            parsed_id = uuid.UUID(record_id)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="record_id must be a UUID or 'me'",
+            ) from exc
     try:
-        return await ViewService(session, ctx.org_id).render(view_id, record_id)
+        return await ViewService(session, ctx.org_id).render(
+            view_id,
+            parsed_id,
+            current_user_email=ctx.user.email if resolve_me else None,
+        )
     except FormError as exc:
         _raise_http(exc)
