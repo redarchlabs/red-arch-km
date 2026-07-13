@@ -215,8 +215,9 @@ async def test_workflow_drives_robot_end_to_end(
     """Happy path: signed heard → KB → llm_decide → authenticated /say + /gesture → done."""
     port, received = robot_bridge
 
-    async def _fake_search(self, org_id, query):  # noqa: ANN001
-        assert query == "how big is the sun?"  # templated from {{after.text}}
+    async def _fake_search(self, org_id, opts):  # noqa: ANN001
+        # _search_knowledge receives the opts dict {"query", "use_knowledge_graph"}.
+        assert opts["query"] == "how big is the sun?"  # templated from {{after.text}}
         return {"answer": KB_ANSWER, "sources": []}
 
     async def _fake_decide(self, org_id, opts):  # noqa: ANN001
