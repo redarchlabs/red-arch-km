@@ -114,6 +114,21 @@ class Settings(BaseSettings):
     # Hard timeout for a single CLI invocation; the subprocess is killed on expiry.
     claude_cli_timeout_seconds: int = Field(default=300, validation_alias="CLAUDE_CLI_TIMEOUT_SECONDS")
 
+    # Gemini model used by the web_research tool (Google Search grounding). Flash is
+    # cheap + grounding-capable and runs on the free 1,500 grounding-requests/day tier
+    # via the AI Studio GEMINI_API_KEY. Overridable for scale/Vertex later.
+    agent_web_research_model: str = Field(
+        default="gemini/gemini-2.5-flash", validation_alias="AGENT_WEB_RESEARCH_MODEL"
+    )
+    # Batch single-shot generation (batch_generate tool): how often to poll the
+    # Anthropic Message Batch and how long to wait before returning a batch id.
+    agent_batch_poll_interval_seconds: int = Field(
+        default=10, validation_alias="AGENT_BATCH_POLL_INTERVAL_SECONDS"
+    )
+    agent_batch_max_wait_seconds: int = Field(
+        default=180, validation_alias="AGENT_BATCH_MAX_WAIT_SECONDS"
+    )
+
     # Public base URL of THIS API service — used to build the OAuth redirect URI for
     # the MCP "Connect" flow (the provider redirects the browser back to
     # {api_public_url}/api/agents/mcp-servers/oauth/callback). Must be reachable from

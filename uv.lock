@@ -229,6 +229,7 @@ source = { editable = "services/api" }
 dependencies = [
     { name = "access-mask" },
     { name = "alembic" },
+    { name = "anthropic" },
     { name = "asyncpg" },
     { name = "boto3" },
     { name = "celery", extra = ["redis"] },
@@ -272,6 +273,7 @@ dev = [
 requires-dist = [
     { name = "access-mask", editable = "packages/access_mask" },
     { name = "alembic", specifier = ">=1.13" },
+    { name = "anthropic", specifier = ">=0.40" },
     { name = "asyncpg", specifier = ">=0.30" },
     { name = "boto3", specifier = ">=1.35" },
     { name = "celery", extras = ["redis"], specifier = ">=5.4" },
