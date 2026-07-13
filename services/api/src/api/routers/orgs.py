@@ -114,6 +114,10 @@ async def update_org(
         description=body.description,
         use_knowledge_graph=body.use_knowledge_graph,
         openai_api_key=encrypted_key,
+        # None = no change; the all-zero UUID sentinel clears it; any other value
+        # sets it. The repo interprets the sentinel (mirrors the openai_api_key
+        # "empty string clears" convention on this same endpoint).
+        home_view_id=body.home_view_id,
     )
     return OrgRead.model_validate(org)
 

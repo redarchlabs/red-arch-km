@@ -8,6 +8,7 @@ import {
   FileText,
   FolderTree,
   Globe,
+  Home,
   LayoutDashboard,
   MessageCircle,
   Search,
@@ -34,6 +35,9 @@ interface NavItem {
 }
 
 const NAV_ITEMS: NavItem[] = [
+  // Always present; the /home page redirects to the org's configured home view
+  // or shows an empty state when none is set.
+  { href: "/home", label: "Home", icon: Home },
   { href: "/folders", label: "Resources", icon: FolderTree },
   { href: "/documents/search", label: "Search", icon: Search },
   { href: "/entities", label: "Entities", icon: Database },

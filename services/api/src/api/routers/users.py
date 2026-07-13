@@ -53,7 +53,12 @@ async def get_me(
         email=user.email,
         is_site_admin=user.is_site_admin,
         orgs=[
-            OrgSummary(id=str(o.id), name=o.name, is_admin=o.id in admin_org_ids)
+            OrgSummary(
+                id=str(o.id),
+                name=o.name,
+                is_admin=o.id in admin_org_ids,
+                home_view_id=str(o.home_view_id) if o.home_view_id else None,
+            )
             for o in orgs
         ],
     )

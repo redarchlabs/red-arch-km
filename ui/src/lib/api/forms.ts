@@ -253,6 +253,7 @@ export interface TableElement extends ElementBase {
   columns: TableColumn[];
   min_rows?: number;
   max_rows?: number | null;
+  read_only?: boolean;
 }
 
 /** Leaf elements that may appear inside a section/block. */

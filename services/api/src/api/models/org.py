@@ -23,6 +23,12 @@ class Org(Base, UUIDMixin, TimestampMixin):
     # Plain UUID (no FK) to avoid a second orgs<->workflows FK path that would make
     # ORM joins ambiguous; a stale/deleted id simply no-ops the channel.
     agent_notify_workflow_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    # Optional per-org landing view: the "Home" nav item links here when set.
+    # Plain UUID (no FK) for the same reason as agent_notify_workflow_id: a direct
+    # orgs->views FK would add a second FK path between the tables (views already
+    # has views.org_id -> orgs.id backing View.org) and make that ORM join
+    # ambiguous. A stale/deleted id simply hides the Home item / 404s the link.
+    home_view_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     # Agent-org autonomy posture: high_touch (every external/side-effecting action
     # asks the human) | balanced | hands_off. Enforced in agents/authority.py.
     agent_autonomy: Mapped[str] = mapped_column(

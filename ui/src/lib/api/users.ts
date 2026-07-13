@@ -5,7 +5,7 @@ export interface CurrentUser {
   username: string;
   email: string;
   is_site_admin: boolean;
-  orgs: Array<{ id: string; name: string; is_admin: boolean }>;
+  orgs: Array<{ id: string; name: string; is_admin: boolean; home_view_id?: string | null }>;
 }
 
 export async function fetchMe(): Promise<CurrentUser> {
