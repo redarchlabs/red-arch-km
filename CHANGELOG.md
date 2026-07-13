@@ -8,6 +8,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Agent org: autonomous company, cost tiers & Claude Code CLI assistant
+
+- **Autonomous-company provisioner** (`scripts/provision_company.py`): an idempotent, declarative
+  blueprint that stands up a full traditional org (Executive, Marketing, Sales, Product, Engineering,
+  Customer Support, Finance, HR, Operations, Legal, IT) of AI agents reporting to one human under
+  high-touch governance. Full reference: [AGENT_ORG.md](docs/AGENT_ORG.md).
+- **Native agent tools** — `list_records`/`get_record` (read) and `create_record`/`update_record`/
+  `create_document` (internal writes, auto-ingested into RAG), reusing the first-party validation +
+  inline-workflow + ingest paths.
+- **Agent scheduler** — cron `agent_schedules` sweep (`run_due_schedules`) → internal
+  `POST /api/internal/agents/run-schedules` + celery-beat `agents-run-schedules`; the existing
+  `advance-runs` sweep drives the enqueued runs.
+- **Centralized high-touch autonomy** — `orgs.agent_autonomy` (migration 033); the authority engine
+  forces `ASK` on any side-effecting tool under high-touch while internal record/document writes run free.
+- **Role-based model tiering** — Opus (apex Chief of Staff) / Sonnet (department heads + advisory
+  analysts) / Haiku (operators) to cut fleet cost; the fleet runs on an Anthropic **API key**.
+- **Claude Code CLI dev/ops assistant** — opt-in `run_claude_code` tool (`CLAUDE_CLI_TOOL_ENABLED`, off by
+  default) that offloads dev/ops work to the local Claude Code CLI on the owner's subscription. Guardrails:
+  allow-listed working dir (`CLAUDE_CLI_WORKING_DIR`, traversal refused), read-only default `--allowedTools`,
+  kill-on-timeout, explicit binary path, and child-env `ANTHROPIC_API_KEY` stripping so the CLI uses the
+  subscription. Console-only, granted to a single operator (`dev-ops-assistant`).
+- **Docs** — new [AGENT_ORG.md](docs/AGENT_ORG.md); ARCHITECTURE.md §2.5 + README docs index updated.
+
 ### Added — Enterprise API (Phase 1: REST + API keys)
 
 - **Org API keys**: `api_keys` table (migration 028, RLS + `FORCE ROW LEVEL SECURITY`) storing only the

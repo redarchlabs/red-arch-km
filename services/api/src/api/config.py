@@ -94,6 +94,26 @@ class Settings(BaseSettings):
     # resolves; empty means fall back to the org admins only.
     agent_notify_email: str = Field(default="", validation_alias="AGENT_NOTIFY_EMAIL")
 
+    # Claude Code CLI tool (services/agents/tools/claude_code.py) — lets a single,
+    # explicitly-granted agent shell the local Claude Code CLI so the owner's Max plan
+    # can do heavy dev/ops work. OFF by default: it runs code on the host, so it is
+    # only registered when enabled AND only works where the CLI is installed+authed
+    # (the host API process, via the interactive console — never the worker container).
+    enable_claude_cli_tool: bool = Field(default=False, validation_alias="CLAUDE_CLI_TOOL_ENABLED")
+    # Absolute path to the `claude` binary. No default: the CLI is not on the host
+    # PATH in a non-login shell, so the operator must point at the resolved binary.
+    claude_cli_path: str = Field(default="", validation_alias="CLAUDE_CLI_PATH")
+    # Allow-listed working-directory root. The tool refuses to run outside this dir
+    # (and errors if it is unset), bounding what the CLI can read/touch.
+    claude_cli_working_dir: str = Field(default="", validation_alias="CLAUDE_CLI_WORKING_DIR")
+    # Comma-separated Claude Code tool allow-list passed via --allowedTools. Default
+    # is read-only (analysis/answers); widen to Edit/Bash only as a deliberate opt-in.
+    claude_cli_allowed_tools: str = Field(
+        default="Read,Grep,Glob,WebFetch", validation_alias="CLAUDE_CLI_ALLOWED_TOOLS"
+    )
+    # Hard timeout for a single CLI invocation; the subprocess is killed on expiry.
+    claude_cli_timeout_seconds: int = Field(default=300, validation_alias="CLAUDE_CLI_TIMEOUT_SECONDS")
+
     # Public base URL of THIS API service — used to build the OAuth redirect URI for
     # the MCP "Connect" flow (the provider redirects the browser back to
     # {api_public_url}/api/agents/mcp-servers/oauth/callback). Must be reachable from
@@ -209,6 +229,11 @@ class Settings(BaseSettings):
     def workflow_trusted_local_hosts(self) -> tuple[str, ...]:
         """Local hosts allowed to bypass the private-IP SSRF guard (empty = none)."""
         return tuple(p.strip() for p in self.workflow_trusted_local_hosts_raw.split(",") if p.strip())
+
+    @property
+    def claude_cli_allowed_tools_list(self) -> list[str]:
+        """Claude Code tool allow-list for the run_claude_code tool (empty = none)."""
+        return [p.strip() for p in self.claude_cli_allowed_tools.split(",") if p.strip()]
 
     @model_validator(mode="after")
     def _require_azp_when_clerk_enabled(self) -> "Settings":

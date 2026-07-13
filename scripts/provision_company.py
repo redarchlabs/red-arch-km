@@ -45,12 +45,28 @@ from api.services.agents.service import AgentConflictError, AgentService
 
 DEFAULT_ORG_ID = "b09440d5-3dd6-4bb6-8609-25de6a4fd74e"  # "CEO Demo"
 
-OPUS = "anthropic/claude-opus-4-8"
-STD = "anthropic/claude-sonnet-5"
+OPUS = "anthropic/claude-opus-4-8"  # apex reasoning hub (Chief of Staff)
+STD = "anthropic/claude-sonnet-5"  # department heads + advisory analysts (judgment)
+HAIKU = "anthropic/claude-haiku-4-5-20251001"  # operators (execution) — cheapest tier
 
 # Write/execute tools an operator needs (reads are always-allowed; delegation and
 # escalation are role-provided for coordinators/advisors).
 OP_TOOLS = ["create_record", "update_record", "create_document", "run_workflow"]
+
+# Agents whose grants/persona differ from the generic role defaults, keyed by name.
+# The dev/ops assistant is the owner's personal Claude-Code-CLI-backed helper: it
+# gets ONLY the run_claude_code tool (no record writes, no MCP), reports to the
+# human (no supervisor), and is console-only (no schedule — the worker container
+# has no CLI). See services/agents/tools/claude_code.py.
+CUSTOM_TOOLS: dict[str, tuple[str, ...]] = {"dev-ops-assistant": ("run_claude_code",)}
+CUSTOM_PERSONA: dict[str, str] = {
+    "dev-ops-assistant": (
+        "You are the owner's personal dev/ops assistant. For any coding, file, or "
+        "shell/ops task, delegate to the run_claude_code tool (it runs the Claude Code "
+        "CLI on the owner's machine, on the owner's Max plan) and then summarize what it "
+        "did and the results. Ask for clarification when a task is ambiguous."
+    ),
+}
 
 # Each blueprint row: (name, display, kind, model, supervisor, mcp[], schedules[])
 # mcp labels become "mcp__<label>__*" wildcard grants (activate when the human
@@ -66,54 +82,62 @@ BRIEFING_TASK = (
 BLUEPRINT: list[Row] = [
     # Executive
     ("chief-of-staff", "Chief of Staff", "coordinator", OPUS, None, [], [("0 7 * * 1-5", BRIEFING_TASK)]),
-    ("executive-assistant", "Executive Assistant", "operator", STD, "chief-of-staff", ["google"], []),
+    ("executive-assistant", "Executive Assistant", "operator", HAIKU, "chief-of-staff", ["google"], []),
     # Marketing
     ("marketing-head", "Marketing — Head", "coordinator", STD, "chief-of-staff", [], []),
-    ("content-writer", "Content Writer", "operator", STD, "marketing-head", ["google"], []),
-    ("market-research-analyst", "Market Research Analyst", "operator", STD, "marketing-head", ["perplexity"],
+    ("content-writer", "Content Writer", "operator", HAIKU, "marketing-head", ["google"], []),
+    ("market-research-analyst", "Market Research Analyst", "operator", HAIKU, "marketing-head", ["perplexity"],
      [("0 8 * * 1", "Weekly market digest: research market trends and capture findings to the KB per the research SOP.")]),
-    ("campaign-social-manager", "Campaign & Social Manager", "operator", STD, "marketing-head", ["slack", "google"], []),
-    ("competitive-intel-analyst", "Competitive Intelligence Analyst", "operator", STD, "marketing-head", ["perplexity"],
+    ("campaign-social-manager", "Campaign & Social Manager", "operator", HAIKU, "marketing-head",
+     ["slack", "google"], []),
+    ("competitive-intel-analyst", "Competitive Intelligence Analyst", "operator", HAIKU, "marketing-head",
+     ["perplexity"],
      [("0 8 * * 1", "Weekly competitor scan: update competitor intel and capture a report to the KB.")]),
-    ("brand-design", "Brand & Design", "operator", STD, "marketing-head", [], []),
+    ("brand-design", "Brand & Design", "operator", HAIKU, "marketing-head", [], []),
     # Sales
     ("sales-head", "Sales — Head", "coordinator", STD, "chief-of-staff", [], []),
-    ("sdr-outreach", "SDR / Outreach", "operator", STD, "sales-head", ["google"], []),
-    ("account-executive", "Account Executive", "operator", STD, "sales-head", ["google"], []),
+    ("sdr-outreach", "SDR / Outreach", "operator", HAIKU, "sales-head", ["google"], []),
+    ("account-executive", "Account Executive", "operator", HAIKU, "sales-head", ["google"], []),
     ("sales-ops-analyst", "Sales Operations Analyst", "advisory", STD, "sales-head", [], []),
     # Product
     ("product-head", "Product — Head", "coordinator", STD, "chief-of-staff", [], []),
-    ("product-manager", "Product Manager", "operator", STD, "product-head", ["notion"], []),
+    ("product-manager", "Product Manager", "operator", HAIKU, "product-head", ["notion"], []),
     ("product-ux-analyst", "Product / UX Analyst", "advisory", STD, "product-head", [], []),
     # Engineering
     ("engineering-head", "Engineering — Head", "coordinator", STD, "chief-of-staff", [], []),
-    ("engineer", "Engineer", "operator", STD, "engineering-head", ["github"], []),
-    ("qa-engineer", "QA Engineer", "operator", STD, "engineering-head", [], []),
+    ("engineer", "Engineer", "operator", HAIKU, "engineering-head", ["github"], []),
+    ("qa-engineer", "QA Engineer", "operator", HAIKU, "engineering-head", [], []),
     ("code-reviewer", "Code Reviewer", "advisory", STD, "engineering-head", [], []),
     # Customer Support
     ("customer-support-head", "Customer Support — Head", "coordinator", STD, "chief-of-staff", [], []),
-    ("support-agent", "Support Agent", "operator", STD, "customer-support-head", ["google"], []),
-    ("customer-success-manager", "Customer Success Manager", "operator", STD, "customer-support-head", ["google"], []),
+    ("support-agent", "Support Agent", "operator", HAIKU, "customer-support-head", ["google"], []),
+    ("customer-success-manager", "Customer Success Manager", "operator", HAIKU, "customer-support-head",
+     ["google"], []),
     # Finance & Accounting
     ("finance-head", "Finance & Accounting — Head", "coordinator", STD, "chief-of-staff", [], []),
-    ("bookkeeper-accountant", "Bookkeeper / Accountant", "operator", STD, "finance-head", [], []),
+    ("bookkeeper-accountant", "Bookkeeper / Accountant", "operator", HAIKU, "finance-head", [], []),
     ("fpa-analyst", "FP&A Analyst", "advisory", STD, "finance-head", [], []),
     # Human Resources
     ("hr-head", "Human Resources — Head", "coordinator", STD, "chief-of-staff", [], []),
-    ("recruiter", "Recruiter", "operator", STD, "hr-head", ["google"], []),
-    ("people-ops", "People Operations", "operator", STD, "hr-head", [], []),
+    ("recruiter", "Recruiter", "operator", HAIKU, "hr-head", ["google"], []),
+    ("people-ops", "People Operations", "operator", HAIKU, "hr-head", [], []),
     # Operations
     ("operations-head", "Operations — Head", "coordinator", STD, "chief-of-staff", [], []),
-    ("operations-coordinator", "Operations Coordinator", "operator", STD, "operations-head", ["slack", "google"], []),
-    ("vendor-procurement", "Vendor & Procurement", "operator", STD, "operations-head", [], []),
+    ("operations-coordinator", "Operations Coordinator", "operator", HAIKU, "operations-head", ["slack", "google"], []),
+    ("vendor-procurement", "Vendor & Procurement", "operator", HAIKU, "operations-head", [], []),
     # Legal & Compliance
     ("legal-head", "Legal & Compliance — Head", "coordinator", STD, "chief-of-staff", [], []),
-    ("contracts-paralegal", "Contracts / Paralegal", "operator", STD, "legal-head", ["google"], []),
+    ("contracts-paralegal", "Contracts / Paralegal", "operator", HAIKU, "legal-head", ["google"], []),
     ("compliance-analyst", "Compliance Analyst", "advisory", STD, "legal-head", [], []),
     # IT
     ("it-head", "IT — Head", "coordinator", STD, "chief-of-staff", [], []),
-    ("systems-administrator", "Systems Administrator", "operator", STD, "it-head", ["github", "slack"], []),
+    ("systems-administrator", "Systems Administrator", "operator", HAIKU, "it-head", ["github", "slack"], []),
     ("security-analyst", "Security Analyst", "advisory", STD, "it-head", [], []),
+    # Owner's personal dev/ops assistant — NOT part of the business org chart.
+    # Reports to the human (no supervisor), console-only (no schedule), and is the
+    # only agent granted run_claude_code (Claude Code CLI on the owner's Max plan).
+    # STD model: low-volume, interactive; better judgment for orchestrating + summarizing.
+    ("dev-ops-assistant", "Dev/Ops Assistant", "operator", STD, None, [], []),
 ]
 
 PERSONA_TAIL = (
@@ -124,7 +148,11 @@ PERSONA_TAIL = (
 )
 
 
-def _grants(kind: str, mcp: list[str]) -> AgentGrants:
+def _grants(name: str, kind: str, mcp: list[str]) -> AgentGrants:
+    if name in CUSTOM_TOOLS:
+        # Explicit tool set (e.g. the dev/ops assistant's run_claude_code): no record
+        # writes and no MCP wildcards beyond what is listed here.
+        return AgentGrants(tools=list(CUSTOM_TOOLS[name]), records_write=False)
     if kind == "operator":
         tools = [*OP_TOOLS, *[f"mcp__{label}__*" for label in mcp]]
         return AgentGrants(tools=tools, records_write=True)
@@ -150,8 +178,8 @@ def _to_create(row: Row) -> AgentCreate:
         kind=kind,
         provider=provider_for_model(model),
         model=model,
-        persona=_persona(display, kind),
-        grants=_grants(kind, mcp),
+        persona=CUSTOM_PERSONA.get(name) or _persona(display, kind),
+        grants=_grants(name, kind, mcp),
     )
 
 
@@ -175,7 +203,7 @@ async def provision(org_id: uuid.UUID, *, dry_run: bool) -> None:
     if dry_run:
         print(f"[dry-run] {len(BLUEPRINT)} agents for org {org_id}:")
         for name, display, kind, model, sup, mcp, sched in BLUEPRINT:
-            g = _grants(kind, mcp)
+            g = _grants(name, kind, mcp)
             print(f"  {name:26s} {kind:11s} {model:26s} sup={sup or '-':22s} "
                   f"tools={g.tools} schedules={len(sched)}")
         return
