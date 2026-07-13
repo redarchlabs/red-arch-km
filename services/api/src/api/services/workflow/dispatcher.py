@@ -144,8 +144,10 @@ class WorkflowDispatchService:
     # ---- connection resolution (mirrors WorkflowRunner) ------------------ #
     async def _search_knowledge(self, org_id: uuid.UUID, opts: dict[str, Any]) -> dict[str, Any]:
         """Org-scoped hybrid RAG lookup for the knowledge_search action (legacy
-        walker path). Mirrors ``ActionExecutor._search_knowledge`` — unrestricted
-        within the org, deferred brain-api import. ``opts`` = ``{query, use_knowledge_graph}``."""
+        walker path). Mirrors ``ActionExecutor._search_knowledge`` — whole-org by
+        default, deferred brain-api import. ``opts`` = ``{query, use_knowledge_graph,
+        folder_tags?, tags?, access_keys?}`` (the optional scope keys restrict retrieval
+        to a subset of the KB; None/absent = whole-org)."""
         from api.services.workflow.actions import ActionError
 
         if self._settings is None:
@@ -156,13 +158,16 @@ class WorkflowDispatchService:
         return await client.vector_chat(
             tenant_id=str(org_id),
             query=str(opts.get("query", "")),
-            access_keys=None,
+            access_keys=opts.get("access_keys"),
+            tags=opts.get("tags"),
+            folder_tags=opts.get("folder_tags"),
             use_knowledge_graph=bool(opts.get("use_knowledge_graph", True)),
         )
 
-    async def _retrieve_knowledge(self, org_id: uuid.UUID, query: str) -> dict[str, Any]:
+    async def _retrieve_knowledge(self, org_id: uuid.UUID, opts: dict[str, Any]) -> dict[str, Any]:
         """Retrieval-only KB lookup for knowledge_search(synthesize=False) (legacy
-        walker path). Mirrors ``ActionExecutor._retrieve_knowledge``."""
+        walker path). Mirrors ``ActionExecutor._retrieve_knowledge``. ``opts`` =
+        ``{query, folder_tags?, tags?, access_keys?}`` (scope; None/absent = whole-org)."""
         from api.services.workflow.actions import ActionError
         from api.services.workflow.runner import _format_passages, _passage_sources
 
@@ -171,7 +176,13 @@ class WorkflowDispatchService:
         from api.services.brain_client import BrainAPIClient
 
         client = BrainAPIClient(self._settings)
-        result = await client.vector_search(tenant_id=str(org_id), query=query, access_keys=None)
+        result = await client.vector_search(
+            tenant_id=str(org_id),
+            query=str(opts.get("query", "")),
+            access_keys=opts.get("access_keys"),
+            tags=opts.get("tags"),
+            folder_tags=opts.get("folder_tags"),
+        )
         hits = result.get("hits", [])
         return {"answer": _format_passages(hits), "sources": _passage_sources(hits), "passages": hits}
 
@@ -555,7 +566,7 @@ class WorkflowDispatchService:
                 send_email=self._send_email,
                 resolve_connection=lambda name: self._resolve_connection(org_id, name),
                 search_knowledge=lambda opts: self._search_knowledge(org_id, opts),
-                retrieve_knowledge=lambda query: self._retrieve_knowledge(org_id, query),
+                retrieve_knowledge=lambda opts: self._retrieve_knowledge(org_id, opts),
                 summarize=lambda opts: self._summarize(org_id, opts),
             )
             try:
