@@ -2,6 +2,13 @@ import type { Org } from "@/types";
 
 import apiClient from "./client";
 
+/**
+ * All-zero UUID sentinel understood by `PATCH /api/orgs/{id}` to CLEAR the
+ * home view. Omitting `home_view_id` (or sending undefined) means "no change";
+ * a real UUID sets it; this sentinel clears it.
+ */
+export const NIL_UUID = "00000000-0000-0000-0000-000000000000";
+
 export interface OrgCreateInput {
   name: string;
   description?: string | null;
@@ -12,6 +19,8 @@ export interface OrgUpdateInput {
   name?: string;
   description?: string | null;
   use_knowledge_graph?: boolean;
+  /** Real UUID sets the home view; `NIL_UUID` clears it; omit for no change. */
+  home_view_id?: string | null;
 }
 
 export async function listOrgs(): Promise<Org[]> {
