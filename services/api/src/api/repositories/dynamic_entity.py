@@ -485,6 +485,37 @@ class DynamicEntityRepository:
         found = result.one_or_none()
         return self._to_public(found) if found is not None else None
 
+    async def find_one_by_field(
+        self, slug: str, value: Any, *, case_insensitive: bool = False
+    ) -> dict[str, Any] | None:
+        """Return the first record whose ``slug`` field equals ``value`` within this
+        org (org-scoped / RLS-safe), or ``None`` when none match.
+
+        ``case_insensitive`` compares under SQL ``lower()`` on both operands — used
+        to resolve a user to their own record by ``email`` regardless of the stored
+        casing. It only takes effect for a string value on a text-typed field, so
+        ``lower()`` is never applied to a non-text column (which would error);
+        every other case falls back to a coerced exact match.
+        """
+        col = self._column(slug)  # validates the slug (raises EntityRecordError on unknown)
+        field = self._field_by_slug.get(slug)
+        text_ci = (
+            case_insensitive
+            and isinstance(value, str)
+            and field is not None
+            and field.field_type in SEARCHABLE_FIELD_TYPES
+        )
+        condition = func.lower(col) == value.lower() if text_ci else col == self._coerce_by_slug(slug, value)
+        stmt = (
+            select(*self._table.c)
+            .where(self._table.c.org_id == self._org_id, condition)
+            # Deterministic pick when more than one record shares the value.
+            .order_by(self._table.c.created_at.asc(), self._table.c.id.asc())
+            .limit(1)
+        )
+        found = (await self._session.execute(stmt)).one_or_none()
+        return self._to_public(found) if found is not None else None
+
     async def list(
         self,
         *,
