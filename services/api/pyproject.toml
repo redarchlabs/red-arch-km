@@ -17,6 +17,7 @@ dependencies = [
     "redis>=5.0",
     "croniter>=3.0",
     "litellm>=1.55",
+    "anthropic>=0.40",
     "mcp>=1.2",
     "alembic>=1.13",
     "boto3>=1.35",

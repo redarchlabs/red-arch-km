@@ -8,6 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Agent LLM layer: prompt caching, web grounding, batch generation
+
+- **Anthropic prompt caching** (`services/agents/llm/caching.py`) — applied automatically inside the
+  provider for Anthropic models: `cache_control` breakpoints on the stable tools+system prefix and the
+  growing conversation, so repeat turns/runs read that prefix at 10% of input price. No-op below the
+  model minimum (4,096 tokens for Haiku 4.5 / Opus 4.5+); cache read/write tokens surfaced in `Usage`.
+- **`web_research` tool** — live-web research with citations via **Gemini + Google Search grounding** on
+  the AI Studio **free 1,500/day** quota (`GEMINI_API_KEY`). A dedicated tool-less call (Gemini can't mix
+  search with function tools) returning `{answer, sources}`; `EXECUTE` + `side_effecting=False` (read-only,
+  runs free under high-touch), grant-gated to the research operators.
+- **`batch_generate` / `check_batch` tools** — single-shot generation at the **50%-off async Batch tier**
+  via the Anthropic Message Batches API (`anthropic` SDK; LiteLLM doesn't wrap it). Submits + bounded-polls,
+  returning `{status:"done", text}` or `{status:"processing", batch_id}`; internal, grant-gated.
+- **Config**: `AGENT_WEB_RESEARCH_MODEL` (default `gemini/gemini-2.5-flash`),
+  `AGENT_BATCH_POLL_INTERVAL_SECONDS`, `AGENT_BATCH_MAX_WAIT_SECONDS`. Provisioner grants `web_research` +
+  `batch_generate` to the research/content operators. Docs: [AGENT_ORG.md](docs/AGENT_ORG.md) updated.
+
 ### Added — Agent org: autonomous company, cost tiers & Claude Code CLI assistant
 
 - **Autonomous-company provisioner** (`scripts/provision_company.py`): an idempotent, declarative

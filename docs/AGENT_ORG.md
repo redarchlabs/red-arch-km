@@ -95,6 +95,13 @@ pays off, cheap execution everywhere else:
 The model is a column on the agent row, so re-tiering is a DB update and takes effect on
 the next run with no code deploy.
 
+**Prompt caching** (Anthropic) is applied automatically inside the provider
+(`llm/caching.py`): the stable tools+system prefix and the growing conversation get
+`cache_control` breakpoints, so repeat turns within a run — and repeat runs within 5
+minutes — read that prefix at 10% of the input price. It is a **no-op below the model's
+minimum** cacheable size (4,096 tokens for Haiku 4.5 / Opus 4.5+), so it mainly benefits
+Sonnet/Opus and tool-heavy prompts; cache read/write tokens surface in `Usage` and are logged.
+
 ---
 
 ## 5. Tools
@@ -108,8 +115,10 @@ then filtered by the authority engine (listing a tool never grants it).
 - **Write** (operator + `records_write`, internal / not side-effecting):
   `create_record`, `update_record`, `create_document` (auto-ingested into RAG). These
   reuse the exact validation + inline-workflow + ingest paths the first-party UI uses.
-- **Execute** (operator, side-effecting → gated under high-touch): `run_workflow`, and
-  any connected **MCP** tool.
+- **Execute** (operator-only via the kind-gate): `run_workflow` and connected **MCP** tools
+  (side-effecting → gated under high-touch); plus read-only research/generation tools that run
+  free — `web_research` (Gemini Google Search grounding), `batch_generate` / `check_batch`
+  (50%-off async generation), and the opt-in `run_claude_code`.
 - **Coordination** (role-provided): delegate, escalate, work-order/plan tools.
 
 ### Claude Code CLI dev/ops assistant (opt-in)
@@ -140,6 +149,29 @@ console-only (no schedule) and reports to the human, outside the business org ch
 > programmatic subscription use is metered separately. The CLI dev-agent is a single,
 > human-driven, first-party-CLI exception for the owner's own work, and its
 > subscription-vs-metered status can change with Anthropic's policy.
+
+### Web research — `web_research` (`services/agents/tools/web_research.py`)
+
+Live-web research with citations via **Gemini + Google Search grounding** on the AI Studio
+**free tier (1,500 grounding requests/day)** through the already-wired `GEMINI_API_KEY`.
+Because Gemini cannot mix Google Search with function tools in one request, this is a
+dedicated **tool-less** call that returns `{answer, sources}` (title + url), mirroring
+`search_knowledge` so citations flow through the normal `tool_result` path and persist in
+`AgentRunStep.content`. `EXECUTE` + **`side_effecting=False`** (read-only → runs free under
+high-touch), operator-only, grant-gated; provisioned to the research operators. When the daily
+free quota is exhausted it returns a clear message rather than silently spending. (Vertex is a
+future switchable backend — paid, no free quota — not wired here.)
+
+### Batch generation — `batch_generate` / `check_batch` (`tools/batch_generate.py`)
+
+Single-shot text generation at the **50%-off async Batch tier** for latency-tolerant work
+(bulk drafts, digests). Uses the **Anthropic Message Batches API** via the `anthropic` SDK
+(LiteLLM does not wrap it) on the calling agent's own Anthropic model. `batch_generate` submits
+and waits (bounded by `AGENT_BATCH_MAX_WAIT_SECONDS`), returning `{status:"done", text}` or
+`{status:"processing", batch_id}` to fetch later with `check_batch`. `EXECUTE` +
+`side_effecting=False`, operator-only, grant-gated. The bounded poll holds the run's DB session
+open, so it is best used from scheduled/background runs; a non-blocking submit + beat-driven
+retrieve is the future-hardening path.
 
 ---
 
@@ -202,8 +234,8 @@ DATABASE_URL=postgresql+asyncpg://…@localhost:5433/redarch_km \
 | Runtime loop | `services/agents/runtime.py` |
 | Run paths | `services/agents/console.py` (interactive), `run_executor.py` (worker) |
 | Scheduler | `services/agents/scheduler.py` |
-| Providers/keys | `services/agents/llm/catalog.py`, `llm/keys.py` |
-| Tools | `services/agents/tools/{spec,registry,loader,records,documents,knowledge,workflows,claude_code}.py` |
+| Providers/keys | `services/agents/llm/{provider,catalog,keys,caching}.py` |
+| Tools | `services/agents/tools/{spec,registry,loader,records,documents,knowledge,workflows,claude_code,web_research,batch_generate}.py` |
 | MCP | `services/agents/mcp/` |
 | Routers | `routers/{agents,agent_console,agent_approvals,mcp_servers}.py`, `routers/internal.py` |
 | Blueprint/provisioner | `scripts/provision_company.py` |
