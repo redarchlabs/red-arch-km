@@ -78,6 +78,7 @@ FastAPI + async SQLAlchemy. App factory `create_app` (`src/api/main.py`), title
 - Document ingestion dispatch to Celery; status callbacks via an internal router.
 - RAG/search **proxy** to the Brain API (including SSE pass-through).
 - First-run setup wizard and the site-admin console.
+- **Agent org** — a multi-tenant AI agent runtime with governance, scheduling, and MCP (see [AGENT_ORG.md](AGENT_ORG.md)).
 
 **Layout:** `routers/` (HTTP), `models/` (SQLAlchemy ORM + RLS), `repositories/`
 (org-scoped data access), `services/` (business logic: permissions, provisioning,
@@ -86,8 +87,9 @@ folder tree, brain client, storage, setup token), `auth/` (Clerk + dependencies)
 
 **Routers mounted** (`main.py`): `health` (`/`), `auth` (`/api/auth`), `orgs`,
 `users`, `documents`, `folders`, `tags`, `chat`, `search`, `dimensions`,
-`memberships`, `attributes`, `internal`, `setup`, `admin` (all under `/api/*`).
-Full endpoint reference: [API.md](API.md).
+`memberships`, `attributes`, `internal`, `setup`, `admin`, and the **agent org**
+(`agents`, `agent_console`, `agent_approvals`, `mcp_servers` under `/api/agents`) —
+all under `/api/*`. Full endpoint reference: [API.md](API.md); agent org: [AGENT_ORG.md](AGENT_ORG.md).
 
 ### 2.2 Brain API — `services/brain_api` (port 8020)
 
@@ -137,6 +139,22 @@ table toolbar; a scroll-synced document reader; a context-sensitive help dock;
 and Light/Dark/Red Arch themes. The axios interceptor attaches `Authorization`
 and `X-Org-ID`, where a per-request `X-Org-ID` wins over the ambient org (used by
 the cross-org site-admin console).
+
+### 2.5 Agent Org — `services/api/src/api/services/agents`
+
+A multi-tenant **agent organization**: arbitrary org charts of AI agents (kinds
+`coordinator`/`advisory`/`operator`) that plan, delegate, and act on the org's own data,
+governed by a `deny > ask > allow` authority engine with a central high-touch approval
+inbox (`orgs.agent_autonomy`). The provider-agnostic runtime (`runtime.py`) drives any
+model via **LiteLLM** (Anthropic/OpenAI/Gemini) through two paths: the **interactive
+console** (in-process, SSE, auto-approves with the human present) and the **worker
+executor** (claims queued runs, parks side-effecting actions for async approval). A cron
+**scheduler** enqueues runs the worker then drives; agents reach external tools over
+**MCP** via a per-org/per-user OAuth "Connect" flow. Cost is tuned by a role-based model
+tier (Opus apex / Sonnet heads+advisory / Haiku operators), and an opt-in `run_claude_code`
+tool lets one console-only assistant offload dev/ops work to the local Claude Code CLI. The
+reusable **autonomous-company** blueprint (`scripts/provision_company.py`) stands up a full
+traditional org run by one human. Full reference: [AGENT_ORG.md](AGENT_ORG.md).
 
 ---
 

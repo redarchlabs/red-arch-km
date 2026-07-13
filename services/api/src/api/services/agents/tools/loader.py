@@ -26,6 +26,6 @@ async def load_agent_tools(
     actor_user_id: uuid.UUID | None = None,
 ) -> list[ToolSpec]:
     # base KM2 tools + coordination primitives (kind-gated) + this agent's MCP tools
-    specs = [*base_tool_specs(), *delegation_tool_specs()]
+    specs = [*base_tool_specs(settings), *delegation_tool_specs()]
     specs.extend(await build_mcp_tool_specs(session, org_id, agent, settings, actor_user_id=actor_user_id))
     return specs
