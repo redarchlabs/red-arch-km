@@ -25,6 +25,8 @@ class OrgSummary(BaseModel):
     name: str
     # True if the user is an org admin of this org (site admins: true for all).
     is_admin: bool
+    # Optional per-org landing view; drives the sidebar "Home" nav item. Null = none.
+    home_view_id: str | None = None
 
 
 class CurrentUserRead(BaseModel):

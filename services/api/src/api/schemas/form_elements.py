@@ -242,6 +242,7 @@ class TableElement(_Element):
     columns: list[TableColumn] = Field(default_factory=list)
     min_rows: int = 0
     max_rows: int | None = None  # capped by MAX_SECTION_ROWS regardless
+    read_only: bool = False  # whole grid non-editable in fill mode: no add/remove-row, all cells locked
 
 
 # ------------------------------------------------------------------ #

@@ -16,11 +16,12 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useOrg } from "@/context/OrgContext";
 import { getApiErrorMessage } from "@/lib/api/errors";
-import { createOrg, deleteOrg, listOrgs, updateOrg } from "@/lib/api/orgs";
+import { createOrg, deleteOrg, listOrgs, NIL_UUID, updateOrg, type OrgUpdateInput } from "@/lib/api/orgs";
+import { listViews, type View } from "@/lib/api/views";
 import type { Org } from "@/types";
 
 export function OrgManager() {
-  const { refresh } = useOrg();
+  const { refresh, currentOrgId } = useOrg();
   const [orgs, setOrgs] = useState<Org[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -30,6 +31,10 @@ export function OrgManager() {
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
+  const [editHomeViewId, setEditHomeViewId] = useState("");
+  // Views of the *current* org: the views API is scoped to the X-Org-ID header,
+  // so the Home view selector can only be offered for the current org's row.
+  const [views, setViews] = useState<View[]>([]);
 
   const [deleteTarget, setDeleteTarget] = useState<Org | null>(null);
   const [deleteConfirmText, setDeleteConfirmText] = useState("");
@@ -49,6 +54,28 @@ export function OrgManager() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Load the current org's views to populate the Home view selector. Scoped to
+  // the current org because listViews() reads the X-Org-ID header; failures just
+  // leave the list empty (the selector still offers "(none)").
+  useEffect(() => {
+    if (!currentOrgId) {
+      setViews([]);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const v = await listViews();
+        if (!cancelled) setViews(v);
+      } catch {
+        if (!cancelled) setViews([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentOrgId]);
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -71,17 +98,25 @@ export function OrgManager() {
 
   const saveEdit = async (org: Org) => {
     const trimmed = editName.trim();
-    if (!trimmed || trimmed === org.name) {
+    const nameChanged = trimmed.length > 0 && trimmed !== org.name;
+    // The home view can only be edited on the current org (see `views` above).
+    const isCurrent = org.id === currentOrgId;
+    const homeChanged = isCurrent && editHomeViewId !== (org.home_view_id ?? "");
+    if (!nameChanged && !homeChanged) {
       setEditingId(null);
       return;
     }
+    const input: OrgUpdateInput = {};
+    if (nameChanged) input.name = trimmed;
+    // Empty selection clears the home view via the NIL_UUID sentinel.
+    if (homeChanged) input.home_view_id = editHomeViewId || NIL_UUID;
     try {
-      await updateOrg(org.id, { name: trimmed });
+      await updateOrg(org.id, input);
       setEditingId(null);
       await load();
       await refresh();
     } catch (e: unknown) {
-      setError(getApiErrorMessage(e, "Rename failed"));
+      setError(getApiErrorMessage(e, "Save failed"));
     }
   };
 
@@ -142,24 +177,45 @@ export function OrgManager() {
               return (
                 <li key={org.id} className="flex items-center gap-2 px-3 py-2">
                   {isEditing ? (
-                    <>
-                      <Input
-                        value={editName}
-                        onChange={(e) => setEditName(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") void saveEdit(org);
-                          if (e.key === "Escape") setEditingId(null);
-                        }}
-                        autoFocus
-                        className="h-8"
-                      />
-                      <Button variant="ghost" size="icon" onClick={() => void saveEdit(org)} aria-label="Save">
-                        <Check className="h-4 w-4" />
-                      </Button>
-                      <Button variant="ghost" size="icon" onClick={() => setEditingId(null)} aria-label="Cancel edit">
-                        <X className="h-4 w-4" />
-                      </Button>
-                    </>
+                    <div className="flex flex-1 flex-col gap-2">
+                      <div className="flex items-center gap-2">
+                        <Input
+                          value={editName}
+                          onChange={(e) => setEditName(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") void saveEdit(org);
+                            if (e.key === "Escape") setEditingId(null);
+                          }}
+                          autoFocus
+                          className="h-8"
+                        />
+                        <Button variant="ghost" size="icon" onClick={() => void saveEdit(org)} aria-label="Save">
+                          <Check className="h-4 w-4" />
+                        </Button>
+                        <Button variant="ghost" size="icon" onClick={() => setEditingId(null)} aria-label="Cancel edit">
+                          <X className="h-4 w-4" />
+                        </Button>
+                      </div>
+                      <label className="block text-xs text-muted-foreground">
+                        Home view
+                        {org.id === currentOrgId ? (
+                          <select
+                            className="mt-1 h-8 w-full max-w-xs rounded-md border bg-background px-2 text-sm text-foreground"
+                            value={editHomeViewId}
+                            onChange={(e) => setEditHomeViewId(e.target.value)}
+                          >
+                            <option value="">(none)</option>
+                            {views.map((v) => (
+                              <option key={v.id} value={v.id}>
+                                {v.name}
+                              </option>
+                            ))}
+                          </select>
+                        ) : (
+                          <span className="mt-1 block">Switch to this org to set its home view.</span>
+                        )}
+                      </label>
+                    </div>
                   ) : (
                     <>
                       <div className="flex flex-1 flex-col">
@@ -174,8 +230,9 @@ export function OrgManager() {
                         onClick={() => {
                           setEditingId(org.id);
                           setEditName(org.name);
+                          setEditHomeViewId(org.home_view_id ?? "");
                         }}
-                        aria-label={`Rename ${org.name}`}
+                        aria-label={`Edit ${org.name}`}
                       >
                         <Pencil className="h-4 w-4" />
                       </Button>
