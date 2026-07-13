@@ -54,6 +54,7 @@ Full documentation lives in [`docs/`](docs/):
 | Document | Description |
 |----------|-------------|
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Service boundaries, data flow, deployment topology |
+| [AGENT_ORG.md](docs/AGENT_ORG.md) | Multi-tenant AI agent org: governance, runtime, model tiers, MCP, autonomous-company provisioner |
 | [DATABASE.md](docs/DATABASE.md) | Schema, Row-Level Security policies, relationships |
 | [RBAC.md](docs/RBAC.md) | 32-bit access-mask model and permission calculation |
 | [API.md](docs/API.md) | REST endpoints with request/response examples |
