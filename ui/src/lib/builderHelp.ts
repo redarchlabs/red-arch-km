@@ -92,6 +92,23 @@ record's fields (or a literal); the bar fills \`value / max\`, clamped to that r
 - **Show percent** — draw the computed percentage on the bar.
 `,
   ),
+  slides: topic(
+    "Slide deck element",
+    `
+Shows content as an **in-app slide deck** — a navigable presentation (prev / next
+with progress dots) instead of a wall of scrolling text.
+
+- **Source** — bind to a **JSON field** (a *slug*) holding a list of slides (the
+  usual case, e.g. a module's \`slides\` field), or author **inline slides**.
+- **Each slide** — an optional title, a **Markdown** body, an optional image, and
+  an optional **video** (\`video_url\`, a direct mp4/webm).
+- **Required viewing** — when a slide has a video, the learner can't advance past
+  it until they've watched it through (seeking ahead is blocked). Set
+  \`require_video: false\` for a supplementary clip that shouldn't block.
+
+Display-only, so it's valid in a standalone view too.
+`,
+  ),
   report: topic(
     "Report / chart",
     `

@@ -24,6 +24,10 @@ export type Expression = unknown;
 // ---- element tree ----
 interface ElementBase {
   id?: string | null;
+  /** Optional conditional visibility: a JsonLogic expression over the enclosing
+   * scope's values (same evaluator as `calculated`). The element renders only
+   * when truthy; `null`/absent is always visible. Mirrors backend `_Element`. */
+  visible_when?: Expression | null;
 }
 
 export interface FieldElement extends ElementBase {
@@ -105,6 +109,29 @@ export interface ProgressElement extends ElementBase {
   value?: Expression;
   max?: number;
   show_percent?: boolean;
+  width?: FieldWidth | null;
+}
+
+/** One slide in a deck: optional title, Markdown `body`, optional image, optional
+ * video. A direct `video_url` (mp4/webm) with `require_video` (default true) blocks
+ * advancing past the slide until the learner watches it through. */
+export interface Slide {
+  title?: string | null;
+  body?: string;
+  image_url?: string | null;
+  video_url?: string | null;
+  require_video?: boolean;
+  notes?: string | null;
+}
+
+/** An in-app slide deck — module content as a navigable presentation (prev/next +
+ * progress) instead of a wall of text. `slug` binds to a JSON entity field holding
+ * the slide array (the common case); `slides` provides them inline. Display-only. */
+export interface SlidesElement extends ElementBase {
+  type: "slides";
+  label?: string | null;
+  slug?: string | null;
+  slides?: Slide[];
   width?: FieldWidth | null;
 }
 
@@ -345,6 +372,7 @@ export type FormElement =
   | InputElement
   | LiveValueElement
   | ProgressElement
+  | SlidesElement
   | ReportElement
   | RecordListElement
   | ChatElement

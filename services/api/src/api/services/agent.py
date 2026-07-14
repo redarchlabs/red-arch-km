@@ -2475,7 +2475,13 @@ class AgentService:
             "notes": (
                 "Every element is an object with a `type` plus the fields below. Containers nest "
                 "arbitrarily. Bind by entity-field slug / relationship_id from get_entity_schema. "
-                "Widths: full|half|third|quarter."
+                "Widths: full|half|third|quarter. "
+                "ANY element may carry `visible_when`: a JsonLogic expression over the enclosing "
+                "scope's values (same vocabulary as `calculated`); the element renders only when it "
+                'is truthy (absent = always visible). Use it to gate flow, e.g. show a quiz button '
+                'only when done: {"visible_when": {">=": [{"var": "progress_pct"}, 100]}}, or an '
+                '"Enroll" button only when not enrolled. Hiding never bypasses server-side required-'
+                "field validation, so gate inputs/buttons, not required persisted fields."
             ),
             "elements": {
                 "field": {
@@ -2532,6 +2538,19 @@ class AgentService:
                         "Display-only readout that POLLS a CORS-reachable HTTP endpoint from the "
                         "browser and shows a value from the JSON response. Generic live external "
                         "state (a device reading, a status). Not entity-bound."
+                    ),
+                },
+                "slides": {
+                    "required": ["type"],
+                    "optional": ["label", "slug", "slides", "width"],
+                    "use": (
+                        "An in-app SLIDE DECK — content as a navigable presentation (prev/next + "
+                        "progress) instead of scrolling text. Set `slug` to bind a JSON entity field "
+                        "holding the slide array (e.g. a Module's `slides` field), OR provide inline "
+                        "`slides`. Each slide is {title?, body (markdown), image_url?, video_url?, "
+                        "require_video?, notes?}. `video_url` is a DIRECT video file (mp4/webm), not a "
+                        "YouTube page; with `require_video` (default true) the learner cannot advance "
+                        "past the slide until they've watched it through. Display-only; valid in standalone views."
                     ),
                 },
                 "button": {

@@ -108,6 +108,36 @@ def test_unknown_field_rejected(ids, fields_by_entity, rels):
         fl.validate(cfg.elements, ids["root"], fields_by_entity, rels)
 
 
+def test_visible_when_accepted_and_round_trips(ids, fields_by_entity, rels):
+    """An element may carry a `visible_when` gate; it validates and survives the
+    model_dump the render pipeline uses to hand config to the client."""
+    gate = {">=": [{"var": "progress_pct"}, 100]}
+    cfg = FormConfig.model_validate(
+        {
+            "version": 2,
+            "elements": [
+                {"type": "field", "slug": "name"},
+                {"type": "button", "label": "Quiz", "action": {"kind": "submit"}, "visible_when": gate},
+            ],
+        }
+    )
+    # Structural validation still passes (gate is presentational, not a binding).
+    fl.validate(cfg.elements, ids["root"], fields_by_entity, rels)
+    # The gate is preserved through the JSON dump used by the view/form render.
+    dumped = cfg.model_dump(mode="json")
+    assert dumped["elements"][1]["visible_when"] == gate
+    # Absent gate defaults to None (always visible).
+    assert dumped["elements"][0]["visible_when"] is None
+
+
+def test_visible_when_rejects_unknown_key_still(ids):
+    """`extra="forbid"` is intact — visible_when didn't open the element to junk."""
+    with pytest.raises(ValidationError):
+        FormConfig.model_validate(
+            {"version": 2, "elements": [{"type": "label", "text": "x", "bogus_attr": 1}]}
+        )
+
+
 def test_table_anchor_must_target_root(ids, fields_by_entity, rels):
     # rel_1to1 is a to-one on root, illegal as a 1:M table anchor.
     cfg = FormConfig.model_validate(

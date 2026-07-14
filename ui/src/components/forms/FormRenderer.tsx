@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronRight, Plus, Trash2, X } from "lucide-react";
+import { ChevronRight, Maximize2, Plus, Trash2, X } from "lucide-react";
 import { Fragment, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -23,10 +23,12 @@ import { createRecord, listRecords, type EntityRecord } from "@/lib/api/entityRe
 import { getReport, runReport, type AggregateResult, type Visualization } from "@/lib/api/reports";
 import { callConnection, runWorkflow } from "@/lib/api/workflows";
 import { ReportChart } from "@/components/reports/ReportChart";
+import { Dialog, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { buildCatalog, fieldMeta, relatedEntityId } from "@/lib/forms/catalog";
 import { evaluate } from "@/lib/forms/jsonLogic";
 
 import { FieldControl } from "./FieldControl";
+import { SlideDeck, coerceSlides } from "./SlideDeck";
 
 /**
  * The one renderer that walks a `FormRender` element tree — used by the public
@@ -333,6 +335,7 @@ function ReportNode({ el }: { el: ReportElement }) {
   const [result, setResult] = useState<AggregateResult | null>(null);
   const [viz, setViz] = useState<Visualization | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(false);
 
   useEffect(() => {
     if (!el.report_id) {
@@ -378,19 +381,57 @@ function ReportNode({ el }: { el: ReportElement }) {
     };
   }, [el.report_id]);
 
+  // Wait for BOTH the data and the viz spec so a pie/metric/table report doesn't
+  // briefly flash as the bar-chart fallback. Only a fully-loaded report is
+  // expandable (clicking a spinner would open an empty modal).
+  const body = (height: number) =>
+    error ? (
+      <div className="px-1 py-2 text-sm text-destructive">{error}</div>
+    ) : result && viz ? (
+      <ReportChart result={result} viz={viz} height={height} />
+    ) : (
+      <div className="px-1 py-2 text-sm text-muted-foreground">Loading…</div>
+    );
+  const ready = !error && Boolean(result && viz);
+
   return (
-    <div className="rounded-md border p-3">
-      {el.title ? <div className="mb-2 text-sm font-medium">{el.title}</div> : null}
-      {error ? (
-        <div className="px-1 py-2 text-sm text-destructive">{error}</div>
-      ) : result && viz ? (
-        // Wait for BOTH the data and the viz spec so a pie/metric/table report
-        // doesn't briefly flash as the bar-chart fallback.
-        <ReportChart result={result} viz={viz} height={el.height ?? 320} />
-      ) : (
-        <div className="px-1 py-2 text-sm text-muted-foreground">Loading…</div>
-      )}
-    </div>
+    <>
+      <div
+        className={`group relative rounded-md border p-3 ${
+          ready ? "cursor-zoom-in transition-colors hover:border-primary/50" : ""
+        }`}
+        role={ready ? "button" : undefined}
+        tabIndex={ready ? 0 : undefined}
+        aria-label={ready ? `Enlarge ${el.title ?? "report"}` : undefined}
+        onClick={ready ? () => setExpanded(true) : undefined}
+        onKeyDown={
+          ready
+            ? (e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  setExpanded(true);
+                }
+              }
+            : undefined
+        }
+      >
+        {el.title ? <div className="mb-2 text-sm font-medium">{el.title}</div> : null}
+        {ready ? (
+          <Maximize2 className="pointer-events-none absolute right-2 top-2 h-3.5 w-3.5 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+        ) : null}
+        {body(el.height ?? 320)}
+      </div>
+      {expanded ? (
+        <Dialog open={expanded} onClose={() => setExpanded(false)} className="max-w-5xl">
+          {el.title ? (
+            <DialogHeader>
+              <DialogTitle>{el.title}</DialogTitle>
+            </DialogHeader>
+          ) : null}
+          <div className="max-h-[75vh] overflow-auto">{body(Math.max(el.height ?? 320, 520))}</div>
+        </Dialog>
+      ) : null}
+    </>
   );
 }
 
@@ -1095,6 +1136,11 @@ export function FormRenderer({
   );
 
   function ElementNode({ el, scope }: { el: FormElement; scope: Scope }): ReactNode {
+    // Conditional visibility: an element with a `visible_when` expression renders
+    // only when it evaluates truthy against the enclosing scope's values. `null`/
+    // absent is always visible. Used to gate flow (e.g. show the quiz only when
+    // modules are complete, or an "Enroll" button only when not yet enrolled).
+    if (el.visible_when != null && !evaluate(el.visible_when, scope.values)) return null;
     switch (el.type) {
       case "field": {
         const meta = fieldMeta(catalog, scope.entityId, el.slug);
@@ -1139,6 +1185,16 @@ export function FormRenderer({
             <LiveValueNode el={el} />
           </div>
         );
+      case "slides": {
+        // `slug` binds to a JSON field on the record (the module's slide list);
+        // otherwise inline `slides` are used. Deck is display-only.
+        const slides = el.slug ? coerceSlides(scope.values[el.slug]) : (el.slides ?? []);
+        return (
+          <div className="sm:col-span-12">
+            <SlideDeck slides={slides} label={el.label} />
+          </div>
+        );
+      }
       case "report":
         return (
           <div className={spanClass(el.width)}>
