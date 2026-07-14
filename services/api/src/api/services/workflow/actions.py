@@ -950,6 +950,57 @@ class LlmGrade:
 
 
 @register
+class GradeQuiz:
+    """Deterministically grade a multiple-choice quiz SERVER-SIDE.
+
+    Loads an assessment's ``question`` rows and compares each learner answer to the
+    stored ``correct_answer`` — so the correct answers are NEVER sent to the client
+    and a client can't forge a pass (unlike a client-side JsonLogic score that also
+    leaks every answer into the view). The learner's choices arrive as manual-run
+    inputs ``a1``, ``a2``, … : the i-th input maps to the i-th question ordered by
+    ``order_field``. Returns ``{score, passed, correct, total}`` (``score`` = integer
+    percent correct); wire ``capture`` (e.g. ``"quiz"``) so a downstream gateway
+    branches on ``{{vars.quiz.passed}}`` and a create_record step stores the score.
+
+    Config: ``{"assessment_id": {"$ref": "inputs.assessment_id"}, "pass_threshold":
+    {"$ref": "vars.asm.passing_threshold"}, "question_slug"?: "question",
+    "assessment_ref"?: "assessment", "order_field"?: "sort_order",
+    "answers_prefix"?: "a"}``. ``pass_threshold`` defaults to 70 when unset. The
+    entity/field slugs are configurable so this isn't LMS-specific. Read-only."""
+
+    type = "grade_quiz"
+
+    async def execute(self, ctx: ActionContext) -> dict[str, Any]:
+        context = _trigger_context(ctx)
+        assessment_id = _resolve_dynamic(ctx.config.get("assessment_id"), context)
+        if assessment_id is None or assessment_id == "":
+            raise ActionError("grade_quiz requires assessment_id")
+        question_slug = str(ctx.config.get("question_slug") or "question")
+        assessment_ref = str(ctx.config.get("assessment_ref") or "assessment")
+        order_field = str(ctx.config.get("order_field") or "sort_order")
+        prefix = str(ctx.config.get("answers_prefix") or "a")
+        pass_threshold = _as_int(_resolve_dynamic(ctx.config.get("pass_threshold"), context), 70)
+
+        repo = await ctx.repo_for_slug(question_slug)
+        questions, _ = await repo.list(
+            filters={assessment_ref: assessment_id}, limit=500, order_by=order_field, order_dir="asc"
+        )
+        total = len(questions)
+        correct = 0
+        for i, question in enumerate(questions, start=1):
+            chosen = ctx.inputs.get(f"{prefix}{i}")
+            expected = question.get("correct_answer")
+            if chosen is not None and expected is not None and str(chosen).strip() == str(expected).strip():
+                correct += 1
+        score = round(100 * correct / total) if total else 0
+        return {"score": score, "passed": score >= pass_threshold, "correct": correct, "total": total}
+
+    def simulate(self, ctx: ActionContext) -> dict[str, Any]:
+        # Read-only, but keep the dry run out of the DB for symmetry with get_record.
+        return {"score": 0, "passed": False, "correct": 0, "total": 0}
+
+
+@register
 class LlmRespond:
     """Role-play a persona + coach the learner for a training SIMULATOR.
 
