@@ -221,3 +221,34 @@ async def get_apikey_tenant_db(
             await session.rollback()
             logger.exception("Unhandled exception in API-key tenant session (org=%s)", principal.org_id)
             raise
+
+
+async def get_apikey_tenant_owner_db(
+    principal: Annotated[ApiKeyPrincipal, Depends(require_api_key)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> AsyncGenerator[AsyncSession]:
+    """RLS session scoped to the key's org, but on the DDL-capable ``km_app`` role.
+
+    A config promotion applies entity changes, which run ``ce_*`` table DDL — so it
+    needs :func:`db_scope.enter_tenant_owner` (keeps CREATE) rather than the
+    least-privilege ``app_user`` scope of :func:`get_apikey_tenant_db`. RLS still
+    enforces (km_app is non-superuser), and the statement timeout is relaxed because
+    a large promotion legitimately runs longer than a data-plane call. Reserve this
+    for the config-write surface only; data-plane routes keep the least-privilege
+    session.
+    """
+    factory = get_session_factory(settings)
+    async with factory() as session:
+        try:
+            await db_scope.enter_tenant_owner(session, principal.org_id)
+            await session.execute(text("SET LOCAL TIME ZONE 'UTC'"))
+            await session.execute(text("SET LOCAL statement_timeout = '300s'"))
+            yield session
+            await session.commit()
+        except HTTPException:
+            await session.rollback()
+            raise
+        except Exception:
+            await session.rollback()
+            logger.exception("Unhandled exception in API-key owner session (org=%s)", principal.org_id)
+            raise
