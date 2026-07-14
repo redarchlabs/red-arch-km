@@ -22,14 +22,14 @@ from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, UniqueConstr
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from api.models.base import Base, TimestampMixin, UUIDMixin
+from api.models.base import Base, LineageMixin, TimestampMixin, UUIDMixin
 from api.models.org import Org
 
 # A link is minted pending, becomes submitted on completion, or expired/revoked.
 FORM_LINK_STATUSES = ("pending", "submitted", "expired", "revoked")
 
 
-class Form(Base, UUIDMixin, TimestampMixin):
+class Form(Base, UUIDMixin, TimestampMixin, LineageMixin):
     __tablename__ = "forms"
     __table_args__ = (UniqueConstraint("org_id", "slug", name="uq_form_slug_per_org"),)
 

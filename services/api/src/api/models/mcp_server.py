@@ -15,7 +15,7 @@ from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, UniqueConstr
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from api.models.base import Base, TimestampMixin, UUIDMixin
+from api.models.base import Base, LineageMixin, TimestampMixin, UUIDMixin
 
 MCP_TRANSPORTS = ("stdio", "http", "sse")
 # Static secret vs OAuth 2.1 browser flow.
@@ -24,7 +24,7 @@ MCP_AUTH_TYPES = ("none", "bearer", "api_key", "oauth")
 MCP_OAUTH_IDENTITIES = ("org", "user")
 
 
-class McpServer(Base, UUIDMixin, TimestampMixin):
+class McpServer(Base, UUIDMixin, TimestampMixin, LineageMixin):
     __tablename__ = "mcp_servers"
     __table_args__ = (UniqueConstraint("org_id", "name", name="uq_mcp_server_name_per_org"),)
 

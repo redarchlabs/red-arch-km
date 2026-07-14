@@ -17,11 +17,11 @@ from sqlalchemy import Boolean, ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from api.models.base import Base, TimestampMixin, UUIDMixin
+from api.models.base import Base, LineageMixin, TimestampMixin, UUIDMixin
 from api.models.org import Org
 
 
-class Report(Base, UUIDMixin, TimestampMixin):
+class Report(Base, UUIDMixin, TimestampMixin, LineageMixin):
     __tablename__ = "reports"
     __table_args__ = (UniqueConstraint("org_id", "slug", name="uq_report_slug_per_org"),)
 
