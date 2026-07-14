@@ -1066,6 +1066,8 @@ function TableEditor({
   const addFieldCol = () => setColumns([...el.columns, { kind: "field", slug: "" }]);
   const addRelatedCol = () =>
     setColumns([...el.columns, { kind: "related", relationship_id: "", slug: "", editable: true }]);
+  const addLinkCol = () =>
+    setColumns([...el.columns, { kind: "link", href_template: "", link_label: "Open" }]);
 
   return (
     <div className="space-y-2">
@@ -1077,6 +1079,30 @@ function TableEditor({
       />
       {childEntity ? (
         <div className="space-y-1.5">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-medium text-muted-foreground">Sort by</span>
+            <select
+              className={input}
+              value={el.sort_by ?? ""}
+              onChange={(e) => onChange({ ...el, sort_by: e.target.value || null })}
+            >
+              <option value="">Default order</option>
+              {childFields.map((f) => (
+                <option key={f.slug} value={f.slug}>
+                  {f.name}
+                </option>
+              ))}
+            </select>
+            <select
+              className={input}
+              value={el.sort_dir ?? "asc"}
+              onChange={(e) => onChange({ ...el, sort_dir: e.target.value as "asc" | "desc" })}
+              disabled={!el.sort_by}
+            >
+              <option value="asc">Asc</option>
+              <option value="desc">Desc</option>
+            </select>
+          </div>
           <p className="text-xs font-medium text-muted-foreground">Columns</p>
           {el.columns.map((col, ci) => (
             <div key={ci} className="flex items-center gap-2">
@@ -1095,7 +1121,7 @@ function TableEditor({
                     </option>
                   ))}
                 </select>
-              ) : (
+              ) : col.kind === "related" ? (
                 <>
                   <select
                     className={input}
@@ -1133,6 +1159,31 @@ function TableEditor({
                     ))}
                   </select>
                 </>
+              ) : (
+                <>
+                  <input
+                    className={input}
+                    placeholder="/documents/{document_key}"
+                    value={col.href_template}
+                    onChange={(e) =>
+                      setColumns(
+                        el.columns.map((c, j) =>
+                          j === ci ? { ...c, href_template: e.target.value } : c,
+                        ),
+                      )
+                    }
+                  />
+                  <input
+                    className={input}
+                    placeholder="Link text"
+                    value={col.link_label ?? ""}
+                    onChange={(e) =>
+                      setColumns(
+                        el.columns.map((c, j) => (j === ci ? { ...c, link_label: e.target.value } : c)),
+                      )
+                    }
+                  />
+                </>
               )}
               <button
                 type="button"
@@ -1149,6 +1200,9 @@ function TableEditor({
             </button>
             <button type="button" className={btn} onClick={addRelatedCol}>
               <Plus className="h-3 w-3" /> Related column
+            </button>
+            <button type="button" className={btn} onClick={addLinkCol}>
+              <Plus className="h-3 w-3" /> Link column
             </button>
           </div>
         </div>

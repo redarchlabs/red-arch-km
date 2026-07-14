@@ -25,9 +25,12 @@ PROFILE_ID = uuid.uuid4()
 
 
 class _Org:
-    def __init__(self, org_id: uuid.UUID, name: str) -> None:
+    def __init__(
+        self, org_id: uuid.UUID, name: str, home_view_id: uuid.UUID | None = None
+    ) -> None:
         self.id = org_id
         self.name = name
+        self.home_view_id = home_view_id
 
 
 def _user(*, is_site_admin: bool) -> CurrentUser:

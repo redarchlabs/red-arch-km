@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 
 import pytest
+from pydantic import ValidationError
 
 from api.schemas.form import FormConfig, upgrade_legacy_form_config
 from api.services import form_layout as fl
@@ -176,6 +177,125 @@ def test_read_only_field_excluded_from_write(ids, rels):
     b = fl.flatten(cfg.elements, rels)
     assert b.root.write_slugs == {"name"}
     assert b.root.display_slugs == ["name", "due_date"]
+
+
+def test_link_column_binds_no_data_but_fetches_token_fields(ids, fields_by_entity, rels):
+    cfg = FormConfig.model_validate(
+        {
+            "version": 2,
+            "elements": [
+                {
+                    "type": "table",
+                    "anchor_relationship_id": str(ids["rel_1m"]),
+                    "columns": [
+                        {"kind": "field", "slug": "qty"},
+                        {
+                            "kind": "link",
+                            "href_template": "/documents/{product_ref}?row={id}",
+                            "link_label": "Open",
+                        },
+                    ],
+                }
+            ],
+        }
+    )
+    # A link column binds no entity field, so validation passes without requiring
+    # the template's tokens to be real fields.
+    fl.validate(cfg.elements, ids["root"], fields_by_entity, rels)  # no raise
+    b = fl.flatten(cfg.elements, rels)
+    table = next(c for c in b.containers if isinstance(c, TableBinding))
+    # `{product_ref}` is fetched into the row so the href can substitute it; `{id}`
+    # is the record id (not a field). Neither is writable; no related binding added.
+    assert "product_ref" in table.display_slugs
+    assert "product_ref" not in table.write_slugs
+    assert table.related_cols == []
+
+
+def test_table_sort_by_is_carried_and_validated(ids, fields_by_entity, rels):
+    cfg = FormConfig.model_validate(
+        {
+            "version": 2,
+            "elements": [
+                {
+                    "type": "table",
+                    "anchor_relationship_id": str(ids["rel_1m"]),
+                    "sort_by": "qty",
+                    "sort_dir": "asc",
+                    "columns": [{"kind": "field", "slug": "qty"}],
+                }
+            ],
+        }
+    )
+    fl.validate(cfg.elements, ids["root"], fields_by_entity, rels)  # qty is a child field
+    b = fl.flatten(cfg.elements, rels)
+    table = next(c for c in b.containers if isinstance(c, TableBinding))
+    assert table.sort_by == "qty" and table.sort_dir == "asc"
+
+    # A sort_by that isn't a field on the child entity is rejected.
+    bad = FormConfig.model_validate(
+        {
+            "version": 2,
+            "elements": [
+                {
+                    "type": "table",
+                    "anchor_relationship_id": str(ids["rel_1m"]),
+                    "sort_by": "nope",
+                    "columns": [{"kind": "field", "slug": "qty"}],
+                }
+            ],
+        }
+    )
+    with pytest.raises(LayoutError):
+        fl.validate(bad.elements, ids["root"], fields_by_entity, rels)
+
+
+def test_link_column_rejects_dangerous_href_scheme(ids):
+    anchor = str(ids["rel_1m"])
+    for bad in ("javascript:alert(1)", " JavaScript:alert(1)", "data:text/html,x", "vbscript:x"):
+        with pytest.raises(ValidationError):
+            FormConfig.model_validate(
+                {
+                    "version": 2,
+                    "elements": [
+                        {
+                            "type": "table",
+                            "anchor_relationship_id": anchor,
+                            "columns": [{"kind": "link", "href_template": bad}],
+                        }
+                    ],
+                }
+            )
+    # Relative and http(s) templates (incl. token placeholders) are accepted.
+    for ok in ("/documents/{doc_key}", "https://example.com/{id}", "#section"):
+        FormConfig.model_validate(
+            {
+                "version": 2,
+                "elements": [
+                    {
+                        "type": "table",
+                        "anchor_relationship_id": anchor,
+                        "columns": [{"kind": "link", "href_template": ok}],
+                    }
+                ],
+            }
+        )
+
+
+def test_progress_element_fetches_expr_fields_without_writing(ids, fields_by_entity, rels):
+    cfg = FormConfig.model_validate(
+        {
+            "version": 2,
+            "elements": [{"type": "progress", "value": {"var": "due_date"}, "max": 100}],
+        }
+    )
+    # A progress bar binds/writes nothing, so validation passes...
+    fl.validate(cfg.elements, ids["root"], fields_by_entity, rels)  # no raise
+    b = fl.flatten(cfg.elements, rels)
+    # ...but the fields its expression reads are fetched (display) so the bar can
+    # render them — never writable, and it adds no container binding.
+    assert b.root.display_slugs == ["due_date"]
+    assert b.root.write_slugs == set()
+    assert not b.containers
 
 
 def test_max_depth_enforced(ids, fields_by_entity, rels):
