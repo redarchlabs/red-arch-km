@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 
 import { CeleryMonitor } from "@/components/site-admin/CeleryMonitor";
+import { DeploymentLogManager } from "@/components/site-admin/DeploymentLogManager";
 import { GlobalMembershipManager } from "@/components/site-admin/GlobalMembershipManager";
 import { OrgManager } from "@/components/site-admin/OrgManager";
 import { SentEmailsManager } from "@/components/site-admin/SentEmailsManager";
@@ -14,7 +15,7 @@ import { SITE_ADMIN_TAB_HELP } from "@/lib/adminHelp";
 import { useHelpOverride } from "@/context/HelpContext";
 import { cn } from "@/lib/utils";
 
-type SiteAdminTab = "orgs" | "users" | "memberships" | "system" | "celery" | "emails";
+type SiteAdminTab = "orgs" | "users" | "memberships" | "system" | "celery" | "emails" | "deployments";
 
 const TABS: ReadonlyArray<{ key: SiteAdminTab; label: string }> = [
   { key: "orgs", label: "Organizations" },
@@ -23,6 +24,7 @@ const TABS: ReadonlyArray<{ key: SiteAdminTab; label: string }> = [
   { key: "system", label: "System" },
   { key: "celery", label: "Celery" },
   { key: "emails", label: "Sent Emails" },
+  { key: "deployments", label: "Deployments" },
 ];
 
 export default function SiteAdminPage() {
@@ -85,6 +87,7 @@ export default function SiteAdminPage() {
       {active === "system" ? <SystemStatus /> : null}
       {active === "celery" ? <CeleryMonitor /> : null}
       {active === "emails" ? <SentEmailsManager /> : null}
+      {active === "deployments" ? <DeploymentLogManager /> : null}
     </div>
   );
 }
