@@ -12,15 +12,16 @@ function genId(): string {
 
 export type PaletteKind = FormElement["type"];
 
-export const LEAF_KINDS: PaletteKind[] = ["field", "label", "calculated", "input", "live_value", "button"];
+export const LEAF_KINDS: PaletteKind[] = ["field", "label", "calculated", "progress", "input", "live_value", "button"];
 export const DATA_KINDS: PaletteKind[] = ["section", "table", "block"];
 export const LAYOUT_KINDS: PaletteKind[] = ["tab_group", "panel", "accordion", "columns"];
 // Palette for the view builder: no entity-bound leaves, plus embedded forms. `input`,
-// `live_value` and `record_list` are unbound, so they're valid in standalone views too.
+// `live_value`, `progress` and `record_list` are unbound, so they're valid in standalone views too.
 export const VIEW_KINDS: PaletteKind[] = [
   "label",
   "input",
   "live_value",
+  "progress",
   "report",
   "record_list",
   "chat",
@@ -35,6 +36,7 @@ export const KIND_LABELS: Record<PaletteKind, string> = {
   calculated: "Calculated",
   input: "Input (slider / toggle / text)",
   live_value: "Live value",
+  progress: "Progress bar",
   report: "Report / chart",
   record_list: "Record list / status board",
   chat: "Chat",
@@ -69,6 +71,8 @@ export function newElement(kind: PaletteKind): FormElement {
       return { id, type: "input", key: "", control: "text", label: "Input" };
     case "live_value":
       return { id, type: "live_value", label: "Live value", url: "", poll_ms: 1000 };
+    case "progress":
+      return { id, type: "progress", label: "Progress", value: 0, max: 100, show_percent: true };
     case "report":
       return { id, type: "report", report_id: "", title: "Report", height: 320 };
     case "record_list":

@@ -487,7 +487,14 @@ class FormRenderService:
                     }
             else:  # table or block — 1:M rows keyed by child FK = root_id
                 repo = await self._repo(c.entity_id)
-                items, _ = await repo.list(filters={rel_slug: root_id}, limit=MAX_SECTION_ROWS)
+                # A table may order its rows by an anchor field (e.g. modules by
+                # sort_order); block/unsorted tables keep default insertion order.
+                sort_kw: dict[str, Any] = {}
+                if isinstance(c, TableBinding) and c.sort_by:
+                    sort_kw = {"order_by": c.sort_by, "order_dir": c.sort_dir}
+                items, _ = await repo.list(
+                    filters={rel_slug: root_id}, limit=MAX_SECTION_ROWS, **sort_kw
+                )
                 rows = []
                 for item in items:
                     row: dict[str, Any] = {

@@ -1,8 +1,7 @@
 "use client";
 
 import { ArrowLeft } from "lucide-react";
-import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { use, useCallback, useEffect, useState } from "react";
 
 import { FormRenderer } from "@/components/forms/FormRenderer";
@@ -21,6 +20,7 @@ export default function ViewViewerPage({ params }: { params: Promise<{ id: strin
   // fields prefill, and run_workflow buttons run against that record (so an
   // update_record/update_record_field step writes it).
   const recordId = useSearchParams().get("record_id") ?? undefined;
+  const router = useRouter();
   const [render, setRender] = useState<FormRender | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -41,6 +41,16 @@ export default function ViewViewerPage({ params }: { params: Promise<{ id: strin
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Return to wherever the user came from — the dashboard/view whose button
+  // opened this one, or the view editor if they launched the runtime viewer
+  // from there. (Previously this hard-linked to `/views/${id}`, which always
+  // dumped end users into this view's *editor*.) Fall back to Home for a direct
+  // deep-link with no in-app history to go back to.
+  const handleBack = useCallback(() => {
+    if (window.history.length > 1) router.back();
+    else router.push("/home");
+  }, [router]);
 
   const handleRunWorkflow = async (
     workflowId: string,
@@ -71,11 +81,17 @@ export default function ViewViewerPage({ params }: { params: Promise<{ id: strin
 
   return (
     <div className="space-y-6">
+      {/* No page title here: each view supplies its own heading in its element
+          tree, so echoing the internal view name (e.g. "Course Player") above it
+          is redundant. Keep only a back affordance. */}
       <div className="flex items-center gap-3">
-        <Link href={`/views/${id}`} className="text-muted-foreground hover:text-foreground">
-          <ArrowLeft className="h-5 w-5" />
-        </Link>
-        <h1 className="flex-1 text-2xl font-semibold">{render.form_name}</h1>
+        <button
+          type="button"
+          onClick={handleBack}
+          className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+        >
+          <ArrowLeft className="h-4 w-4" /> Back
+        </button>
       </div>
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
       {notice ? <p className="text-sm text-green-600">{notice}</p> : null}

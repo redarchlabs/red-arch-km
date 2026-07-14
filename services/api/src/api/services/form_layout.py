@@ -19,11 +19,45 @@ model in ``models/custom_entity.py``):
 
 from __future__ import annotations
 
+import re
 import uuid
 from dataclasses import dataclass
 from typing import Any
 
 from api.schemas.form_elements import MAX_TREE_DEPTH, tree_depth
+
+# ``{token}`` placeholders in a link column's ``href_template``. ``{id}`` is the
+# row record id; any other token is an anchor field slug whose value must be
+# fetched into the row so the link can substitute it.
+_LINK_TOKEN_RE = re.compile(r"\{(\w+)\}")
+
+
+def _link_field_tokens(href_template: str) -> list[str]:
+    """Anchor field slugs a link column references (every ``{token}`` but ``{id}``)."""
+    return [tok for tok in _LINK_TOKEN_RE.findall(href_template) if tok != "id"]
+
+
+def _expr_var_slugs(expr: Any) -> list[str]:
+    """Field slugs referenced by ``{"var": "<slug>"}`` anywhere in a JsonLogic
+    expression — so a display-only element (e.g. ``progress``) can declare the
+    record fields it needs fetched, without a visible ``field`` element."""
+    out: list[str] = []
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            for op, arg in node.items():
+                if op == "var":
+                    slug = arg[0] if isinstance(arg, list) and arg else arg
+                    if isinstance(slug, str):
+                        out.append(slug)
+                else:
+                    walk(arg)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    walk(expr)
+    return out
 
 
 class LayoutError(ValueError):
@@ -136,7 +170,17 @@ def _validate_element(
     elif etype == "calculated":
         if el.target_slug is not None:
             _require_field(el.target_slug, ctx, fields_by_entity)
-    elif etype in ("label", "button", "form_ref", "input", "live_value", "chat", "report", "record_list"):
+    elif etype in (
+        "label",
+        "button",
+        "form_ref",
+        "input",
+        "live_value",
+        "progress",
+        "chat",
+        "report",
+        "record_list",
+    ):
         return  # presentational / unbound — nothing to bind at this entity level
     elif etype == "section":
         info = _require_rel(el.relationship_id, rels)
@@ -152,6 +196,8 @@ def _validate_element(
             _validate_list(el.elements, child, fields_by_entity, rels)
         else:
             _validate_table_columns(el.columns, child, fields_by_entity, rels)
+            if el.sort_by is not None:
+                _require_field(el.sort_by, child, fields_by_entity)
     elif etype == "tab_group":
         for tab in el.tabs:
             _validate_list(tab.elements, ctx, fields_by_entity, rels)
@@ -216,6 +262,8 @@ class TableBinding:
     display_slugs: list[str]  # anchor field columns (incl. read-only)
     write_slugs: set[str]  # editable anchor field columns
     related_cols: list[RelatedColBinding]
+    sort_by: str | None = None  # anchor field slug to order rows by
+    sort_dir: str = "asc"
 
 
 @dataclass
@@ -262,6 +310,12 @@ def flatten(elements: list[Any], rels: dict[uuid.UUID, RelInfo]) -> Bindings:
                 root.write_slugs.add(el.slug)
         elif etype == "calculated" and el.target_slug is not None:
             root.calc.append(CalcBinding(el.target_slug, el.expression))
+        elif etype == "progress":
+            # Display-only, but declare the record fields its `value` expression
+            # reads so build_render fetches them into the root values.
+            for slug in _expr_var_slugs(el.value):
+                if slug not in root.display_slugs:
+                    root.display_slugs.append(slug)
         elif etype == "section":
             info = rels[el.relationship_id]
             display, write, calc = _leaf_slugs(el.elements)
@@ -284,13 +338,27 @@ def flatten(elements: list[Any], rels: dict[uuid.UUID, RelInfo]) -> Bindings:
                     display.append(col.slug)
                     if not col.read_only:
                         write.add(col.slug)
+                elif col.kind == "link":
+                    # Not a visible column, but its `{slug}` tokens must be fetched
+                    # into the row so the href can substitute them (deduped).
+                    for tok in _link_field_tokens(col.href_template):
+                        if tok not in display:
+                            display.append(tok)
                 else:  # related
                     rinfo = rels[col.relationship_id]
                     related.append(
                         RelatedColBinding(col.relationship_id, rinfo.target_id, col.slug, col.editable)
                     )
             containers.append(
-                TableBinding(el.anchor_relationship_id, info.source_id, display, write, related)
+                TableBinding(
+                    el.anchor_relationship_id,
+                    info.source_id,
+                    display,
+                    write,
+                    related,
+                    sort_by=el.sort_by,
+                    sort_dir=el.sort_dir,
+                )
             )
         elif etype == "tab_group":
             for tab in el.tabs:
@@ -323,6 +391,8 @@ def _validate_table_columns(
     for col in columns:
         if col.kind == "field":
             _require_field(col.slug, child_entity, fields_by_entity)
+        elif col.kind == "link":
+            continue  # presentational per-row link — binds no entity data
         else:  # related
             info = _require_rel(col.relationship_id, rels)
             if info.source_id != child_entity:

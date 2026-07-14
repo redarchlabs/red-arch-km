@@ -1,6 +1,6 @@
 "use client";
 
-import { Plus, Trash2, X } from "lucide-react";
+import { ChevronRight, Plus, Trash2, X } from "lucide-react";
 import { Fragment, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -75,6 +75,27 @@ function spanClass(width?: string | null): string {
 
 function nonEmpty(v: Values): boolean {
   return Object.values(v).some((x) => x !== "" && x != null);
+}
+
+/** Reject any URL whose scheme isn't http(s); relative URLs pass through. Defense in
+ * depth against a link-column stored-XSS (`javascript:`/`data:` …) alongside the
+ * server-side `href_template` validator — the schema can't cover every authoring path. */
+function safeHref(url: string): string {
+  const scheme = /^\s*([a-zA-Z][a-zA-Z0-9+.-]*):/.exec(url);
+  if (scheme && !/^https?$/i.test(scheme[1])) return "#";
+  return url;
+}
+
+/** Substitute a link column's `{token}` placeholders from a table row: `{id}` is the
+ * row record id, any other token is an anchor field value on the row. Each value is
+ * URL-encoded; an unknown/absent token resolves to an empty string. The final URL is
+ * scheme-checked so a stored template can't smuggle a `javascript:` link. */
+function fillHref(template: string, row: RowState): string {
+  const url = template.replace(/\{(\w+)\}/g, (_, key: string) => {
+    const v = key === "id" ? row.id : row.values?.[key];
+    return v == null ? "" : encodeURIComponent(String(v));
+  });
+  return safeHref(url);
 }
 
 /** Collect `input` elements reachable in the root scope (layout containers only, since
@@ -1099,6 +1120,8 @@ export function FormRenderer({
         return <div className={spanClass(el.width)}>{LabelNode({ el })}</div>;
       case "calculated":
         return <div className={spanClass(el.width)}>{CalculatedNode({ el, scope })}</div>;
+      case "progress":
+        return <div className={spanClass(el.width)}>{ProgressNode({ el, scope })}</div>;
       case "input":
         return (
           <div className={spanClass(el.width)}>
@@ -1161,13 +1184,36 @@ export function FormRenderer({
           </div>
         );
       }
-      case "panel":
+      case "panel": {
+        if (!el.collapsible) {
+          return (
+            <fieldset className="sm:col-span-12 rounded-lg border p-4">
+              {el.title ? <legend className="px-1 text-sm font-semibold">{el.title}</legend> : null}
+              {renderList(el.elements, scope)}
+            </fieldset>
+          );
+        }
+        const pkey = el.id ?? el.title ?? "panel";
+        const collapsed = (ui[`panel-${pkey}`] as boolean | undefined) ?? Boolean(el.collapsed);
         return (
           <fieldset className="sm:col-span-12 rounded-lg border p-4">
-            {el.title ? <legend className="px-1 text-sm font-semibold">{el.title}</legend> : null}
-            {renderList(el.elements, scope)}
+            <legend className="px-1">
+              <button
+                type="button"
+                onClick={() => setUi((p) => ({ ...p, [`panel-${pkey}`]: !collapsed }))}
+                className="flex items-center gap-1 text-sm font-semibold"
+                aria-expanded={!collapsed}
+              >
+                <ChevronRight
+                  className={`h-4 w-4 transition-transform ${collapsed ? "" : "rotate-90"}`}
+                />
+                {el.title ?? "Details"}
+              </button>
+            </legend>
+            {collapsed ? null : renderList(el.elements, scope)}
           </fieldset>
         );
+      }
       case "tab_group":
         return TabGroupNode({ el, scope });
       case "accordion":
@@ -1199,6 +1245,41 @@ export function FormRenderer({
         {el.label ? <label className="mb-1 block text-sm font-medium">{el.label}</label> : null}
         <div className="rounded-md border bg-muted/40 px-3 py-2 text-sm">{display}</div>
         {el.help_text ? <p className="mt-1 text-xs text-muted-foreground">{el.help_text}</p> : null}
+      </div>
+    );
+  }
+
+  function ProgressNode({
+    el,
+    scope,
+  }: {
+    el: Extract<FormElement, { type: "progress" }>;
+    scope: Scope;
+  }) {
+    const max = el.max && el.max > 0 ? el.max : 100;
+    const raw = Number(evaluate(el.value, scope.values));
+    const value = Number.isFinite(raw) ? Math.min(Math.max(raw, 0), max) : 0;
+    const pct = Math.round((value / max) * 100);
+    return (
+      <div>
+        {el.label ? <label className="mb-1 block text-sm font-medium">{el.label}</label> : null}
+        <div
+          className="relative h-4 w-full overflow-hidden rounded-full bg-muted"
+          role="progressbar"
+          aria-valuenow={pct}
+          aria-valuemin={0}
+          aria-valuemax={100}
+        >
+          <div
+            className="h-full rounded-full bg-primary transition-all"
+            style={{ width: `${pct}%` }}
+          />
+          {el.show_percent !== false ? (
+            <span className="absolute inset-0 flex items-center justify-center text-xs font-medium">
+              {pct}%
+            </span>
+          ) : null}
+        </div>
       </div>
     );
   }
@@ -1341,7 +1422,7 @@ export function FormRenderer({
               <tr className="border-b text-left">
                 {el.columns.map((col, ci) => (
                   <th key={ci} className="px-2 py-1.5 font-medium">
-                    {col.label ?? col.slug}
+                    {col.label ?? (col.kind === "link" ? "" : col.slug)}
                   </th>
                 ))}
                 {!locked ? <th className="w-8" /> : null}
@@ -1351,6 +1432,21 @@ export function FormRenderer({
               {rows.map((row, ri) => (
                 <tr key={ri} className="border-b align-top">
                   {el.columns.map((col, ci) => {
+                    if (col.kind === "link") {
+                      const href = fillHref(col.href_template, row);
+                      return (
+                        <td key={ci} className="px-2 py-1.5">
+                          <a
+                            href={href}
+                            target={col.new_tab ? "_blank" : undefined}
+                            rel={col.new_tab ? "noopener noreferrer" : undefined}
+                            className="font-medium text-primary underline underline-offset-2 hover:no-underline"
+                          >
+                            {col.link_label ?? "Open"}
+                          </a>
+                        </td>
+                      );
+                    }
                     if (col.kind === "field") {
                       const meta = fieldMeta(catalog, childEntity, col.slug);
                       if (!meta) return <td key={ci} />;
