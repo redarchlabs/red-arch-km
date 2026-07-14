@@ -290,3 +290,61 @@ async def test_import_collision_strategies(admin_session: AsyncSession) -> None:
     assert rename.resources["entities"].renamed == 2
     slugs = {d.slug for d in (await defs_repo.list_all(limit=100))[0]}
     assert "company" in slugs and "company_imported" in slugs
+
+
+@pytest.mark.asyncio
+async def test_lineage_links_survive_rename_across_promotions(admin_session: AsyncSession) -> None:
+    """The keystone of change-management: a second promotion re-targets the SAME
+    row by durable lineage even after the source object's slug (its natural key)
+    was renamed — so no duplicate is created."""
+    source = await _make_org(admin_session, "Lineage Source")
+    target = await _make_org(admin_session, "Lineage Target")
+    await _seed_source(admin_session, source)
+
+    # --- First promotion into the empty target -------------------------- #
+    await set_tenant(admin_session, str(source.id))
+    bundle1 = await MigrationExporter(admin_session, source.id).export(include_records=False)
+    src_company_id = next(e["id"] for e in bundle1["resources"]["entities"] if e["slug"] == "company")
+    # A self-origin object exports lineage_id == its own id.
+    assert next(e["lineage_id"] for e in bundle1["resources"]["entities"] if e["slug"] == "company") == src_company_id
+
+    await set_tenant(admin_session, str(target.id))
+    await MigrationImporter(admin_session, target.id, _settings()).import_bundle(bundle1, CollisionStrategy.SKIP)
+    await admin_session.commit()
+
+    defs_repo = EntityDefinitionRepository(admin_session, target.id)
+    tgt_company = await defs_repo.get_by_slug("company")
+    assert tgt_company is not None
+    # The freshly-created target row was STAMPED with the source's lineage.
+    assert str(tgt_company.lineage_id) == src_company_id
+    assert len((await defs_repo.list_all(limit=100))[0]) == 2
+
+    # --- Rename the source entity's SLUG (its natural key) --------------- #
+    await set_tenant(admin_session, str(source.id))
+    src_defs = EntityDefinitionRepository(admin_session, source.id)
+    src_company = await src_defs.get_by_slug("company")
+    src_company.slug = "organization"
+    src_company.name = "Organization"
+    await admin_session.commit()
+
+    # --- Second promotion (OVERWRITE) ----------------------------------- #
+    bundle2 = await MigrationExporter(admin_session, source.id).export(include_records=False)
+    renamed = next(e for e in bundle2["resources"]["entities"] if e["lineage_id"] == src_company_id)
+    assert renamed["slug"] == "organization"  # renamed on the source
+
+    await set_tenant(admin_session, str(target.id))
+    summary = await MigrationImporter(admin_session, target.id, _settings()).import_bundle(
+        bundle2, CollisionStrategy.OVERWRITE
+    )
+    await admin_session.commit()
+    assert summary.errors == [], summary.errors
+
+    # Matched by LINEAGE, not slug: the existing row was overwritten in place, NOT
+    # a new 'organization' entity created.
+    remaining = (await defs_repo.list_all(limit=100))[0]
+    assert len(remaining) == 2, [e.slug for e in remaining]
+    assert await defs_repo.get_by_slug("organization") is None  # no stray duplicate
+    matched = await defs_repo.get_by_slug("company")  # entity overwrite keeps the slug
+    assert matched is not None
+    assert matched.name == "Organization"  # content was updated
+    assert str(matched.lineage_id) == src_company_id

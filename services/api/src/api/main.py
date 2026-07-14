@@ -42,6 +42,7 @@ from api.routers import (
     memberships,
     migration,
     orgs,
+    promotions,
     reports,
     search,
     setup,
@@ -214,6 +215,8 @@ def create_app() -> FastAPI:
     app.include_router(setup.router, prefix="/api/setup", tags=["setup"])
     app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
     app.include_router(migration.router, prefix="/api/migration", tags=["migration"])
+    # Change-management: releases, promotion targets, promote/rollback (org-admin).
+    app.include_router(promotions.router, prefix="/api/promotions", tags=["promotions"])
     # API-key management (org-admin, Clerk-authed) for the Admin Area "API" tab.
     app.include_router(api_keys.router, prefix="/api/api-keys", tags=["api-keys"])
     # Public, API-key-authenticated enterprise surface + its own always-on docs.

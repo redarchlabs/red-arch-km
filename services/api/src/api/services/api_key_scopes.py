@@ -54,9 +54,22 @@ API_SCOPES: tuple[ScopeDef, ...] = (
     ),
     ScopeDef("work_orders:read", "List and read work orders."),
     ScopeDef("work_orders:write", "File and update work orders."),
+    ScopeDef("config:read", "Read instance/config info (e.g. verify a promotion connection)."),
+    ScopeDef(
+        "config:write",
+        "Receive and apply configuration promotions (create/update/delete entities, "
+        "workflows, agents, …). VERY HIGH PRIVILEGE: it remote-controls this org's "
+        "configuration, so it is NEVER granted by a '*' or 'config:*' wildcard — a key "
+        "must list 'config:write' explicitly.",
+    ),
 )
 
 VALID_SCOPES: frozenset[str] = frozenset(s.name for s in API_SCOPES)
+
+# Scopes so powerful they are never satisfied by a wildcard grant ("*" or
+# "<domain>:*") — a key must be minted with the exact scope. ``config:write`` can
+# rewrite the whole org configuration, so it must be an explicit, deliberate grant.
+SENSITIVE_SCOPES: frozenset[str] = frozenset({"config:write"})
 
 
 def normalize_scopes(scopes: list[str]) -> list[str]:
@@ -82,9 +95,14 @@ def has_scope(granted: frozenset[str], required: str) -> bool:
 
     ``required`` is always a concrete ``"domain:action"``. A grant matches when it
     is the exact scope, the global ``"*"`` wildcard, or the ``"domain:*"`` wildcard
-    for that domain.
+    for that domain — EXCEPT for :data:`SENSITIVE_SCOPES`, which are satisfied only
+    by an exact grant (never by a wildcard).
     """
-    if required in granted or "*" in granted:
+    if required in granted:
+        return True
+    if required in SENSITIVE_SCOPES:
+        return False  # wildcards never grant a sensitive scope
+    if "*" in granted:
         return True
     domain = required.split(":", 1)[0]
     return f"{domain}:*" in granted

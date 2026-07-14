@@ -48,6 +48,19 @@ MAX_DOCUMENTS = 10_000
 _PAGE = 200
 
 
+def _lineage(obj: Any) -> str:
+    """The durable cross-environment identity of a config row.
+
+    A row that was authored in this environment has ``lineage_id IS NULL``
+    (self-origin), so its identity is simply its own ``id``; a row copied in from
+    another environment carries a stamped ``lineage_id``. Emitting
+    ``lineage_id or id`` means the bundle always carries a stable identity the
+    importer can match on across environments and renames. See ``LineageMixin``
+    and migration ``037_config_lineage``.
+    """
+    return str(getattr(obj, "lineage_id", None) or obj.id)
+
+
 class MigrationExporter:
     def __init__(self, session: AsyncSession, org_id: uuid.UUID) -> None:
         self._session = session
@@ -169,7 +182,7 @@ class MigrationExporter:
     # ------------------------------------------------------------------ #
     async def _export_tags(self) -> list[dict[str, Any]]:
         tags, _ = await TagRepository(self._session, self._org_id).list_all(limit=10_000)
-        return [{"id": str(t.id), "name": t.name} for t in tags]
+        return [{"id": str(t.id), "lineage_id": _lineage(t), "name": t.name} for t in tags]
 
     async def _export_entities(self) -> list[dict[str, Any]]:
         defs_repo = EntityDefinitionRepository(self._session, self._org_id)
@@ -183,6 +196,7 @@ class MigrationExporter:
             out.append(
                 {
                     "id": str(d.id),
+                    "lineage_id": _lineage(d),
                     "name": d.name,
                     "slug": d.slug,
                     "description": d.description,
@@ -190,6 +204,7 @@ class MigrationExporter:
                     "fields": [
                         {
                             "id": str(f.id),
+                            "lineage_id": _lineage(f),
                             "name": f.name,
                             "slug": f.slug,
                             "field_type": f.field_type,
@@ -204,6 +219,7 @@ class MigrationExporter:
                     "relationships": [
                         {
                             "id": str(r.id),
+                            "lineage_id": _lineage(r),
                             "name": r.name,
                             "slug": r.slug,
                             "cardinality": r.cardinality,
@@ -222,6 +238,7 @@ class MigrationExporter:
         return [
             {
                 "id": str(c.id),
+                "lineage_id": _lineage(c),
                 "name": c.name,
                 "kind": c.kind,
                 "base_url": c.base_url,
@@ -238,6 +255,7 @@ class MigrationExporter:
         return [
             {
                 "id": str(f.id),
+                "lineage_id": _lineage(f),
                 "name": f.name,
                 "description": f.description,
                 "dot_path": f.dot_path,
@@ -264,6 +282,7 @@ class MigrationExporter:
             out.append(
                 {
                     "id": str(wf.id),
+                    "lineage_id": _lineage(wf),
                     "name": wf.name,
                     "description": wf.description,
                     "entity_definition_id": str(wf.entity_definition_id) if wf.entity_definition_id else None,
@@ -287,6 +306,7 @@ class MigrationExporter:
         return [
             {
                 "id": str(e.id),
+                "lineage_id": _lineage(e),
                 "name": e.name,
                 "workflow_id": str(e.workflow_id),
                 "enabled": e.enabled,
@@ -300,6 +320,7 @@ class MigrationExporter:
         return [
             {
                 "id": str(f.id),
+                "lineage_id": _lineage(f),
                 "name": f.name,
                 "slug": f.slug,
                 "description": f.description,
@@ -315,6 +336,7 @@ class MigrationExporter:
         return [
             {
                 "id": str(r.id),
+                "lineage_id": _lineage(r),
                 "name": r.name,
                 "slug": r.slug,
                 "description": r.description,
@@ -331,6 +353,7 @@ class MigrationExporter:
         return [
             {
                 "id": str(v.id),
+                "lineage_id": _lineage(v),
                 "name": v.name,
                 "slug": v.slug,
                 "description": v.description,
@@ -346,6 +369,7 @@ class MigrationExporter:
         return [
             {
                 "id": str(s.id),
+                "lineage_id": _lineage(s),
                 "name": s.name,
                 "description": s.description,
                 "transport": s.transport,
@@ -365,6 +389,7 @@ class MigrationExporter:
         return [
             {
                 "id": str(a.id),
+                "lineage_id": _lineage(a),
                 "name": a.name,
                 "display_name": a.display_name,
                 "description": a.description,
@@ -433,6 +458,7 @@ class MigrationExporter:
                 out.append(
                     {
                         "id": str(d.id),
+                        "lineage_id": _lineage(d),
                         "title": d.title,
                         "description": d.description,
                         "text": d.text,

@@ -20,14 +20,14 @@ from sqlalchemy import Boolean, ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from api.models.base import Base, TimestampMixin, UUIDMixin
+from api.models.base import Base, LineageMixin, TimestampMixin, UUIDMixin
 
 # Governance classes (kind-gate). Kept as strings + comment, matching the
 # codebase convention (workflow statuses are plain strings, not PG enums).
 AGENT_KINDS = ("coordinator", "advisory", "operator")
 
 
-class Agent(Base, UUIDMixin, TimestampMixin):
+class Agent(Base, UUIDMixin, TimestampMixin, LineageMixin):
     __tablename__ = "agents"
     __table_args__ = (UniqueConstraint("org_id", "name", name="uq_agent_name_per_org"),)
 

@@ -19,7 +19,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import ARRAY, BIGINT, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from api.models.base import Base, TimestampMixin, UUIDMixin
+from api.models.base import Base, LineageMixin, TimestampMixin, UUIDMixin
 from api.models.org import Org
 
 document_tags = Table(
@@ -58,7 +58,7 @@ class ProcessingStatus(StrEnum):
         return frozenset({cls.SUCCESS, cls.FAILED, cls.CANCELLED})
 
 
-class Folder(Base, UUIDMixin, TimestampMixin):
+class Folder(Base, UUIDMixin, TimestampMixin, LineageMixin):
     __tablename__ = "folders"
     __table_args__ = (UniqueConstraint("org_id", "name", "parent_id", name="uq_folder_name_per_org_parent"),)
 
@@ -84,7 +84,7 @@ class Folder(Base, UUIDMixin, TimestampMixin):
     children: Mapped[list[Folder]] = relationship(back_populates="parent")
 
 
-class Tag(Base, UUIDMixin, TimestampMixin):
+class Tag(Base, UUIDMixin, TimestampMixin, LineageMixin):
     __tablename__ = "tags"
     __table_args__ = (UniqueConstraint("org_id", "name", name="uq_tag_per_org"),)
 
@@ -94,7 +94,7 @@ class Tag(Base, UUIDMixin, TimestampMixin):
     org: Mapped[Org] = relationship()
 
 
-class Document(Base, UUIDMixin, TimestampMixin):
+class Document(Base, UUIDMixin, TimestampMixin, LineageMixin):
     __tablename__ = "documents"
     __table_args__ = (UniqueConstraint("org_id", "document_key", name="uq_doc_key_per_org"),)
 

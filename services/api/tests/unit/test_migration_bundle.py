@@ -11,6 +11,7 @@ import pytest
 from api.services.migration.bundle import (
     BUNDLE_FORMAT_VERSION,
     BUNDLE_KIND,
+    SUPPORTED_BUNDLE_FORMAT_VERSIONS,
     CollisionStrategy,
     IdMap,
     ImportSummary,
@@ -131,5 +132,9 @@ def test_filter_resources_none_selection_is_passthrough() -> None:
 
 def test_bundle_constants_stable() -> None:
     # Guards against an accidental format bump that would reject old bundles.
+    # v2 (lineage) is the current shape, but v1 bundles MUST still be accepted on
+    # import (they simply lack lineage_id and fall back to natural-key matching).
     assert BUNDLE_KIND == "km2-migration-bundle"
-    assert BUNDLE_FORMAT_VERSION == 1
+    assert BUNDLE_FORMAT_VERSION == 2
+    assert 1 in SUPPORTED_BUNDLE_FORMAT_VERSIONS
+    assert 2 in SUPPORTED_BUNDLE_FORMAT_VERSIONS

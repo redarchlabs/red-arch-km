@@ -1,13 +1,15 @@
 "use client";
 
-import { AlertTriangle, KeyRound, Upload } from "lucide-react";
+import { AlertTriangle, GitCompare, KeyRound, Trash2, Upload } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
+  diffOrg,
   importOrg,
+  type BundleDiff,
   type CollisionStrategy,
   type ImportSummary,
   type ResourceOutcome,
@@ -43,12 +45,14 @@ export function ImportPanel() {
   const [strategy, setStrategy] = useState<CollisionStrategy>("skip");
   const [busy, setBusy] = useState(false);
   const [summary, setSummary] = useState<ImportSummary | null>(null);
+  const [diff, setDiff] = useState<BundleDiff | null>(null);
 
   async function onFileChange(chosen: File | null) {
     setFile(chosen);
     setGroups(null);
     setSelection({});
     setSummary(null);
+    setDiff(null);
     setParseError(null);
     if (!chosen) return;
     try {
@@ -82,6 +86,25 @@ export function ImportPanel() {
       });
     } catch (error) {
       toast.error("Import failed", { description: getApiErrorMessage(error, "Could not import this bundle.") });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function runDiff() {
+    if (!file) {
+      toast.error("Choose a bundle file first.");
+      return;
+    }
+    setBusy(true);
+    setDiff(null);
+    setSummary(null);
+    try {
+      const result = await diffOrg(file);
+      setDiff(result);
+      toast.success("Diff complete", { description: "Review what would change below." });
+    } catch (error) {
+      toast.error("Diff failed", { description: getApiErrorMessage(error, "Could not diff this bundle.") });
     } finally {
       setBusy(false);
     }
@@ -147,6 +170,10 @@ export function ImportPanel() {
               </fieldset>
 
               <div className="flex flex-wrap items-center gap-2">
+                <Button variant="outline" onClick={() => void runDiff()} disabled={busy}>
+                  <GitCompare className="mr-2 h-4 w-4" />
+                  {busy ? "Working…" : "Preview diff"}
+                </Button>
                 <Button variant="outline" onClick={() => runImport(true)} disabled={busy || selected === 0}>
                   {busy ? "Working…" : "Preview (dry run)"}
                 </Button>
@@ -155,13 +182,106 @@ export function ImportPanel() {
                   {busy ? "Importing…" : `Import ${selected} object${selected === 1 ? "" : "s"}`}
                 </Button>
               </div>
+              <p className="text-xs text-muted-foreground">
+                <span className="font-medium">Preview diff</span> compares the whole bundle against this
+                organization by durable identity — showing what would be added, changed, or removed — before you
+                import.
+              </p>
             </>
           ) : null}
         </CardContent>
       </Card>
 
+      {diff ? <DiffSummaryView diff={diff} /> : null}
       {summary ? <ImportSummaryView summary={summary} /> : null}
     </div>
+  );
+}
+
+const DIFF_COLUMNS = ["added", "changed", "deleted", "unchanged"] as const;
+
+function DiffSummaryView({ diff }: { diff: BundleDiff }) {
+  // Only show resource types that have any object on either side.
+  const rows = diff.resources.filter(
+    (r) => r.added + r.changed + r.deleted + r.unchanged > 0,
+  );
+  const nothing = rows.length === 0;
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          Diff preview
+          <span className="rounded-full bg-sky-500/15 px-2 py-0.5 text-xs font-medium text-sky-600 dark:text-sky-400">
+            read-only
+          </span>
+        </CardTitle>
+        <CardDescription>
+          What importing this bundle would do to <span className="font-medium">this</span> organization. Objects
+          are matched by durable identity (falling back to slug/name), so a renamed object still lines up.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-5">
+        {diff.has_deletes ? (
+          <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm">
+            <Trash2 className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+            <div>
+              <p className="font-medium text-destructive">
+                {diff.totals.deleted} object{diff.totals.deleted === 1 ? "" : "s"} exist here but not in the
+                bundle
+              </p>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                Importing does not delete anything today — these are shown so you can see the drift. Controlled
+                deletion is part of the Releases workflow.
+              </p>
+            </div>
+          </div>
+        ) : null}
+
+        {nothing ? (
+          <p className="text-sm text-muted-foreground">This bundle matches the current organization exactly.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b text-left text-muted-foreground">
+                  <th className="py-1 pr-4 font-medium">Resource</th>
+                  {DIFF_COLUMNS.map((k) => (
+                    <th key={k} className="px-2 py-1 text-right font-medium capitalize">
+                      {k}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => (
+                  <tr key={r.resource_type} className="border-b last:border-0">
+                    <td className="py-1 pr-4 font-medium capitalize">
+                      {r.resource_type.replace(/_/g, " ")}
+                      {r.count_only ? (
+                        <span className="ml-1 text-xs font-normal text-muted-foreground">(data · count only)</span>
+                      ) : null}
+                    </td>
+                    {DIFF_COLUMNS.map((k) => (
+                      <td
+                        key={k}
+                        className={cn(
+                          "px-2 py-1 text-right tabular-nums",
+                          k === "deleted" && r.deleted > 0 ? "font-medium text-destructive" : "",
+                          k === "added" && r.added > 0 ? "text-emerald-600 dark:text-emerald-400" : "",
+                          r[k] === 0 ? "text-muted-foreground/50" : "",
+                        )}
+                      >
+                        {r[k]}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

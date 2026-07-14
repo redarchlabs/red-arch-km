@@ -26,6 +26,18 @@ class TestHasScope:
     def test_empty_grant_denies(self) -> None:
         assert not has_scope(frozenset(), "reports:read")
 
+    def test_config_write_is_never_granted_by_wildcards(self) -> None:
+        # config:write remote-controls the whole org config, so it must be an
+        # explicit grant — never satisfied by "*" or "config:*".
+        assert not has_scope(frozenset({"*"}), "config:write")
+        assert not has_scope(frozenset({"config:*"}), "config:write")
+        assert has_scope(frozenset({"config:write"}), "config:write")
+
+    def test_config_read_still_follows_wildcards(self) -> None:
+        # config:read is not sensitive; a wildcard grants it as usual.
+        assert has_scope(frozenset({"*"}), "config:read")
+        assert has_scope(frozenset({"config:*"}), "config:read")
+
 
 class TestNormalizeScopes:
     def test_dedupes_and_orders_by_catalog(self) -> None:

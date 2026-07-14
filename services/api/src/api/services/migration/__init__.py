@@ -13,6 +13,7 @@ See ``bundle.py`` for the on-disk format, ``exporter.py`` for serialization, and
 from api.services.migration.bundle import (
     BUNDLE_FORMAT_VERSION,
     BUNDLE_KIND,
+    SUPPORTED_BUNDLE_FORMAT_VERSIONS,
     CollisionStrategy,
     ImportSummary,
 )
@@ -22,6 +23,7 @@ from api.services.migration.importer import MigrationImporter
 __all__ = [
     "BUNDLE_FORMAT_VERSION",
     "BUNDLE_KIND",
+    "SUPPORTED_BUNDLE_FORMAT_VERSIONS",
     "CollisionStrategy",
     "ImportSummary",
     "MigrationExporter",

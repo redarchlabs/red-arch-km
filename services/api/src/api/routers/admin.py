@@ -16,13 +16,17 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.concurrency import run_in_threadpool
+from pydantic import BaseModel
 from redis.asyncio import Redis
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from api.auth.dependencies import CurrentUser, require_site_admin
 from api.config import Settings, get_settings
 from api.dependencies import get_db, get_redis
+from api.models.org import Org
+from api.models.promotion import Release, ReleasePromotion
 from api.repositories.user import UserRepository
 from api.schemas.admin import (
     AdminUserUpdate,
@@ -543,3 +547,61 @@ async def get_sent_email(
         html=payload.get("HTML"),
         attachments=attachments,
     )
+
+
+# --------------------------------------------------------------------------- #
+# Cross-org deployment log (change-management)
+# --------------------------------------------------------------------------- #
+class DeploymentRow(BaseModel):
+    """One promotion across the whole installation, for the site-admin log."""
+
+    id: uuid.UUID
+    release_name: str | None
+    source_org: str | None
+    target_label: str
+    target_kind: str
+    target_org: str | None
+    status: str
+    strategy: str
+    is_rollback: bool
+    created_at: datetime | None
+
+
+@router.get("/deployments", response_model=list[DeploymentRow])
+async def list_deployments(
+    _admin: Annotated[CurrentUser, Depends(require_site_admin)],
+    session: Annotated[AsyncSession, Depends(get_db)],
+    limit: Annotated[int, Query(ge=1, le=1000)] = 500,
+) -> list[DeploymentRow]:
+    """Every config promotion across all orgs (newest first).
+
+    Reads ``release_promotions`` cross-org on the privileged (bypass) session so a
+    site admin sees deployments in every tenant in one place. Nothing tenant-scoped
+    is exposed beyond release/target/org names + status.
+    """
+    src = aliased(Org)
+    tgt = aliased(Org)
+    stmt = (
+        select(ReleasePromotion, Release.name, src.name, tgt.name)
+        .join(Release, Release.id == ReleasePromotion.release_id, isouter=True)
+        .join(src, src.id == ReleasePromotion.org_id, isouter=True)
+        .join(tgt, tgt.id == ReleasePromotion.target_org_id, isouter=True)
+        .order_by(ReleasePromotion.created_at.desc())
+        .limit(limit)
+    )
+    rows = (await session.execute(stmt)).all()
+    return [
+        DeploymentRow(
+            id=p.id,
+            release_name=release_name,
+            source_org=source_org,
+            target_label=p.target_label,
+            target_kind=p.target_kind,
+            target_org=target_org,
+            status=p.status,
+            strategy=p.strategy,
+            is_rollback=p.rollback_source_id is not None,
+            created_at=p.created_at,
+        )
+        for p, release_name, source_org, target_org in rows
+    ]
