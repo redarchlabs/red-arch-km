@@ -21,10 +21,15 @@ Key invariants (enforced here + in ``FormService._validate_config``):
 
 from __future__ import annotations
 
+import re
 import uuid
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+# A URL scheme prefix (``scheme:``) at the very start of a string. Used to reject
+# non-http(s) schemes (``javascript:``, ``data:``, …) in author-supplied link URLs.
+_URL_SCHEME_RE = re.compile(r"^\s*([a-zA-Z][a-zA-Z0-9+.\-]*):")
 
 # ------------------------------------------------------------------ #
 # Shared presentational vocabulary
@@ -154,6 +159,20 @@ class LiveValueElement(_Element):
     width: FieldWidth | None = None
 
 
+class ProgressElement(_Element):
+    """A display-only progress bar. ``value`` is a sandboxed expression over the
+    form's values (or a literal) yielding a number; the bar fills ``value / max``,
+    clamped to ``[0, max]``. When ``show_percent`` the computed percentage is drawn
+    on the bar. Reads values but writes nothing — safe wherever ``calculated`` is."""
+
+    type: Literal["progress"] = "progress"
+    label: str | None = None
+    value: Expression = None
+    max: float = 100
+    show_percent: bool = True
+    width: FieldWidth | None = None
+
+
 class ReportElement(_Element):
     """Embeds a saved report on a dashboard — renders its chart, KPI tile, or table
     per the report's own visualization spec (fetched from ``/reports/{id}/run``).
@@ -229,7 +248,43 @@ class RelatedColumn(BaseModel):
     display: FieldDisplay | None = None
 
 
-TableColumn = Annotated[AnchorColumn | RelatedColumn, Field(discriminator="kind")]
+class LinkColumn(BaseModel):
+    """A non-data column that renders a per-row hyperlink instead of a value. Binds
+    no entity data. ``href_template`` is a URL with ``{token}`` placeholders filled
+    from the row: ``{id}`` = the row record's id, and ``{<field_slug>}`` = an anchor
+    field value on the row (each token is URL-encoded). ``link_label`` is the static
+    link text. Use it to open a row's detail view, a linked document, or an external
+    page — e.g. ``/documents/{document_key}`` or ``/views/<id>/view?record_id={id}``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["link"] = "link"
+    label: str | None = None
+    href_template: str
+    link_label: str = "Open"
+    new_tab: bool = False
+    width: FieldWidth | None = None
+
+    @field_validator("href_template")
+    @classmethod
+    def _reject_dangerous_scheme(cls, v: str) -> str:
+        """Only relative URLs or ``http(s)`` absolute URLs are allowed. Any other
+        scheme (``javascript:``, ``data:``, ``vbscript:``, …) is rejected so a link
+        column can never become a stored-XSS vector when the row is rendered. Token
+        placeholders are URL-encoded at render time, so only the static template
+        text — i.e. the scheme — is constrained here."""
+        m = _URL_SCHEME_RE.match(v)
+        if m and m.group(1).lower() not in ("http", "https"):
+            raise ValueError(
+                f"href_template scheme {m.group(1)!r} is not allowed; "
+                "use a relative URL or an http(s) URL"
+            )
+        return v
+
+
+TableColumn = Annotated[
+    AnchorColumn | RelatedColumn | LinkColumn, Field(discriminator="kind")
+]
 
 
 class TableElement(_Element):
@@ -243,6 +298,8 @@ class TableElement(_Element):
     min_rows: int = 0
     max_rows: int | None = None  # capped by MAX_SECTION_ROWS regardless
     read_only: bool = False  # whole grid non-editable in fill mode: no add/remove-row, all cells locked
+    sort_by: str | None = None  # anchor field slug to order rows by; None = default (insertion) order
+    sort_dir: Literal["asc", "desc"] = "asc"
 
 
 # ------------------------------------------------------------------ #
@@ -481,6 +538,7 @@ FormElement = Annotated[
     | CalculatedElement
     | InputElement
     | LiveValueElement
+    | ProgressElement
     | ReportElement
     | RecordListElement
     | ChatElement
