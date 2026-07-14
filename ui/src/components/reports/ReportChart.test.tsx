@@ -24,6 +24,21 @@ describe("formatValue", () => {
     expect(formatValue(0, "bytes")).toBe("0 B");
     expect(formatValue(5, "plain", "kg")).toBe("5kg");
   });
+
+  it("caps a repeating decimal at 2 fraction digits by default (plain)", () => {
+    // The bug: an average like 630/11 used to render as 57.27272727272727.
+    expect(formatValue(630 / 11, "plain", "%")).toBe("57.27%");
+    // Integers stay exact — no trailing zeros, no thousands grouping.
+    expect(formatValue(1500, "plain")).toBe("1500");
+  });
+
+  it("honors a caller-supplied precision across formats", () => {
+    expect(formatValue(630 / 11, "plain", "%", 1)).toBe("57.3%");
+    expect(formatValue(630 / 11, "plain", "%", 0)).toBe("57%");
+    expect(formatValue(2 / 3, "percent", null, 1)).toBe("66.7%");
+    // Out-of-range precision is clamped to 0–6.
+    expect(formatValue(1 / 3, "plain", null, 9)).toBe((1 / 3).toFixed(6));
+  });
 });
 
 const RESULT: AggregateResult = {

@@ -74,6 +74,9 @@ export interface Visualization {
   compare_to?: string | null;
   unit?: string | null;
   number_format?: NumberFormat;
+  /** Fraction-digit cap for the formatted value; null lets each format apply its
+   * own default (so an average doesn't render as 57.27272727…). Range 0–6. */
+  precision?: number | null;
   options?: Record<string, unknown>;
 }
 
