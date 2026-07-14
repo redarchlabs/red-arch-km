@@ -64,7 +64,12 @@ export default function ViewViewerPage({ params }: { params: Promise<{ id: strin
       // (`?record_id=`), else no record — an ad-hoc "run now". The run endpoint
       // needs a CRUD operation ("update" is the default); button `inputs` ride
       // along as `after` for workflows that reference them.
-      const target = rowRecordId ?? recordId ?? null;
+      // `record_id=me` is a RENDER-time sentinel (the server binds the view to the
+      // caller's own record by email); the run endpoint only accepts a UUID, so
+      // never forward the sentinel — a manual workflow ignores record_id anyway,
+      // and its declared `inputs` carry whatever identity it needs.
+      const pageRecordId = recordId === "me" ? null : recordId;
+      const target = rowRecordId ?? pageRecordId ?? null;
       // Pass the button values as BOTH `after` (entity-triggered workflows that
       // reference after.*) and `inputs` (manual-trigger workflows whose declared
       // inputs read inputs.*). The backend routes to the right one by trigger
