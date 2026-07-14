@@ -155,9 +155,23 @@ _REF_KEY = "$ref"
 
 def _trigger_context(ctx: ActionContext) -> dict[str, Any]:
     """The run's data context: the triggering record (``before.<field>`` /
-    ``after.<field>``), any manual-run input variables (``inputs.<key>``), and
-    variables captured from earlier steps (``vars.<key>``)."""
-    return {"before": ctx.before, "after": ctx.after, "inputs": ctx.inputs or {}, "vars": ctx.vars or {}}
+    ``after.<field>``), any manual-run input variables (``inputs.<key>``),
+    variables captured from earlier steps (``vars.<key>``), and clock tokens
+    ``now`` (UTC ISO-8601 timestamp) / ``today`` (UTC ``YYYY-MM-DD`` date) so a
+    template can stamp e.g. an ``issued_date`` without a frozen literal.
+
+    ``now``/``today`` are read at context-build time; two steps in one run may see
+    timestamps a few ms apart (same ``today``), which is fine for date stamping.
+    """
+    stamp = dt.datetime.now(dt.UTC)
+    return {
+        "before": ctx.before,
+        "after": ctx.after,
+        "inputs": ctx.inputs or {},
+        "vars": ctx.vars or {},
+        "now": stamp.isoformat(),
+        "today": stamp.date().isoformat(),
+    }
 
 
 def _lookup(context: dict[str, Any], path: str) -> Any:
@@ -194,19 +208,24 @@ def _resolve_value_map(values: dict[str, Any], context: dict[str, Any]) -> dict[
     return {key: _resolve_dynamic(value, context) for key, value in values.items()}
 
 
-# ``{{ after.first_name }}`` / ``{{ inputs.amount }}`` / ``{{ vars.answer }}``
-# tokens in email subject/body/recipient (and any other templated action field).
-# The path after the namespace may be dotted (``{{ vars.kb.answer }}``) so a token
-# can reach into a captured step output (e.g. knowledge_search's {answer, sources}).
-_TEMPLATE_TOKEN = re.compile(r"\{\{\s*(before|after|inputs|vars)\.([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*)\s*\}\}")
+# ``{{ after.first_name }}`` / ``{{ inputs.amount }}`` / ``{{ vars.answer }}`` tokens
+# in email subject/body/recipient (and any other templated action field), plus the
+# bare clock tokens ``{{ now }}`` / ``{{ today }}``. The path after a namespace may be
+# dotted (``{{ vars.kb.answer }}``) so a token can reach into a captured step output
+# (e.g. knowledge_search's {answer, sources}). One capture group = the full lookup
+# path (``now``/``today`` resolve as single-segment keys via :func:`_lookup`).
+_TEMPLATE_TOKEN = re.compile(
+    r"\{\{\s*((?:before|after|inputs|vars)\.[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*|now|today)\s*\}\}"
+)
 
 
 def _render_template(template: str, context: dict[str, Any]) -> str:
-    """Substitute ``{{before.slug}}`` / ``{{after.slug}}`` tokens from the trigger
-    context. An unknown/missing field renders as an empty string (never raises)."""
+    """Substitute ``{{before.slug}}`` / ``{{after.slug}}`` / ``{{now}}`` / ``{{today}}``
+    tokens from the trigger context. An unknown/missing field renders as an empty
+    string (never raises)."""
 
     def _sub(match: re.Match[str]) -> str:
-        value = _lookup(context, f"{match.group(1)}.{match.group(2)}")
+        value = _lookup(context, match.group(1))
         return "" if value is None else str(value)
 
     return _TEMPLATE_TOKEN.sub(_sub, template)
