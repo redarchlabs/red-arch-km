@@ -259,3 +259,70 @@ class TestUpdateRecordTemplates:
         out = handler.simulate(ctx)
         assert repo.update_calls == []  # dry run touches nothing
         assert out["values"] == {"alert": "Red", "note": "hi"}
+
+
+class TestGradeQuiz:
+    """Server-side MCQ grading: compares learner answers (inputs a1..aN) to each
+    question's stored correct_answer — answers never leave the server."""
+
+    @staticmethod
+    def _questions() -> list[dict]:
+        return [
+            {"id": uuid.uuid4(), "sort_order": 1, "correct_answer": "B"},
+            {"id": uuid.uuid4(), "sort_order": 2, "correct_answer": "A"},
+            {"id": uuid.uuid4(), "sort_order": 3, "correct_answer": "D"},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_grades_server_side_and_applies_threshold(self) -> None:
+        handler = ACTION_REGISTRY["grade_quiz"]
+        repo = FakeRepo(self._questions())
+        aid = str(uuid.uuid4())
+        ctx = _ctx(
+            {"assessment_id": {"$ref": "inputs.assessment_id"}, "pass_threshold": 60},
+            repo=repo,
+            inputs={"assessment_id": aid, "a1": "B", "a2": "wrong", "a3": "D"},  # 2 of 3
+        )
+        out = await handler.execute(ctx)
+        assert out == {"score": 67, "passed": True, "correct": 2, "total": 3}
+        # Questions loaded by the assessment relation, ordered by sort_order.
+        assert repo.list_calls[0]["filters"] == {"assessment": aid}
+        assert repo.list_calls[0]["order_by"] == "sort_order"
+
+    @pytest.mark.asyncio
+    async def test_threshold_not_met_is_not_passed(self) -> None:
+        handler = ACTION_REGISTRY["grade_quiz"]
+        repo = FakeRepo(self._questions())
+        out = await handler.execute(
+            _ctx({"assessment_id": "a", "pass_threshold": 70}, repo=repo, inputs={"a1": "B"})  # 1 of 3
+        )
+        assert out["score"] == 33 and out["passed"] is False
+
+    @pytest.mark.asyncio
+    async def test_missing_answers_count_wrong_default_threshold(self) -> None:
+        handler = ACTION_REGISTRY["grade_quiz"]
+        repo = FakeRepo(self._questions())
+        # No answers → 0 correct; default threshold 70 → not passed.
+        out = await handler.execute(_ctx({"assessment_id": "a"}, repo=repo, inputs={}))
+        assert out == {"score": 0, "passed": False, "correct": 0, "total": 3}
+
+    @pytest.mark.asyncio
+    async def test_no_questions_scores_zero(self) -> None:
+        handler = ACTION_REGISTRY["grade_quiz"]
+        out = await handler.execute(_ctx({"assessment_id": "a"}, repo=FakeRepo([]), inputs={"a1": "x"}))
+        assert out == {"score": 0, "passed": False, "correct": 0, "total": 0}
+
+    @pytest.mark.asyncio
+    async def test_answer_match_is_trimmed_exact(self) -> None:
+        handler = ACTION_REGISTRY["grade_quiz"]
+        repo = FakeRepo([{"id": uuid.uuid4(), "sort_order": 1, "correct_answer": " Yes "}])
+        out = await handler.execute(
+            _ctx({"assessment_id": "a", "pass_threshold": 1}, repo=repo, inputs={"a1": "Yes"})
+        )
+        assert out["correct"] == 1
+
+    @pytest.mark.asyncio
+    async def test_missing_assessment_id_raises(self) -> None:
+        handler = ACTION_REGISTRY["grade_quiz"]
+        with pytest.raises(ActionError):
+            await handler.execute(_ctx({}, repo=FakeRepo([]), inputs={}))
