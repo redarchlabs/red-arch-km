@@ -13,10 +13,13 @@ import type {
   FieldElement,
   FormElement,
   LabelElement,
+  RecordListElement,
+  RecordListFilterConfig,
   SectionElement,
   TableColumn,
   TableElement,
 } from "@/lib/api/forms";
+import { FILTER_OPERATORS } from "@/lib/api/filterOps";
 
 import {
   KIND_LABELS,
@@ -162,6 +165,8 @@ function ElementEditor({
       return <LiveValueEditor el={el} onChange={onChange} />;
     case "report":
       return <ReportEditor el={el} onChange={onChange} />;
+    case "record_list":
+      return <RecordListEditor el={el} ctx={ctx} onChange={onChange} />;
     case "chat":
       return <ChatEditor el={el} onChange={onChange} />;
     case "button":
@@ -185,6 +190,153 @@ function ElementEditor({
     default:
       return null;
   }
+}
+
+function RecordListEditor({
+  el,
+  ctx,
+  onChange,
+}: {
+  el: RecordListElement;
+  ctx: BuilderCtx;
+  onChange: (el: FormElement) => void;
+}) {
+  const entities = [...ctx.entitiesById.values()];
+  const filters = el.filters ?? [];
+  const setFilters = (next: RecordListFilterConfig[]) => onChange({ ...el, filters: next });
+  const updateFilter = (i: number, patch: Partial<RecordListFilterConfig>) =>
+    setFilters(filters.map((f, j) => (j === i ? { ...f, ...patch } : f)));
+
+  return (
+    <div className="space-y-1.5">
+      <Row label="Label">
+        <input
+          className={input}
+          value={el.label ?? ""}
+          onChange={(e) => onChange({ ...el, label: e.target.value || null })}
+        />
+      </Row>
+      <Row label="Entity">
+        <select className={input} value={el.entity} onChange={(e) => onChange({ ...el, entity: e.target.value })}>
+          <option value="">Select entity…</option>
+          {entities.map((ent) => (
+            <option key={ent.id} value={ent.slug}>
+              {ent.name}
+            </option>
+          ))}
+        </select>
+      </Row>
+      <Row label="Columns">
+        <input
+          className={input}
+          placeholder="field slugs, comma-separated (blank = all)"
+          value={(el.fields ?? []).join(", ")}
+          onChange={(e) =>
+            onChange({
+              ...el,
+              fields: e.target.value
+                .split(",")
+                .map((s) => s.trim())
+                .filter(Boolean),
+            })
+          }
+        />
+      </Row>
+      <div className="space-y-1">
+        <div className="flex items-center justify-between">
+          <span className="text-xs font-medium text-muted-foreground">Filters (all must match)</span>
+          <button
+            type="button"
+            className={btn}
+            onClick={() => setFilters([...filters, { field: "", op: "eq", value: "" }])}
+          >
+            <Plus className="h-3 w-3" /> Filter
+          </button>
+        </div>
+        {filters.map((f, i) => (
+          <div key={i} className="flex items-center gap-1.5">
+            <input
+              className={input}
+              placeholder="field / relation slug"
+              value={f.field}
+              onChange={(e) => updateFilter(i, { field: e.target.value })}
+            />
+            <select
+              className={input}
+              value={f.op ?? "eq"}
+              onChange={(e) => updateFilter(i, { op: e.target.value as (typeof FILTER_OPERATORS)[number] })}
+            >
+              {FILTER_OPERATORS.map((op) => (
+                <option key={op} value={op}>
+                  {op}
+                </option>
+              ))}
+            </select>
+            <input
+              className={input}
+              placeholder="value ( @me = current user )"
+              value={f.value == null ? "" : String(f.value)}
+              onChange={(e) => updateFilter(i, { value: e.target.value })}
+            />
+            <button
+              type="button"
+              className={btn}
+              onClick={() => setFilters(filters.filter((_, j) => j !== i))}
+              aria-label="Remove filter"
+            >
+              <Trash2 className="h-3 w-3" />
+            </button>
+          </div>
+        ))}
+        <p className="text-[11px] text-muted-foreground">
+          Tip: a value of <code>@me</code> on a relation field (e.g. learner) scopes the list to the current
+          user’s own records.
+        </p>
+      </div>
+      <Row label="Sort by">
+        <input
+          className={input}
+          placeholder="field slug (blank = created_at)"
+          value={el.sort_by ?? ""}
+          onChange={(e) => onChange({ ...el, sort_by: e.target.value || null })}
+        />
+      </Row>
+      <Row label="Sort dir">
+        <select
+          className={input}
+          value={el.sort_dir ?? "desc"}
+          onChange={(e) => onChange({ ...el, sort_dir: e.target.value as "asc" | "desc" })}
+        >
+          <option value="desc">Desc</option>
+          <option value="asc">Asc</option>
+        </select>
+      </Row>
+      <Row label="Limit">
+        <input
+          className={input}
+          type="number"
+          value={el.limit ?? 20}
+          onChange={(e) => onChange({ ...el, limit: Number(e.target.value) || 20 })}
+        />
+      </Row>
+      <Row label="Poll (ms)">
+        <input
+          className={input}
+          type="number"
+          placeholder="blank = fetch once"
+          value={el.poll_ms ?? ""}
+          onChange={(e) => onChange({ ...el, poll_ms: Number(e.target.value) || null })}
+        />
+      </Row>
+      <Row label="Empty text">
+        <input
+          className={input}
+          value={el.empty_text ?? ""}
+          onChange={(e) => onChange({ ...el, empty_text: e.target.value || null })}
+        />
+      </Row>
+    </div>
+  );
 }
 
 function FormRefEditor({
