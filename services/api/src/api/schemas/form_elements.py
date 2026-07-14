@@ -236,6 +236,22 @@ class ReportElement(_Element):
     width: FieldWidth | None = None
 
 
+class RecordListFilter(BaseModel):
+    """One server-side filter narrowing a ``record_list``'s rows.
+
+    Mirrors the record endpoint's ``field:op[:value]`` filter (see
+    ``entity_records_helpers.parse_filters``). ``value`` may be the sentinel ``@me``
+    on a to-one relation field, which the endpoint resolves to the caller's OWN
+    record id (matched by email, like ``record_id=me``) — so a board can show just
+    the current user's rows without the author hard-coding an id."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    field: str
+    op: Literal["eq", "ne", "gt", "gte", "lt", "lte", "in", "contains", "isnull"] = "eq"
+    value: Any = None
+
+
 class RecordListElement(_Element):
     """A read-only display of existing records of an entity — a live "status board".
 
@@ -245,12 +261,17 @@ class RecordListElement(_Element):
     bound to the view's root record, so it is valid in a standalone view. An optional
     ``row_workflow_id`` renders a per-row button that runs that workflow against the
     row's record (e.g. re-announce this mission-state row) — the runtime targets the
-    row id, so an ``update_record``/``update_record_field`` step writes that row."""
+    row id, so an ``update_record``/``update_record_field`` step writes that row.
+
+    ``filters`` narrows the rows server-side (ANDed); a filter ``value`` of ``@me``
+    on a relation field scopes the board to the caller's own records (e.g. a
+    learner's own attempts/certificates)."""
 
     type: Literal["record_list"] = "record_list"
     entity: str  # entity slug to read records from
     label: str | None = None
     fields: list[str] = Field(default_factory=list)  # field slugs as columns; empty = every field
+    filters: list[RecordListFilter] = Field(default_factory=list)  # server-side row filters (ANDed)
     sort_by: str | None = None  # field slug or base column; defaults to created_at
     sort_dir: Literal["asc", "desc"] = "desc"
     limit: int = 20

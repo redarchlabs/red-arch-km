@@ -197,6 +197,9 @@ function RecordListNode({
   const [rows, setRows] = useState<EntityRecord[] | null>(null);
   const [error, setError] = useState(false);
   const [busyRow, setBusyRow] = useState<string | null>(null);
+  // Serialize the declared filters to a stable string so the fetch effect re-runs
+  // only when they actually change (not on every render's fresh array identity).
+  const filtersKey = JSON.stringify(el.filters ?? []);
 
   useEffect(() => {
     if (!el.entity) {
@@ -208,6 +211,13 @@ function RecordListNode({
     let failures = 0;
     // poll_ms turns the board live; 0 => fetch once.
     const base = el.poll_ms ? Math.max(500, el.poll_ms) : 0;
+    // Author-declared server-side filters (ANDed). `@me` resolves to the caller's
+    // own record server-side; `isnull` carries no value.
+    const filters = (el.filters ?? []).map((f) => ({
+      field: f.field,
+      op: f.op ?? "eq",
+      value: f.value == null ? undefined : String(f.value),
+    }));
 
     const fetchOnce = async () => {
       // Pause while the tab is hidden — don't hammer the DB for a board no one sees.
@@ -217,6 +227,7 @@ function RecordListNode({
           limit: el.limit ?? 20,
           orderBy: el.sort_by ?? undefined,
           orderDir: el.sort_dir ?? "desc",
+          filters,
         });
         if (!alive) return;
         failures = 0;
@@ -254,7 +265,10 @@ function RecordListNode({
       if (timer) window.clearTimeout(timer);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [el.entity, el.limit, el.sort_by, el.sort_dir, el.poll_ms]);
+    // `filtersKey` (below) is `el.filters` serialized — a stable stand-in that
+    // re-runs the effect when the filters change without the array's churn.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [el.entity, el.limit, el.sort_by, el.sort_dir, el.poll_ms, filtersKey]);
 
   // Columns: the explicit field list, else the field slugs on the first row
   // (excluding base columns) so an unconfigured board still shows something.

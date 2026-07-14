@@ -29,6 +29,7 @@ from api.services.entity_records_helpers import (
     dispatch_inline_workflows,
     encode_cursor,
     parse_filters,
+    resolve_me_filters,
 )
 
 router = APIRouter()
@@ -61,9 +62,11 @@ async def list_records(
     — used by the record-list view element (e.g. a "latest record" status board).
     Keyset ``cursor`` pagination applies under any sort and with filters applied.
     """
-    repo, _definition = await build_record_repo(session, ctx.org_id, slug)
+    repo, definition = await build_record_repo(session, ctx.org_id, slug)
     decoded = decode_cursor(cursor) if cursor else None
-    filters = parse_filters(filter or [])
+    # Resolve any ``@me`` filter to the caller's own record id server-side (e.g. a
+    # ``filter=learner:eq:@me`` "my rows" board) — never trusting a client id.
+    filters = await resolve_me_filters(session, ctx.org_id, definition, parse_filters(filter or []), ctx.user.email)
     try:
         items, next_cursor = await repo.list(
             filters=filters, search=q, cursor=decoded, limit=limit, order_by=order_by, order_dir=order_dir
