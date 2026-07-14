@@ -18,7 +18,7 @@ type AdminTabKey =
   | "members"
   | "import_export"
   | "api";
-type SiteAdminTabKey = "orgs" | "users" | "memberships" | "system" | "celery" | "emails";
+type SiteAdminTabKey = "orgs" | "users" | "memberships" | "system" | "celery" | "emails" | "deployments";
 
 // Regions / Departments / Roles / Groups all use the same DimensionManager, so
 // they share one topic that names all four.
@@ -164,6 +164,17 @@ so you can confirm what a workflow or form actually sent.
 This proxies the mail container directly and is available in **dev/staging
 only**; it has no per-organization scoping, which is why it lives under Site
 Admin.
+`,
+  ),
+  deployments: topic(
+    "Deployments",
+    `
+The **change-management deployment log** across every organization — each config
+promotion (and rollback), newest first.
+
+Use it to see what was deployed where, by which release, and its outcome. It is a
+read-only, cross-org audit view; org admins manage their own releases under the
+**Releases** area.
 `,
   ),
 };

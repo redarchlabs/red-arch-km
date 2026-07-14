@@ -56,9 +56,58 @@ export interface ImportSummary {
   generated_secrets: GeneratedSecret[];
 }
 
+/** How a single object compares between a bundle and the current org. */
+export type ObjectStatus = "added" | "changed" | "unchanged" | "deleted";
+
+export interface ObjectDiff {
+  resource_type: string;
+  status: ObjectStatus;
+  lineage_id: string | null;
+  natural_key: string;
+  name: string | null;
+}
+
+/** Per-resource-type diff tally plus the added/changed/deleted objects. */
+export interface ResourceDiff {
+  resource_type: string;
+  added: number;
+  changed: number;
+  unchanged: number;
+  deleted: number;
+  /** Data layer (records/documents): the counts are informational, not correlated. */
+  count_only: boolean;
+  objects: ObjectDiff[];
+}
+
+/** The full preview of what importing a bundle would do to the current org. */
+export interface BundleDiff {
+  resources: ResourceDiff[];
+  /** Resource types with deletes, children-first — the order deletes apply in. */
+  delete_order: string[];
+  has_deletes: boolean;
+  totals: Record<ObjectStatus, number>;
+}
+
 /** Fetch the org's exportable-object index for the selection UI. */
 export async function fetchManifest(): Promise<Manifest> {
   return (await apiClient.get<Manifest>("/migration/manifest")).data;
+}
+
+/**
+ * Preview what importing a bundle would do to the current org — which objects are
+ * added, changed, deleted, or unchanged (matched by durable lineage, falling back
+ * to slug/name). Read-only: nothing is written.
+ */
+export async function diffOrg(file: File): Promise<BundleDiff> {
+  const form = new FormData();
+  form.append("file", file);
+  const response = await apiClient.post<BundleDiff>("/migration/diff", form, {
+    // Suppress the client's JSON default so the browser sets the multipart
+    // boundary Content-Type (see importOrg / documents.ts).
+    headers: { "Content-Type": undefined },
+    timeout: 120000,
+  });
+  return response.data;
 }
 
 export interface ExportOptions {

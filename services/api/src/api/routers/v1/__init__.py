@@ -14,7 +14,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 
 from api.auth.api_key import enforce_api_rate_limit
-from api.routers.v1 import agents, entities, knowledge, records, reports, search, workflows
+from api.routers.v1 import agents, config, entities, knowledge, records, reports, search, workflows
 
 # The rate limiter (which resolves + caches the API-key principal) runs for every
 # v1 route; individual endpoints add their scope + session dependencies.
@@ -27,3 +27,4 @@ router.include_router(workflows.router, prefix="/workflows", tags=["v1: workflow
 router.include_router(search.router, prefix="/search", tags=["v1: search"])
 router.include_router(knowledge.router, prefix="/knowledge", tags=["v1: knowledge"])
 router.include_router(agents.router, prefix="", tags=["v1: agents"])
+router.include_router(config.router, prefix="/config", tags=["v1: config"])

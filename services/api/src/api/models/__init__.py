@@ -17,6 +17,13 @@ from api.models.document import Document, DocumentAccess, DocumentAttributeDefin
 from api.models.form import Form, FormLink
 from api.models.org import Department, Group, Org, Region, Role
 from api.models.org_provider_credential import OrgProviderCredential
+from api.models.promotion import (
+    PromotionTarget,
+    Release,
+    ReleaseApproval,
+    ReleaseItem,
+    ReleasePromotion,
+)
 from api.models.report import Report
 from api.models.user import UserOrgMembership, UserProfile
 from api.models.view import View
@@ -60,7 +67,12 @@ __all__ = [
     "Group",
     "Org",
     "OrgProviderCredential",
+    "PromotionTarget",
     "Region",
+    "Release",
+    "ReleaseApproval",
+    "ReleaseItem",
+    "ReleasePromotion",
     "Report",
     "Role",
     "Tag",

@@ -21,14 +21,14 @@ from api.auth.dependencies import OrgContext, require_org_admin
 from api.config import Settings, get_settings
 from api.dependencies import get_db
 from api.services.migration import (
-    BUNDLE_FORMAT_VERSION,
     BUNDLE_KIND,
     CollisionStrategy,
     ImportSummary,
     MigrationExporter,
     MigrationImporter,
 )
-from api.services.migration.bundle import Selection
+from api.services.migration.bundle import MAX_BUNDLE_BYTES, SUPPORTED_BUNDLE_FORMAT_VERSIONS, Selection
+from api.services.migration.diff import BundleDiff, compute_diff
 
 router = APIRouter()
 
@@ -54,10 +54,6 @@ def _parse_selection(raw: str | None) -> Selection | None:
     if not isinstance(parsed, dict):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="selection must be a JSON object")
     return parsed
-
-# Upload guard: a bundle is JSON text (documents can be large, but a multi-hundred-MB
-# upload is almost certainly a mistake or abuse).
-MAX_BUNDLE_BYTES = 256 * 1024 * 1024
 
 
 @router.get("/manifest")
@@ -113,12 +109,38 @@ async def _read_bundle(file: UploadFile) -> dict[str, Any]:
             detail="file is not a KM2 migration bundle",
         )
     version = bundle.get("format_version")
-    if version != BUNDLE_FORMAT_VERSION:
+    if version not in SUPPORTED_BUNDLE_FORMAT_VERSIONS:
+        supported = ", ".join(str(v) for v in sorted(SUPPORTED_BUNDLE_FORMAT_VERSIONS))
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"unsupported bundle format_version {version!r} (expected {BUNDLE_FORMAT_VERSION})",
+            detail=f"unsupported bundle format_version {version!r} (supported: {supported})",
         )
     return bundle
+
+
+@router.post("/diff", response_model=BundleDiff)
+async def diff_org(
+    ctx: Annotated[OrgContext, Depends(require_org_admin)],
+    session: Annotated[AsyncSession, Depends(get_db)],
+    file: UploadFile,
+) -> BundleDiff:
+    """Preview what importing this bundle into the current org would do.
+
+    Objects are correlated to the current org by durable ``lineage_id`` (falling
+    back to slug/name on the first promotion) and classified as added / changed /
+    deleted / unchanged, grouped by resource type. Records and documents are
+    reported count-only. Read-only: nothing is written, so this is safe to call
+    repeatedly before an import.
+    """
+    bundle = await _read_bundle(file)
+    source_resources = bundle.get("resources") or {}
+    # Config-only current-state export of the target: the diff correlates config
+    # objects; data is count-only from the source side, so target rows/text aren't
+    # needed (and skipping them keeps the preview cheap).
+    target = await MigrationExporter(session, ctx.org_id).export(
+        include_records=False, include_documents=False
+    )
+    return compute_diff(source_resources, target["resources"])
 
 
 @router.post("/import", response_model=ImportSummary)

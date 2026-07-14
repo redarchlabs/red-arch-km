@@ -115,6 +115,53 @@ class MigrationImporter:
         return summary
 
     # ------------------------------------------------------------------ #
+    # Lineage-aware matching (durable cross-environment identity)
+    # ------------------------------------------------------------------ #
+    # An incoming object carries a stable ``lineage_id`` (== its own id in the
+    # origin env, or a stamped value if it was itself promoted). We match it to an
+    # existing target row by lineage FIRST — so a promotion re-targets the same row
+    # even after the object was renamed — and fall back to the natural key (slug /
+    # name) only when no lineage match exists. On that first natural-key-only
+    # promotion we *adopt* the incoming lineage onto the matched row so subsequent
+    # promotions are lineage-linked. v1 bundles carry no ``lineage_id`` and so keep
+    # the original natural-key behaviour unchanged.
+    @staticmethod
+    def _row_lineage(row: Any) -> str:
+        """A target row's durable identity: its stamped ``lineage_id`` or its id."""
+        return str(getattr(row, "lineage_id", None) or row.id)
+
+    def _match_lineage(self, incoming: dict, existing_rows: list[Any], natural_found: Any) -> tuple[Any, bool]:
+        """Return ``(matched_row, matched_by_lineage)``.
+
+        Lineage match wins over ``natural_found``; when the bundle has no lineage
+        (v1) or nothing matches, ``natural_found`` is returned unchanged.
+        """
+        incoming_lineage = incoming.get("lineage_id")
+        if incoming_lineage:
+            for row in existing_rows:
+                if self._row_lineage(row) == incoming_lineage:
+                    return row, True
+        return natural_found, False
+
+    def _stamp_new(self, row: Any, incoming: dict) -> None:
+        """Stamp a freshly-created row with the origin's lineage so a later
+        promotion re-targets it. No-op for v1 bundles (no lineage) and for a
+        self-origin value that already equals the new row's own id."""
+        lin = incoming.get("lineage_id")
+        if lin and lin != str(row.id):
+            row.lineage_id = uuid.UUID(lin)
+
+    def _adopt_lineage(self, row: Any, incoming: dict, *, by_lineage: bool) -> None:
+        """On a natural-key match during the first lineage-aware promotion, stamp
+        the existing row so future promotions link by lineage. Skipped when the row
+        was already found *by* lineage, is itself the origin, or already stamped."""
+        if by_lineage:
+            return
+        lin = incoming.get("lineage_id")
+        if lin and getattr(row, "lineage_id", None) is None and lin != str(row.id):
+            row.lineage_id = uuid.UUID(lin)
+
+    # ------------------------------------------------------------------ #
     # Tags
     # ------------------------------------------------------------------ #
     async def _import_tags(self, tags: list[dict], strategy: CollisionStrategy, summary: ImportSummary) -> None:
@@ -126,14 +173,17 @@ class MigrationImporter:
             name = tag.get("name")
             if not name:
                 continue
-            found = by_name.get(name)
+            found, by_lineage = self._match_lineage(tag, existing, by_name.get(name))
             if found is not None:
                 # Tags are pure labels — a same-name tag IS the same tag; always
                 # reuse it regardless of strategy (rename would fragment the vocab).
+                self._adopt_lineage(found, tag, by_lineage=by_lineage)
                 self._ids.put("tags", tag["id"], found.id)
                 out.record("skipped")
                 continue
             created = await repo.create(name=name)
+            self._stamp_new(created, tag)
+            existing.append(created)
             by_name[name] = created
             self._ids.put("tags", tag["id"], created.id)
             out.record("created")
@@ -149,27 +199,31 @@ class MigrationImporter:
         rels_repo = EntityRelationshipRepository(self._session, self._org_id)
         service = EntityService(self._session, self._org_id)
         out = summary.outcome("entities")
-        existing_slugs = {d.slug for d in (await defs_repo.list_all(limit=1000))[0]}
+        existing_defs = (await defs_repo.list_all(limit=1000))[0]
+        existing_slugs = {d.slug for d in existing_defs}
+        defs_by_slug = {d.slug: d for d in existing_defs}
 
         # Pass 1: definitions + scalar fields.
         for ent in entities:
             slug = ent["slug"]
-            existing = await defs_repo.get_by_slug(slug)
+            found, by_lineage = self._match_lineage(ent, existing_defs, defs_by_slug.get(slug))
             try:
-                if existing is not None and strategy is CollisionStrategy.SKIP:
-                    self._ids.put("entities", ent["id"], existing.id)
+                if found is not None and strategy is CollisionStrategy.SKIP:
+                    self._adopt_lineage(found, ent, by_lineage=by_lineage)
+                    self._ids.put("entities", ent["id"], found.id)
                     out.record("skipped")
                     continue
-                if existing is not None and strategy is CollisionStrategy.OVERWRITE:
-                    await defs_repo.update(existing, name=ent["name"], description=ent.get("description"))
-                    await self._add_missing_fields(service, fields_repo, existing.id, ent["fields"], summary)
-                    self._ids.put("entities", ent["id"], existing.id)
+                if found is not None and strategy is CollisionStrategy.OVERWRITE:
+                    await defs_repo.update(found, name=ent["name"], description=ent.get("description"))
+                    await self._add_missing_fields(service, fields_repo, found.id, ent["fields"], summary)
+                    self._adopt_lineage(found, ent, by_lineage=by_lineage)
+                    self._ids.put("entities", ent["id"], found.id)
                     out.record("overwritten")
                     continue
                 # create (fresh, or rename-to-avoid-collision)
                 new_slug = slug
                 new_name = ent["name"]
-                if existing is not None:  # RENAME
+                if found is not None:  # RENAME
                     new_slug = suffix_slug(slug, existing_slugs, sep="_")
                     new_name = suffix_name(ent["name"], set())
                 existing_slugs.add(new_slug)
@@ -181,8 +235,14 @@ class MigrationImporter:
                         fields=[self._field_create(f) for f in ent["fields"]],
                     )
                 )
+                # A genuine create adopts the origin's lineage; a rename-fork is a
+                # deliberate new object, so it stays self-origin (unstamped).
+                if found is None:
+                    self._stamp_new(created, ent)
+                existing_defs.append(created)
+                defs_by_slug[created.slug] = created
                 self._ids.put("entities", ent["id"], created.id)
-                out.record("renamed" if existing is not None else "created")
+                out.record("renamed" if found is not None else "created")
             except (EntityError, ValueError) as exc:
                 out.record("failed")
                 summary.errors.append(f"entity {slug!r}: {exc}")
@@ -270,12 +330,14 @@ class MigrationImporter:
         self, connections: list[dict], strategy: CollisionStrategy, summary: ImportSummary
     ) -> None:
         repo = WorkflowConnectionRepository(self._session, self._org_id)
-        existing = {c.name: c for c in await repo.list_all()}
+        existing_conns = await repo.list_all()
+        existing = {c.name: c for c in existing_conns}
         out = summary.outcome("connections")
         for conn in connections:
             name = conn["name"]
-            found = existing.get(name)
+            found, by_lineage = self._match_lineage(conn, existing_conns, existing.get(name))
             if found is not None and strategy is CollisionStrategy.SKIP:
+                self._adopt_lineage(found, conn, by_lineage=by_lineage)
                 self._ids.put("connections", conn["id"], found.id)
                 out.record("skipped")
                 continue
@@ -286,9 +348,10 @@ class MigrationImporter:
                     auth_type=conn.get("auth_type"),
                     config=conn.get("config") or {},
                 )
+                self._adopt_lineage(found, conn, by_lineage=by_lineage)
                 self._ids.put("connections", conn["id"], found.id)
                 out.record("overwritten")
-                self._note_secret(conn, name, summary)
+                self._note_secret(conn, found.name, summary)
                 continue
             new_name = name
             if found is not None:  # RENAME
@@ -304,6 +367,9 @@ class MigrationImporter:
                 secret_encrypted=None,
                 config=conn.get("config") or {},
             )
+            if found is None:
+                self._stamp_new(created, conn)
+            existing_conns.append(created)
             existing[new_name] = created
             self._ids.put("connections", conn["id"], created.id)
             out.record("renamed" if found is not None else "created")
@@ -322,6 +388,9 @@ class MigrationImporter:
     ) -> None:
         repo = FolderRepository(self._session, self._org_id)
         out = summary.outcome("folders")
+        # Lineage index over ALL existing folders (matching is normally by
+        # (parent, name), but lineage lets a promotion re-target a renamed/moved folder).
+        all_folders, _ = await repo.list_visible_to_masks(None)
         # Order shallowest-first so a parent is always created before its child.
         ordered = sorted(folders, key=lambda f: (f.get("dot_path") or "").count("."))
         for folder in ordered:
@@ -329,21 +398,24 @@ class MigrationImporter:
             parent_id = uuid.UUID(parent_new) if parent_new else None
             name = folder["name"]
             # Collision key = (parent, name), matching the DB unique constraint.
-            siblings = {f.name for f in await repo.list_children(parent_id)}
-            if name in siblings and strategy is CollisionStrategy.SKIP:
-                match = next(f for f in await repo.list_children(parent_id) if f.name == name)
-                self._ids.put("folders", folder["id"], match.id)
+            sibling_rows = await repo.list_children(parent_id)
+            siblings = {f.name for f in sibling_rows}
+            natural = next((f for f in sibling_rows if f.name == name), None)
+            found, by_lineage = self._match_lineage(folder, all_folders, natural)
+            if found is not None and strategy is CollisionStrategy.SKIP:
+                self._adopt_lineage(found, folder, by_lineage=by_lineage)
+                self._ids.put("folders", folder["id"], found.id)
                 out.record("skipped")
                 continue
             new_name = name
             action = "created"
-            if name in siblings and strategy is CollisionStrategy.OVERWRITE:
+            if found is not None and strategy is CollisionStrategy.OVERWRITE:
                 # Folders carry no body — "overwrite" degrades to reuse the existing folder.
-                match = next(f for f in await repo.list_children(parent_id) if f.name == name)
-                self._ids.put("folders", folder["id"], match.id)
+                self._adopt_lineage(found, folder, by_lineage=by_lineage)
+                self._ids.put("folders", folder["id"], found.id)
                 out.record("overwritten")
                 continue
-            if name in siblings:  # RENAME
+            if found is not None:  # RENAME (fork)
                 new_name = suffix_name(name, siblings, max_len=255)
                 action = "renamed"
             dot_path = await build_dot_path(self._session, self._org_id, new_name, parent_id)
@@ -363,6 +435,9 @@ class MigrationImporter:
                 contributor_permission_masks=contrib_masks,
                 dot_path=dot_path,
             )
+            if found is None:
+                self._stamp_new(created, folder)
+            all_folders.append(created)
             self._ids.put("folders", folder["id"], created.id)
             out.record(action)
 
@@ -374,12 +449,14 @@ class MigrationImporter:
     ) -> None:
         repo = WorkflowRepository(self._session, self._org_id)
         service = WorkflowService(self._session, self._org_id)
-        existing = {w.name: w for w in await repo.list_all()}
+        existing_wfs = await repo.list_all()
+        existing = {w.name: w for w in existing_wfs}
         out = summary.outcome("workflows")
         for wf in workflows:
             name = wf["name"]
-            found = existing.get(name)
+            found, by_lineage = self._match_lineage(wf, existing_wfs, existing.get(name))
             if found is not None and strategy is CollisionStrategy.SKIP:
+                self._adopt_lineage(found, wf, by_lineage=by_lineage)
                 self._ids.put("workflows", wf["id"], found.id)
                 out.record("skipped")
                 continue
@@ -392,13 +469,17 @@ class MigrationImporter:
                 if found is not None and strategy is CollisionStrategy.OVERWRITE:
                     target = found
                     action = "overwritten"
+                    self._adopt_lineage(found, wf, by_lineage=by_lineage)
                 else:
                     new_name = name if found is None else suffix_name(name, set(existing))
                     action = "created" if found is None else "renamed"
                     target = await service.create_workflow(
                         name=new_name, entity_definition_id=entity_id, description=wf.get("description")
                     )
+                    if found is None:
+                        self._stamp_new(target, wf)
                     existing[new_name] = target
+                    existing_wfs.append(target)
                 self._ids.put("workflows", wf["id"], target.id)
                 if remapped_def is not None:
                     version = await service.save_draft(target.id, remapped_def)
@@ -457,12 +538,16 @@ class MigrationImporter:
         from api.services.workflow.webhook_signing import SIGNATURE_HEADER
 
         repo = WorkflowInboundEndpointRepository(self._session, self._org_id)
-        existing = {e.name for e in await repo.list_all()}
+        existing_eps = await repo.list_all()
+        existing = {e.name for e in existing_eps}
         out = summary.outcome("inbound_endpoints")
         org_key = self._settings.org_encryption_key.get_secret_value()
         for ep in endpoints:
             name = ep["name"]
-            if name in existing and strategy is CollisionStrategy.SKIP:
+            natural = next((e for e in existing_eps if e.name == name), None)
+            found, by_lineage = self._match_lineage(ep, existing_eps, natural)
+            if found is not None and strategy is CollisionStrategy.SKIP:
+                self._adopt_lineage(found, ep, by_lineage=by_lineage)
                 out.record("skipped")
                 continue
             workflow_new = self._ids.get("workflows", ep["workflow_id"])
@@ -470,16 +555,20 @@ class MigrationImporter:
                 out.record("failed")
                 summary.errors.append(f"inbound endpoint {name!r}: workflow not in bundle")
                 continue
-            new_name = name if name not in existing else suffix_name(name, existing, max_len=120)
-            out_action = "renamed" if name in existing else "created"
+            collision = found is not None
+            new_name = name if not collision else suffix_name(name, existing, max_len=120)
+            out_action = "renamed" if collision else "created"
             token = secrets.token_urlsafe(32)
             signing_secret = "whsec_" + secrets.token_urlsafe(32)
-            await repo.create(
+            created_ep = await repo.create(
                 name=new_name,
                 workflow_id=uuid.UUID(workflow_new),
                 token_hash=hash_token(token),
                 signing_secret_encrypted=encrypt_secret(signing_secret, org_key),
             )
+            if found is None and created_ep is not None:
+                self._stamp_new(created_ep, ep)
+                existing_eps.append(created_ep)
             existing.add(new_name)
             url = f"{self._settings.public_base_url.rstrip('/')}/api/inbound/{token}"
             summary.generated_secrets.append(
@@ -501,12 +590,14 @@ class MigrationImporter:
         self, forms: list[dict], strategy: CollisionStrategy, summary: ImportSummary
     ) -> None:
         service = FormService(self._session, self._org_id)
-        existing = {f.slug: f for f in await service.list_forms()}
+        existing_forms = await service.list_forms()
+        existing = {f.slug: f for f in existing_forms}
         out = summary.outcome("forms")
         for form in forms:
             slug = form["slug"]
-            found = existing.get(slug)
+            found, by_lineage = self._match_lineage(form, existing_forms, existing.get(slug))
             if found is not None and strategy is CollisionStrategy.SKIP:
+                self._adopt_lineage(found, form, by_lineage=by_lineage)
                 self._ids.put("forms", form["id"], found.id)
                 out.record("skipped")
                 continue
@@ -521,6 +612,7 @@ class MigrationImporter:
                     updated = await service.update_form(
                         found.id, FormUpdate(name=form["name"], description=form.get("description"), config=config)
                     )
+                    self._adopt_lineage(found, form, by_lineage=by_lineage)
                     self._ids.put("forms", form["id"], updated.id)
                     out.record("overwritten")
                     continue
@@ -535,6 +627,9 @@ class MigrationImporter:
                         config=config,
                     )
                 )
+                if found is None:
+                    self._stamp_new(created, form)
+                existing_forms.append(created)
                 existing[new_slug] = created
                 self._ids.put("forms", form["id"], created.id)
                 out.record("created" if found is None else "renamed")
@@ -549,12 +644,14 @@ class MigrationImporter:
         self, reports: list[dict], strategy: CollisionStrategy, summary: ImportSummary
     ) -> None:
         service = ReportService(self._session, self._org_id)
-        existing = {r.slug: r for r in await service.list_reports()}
+        existing_reports = await service.list_reports()
+        existing = {r.slug: r for r in existing_reports}
         out = summary.outcome("reports")
         for report in reports:
             slug = report["slug"]
-            found = existing.get(slug)
+            found, by_lineage = self._match_lineage(report, existing_reports, existing.get(slug))
             if found is not None and strategy is CollisionStrategy.SKIP:
+                self._adopt_lineage(found, report, by_lineage=by_lineage)
                 self._ids.put("reports", report["id"], found.id)
                 out.record("skipped")
                 continue
@@ -591,6 +688,7 @@ class MigrationImporter:
                             is_active=is_active,
                         ),
                     )
+                    self._adopt_lineage(found, report, by_lineage=by_lineage)
                     self._ids.put("reports", report["id"], updated.id)
                     out.record("overwritten")
                     continue
@@ -607,6 +705,9 @@ class MigrationImporter:
                         is_active=is_active,
                     )
                 )
+                if found is None:
+                    self._stamp_new(created, report)
+                existing_reports.append(created)
                 existing[new_slug] = created
                 self._ids.put("reports", report["id"], created.id)
                 out.record("created" if found is None else "renamed")
@@ -621,12 +722,14 @@ class MigrationImporter:
         self, views: list[dict], strategy: CollisionStrategy, summary: ImportSummary
     ) -> None:
         service = ViewService(self._session, self._org_id)
-        existing = {v.slug: v for v in await service.list_views()}
+        existing_views = await service.list_views()
+        existing = {v.slug: v for v in existing_views}
         out = summary.outcome("views")
         for view in views:
             slug = view["slug"]
-            found = existing.get(slug)
+            found, by_lineage = self._match_lineage(view, existing_views, existing.get(slug))
             if found is not None and strategy is CollisionStrategy.SKIP:
+                self._adopt_lineage(found, view, by_lineage=by_lineage)
                 self._ids.put("views", view["id"], found.id)
                 out.record("skipped")
                 continue
@@ -645,6 +748,7 @@ class MigrationImporter:
                     updated = await service.update_view(
                         found.id, ViewUpdate(name=view["name"], description=view.get("description"), config=config)
                     )
+                    self._adopt_lineage(found, view, by_lineage=by_lineage)
                     self._ids.put("views", view["id"], updated.id)
                     out.record("overwritten")
                     continue
@@ -659,6 +763,9 @@ class MigrationImporter:
                         config=config,
                     )
                 )
+                if found is None:
+                    self._stamp_new(created, view)
+                existing_views.append(created)
                 existing[new_slug] = created
                 self._ids.put("views", view["id"], created.id)
                 out.record("created" if found is None else "renamed")
@@ -678,12 +785,14 @@ class MigrationImporter:
         self, servers: list[dict], strategy: CollisionStrategy, summary: ImportSummary
     ) -> None:
         repo = McpServerRepository(self._session, self._org_id)
-        existing = {s.name: s for s in await repo.list_all()}
+        existing_srvs = await repo.list_all()
+        existing = {s.name: s for s in existing_srvs}
         out = summary.outcome("mcp_servers")
         for srv in servers:
             name = srv["name"]
-            found = existing.get(name)
+            found, by_lineage = self._match_lineage(srv, existing_srvs, existing.get(name))
             if found is not None and strategy is CollisionStrategy.SKIP:
+                self._adopt_lineage(found, srv, by_lineage=by_lineage)
                 self._ids.put("mcp_servers", srv["id"], found.id)
                 out.record("skipped")
                 continue
@@ -694,10 +803,11 @@ class MigrationImporter:
                 found.url = srv.get("url")
                 found.config = srv.get("config") or {}
                 found.enabled = srv.get("enabled", True)
+                self._adopt_lineage(found, srv, by_lineage=by_lineage)
                 await repo.flush()
                 self._ids.put("mcp_servers", srv["id"], found.id)
                 out.record("overwritten")
-                self._note_mcp_secret(srv, name, summary)
+                self._note_mcp_secret(srv, found.name, summary)
                 continue
             new_name = name if found is None else suffix_name(name, set(existing), max_len=120)
             created = await repo.create(
@@ -712,6 +822,9 @@ class MigrationImporter:
                     enabled=srv.get("enabled", True),
                 )
             )
+            if found is None:
+                self._stamp_new(created, srv)
+            existing_srvs.append(created)
             existing[new_name] = created
             self._ids.put("mcp_servers", srv["id"], created.id)
             out.record("created" if found is None else "renamed")
@@ -729,14 +842,16 @@ class MigrationImporter:
         self, agents: list[dict], strategy: CollisionStrategy, summary: ImportSummary
     ) -> None:
         repo = AgentRepository(self._session, self._org_id)
-        existing = {a.name: a for a in await repo.list_all()}
+        existing_agents = await repo.list_all()
+        existing = {a.name: a for a in existing_agents}
         out = summary.outcome("agents")
 
         # Pass 1: create/find + remap mcp_server_ids + workflow_allowlist.
         for agent in agents:
             name = agent["name"]
-            found = existing.get(name)
+            found, by_lineage = self._match_lineage(agent, existing_agents, existing.get(name))
             if found is not None and strategy is CollisionStrategy.SKIP:
+                self._adopt_lineage(found, agent, by_lineage=by_lineage)
                 self._ids.put("agents", agent["id"], found.id)
                 out.record("skipped")
                 continue
@@ -744,6 +859,7 @@ class MigrationImporter:
             wf_ids = self._remap_id_list("workflows", agent.get("workflow_allowlist"), summary, agent["name"])
             if found is not None and strategy is CollisionStrategy.OVERWRITE:
                 self._apply_agent_fields(found, agent, mcp_ids, wf_ids)
+                self._adopt_lineage(found, agent, by_lineage=by_lineage)
                 await repo.flush()
                 self._ids.put("agents", agent["id"], found.id)
                 out.record("overwritten")
@@ -751,7 +867,10 @@ class MigrationImporter:
             new_name = name if found is None else suffix_slug(name, set(existing), sep="-")
             model = Agent(name=new_name, provider=agent["provider"], model=agent["model"])
             self._apply_agent_fields(model, agent, mcp_ids, wf_ids)
+            if found is None:
+                self._stamp_new(model, agent)
             created = await repo.create(model)
+            existing_agents.append(created)
             existing[new_name] = created
             self._ids.put("agents", agent["id"], created.id)
             out.record("created" if found is None else "renamed")
@@ -905,24 +1024,30 @@ class MigrationImporter:
         out = summary.outcome("documents")
 
         existing_tags = {t.name: t for t in (await tag_repo.list_all(limit=10_000))[0]}
-        # Existing (folder_id, title) keys for collision detection.
+        # Existing (folder_id, title) keys for collision detection, plus the doc
+        # rows themselves for lineage matching.
         existing_keys: set[tuple[str | None, str]] = set()
+        existing_docs: list[Any] = []
         off = 0
         while True:
             docs, total = await doc_repo.list_for_folders(None, include_unfiled=True, offset=off, limit=200)
             for d in docs:
                 existing_keys.add((str(d.folder_id) if d.folder_id else None, d.title))
+                existing_docs.append(d)
             off += len(docs)
             if not docs or off >= total:
                 break
+        by_key = {(str(d.folder_id) if d.folder_id else None, d.title): d for d in existing_docs}
 
         for doc in documents:
             folder_new = self._ids.get("folders", doc["folder_id"]) if doc.get("folder_id") else None
             folder_id = uuid.UUID(folder_new) if folder_new else None
             title = doc["title"]
             key = (folder_new, title)
-            collision = key in existing_keys
+            found, by_lineage = self._match_lineage(doc, existing_docs, by_key.get(key))
+            collision = found is not None
             if collision and strategy is CollisionStrategy.SKIP:
+                self._adopt_lineage(found, doc, by_lineage=by_lineage)
                 out.record("skipped")
                 continue
             new_title = title
@@ -945,6 +1070,9 @@ class MigrationImporter:
                 tag_ids=tag_ids,
             )
             created.size_bytes = len(doc["text"].encode("utf-8")) if doc.get("text") else None
+            if found is None:
+                self._stamp_new(created, doc)
+            existing_docs.append(created)
             existing_keys.add((folder_new, new_title))
             out.record(action)
             if not dry_run and created.text:

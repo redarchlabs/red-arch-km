@@ -18,11 +18,11 @@ from sqlalchemy import Boolean, ForeignKey, Integer, String, Text, UniqueConstra
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from api.models.base import Base, TimestampMixin, UUIDMixin
+from api.models.base import Base, LineageMixin, TimestampMixin, UUIDMixin
 from api.models.org import Org
 
 
-class EntityDefinition(Base, UUIDMixin, TimestampMixin):
+class EntityDefinition(Base, UUIDMixin, TimestampMixin, LineageMixin):
     """A user-defined entity type, backed by a physical table ``ce_<hex>``."""
 
     __tablename__ = "entity_definitions"
@@ -52,7 +52,7 @@ class EntityDefinition(Base, UUIDMixin, TimestampMixin):
     )
 
 
-class EntityField(Base, UUIDMixin, TimestampMixin):
+class EntityField(Base, UUIDMixin, TimestampMixin, LineageMixin):
     """A scalar field on an entity, backed by a physical column ``f_<hex>``."""
 
     __tablename__ = "entity_fields"
@@ -79,7 +79,7 @@ class EntityField(Base, UUIDMixin, TimestampMixin):
     definition: Mapped[EntityDefinition] = relationship(back_populates="fields")
 
 
-class EntityRelationship(Base, UUIDMixin, TimestampMixin):
+class EntityRelationship(Base, UUIDMixin, TimestampMixin, LineageMixin):
     """A relationship between two entities.
 
     ``physical_name`` is the FK column (``r_<hex>``) for to-one cardinalities,
