@@ -96,6 +96,18 @@ export interface LiveValueElement extends ElementBase {
   width?: FieldWidth | null;
 }
 
+/** A display-only progress bar. `value` is a JsonLogic expression over the form's
+ * values (or a literal) yielding a number; the bar fills `value / max`, clamped to
+ * `[0, max]`. `show_percent` draws the computed percentage on the bar. */
+export interface ProgressElement extends ElementBase {
+  type: "progress";
+  label?: string | null;
+  value?: Expression;
+  max?: number;
+  show_percent?: boolean;
+  width?: FieldWidth | null;
+}
+
 /** Embeds a saved report on a dashboard — renders its chart / KPI tile / table per
  * the report's own visualization spec. Not entity-bound, so valid in standalone views. */
 export interface ReportElement extends ElementBase {
@@ -244,7 +256,18 @@ export type RelatedColumn = {
   width?: FieldWidth | null;
   display?: FieldDisplay | null;
 };
-export type TableColumn = AnchorColumn | RelatedColumn;
+/** A non-data column rendering a per-row hyperlink. `href_template` is a URL with
+ * `{token}` placeholders: `{id}` = the row record id, `{<field_slug>}` = an anchor
+ * field value on the row (each URL-encoded). e.g. `/documents/{document_key}`. */
+export type LinkColumn = {
+  kind: "link";
+  href_template: string;
+  link_label?: string;
+  label?: string | null;
+  new_tab?: boolean;
+  width?: FieldWidth | null;
+};
+export type TableColumn = AnchorColumn | RelatedColumn | LinkColumn;
 
 export interface TableElement extends ElementBase {
   type: "table";
@@ -254,6 +277,9 @@ export interface TableElement extends ElementBase {
   min_rows?: number;
   max_rows?: number | null;
   read_only?: boolean;
+  /** Anchor field slug to order rows by (server-side); omit for insertion order. */
+  sort_by?: string | null;
+  sort_dir?: "asc" | "desc";
 }
 
 /** Leaf elements that may appear inside a section/block. */
@@ -318,6 +344,7 @@ export type FormElement =
   | CalculatedElement
   | InputElement
   | LiveValueElement
+  | ProgressElement
   | ReportElement
   | RecordListElement
   | ChatElement

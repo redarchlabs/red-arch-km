@@ -81,6 +81,17 @@ value pulled from the JSON response — a generic way to display live external s
 - **Units** — an optional suffix shown after the value.
 `,
   ),
+  progress: topic(
+    "Progress bar element",
+    `
+A **display-only progress bar**. Its **value** is a JsonLogic expression over the
+record's fields (or a literal); the bar fills \`value / max\`, clamped to that range.
+
+- **Value** — the amount complete (e.g. a \`progress_pct\` field, or a computed sum).
+- **Max** — the value that reads as 100% full (default 100).
+- **Show percent** — draw the computed percentage on the bar.
+`,
+  ),
   report: topic(
     "Report / chart",
     `

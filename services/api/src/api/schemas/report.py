@@ -56,6 +56,9 @@ class Visualization(BaseModel):
     compare_to: str | None = None
     unit: str | None = Field(default=None, max_length=16)
     number_format: NumberFormat = "plain"
+    # Fraction-digit cap for the formatted value. ``None`` lets each format apply
+    # its own sensible default (so an average doesn't render as 57.27272727…).
+    precision: int | None = Field(default=None, ge=0, le=6)
     # Reserved passthrough for future presentation hints. Persisted and returned
     # as-is; the current renderer does not read it yet (kept so saved reports can
     # carry options forward without a schema change).
