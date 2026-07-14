@@ -85,7 +85,7 @@ export function newElement(kind: PaletteKind): FormElement {
     case "report":
       return { id, type: "report", report_id: "", title: "Report", height: 320 };
     case "record_list":
-      return { id, type: "record_list", label: "Records", entity: "", fields: [], sort_dir: "desc", limit: 20 };
+      return { id, type: "record_list", label: "Records", entity: "", fields: [], filters: [], sort_dir: "desc", limit: 20 };
     case "chat":
       return {
         id,
