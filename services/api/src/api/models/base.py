@@ -38,3 +38,20 @@ class TenantMixin:
     # The API sets `SET app.current_tenant_id` per request so queries
     # are automatically scoped to the current tenant.
     pass  # org_id FK is defined per model since relationship config varies
+
+
+class LineageMixin:
+    """Durable cross-environment identity for promotable config objects.
+
+    ``NULL`` means **self-origin**: the object was authored in this environment
+    and its lineage identity is simply its own ``id`` — so every existing row is
+    already correctly identified with no backfill. It is *stamped* (set non-NULL)
+    only on objects copied in from another environment, so a later promotion
+    re-targets the same row even after the object's slug/name is renamed.
+
+    See migration ``037_config_lineage`` and ``api.services.migration`` (exporter
+    emits ``lineage_id := row.lineage_id or row.id``; importer matches on
+    ``(org_id, lineage_id)`` first).
+    """
+
+    lineage_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)

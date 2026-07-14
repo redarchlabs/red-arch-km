@@ -40,7 +40,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from api.models.base import Base, TimestampMixin, UUIDMixin
+from api.models.base import Base, LineageMixin, TimestampMixin, UUIDMixin
 from api.models.org import Org
 
 # Status vocabularies (kept as plain strings + CHECKs in the migration).
@@ -74,7 +74,7 @@ TOKEN_WAIT_KINDS = (
 )
 
 
-class Workflow(Base, UUIDMixin, TimestampMixin):
+class Workflow(Base, UUIDMixin, TimestampMixin, LineageMixin):
     __tablename__ = "workflows"
     __table_args__ = (
         UniqueConstraint("org_id", "name", name="uq_workflow_name_per_org"),
@@ -349,7 +349,7 @@ class WorkflowRunToken(Base):
 CONNECTION_AUTH_TYPES = ("none", "bearer", "api_key", "basic")
 
 
-class WorkflowConnection(Base, UUIDMixin, TimestampMixin):
+class WorkflowConnection(Base, UUIDMixin, TimestampMixin, LineageMixin):
     """A reusable, org-scoped credential for the ``http_request`` connector task.
 
     The secret (bearer token / api key / basic password) is stored Fernet-encrypted
@@ -376,7 +376,7 @@ class WorkflowConnection(Base, UUIDMixin, TimestampMixin):
     org: Mapped[Org] = relationship()
 
 
-class WorkflowInboundEndpoint(Base, UUIDMixin, TimestampMixin):
+class WorkflowInboundEndpoint(Base, UUIDMixin, TimestampMixin, LineageMixin):
     """A public webhook URL that starts a workflow run when POSTed to.
 
     The URL carries an opaque token; only its SHA-256 hash is stored (like intake

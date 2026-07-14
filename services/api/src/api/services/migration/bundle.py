@@ -15,8 +15,20 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 # Bump ``BUNDLE_FORMAT_VERSION`` on any breaking change to the resource shapes.
-BUNDLE_FORMAT_VERSION = 1
+#
+# v2 (change-management / lineage): every exported resource additionally carries a
+# durable ``lineage_id`` (``row.lineage_id or row.id``) so the importer can match
+# by stable identity across environments and survive renames. v2 is a superset of
+# v1 — a v1 bundle simply lacks ``lineage_id`` and the importer falls back to
+# natural-key matching, so both are accepted on import.
+BUNDLE_FORMAT_VERSION = 2
+SUPPORTED_BUNDLE_FORMAT_VERSIONS: frozenset[int] = frozenset({1, 2})
 BUNDLE_KIND = "km2-migration-bundle"
+
+# Upload/transport guard: a bundle is JSON text (documents can be large, but a
+# multi-hundred-MB payload is almost certainly a mistake or abuse). Shared by the
+# import route and the outbound push client.
+MAX_BUNDLE_BYTES = 256 * 1024 * 1024
 
 # Resource sections, in dependency order (import must follow this order so that
 # every reference target exists before the referrer is created).

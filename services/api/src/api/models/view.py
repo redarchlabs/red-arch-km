@@ -16,11 +16,11 @@ from sqlalchemy import Boolean, ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from api.models.base import Base, TimestampMixin, UUIDMixin
+from api.models.base import Base, LineageMixin, TimestampMixin, UUIDMixin
 from api.models.org import Org
 
 
-class View(Base, UUIDMixin, TimestampMixin):
+class View(Base, UUIDMixin, TimestampMixin, LineageMixin):
     __tablename__ = "views"
     __table_args__ = (UniqueConstraint("org_id", "slug", name="uq_view_slug_per_org"),)
 
