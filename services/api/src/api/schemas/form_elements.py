@@ -61,6 +61,15 @@ class _Element(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: str | None = None  # stable per-element id; server fills one if omitted
+    # Optional conditional visibility: a sandboxed JsonLogic expression evaluated
+    # over the enclosing scope's values (same evaluator as ``calculated``). The
+    # element renders only when this is truthy; ``None`` (the default) is always
+    # visible. Lets a view gate an element on record state — e.g. show the quiz
+    # only when ``{">=": [{"var": "progress_pct"}, 100]}``, or an "Enroll" button
+    # only when the learner isn't enrolled yet. Display-only: hiding an element
+    # never suppresses server-side validation of data the author marked required,
+    # so gate inputs, not required persisted fields.
+    visible_when: Expression = None
 
 
 # ------------------------------------------------------------------ #
@@ -170,6 +179,43 @@ class ProgressElement(_Element):
     value: Expression = None
     max: float = 100
     show_percent: bool = True
+    width: FieldWidth | None = None
+
+
+class Slide(BaseModel):
+    """One slide in a deck: an optional title, a Markdown ``body``, an optional
+    image, and an optional video. Rendered as a single presentation page by the
+    ``slides`` element.
+
+    ``video_url`` is a direct video file (mp4/webm) — not a YouTube/Vimeo page.
+    When ``require_video`` is set (and a ``video_url`` is present) the deck blocks
+    advancing past the slide until the learner has watched the video through
+    (seeking ahead is prevented), so a training video can't be skipped."""
+
+    model_config = ConfigDict(extra="forbid")
+    title: str | None = None
+    body: str = ""  # Markdown
+    image_url: str | None = None
+    video_url: str | None = None  # direct video file (mp4/webm)
+    require_video: bool = True  # when a video is present, gate "next" until it's watched (opt out per slide)
+    notes: str | None = None  # optional speaker/aside notes
+
+
+class SlidesElement(_Element):
+    """An in-app **slide deck** — module content shown as a navigable presentation
+    (prev/next + progress) instead of a wall of text. Display-only, so it is valid
+    in a standalone view. Two content sources (mutually exclusive, ``slug`` wins):
+
+    * ``slug`` — bind to a JSON entity field holding the slide array (the common
+      case: a Module's ``slides`` field), so the deck is data-driven per record.
+    * ``slides`` — inline slides authored directly on the element.
+
+    Each slide is ``{title?, body(markdown), image_url?, notes?}``."""
+
+    type: Literal["slides"] = "slides"
+    label: str | None = None
+    slug: str | None = None  # JSON field holding a list of slides (entity-bound case)
+    slides: list[Slide] = Field(default_factory=list)  # inline slides (standalone case)
     width: FieldWidth | None = None
 
 
@@ -539,6 +585,7 @@ FormElement = Annotated[
     | InputElement
     | LiveValueElement
     | ProgressElement
+    | SlidesElement
     | ReportElement
     | RecordListElement
     | ChatElement

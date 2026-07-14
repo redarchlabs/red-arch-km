@@ -177,6 +177,7 @@ def _validate_element(
         "input",
         "live_value",
         "progress",
+        "slides",
         "chat",
         "report",
         "record_list",
@@ -302,8 +303,18 @@ def flatten(elements: list[Any], rels: dict[uuid.UUID, RelInfo]) -> Bindings:
     root = RootBinding(display_slugs=[], write_slugs=set(), calc=[])
     containers: list[Any] = []
 
+    def declare(slug: str) -> None:
+        if slug not in root.display_slugs:
+            root.display_slugs.append(slug)
+
     def visit(el: Any) -> None:
         etype = el.type
+        # A `visible_when` gate reads record fields; declare them so build_render
+        # fetches them into the root values (same as progress's `value` handling).
+        gate = getattr(el, "visible_when", None)
+        if gate is not None:
+            for slug in _expr_var_slugs(gate):
+                declare(slug)
         if etype == "field":
             root.display_slugs.append(el.slug)
             if not el.read_only:
@@ -314,8 +325,10 @@ def flatten(elements: list[Any], rels: dict[uuid.UUID, RelInfo]) -> Bindings:
             # Display-only, but declare the record fields its `value` expression
             # reads so build_render fetches them into the root values.
             for slug in _expr_var_slugs(el.value):
-                if slug not in root.display_slugs:
-                    root.display_slugs.append(slug)
+                declare(slug)
+        elif etype == "slides" and getattr(el, "slug", None):
+            # A slug-bound deck reads the record's JSON slide field — fetch it.
+            declare(el.slug)
         elif etype == "section":
             info = rels[el.relationship_id]
             display, write, calc = _leaf_slugs(el.elements)
