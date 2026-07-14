@@ -9,6 +9,7 @@
  * the shared `<FormRenderer>`.
  */
 import apiClient from "./client";
+import type { FilterOp } from "./filterOps";
 
 const PUBLIC_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
 
@@ -146,6 +147,15 @@ export interface ReportElement extends ElementBase {
   width?: FieldWidth | null;
 }
 
+/** One server-side filter on a `record_list` (mirrors backend `RecordListFilter`).
+ * A `value` of `"@me"` on a relation field scopes the board to the caller's own
+ * records (resolved server-side, like `record_id=me`). */
+export interface RecordListFilterConfig {
+  field: string;
+  op?: FilterOp;
+  value?: string | number | boolean | null;
+}
+
 /** Read-only "status board": lists existing records of an entity (newest-first or by
  * sort_by), optionally re-polling to stay live, with an optional per-row workflow button. */
 export interface RecordListElement extends ElementBase {
@@ -153,6 +163,8 @@ export interface RecordListElement extends ElementBase {
   entity: string;
   label?: string | null;
   fields?: string[];
+  /** Server-side row filters, ANDed. `value: "@me"` on a relation → caller's own rows. */
+  filters?: RecordListFilterConfig[];
   sort_by?: string | null;
   sort_dir?: "asc" | "desc";
   limit?: number;
