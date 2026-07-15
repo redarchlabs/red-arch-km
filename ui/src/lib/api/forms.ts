@@ -172,6 +172,10 @@ export interface RecordListElement extends ElementBase {
   empty_text?: string | null;
   row_workflow_id?: string | null;
   row_action_label?: string | null;
+  /** Inputs for `row_workflow_id`, evaluated per row over the row's values + the
+   * enclosing view's values (`{ var: "id" }` = row id) — e.g. a course board's Enroll
+   * passing `course_id` + the caller's `learner_email`. */
+  row_workflow_inputs?: Record<string, Expression>;
   /** Optional per-row hyperlink with `{token}` placeholders filled from the row
    * (`{id}` = row id, `{<field>}` = a field value) — e.g. `/views/{player_view_slug}/view`. */
   row_link_template?: string | null;
