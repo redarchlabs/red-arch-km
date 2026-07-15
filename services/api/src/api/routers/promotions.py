@@ -13,7 +13,7 @@ import uuid
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -70,7 +70,7 @@ def _400(exc: PromotionError) -> HTTPException:
 # Schemas
 # --------------------------------------------------------------------------- #
 class TargetCreate(BaseModel):
-    name: str
+    name: str = Field(max_length=120)
     kind: PromotionTargetKind
     target_org_id: uuid.UUID | None = None
     base_url: str | None = None
@@ -106,7 +106,7 @@ class TargetOut(BaseModel):
 
 
 class ReleaseCreate(BaseModel):
-    name: str
+    name: str = Field(max_length=200)
     description: str | None = None
     selection: Selection | None = None
 
@@ -191,15 +191,18 @@ class ReleaseDetail(BaseModel):
     promotions: list[PromotionOut]
 
 
+# Promoting a release means "make the target match the release", so the default
+# strategy is OVERWRITE (update existing objects), not SKIP (which would leave
+# every already-present object untouched and only create net-new ones).
 class DiffRequest(BaseModel):
     target_id: uuid.UUID
-    strategy: CollisionStrategy = CollisionStrategy.SKIP
+    strategy: CollisionStrategy = CollisionStrategy.OVERWRITE
     apply_deletes: bool = False
 
 
 class PromoteRequest(BaseModel):
     target_id: uuid.UUID
-    strategy: CollisionStrategy = CollisionStrategy.SKIP
+    strategy: CollisionStrategy = CollisionStrategy.OVERWRITE
     apply_deletes: bool = False
     allow_data: bool = False
     override_inflight: bool = False
@@ -307,12 +310,16 @@ async def create_release(
     session: Annotated[AsyncSession, Depends(get_db)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> ReleaseOut:
-    release = await _svc(ctx, session, settings).create_release(
-        name=body.name,
-        description=body.description,
-        selection=body.selection,
-        created_by_id=ctx.user.profile_id,
-    )
+    try:
+        release = await _svc(ctx, session, settings).create_release(
+            name=body.name,
+            description=body.description,
+            selection=body.selection,
+            created_by_id=ctx.user.profile_id,
+        )
+    except PromotionError as exc:
+        await session.rollback()
+        raise _400(exc) from exc
     await session.commit()
     return ReleaseOut.of(release)
 
@@ -404,8 +411,17 @@ async def diff_release(
     session: Annotated[AsyncSession, Depends(get_db)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> BundleDiff:
+    # A local-org diff exports the *target* org's entire config; the caller must
+    # administer that org too (same dual-org check as promote/rollback). Without
+    # this, any source-org admin could read another org's config inventory.
+    svc = _svc(ctx, session, settings)
+    target = await svc.get_target(body.target_id)
+    if target is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="target not found")
+    if target.kind == PromotionTargetKind.LOCAL_ORG.value and target.target_org_id is not None:
+        await _require_admin_of(session, ctx, target.target_org_id)
     try:
-        result = await _svc(ctx, session, settings).preview_promotion(
+        result = await svc.preview_promotion(
             release_id, body.target_id, strategy=body.strategy, apply_deletes=body.apply_deletes
         )
     except PromotionError as exc:
@@ -474,7 +490,11 @@ async def rollback_promotion(
     existing = await svc.get_promotion(promotion_id)
     if existing is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="promotion not found")
-    if existing.target_org_id is not None:
+    # Only a LOCAL_ORG promotion writes into another org in *this* DB, so the
+    # dual-admin check applies there. For a remote promotion ``target_org_id`` is an
+    # org id on the *remote* instance (meaningless against local memberships) and
+    # authorization is the stored remote API key.
+    if existing.target_kind == PromotionTargetKind.LOCAL_ORG.value and existing.target_org_id is not None:
         await _require_admin_of(session, ctx, existing.target_org_id)
     try:
         promotion, _ = await svc.rollback_promotion(promotion_id, rolled_back_by_id=ctx.user.profile_id)

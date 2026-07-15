@@ -43,9 +43,15 @@ export function ChangeManagementConsole() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
-    const [r, t] = await Promise.all([listReleases(), listTargets()]);
-    setReleases(r);
-    setTargets(t);
+    try {
+      const [r, t] = await Promise.all([listReleases(), listTargets()]);
+      setReleases(r);
+      setTargets(t);
+    } catch (error) {
+      toast.error("Could not load change management", {
+        description: getApiErrorMessage(error, "Failed to load releases and targets."),
+      });
+    }
   }, []);
 
   useEffect(() => {

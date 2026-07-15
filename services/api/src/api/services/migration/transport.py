@@ -16,6 +16,7 @@ import json
 from urllib.parse import urlsplit
 
 import httpx
+from pydantic import ValidationError
 
 from api.config import Settings
 from api.services.migration.bundle import MAX_BUNDLE_BYTES, CollisionStrategy
@@ -64,7 +65,13 @@ class OutboundPushClient:
         if resp.status_code == 401 or resp.status_code == 403:
             raise TransportError("the remote rejected the API key (missing config access)")
         resp.raise_for_status()
-        return resp.json()
+        try:
+            body = resp.json()
+        except (ValueError, json.JSONDecodeError) as exc:
+            raise TransportError("the remote returned a non-JSON response") from exc
+        if not isinstance(body, dict):
+            raise TransportError("the remote returned an unexpected response shape")
+        return body
 
     async def push(
         self,
@@ -110,7 +117,7 @@ class OutboundPushClient:
         except httpx.HTTPError as exc:
             raise TransportError(f"could not reach the remote instance: {exc}") from exc
 
-        if resp.status_code == status_conflict():
+        if resp.status_code == 409:
             detail = _detail(resp)
             blockers = [InFlightBlocker.model_validate(b) for b in detail.get("blockers", [])]
             raise PromotionBlocked(blockers)
@@ -118,11 +125,13 @@ class OutboundPushClient:
             raise TransportError("the remote rejected the API key (missing config:write)")
         if resp.status_code >= 400:
             raise TransportError(f"remote promotion failed ({resp.status_code}): {_detail(resp)}")
-        return PromotionResult.model_validate(resp.json())
-
-
-def status_conflict() -> int:
-    return 409
+        # Guard against a hostile/misbehaving remote returning an unbounded body.
+        if len(resp.content) > MAX_BUNDLE_BYTES:
+            raise TransportError(f"remote response exceeds the {MAX_BUNDLE_BYTES // (1024 * 1024)} MB limit")
+        try:
+            return PromotionResult.model_validate(resp.json())
+        except (ValueError, json.JSONDecodeError, ValidationError) as exc:
+            raise TransportError(f"the remote returned an invalid promotion result: {exc}") from exc
 
 
 def _detail(resp: httpx.Response) -> dict:

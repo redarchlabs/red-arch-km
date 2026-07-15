@@ -21,8 +21,10 @@ from typing import Any
 
 import httpx
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api import db_scope
 from api.config import Settings
 from api.models.promotion import (
     PromotionStatus,
@@ -124,7 +126,10 @@ class PromotionService:
             config=config or {},
         )
         self._session.add(target)
-        await self._session.flush()
+        try:
+            await self._session.flush()
+        except IntegrityError as exc:
+            raise PromotionError(f"a target named {name!r} already exists") from exc
         return target
 
     async def delete_target(self, target_id: uuid.UUID) -> None:
@@ -139,12 +144,18 @@ class PromotionService:
         ok/error result rather than raising, so the UI can render either outcome."""
         if target.kind != PromotionTargetKind.REMOTE_INSTANCE.value:
             raise PromotionError("only remote-instance targets can be tested")
+        # Capture the connection details while attached, then release the session for
+        # the network probe so it doesn't sit idle-in-transaction during the ping.
+        base_url = target.base_url or ""
         try:
-            info = await OutboundPushClient(self._settings).ping(
-                target.base_url or "", self._remote_key(target)
-            )
+            api_key = self._remote_key(target)
+        except PromotionError as exc:
+            return {"ok": False, "remote_bundle_format_version": None, "error": str(exc)}
+        await self._session.close()
+        try:
+            info = await OutboundPushClient(self._settings).ping(base_url, api_key)
             return {"ok": True, "remote_bundle_format_version": info.get("bundle_format_version"), "error": None}
-        except (TransportError, PromotionError, httpx.HTTPError) as exc:
+        except (TransportError, httpx.HTTPError) as exc:
             return {"ok": False, "remote_bundle_format_version": None, "error": str(exc)}
 
     def _encrypt(self, api_key: str | None) -> str | None:
@@ -197,7 +208,10 @@ class PromotionService:
             created_by_id=created_by_id,
         )
         self._session.add(release)
-        await self._session.flush()
+        try:
+            await self._session.flush()
+        except IntegrityError as exc:
+            raise PromotionError(f"a release named {name!r} already exists") from exc
         await self._populate_items(release, resources)
         await self._session.flush()
         return release
@@ -246,20 +260,44 @@ class PromotionService:
         await self._session.flush()
         return release
 
+    async def _record_decision(
+        self, release: Release, *, approver_id: uuid.UUID | None, decision: str, comment: str | None
+    ) -> None:
+        """Upsert this approver's decision. ``release_approvals`` is unique per
+        (release, approver), and a release can legally cycle in_review → rejected →
+        (resubmit) → in_review, so the same reviewer may decide more than once —
+        update the prior row instead of inserting a duplicate (which would 500 on
+        the unique constraint)."""
+        existing = None
+        if approver_id is not None:
+            row = await self._session.execute(
+                select(ReleaseApproval).where(
+                    ReleaseApproval.release_id == release.id,
+                    ReleaseApproval.org_id == self._org_id,
+                    ReleaseApproval.approver_id == approver_id,
+                )
+            )
+            existing = row.scalar_one_or_none()
+        if existing is not None:
+            existing.decision = decision
+            existing.comment = comment
+        else:
+            self._session.add(
+                ReleaseApproval(
+                    org_id=self._org_id,
+                    release_id=release.id,
+                    approver_id=approver_id,
+                    decision=decision,
+                    comment=comment,
+                )
+            )
+
     async def approve_release(
         self, release_id: uuid.UUID, *, approver_id: uuid.UUID | None, comment: str | None
     ) -> Release:
         release = await self._release_or_raise(release_id)
         self._require_status(release, {ReleaseStatus.IN_REVIEW})
-        self._session.add(
-            ReleaseApproval(
-                org_id=self._org_id,
-                release_id=release.id,
-                approver_id=approver_id,
-                decision="approved",
-                comment=comment,
-            )
-        )
+        await self._record_decision(release, approver_id=approver_id, decision="approved", comment=comment)
         release.status = ReleaseStatus.APPROVED.value
         release.approved_at = func.now()
         await self._session.flush()
@@ -270,15 +308,7 @@ class PromotionService:
     ) -> Release:
         release = await self._release_or_raise(release_id)
         self._require_status(release, {ReleaseStatus.IN_REVIEW})
-        self._session.add(
-            ReleaseApproval(
-                org_id=self._org_id,
-                release_id=release.id,
-                approver_id=approver_id,
-                decision="rejected",
-                comment=comment,
-            )
-        )
+        await self._record_decision(release, approver_id=approver_id, decision="rejected", comment=comment)
         release.status = ReleaseStatus.REJECTED.value
         await self._session.flush()
         return release
@@ -307,9 +337,10 @@ class PromotionService:
 
     async def _push_remote(
         self,
-        target: PromotionTarget,
-        bundle: dict[str, Any],
         *,
+        base_url: str,
+        api_key: str,
+        bundle: dict[str, Any],
         strategy: CollisionStrategy,
         apply_deletes: bool,
         allow_data: bool,
@@ -321,12 +352,19 @@ class PromotionService:
         The remote applies it and returns the result — including the reverse
         snapshot, which the source stores so a rollback can re-push it. A
         ``TransportError`` (SSRF/size/unreachable/remote error) surfaces as a 400;
-        an in-flight block surfaces as ``PromotionBlocked`` (409)."""
+        an in-flight block surfaces as ``PromotionBlocked`` (409).
+
+        Takes plain ``base_url``/``api_key`` (not the ORM target) and **closes the
+        DB session before the network call** so the up-to-300s push does not hold a
+        pooled connection open (idle-in-transaction). The caller must have captured
+        everything it needs from the session first, and reopens a fresh transaction
+        afterwards for any bookkeeping."""
+        await self._session.close()
         client = OutboundPushClient(self._settings)
         try:
             return await client.push(
-                base_url=target.base_url or "",
-                api_key=self._remote_key(target),
+                base_url=base_url,
+                api_key=api_key,
                 bundle=bundle,
                 strategy=strategy,
                 apply_deletes=apply_deletes,
@@ -349,13 +387,22 @@ class PromotionService:
         self._validate_target(target)
         bundle = release.bundle or {}
         if target.kind == PromotionTargetKind.LOCAL_ORG.value:
-            assert target.target_org_id is not None
+            if target.target_org_id is None:
+                raise PromotionError("local-org target is missing target_org_id")
+            # Scope the read/dry-run to the TARGET org so RLS enforces the boundary
+            # (defense in depth over the explicit org_id the executor passes).
+            await db_scope.enter_tenant_owner(self._session, target.target_org_id)
             executor = PromotionExecutor(self._session, target.target_org_id, self._settings)
             result = await executor.preview(bundle, strategy=strategy, apply_deletes=apply_deletes)
-            await self._session.rollback()
+            await self._session.rollback()  # nothing persists; also clears the tenant scope
             return result
+        # Remote: capture the connection details while the target is attached, then
+        # push (which releases the session for the network leg).
+        base_url = target.base_url or ""
+        api_key = self._remote_key(target)
         return await self._push_remote(
-            target, bundle, strategy=strategy, apply_deletes=apply_deletes,
+            base_url=base_url, api_key=api_key, bundle=bundle,
+            strategy=strategy, apply_deletes=apply_deletes,
             allow_data=False, override_inflight=False, dry_run=True,
         )
 
@@ -376,17 +423,29 @@ class PromotionService:
         commit together. On an in-flight block nothing is persisted (the executor
         raises before mutating). Returns the record and the live result (whose
         generated_secrets are surfaced once and NOT persisted)."""
-        release = await self._release_or_raise(release_id)
+        # Lock the release row so two concurrent promotes/rollbacks of the same
+        # release serialize (the status check + record insert are then atomic).
+        release = await self._lock_release(release_id)
         self._require_status(release, {ReleaseStatus.APPROVED})
         target = await self.get_target(target_id)
         if target is None:
             raise PromotionError("target not found")
         self._validate_target(target)
         bundle = release.bundle or {}
+        # Capture the scalar values the audit record needs now, while the ORM objects
+        # are attached — the remote path releases the session during its network push.
+        release_pk = release.id
+        target_pk = target.id
+        target_kind = target.kind
+        target_label = target.name
 
         importer = None
         if target.kind == PromotionTargetKind.LOCAL_ORG.value:
-            assert target.target_org_id is not None
+            if target.target_org_id is None:
+                raise PromotionError("local-org target is missing target_org_id")
+            # Apply RLS-scoped to the TARGET org (defense in depth), then return to
+            # cross-org scope to write the promotion record (owned by the source org).
+            await db_scope.enter_tenant_owner(self._session, target.target_org_id)
             executor = PromotionExecutor(self._session, target.target_org_id, self._settings)
             result, importer = await executor.promote(
                 bundle,
@@ -395,20 +454,27 @@ class PromotionService:
                 allow_data=allow_data,
                 override_inflight=override_inflight,
             )
+            await db_scope.exit_to_bypass(self._session)
             record_target_org = target.target_org_id
         else:
+            base_url = target.base_url or ""
+            api_key = self._remote_key(target)
+            record_target_org = target.remote_org_id
+            # _push_remote releases the DB connection for the network leg; reopen a
+            # privileged transaction afterwards to write the audit record.
             result = await self._push_remote(
-                target, bundle, strategy=strategy, apply_deletes=apply_deletes,
+                base_url=base_url, api_key=api_key, bundle=bundle,
+                strategy=strategy, apply_deletes=apply_deletes,
                 allow_data=allow_data, override_inflight=override_inflight, dry_run=False,
             )
-            record_target_org = target.remote_org_id
+            await db_scope.enter_bypass(self._session)
 
         promotion = ReleasePromotion(
             org_id=self._org_id,
-            release_id=release.id,
-            target_id=target.id,
-            target_kind=target.kind,
-            target_label=target.name,
+            release_id=release_pk,
+            target_id=target_pk,
+            target_kind=target_kind,
+            target_label=target_label,
             target_org_id=record_target_org,
             status=PromotionStatus.PROMOTED.value,
             strategy=strategy.value,
@@ -423,6 +489,10 @@ class PromotionService:
         self._session.add(promotion)
         await self._session.commit()
         if importer is not None:
+            # The commit cleared the transaction-scoped RLS GUCs; re-enter privileged
+            # scope so the post-commit ingest enqueue (doc.celery_task_id writes) is
+            # not blocked by RLS failing closed.
+            await db_scope.enter_bypass(self._session)
             await importer.dispatch_pending_ingests(result.import_summary)
         return promotion, result
 
@@ -430,7 +500,9 @@ class PromotionService:
         self, promotion_id: uuid.UUID, *, rolled_back_by_id: uuid.UUID | None
     ) -> tuple[ReleasePromotion, PromotionResult]:
         """Undo a promoted promotion by re-applying its reverse snapshot."""
-        promotion = await self.get_promotion(promotion_id)
+        # Lock the promotion row so two concurrent rollbacks (or a rollback racing a
+        # re-promote) cannot both pass the status check and double-apply.
+        promotion = await self._lock_promotion(promotion_id)
         if promotion is None:
             raise PromotionError("promotion not found")
         if promotion.status != PromotionStatus.PROMOTED.value:
@@ -440,19 +512,32 @@ class PromotionService:
 
         importer = None
         if promotion.target_kind == PromotionTargetKind.LOCAL_ORG.value:
-            assert promotion.target_org_id is not None
+            if promotion.target_org_id is None:
+                raise PromotionError("local-org promotion is missing target_org_id")
+            await db_scope.enter_tenant_owner(self._session, promotion.target_org_id)
             executor = PromotionExecutor(self._session, promotion.target_org_id, self._settings)
             result, importer = await executor.rollback(promotion.pre_state_bundle)
+            await db_scope.exit_to_bypass(self._session)
         else:
             target = await self.get_target(promotion.target_id) if promotion.target_id else None
             if target is None:
                 raise PromotionError("the remote target was removed; cannot roll back")
             # Rollback == re-push the reverse snapshot with deletes on (restore
             # overwrites + remove what the promotion created), overriding in-flight.
+            base_url = target.base_url or ""
+            api_key = self._remote_key(target)
+            snapshot = promotion.pre_state_bundle
             result = await self._push_remote(
-                target, promotion.pre_state_bundle, strategy=CollisionStrategy.OVERWRITE,
-                apply_deletes=True, allow_data=False, override_inflight=True, dry_run=False,
+                base_url=base_url, api_key=api_key, bundle=snapshot,
+                strategy=CollisionStrategy.OVERWRITE, apply_deletes=True,
+                allow_data=False, override_inflight=True, dry_run=False,
             )
+            # The push released the session (and its row lock). Reopen and re-lock,
+            # guarding against a concurrent rollback that completed while we pushed.
+            await db_scope.enter_bypass(self._session)
+            promotion = await self._lock_promotion(promotion_id)
+            if promotion is None or promotion.status != PromotionStatus.PROMOTED.value:
+                raise PromotionError("the promotion is no longer in a rollbackable state")
 
         promotion.status = PromotionStatus.ROLLED_BACK.value
         promotion.rolled_back_at = func.now()
@@ -476,12 +561,32 @@ class PromotionService:
         self._session.add(inverse)
         await self._session.commit()
         if importer is not None:
+            await db_scope.enter_bypass(self._session)
             await importer.dispatch_pending_ingests(result.import_summary)
         return promotion, result
 
     # ------------------------------------------------------------------ #
     # History
     # ------------------------------------------------------------------ #
+    async def _lock_release(self, release_id: uuid.UUID) -> Release:
+        row = await self._session.execute(
+            select(Release)
+            .where(Release.id == release_id, Release.org_id == self._org_id)
+            .with_for_update()
+        )
+        release = row.scalar_one_or_none()
+        if release is None:
+            raise PromotionError("release not found")
+        return release
+
+    async def _lock_promotion(self, promotion_id: uuid.UUID) -> ReleasePromotion | None:
+        row = await self._session.execute(
+            select(ReleasePromotion)
+            .where(ReleasePromotion.id == promotion_id, ReleasePromotion.org_id == self._org_id)
+            .with_for_update()
+        )
+        return row.scalar_one_or_none()
+
     async def get_promotion(self, promotion_id: uuid.UUID) -> ReleasePromotion | None:
         row = await self._session.execute(
             select(ReleasePromotion).where(
