@@ -11,10 +11,14 @@ export interface ActionConfigField {
   entityFieldsFrom?: string;
 }
 
-// Keep in sync with the backend ACTION_REGISTRY
-// (services/api/src/api/services/workflow/actions.py). Only actions with a
-// registered handler belong here — offering one without a handler produces an
-// action that always fails at run time.
+// This is a CURATED SUBSET of the backend ACTION_REGISTRY
+// (services/api/src/api/services/workflow/actions.py) — the actions the simple
+// trigger→action inspector can render with the generic config loop. Advanced
+// actions (knowledge_search, summarize, get_record, update_record, grade_quiz,
+// llm_*) are deliberately absent: they're authored via the agent or the BPMN graph
+// editor, not here. The invariant is one-directional — every entry here MUST have a
+// registered backend handler (offering one without a handler produces an action that
+// always fails at run time), but not every handler needs an entry here.
 export const ACTION_LABELS: Record<string, string> = {
   update_record_field: "Update field on the changed record",
   create_record: "Create a record in another entity",

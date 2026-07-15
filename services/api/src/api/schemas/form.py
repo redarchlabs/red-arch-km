@@ -212,6 +212,12 @@ class FormRenderRead(BaseModel):
     description: str | None
     status: str  # link/record status: pending | submitted | expired | editable
     root_entity_id: uuid.UUID | None  # None for a standalone (no-entity) view
+    # The record this render is actually bound to, once resolved. Same as the
+    # requested id for a normal ``?record_id=<uuid>``; for the ``record_id=me``
+    # sentinel it's the caller's OWN record id (or None if unresolved) — the client
+    # needs it to target a workflow button at the right record without re-sending the
+    # opaque sentinel.
+    record_id: uuid.UUID | None = None
     config: FormConfig
     catalog: list[EntityCatalogEntry] = Field(default_factory=list)
     relationships: list[RelationshipMeta] = Field(default_factory=list)

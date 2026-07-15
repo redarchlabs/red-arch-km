@@ -14,13 +14,11 @@ import uuid
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api import db_scope
 from api.models.view import View
 from api.repositories.custom_entity import (
     EntityDefinitionRepository,
     EntityFieldRepository,
 )
-from api.repositories.dynamic_entity import DynamicEntityRepository
 from api.repositories.view import ViewRepository
 from api.schemas.form import FormConfig, FormRenderRead
 from api.schemas.form_elements import iter_elements
@@ -33,15 +31,12 @@ from api.services.form_service import (
     FormValidationError,
     _load_layout_context,
 )
+from api.services.self_record import IDENTITY_FIELD_SLUG, resolve_own_record_id
 
 MAX_VIEWS_PER_ORG = 200
 
 # Elements that require an entity binding — illegal in a standalone (no-entity) view.
 _ENTITY_BOUND_TYPES = {"field", "calculated", "section", "table", "block"}
-
-# Field slug matched against the current user's email when ``record_id=me`` is
-# used to auto-bind a view to the caller's own record.
-IDENTITY_FIELD_SLUG = "email"
 
 
 class ViewService:
@@ -130,29 +125,14 @@ class ViewService:
         field_slug: str = IDENTITY_FIELD_SLUG,
     ) -> uuid.UUID | None:
         """Resolve the current user to their own record in ``entity_definition_id``
-        by matching the entity's ``field_slug`` (default ``email``) to ``email``
-        case-insensitively.
+        (matched by ``field_slug``/``email``) for the ``record_id=me`` sentinel.
 
-        Returns the matching record id, or ``None`` when the entity has no such
-        field or no record matches — the caller then renders the view unbound
-        rather than erroring.
+        Delegates to the shared :func:`resolve_own_record_id` so the view binding and
+        the record-list ``@me`` filter apply the exact same identity rule.
         """
-        definition = await self._defs.get(entity_definition_id)
-        if definition is None:
-            return None
-        fields = await self._fields.list_for_definition(entity_definition_id)
-        if not any(f.slug == field_slug for f in fields):
-            return None
-        # Scope to the org's RLS tenant BEFORE reading records: this runs ahead of
-        # FormRenderService.build_render (which enters the tenant itself), and a
-        # session with no tenant GUC fails closed (RLS → zero rows). enter_tenant is
-        # transaction-scoped SET LOCAL and idempotent, so build_render re-pinning it
-        # afterwards is a no-op.
-        await db_scope.enter_tenant(self._session, self._org_id)
-        # Relationships are irrelevant to a scalar-field lookup, so skip loading them.
-        repo = DynamicEntityRepository(self._session, self._org_id, definition, fields)
-        record = await repo.find_one_by_field(field_slug, email, case_insensitive=True)
-        return uuid.UUID(str(record["id"])) if record is not None else None
+        return await resolve_own_record_id(
+            self._session, self._org_id, entity_definition_id, email, field_slug=field_slug
+        )
 
     async def render(
         self,

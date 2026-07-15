@@ -2475,7 +2475,13 @@ class AgentService:
             "notes": (
                 "Every element is an object with a `type` plus the fields below. Containers nest "
                 "arbitrarily. Bind by entity-field slug / relationship_id from get_entity_schema. "
-                "Widths: full|half|third|quarter."
+                "Widths: full|half|third|quarter. "
+                "ANY element may carry `visible_when`: a JsonLogic expression over the enclosing "
+                "scope's values (same vocabulary as `calculated`); the element renders only when it "
+                'is truthy (absent = always visible). Use it to gate flow, e.g. show a quiz button '
+                'only when done: {"visible_when": {">=": [{"var": "progress_pct"}, 100]}}, or an '
+                '"Enroll" button only when not enrolled. Hiding never bypasses server-side required-'
+                "field validation, so gate inputs/buttons, not required persisted fields."
             ),
             "elements": {
                 "field": {
@@ -2532,6 +2538,21 @@ class AgentService:
                         "Display-only readout that POLLS a CORS-reachable HTTP endpoint from the "
                         "browser and shows a value from the JSON response. Generic live external "
                         "state (a device reading, a status). Not entity-bound."
+                    ),
+                },
+                "slides": {
+                    "required": ["type"],
+                    "optional": ["label", "slug", "slides", "width"],
+                    "use": (
+                        "An in-app SLIDE DECK — content as a navigable presentation (prev/next + "
+                        "progress) instead of scrolling text. Set `slug` to bind a JSON entity field "
+                        "holding the slide array (e.g. a Module's `slides` field), OR provide inline "
+                        "`slides`. Each slide is {title?, body (markdown), image_url?, video_url?, "
+                        "require_video?, notes?}. `video_url` is a DIRECT video file (mp4/webm), not a "
+                        "YouTube page; with `require_video` (default true) the deck discourages skipping — "
+                        "it disables the forward controls and snaps forward seeks back until the video "
+                        "finishes. This is a client-side nudge, not enforced viewing (nothing is recorded "
+                        "server-side). Display-only; valid in standalone views."
                     ),
                 },
                 "button": {
@@ -2625,9 +2646,11 @@ class AgentService:
             "notes": (
                 "Workflow steps are `actions` (each {type, config}) on create_workflow / "
                 "save_workflow_definition. Config values may embed {{after.<slug>}} / "
-                "{{before.<slug>}} / {{inputs.<key>}} / {{vars.<key>}} tokens or a "
-                '{"$ref": "after.<slug>"} envelope. `after`/`before` = triggering record (or '
-                "the inbound webhook payload); `vars` = values captured from earlier steps."
+                "{{before.<slug>}} / {{inputs.<key>}} / {{vars.<key>}} tokens, the clock "
+                "tokens {{now}} (UTC ISO-8601) / {{today}} (UTC YYYY-MM-DD) for date "
+                'stamping, or a {"$ref": "after.<slug>"} envelope. `after`/`before` = '
+                "triggering record (or the inbound webhook payload); `vars` = values "
+                "captured from earlier steps."
             ),
             "quick_pick": {
                 "POST to an external URL (simple)": "send_webhook",
@@ -2640,6 +2663,7 @@ class AgentService:
                 "Change a field on the triggering record": "update_record_field",
                 "Write several fields of any record (by id / latest)": "update_record",
                 "Read a record's live fields into vars (state read-back)": "get_record",
+                "Grade a multiple-choice quiz server-side (score + pass/fail gate)": "grade_quiz",
                 "Write an audit line": "log",
             },
             "actions": {
@@ -2745,6 +2769,26 @@ class AgentService:
                     "note": (
                         "Read-only. Feed live state into a later summarize/llm_decide/http_request via "
                         "{{vars.<capture>.<field>}}."
+                    ),
+                },
+                "grade_quiz": {
+                    "config": {
+                        "assessment_id": "required — the assessment whose `question` rows to grade (id/$ref/token)",
+                        "answers": "preferred — a {question_id: choice} map (e.g. {$ref:'inputs.answers'})",
+                        "answers_prefix": "fallback — positional inputs a1..aN by question order (default 'a')",
+                        "pass_threshold": "percent needed to pass (default 70; id/$ref/token)",
+                        "question_slug/assessment_ref/order_field": "override entity/field slugs (default question/assessment/sort_order)",
+                    },
+                    "use": (
+                        "Deterministically grade an MCQ quiz server-side against each question's stored "
+                        "correct_answer. Output: {score, passed, correct, total, answered}. Capture it "
+                        "(e.g. 'quiz') so a gateway branches on {{vars.quiz.passed}}."
+                    ),
+                    "note": (
+                        "Read-only. Prefer the id-keyed `answers` map (robust to reorder/ties); positional "
+                        "a1..aN requires the view to render questions in `order_field` order. NOT tamper-proof "
+                        "on its own — the records API lets any org member read a question's correct_answer or "
+                        "forge a passing record; the MCQ gate is an honest-effort check, not exam invigilation."
                     ),
                 },
                 "log": {"config": {"message": "text"}, "use": "Emit a log line (no side effects)."},

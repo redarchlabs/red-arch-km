@@ -4,7 +4,7 @@ import DOMPurify from "dompurify";
 import { ArrowLeft, Ban, BookOpen, Pencil, RefreshCw, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Markdown } from "@/components/common/Markdown";
 import { DocumentReader } from "@/components/documents/DocumentReader";
@@ -108,6 +108,20 @@ export default function DocumentDetailPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Land in the READ view by default: if the document is ALREADY finished when the
+  // page first loads, open the full-screen reader (the detail/manage page — chunks,
+  // reprocess, summary — sits behind it). The decision is made ONCE, on the first
+  // loaded document: closing the reader doesn't reopen it, a still-processing doc
+  // isn't yanked into an empty reader, and — crucially — a doc that finishes LATER
+  // (a poll flips PROCESSING→SUCCESS while the user is reading logs on the manage
+  // page) does NOT pull them into the reader mid-task.
+  const autoOpenedReader = useRef(false);
+  useEffect(() => {
+    if (autoOpenedReader.current || !doc) return;
+    autoOpenedReader.current = true; // decide once, regardless of the later status
+    if (doc.processing_status === "SUCCESS") setReaderOpen(true);
+  }, [doc]);
 
   // While the ingest is still running, poll quietly so the progress bar, status,
   // logs, and (on completion) chunks/summary refresh without a manual reload.

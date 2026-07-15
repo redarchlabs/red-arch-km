@@ -22,6 +22,7 @@ export const VIEW_KINDS: PaletteKind[] = [
   "input",
   "live_value",
   "progress",
+  "slides",
   "report",
   "record_list",
   "chat",
@@ -37,6 +38,7 @@ export const KIND_LABELS: Record<PaletteKind, string> = {
   input: "Input (slider / toggle / text)",
   live_value: "Live value",
   progress: "Progress bar",
+  slides: "Slide deck",
   report: "Report / chart",
   record_list: "Record list / status board",
   chat: "Chat",
@@ -73,10 +75,17 @@ export function newElement(kind: PaletteKind): FormElement {
       return { id, type: "live_value", label: "Live value", url: "", poll_ms: 1000 };
     case "progress":
       return { id, type: "progress", label: "Progress", value: 0, max: 100, show_percent: true };
+    case "slides":
+      return {
+        id,
+        type: "slides",
+        label: "Slides",
+        slides: [{ title: "Slide 1", body: "Slide content (Markdown)." }],
+      };
     case "report":
       return { id, type: "report", report_id: "", title: "Report", height: 320 };
     case "record_list":
-      return { id, type: "record_list", label: "Records", entity: "", fields: [], sort_dir: "desc", limit: 20 };
+      return { id, type: "record_list", label: "Records", entity: "", fields: [], filters: [], sort_dir: "desc", limit: 20 };
     case "chat":
       return {
         id,

@@ -9,6 +9,7 @@
  * the shared `<FormRenderer>`.
  */
 import apiClient from "./client";
+import type { FilterOp } from "./filterOps";
 
 const PUBLIC_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
 
@@ -24,6 +25,10 @@ export type Expression = unknown;
 // ---- element tree ----
 interface ElementBase {
   id?: string | null;
+  /** Optional conditional visibility: a JsonLogic expression over the enclosing
+   * scope's values (same evaluator as `calculated`). The element renders only
+   * when truthy; `null`/absent is always visible. Mirrors backend `_Element`. */
+  visible_when?: Expression | null;
 }
 
 export interface FieldElement extends ElementBase {
@@ -108,6 +113,29 @@ export interface ProgressElement extends ElementBase {
   width?: FieldWidth | null;
 }
 
+/** One slide in a deck: optional title, Markdown `body`, optional image, optional
+ * video. A direct `video_url` (mp4/webm) with `require_video` (default true) blocks
+ * advancing past the slide until the learner watches it through. */
+export interface Slide {
+  title?: string | null;
+  body?: string;
+  image_url?: string | null;
+  video_url?: string | null;
+  require_video?: boolean;
+  notes?: string | null;
+}
+
+/** An in-app slide deck — module content as a navigable presentation (prev/next +
+ * progress) instead of a wall of text. `slug` binds to a JSON entity field holding
+ * the slide array (the common case); `slides` provides them inline. Display-only. */
+export interface SlidesElement extends ElementBase {
+  type: "slides";
+  label?: string | null;
+  slug?: string | null;
+  slides?: Slide[];
+  width?: FieldWidth | null;
+}
+
 /** Embeds a saved report on a dashboard — renders its chart / KPI tile / table per
  * the report's own visualization spec. Not entity-bound, so valid in standalone views. */
 export interface ReportElement extends ElementBase {
@@ -119,6 +147,15 @@ export interface ReportElement extends ElementBase {
   width?: FieldWidth | null;
 }
 
+/** One server-side filter on a `record_list` (mirrors backend `RecordListFilter`).
+ * A `value` of `"@me"` on a relation field scopes the board to the caller's own
+ * records (resolved server-side, like `record_id=me`). */
+export interface RecordListFilterConfig {
+  field: string;
+  op?: FilterOp;
+  value?: string | number | boolean | null;
+}
+
 /** Read-only "status board": lists existing records of an entity (newest-first or by
  * sort_by), optionally re-polling to stay live, with an optional per-row workflow button. */
 export interface RecordListElement extends ElementBase {
@@ -126,6 +163,8 @@ export interface RecordListElement extends ElementBase {
   entity: string;
   label?: string | null;
   fields?: string[];
+  /** Server-side row filters, ANDed. `value: "@me"` on a relation → caller's own rows. */
+  filters?: RecordListFilterConfig[];
   sort_by?: string | null;
   sort_dir?: "asc" | "desc";
   limit?: number;
@@ -345,6 +384,7 @@ export type FormElement =
   | InputElement
   | LiveValueElement
   | ProgressElement
+  | SlidesElement
   | ReportElement
   | RecordListElement
   | ChatElement
@@ -433,6 +473,10 @@ export interface FormRender {
   description: string | null;
   status: string;
   root_entity_id: string | null;
+  /** The record this render is actually bound to, once resolved. For a `record_id=me`
+   * view it's the caller's own record id (or null if unresolved) — use it to target a
+   * workflow button at the right record instead of re-sending the `me` sentinel. */
+  record_id: string | null;
   config: FormConfig;
   catalog: EntityCatalogEntry[];
   relationships: RelationshipMeta[];
