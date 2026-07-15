@@ -38,6 +38,22 @@ class FakeRepo:
         return {"id": record_id, **patch}
 
 
+class _PagingRepo:
+    """Repo stub that emulates the real keyset pagination (cursor + capped page) so a
+    grader that loops the cursor can be exercised over more than one page."""
+
+    def __init__(self, records: list[dict], *, page: int = 200) -> None:
+        self.records = records
+        self.page = page
+
+    async def list(self, *, filters=None, search=None, cursor=None, limit=50, order_by=None, order_dir="desc"):
+        start = cursor or 0
+        stop = start + min(limit, self.page)
+        rows = self.records[start:stop]
+        next_cursor = stop if stop < len(self.records) else None
+        return rows, next_cursor
+
+
 def _ctx(config, *, repo=None, trigger_repo=None, record_id=None, after=None, before=None, inputs=None, vars=None):
     async def _slug(_slug_name: str):
         return repo
@@ -262,8 +278,10 @@ class TestUpdateRecordTemplates:
 
 
 class TestGradeQuiz:
-    """Server-side MCQ grading: compares learner answers (inputs a1..aN) to each
-    question's stored correct_answer — answers never leave the server."""
+    """Server-side MCQ grading: compares learner answers to each question's stored
+    correct_answer — answers never leave the server. Answers arrive either as a
+    ``{question_id: choice}`` map (preferred, order-independent) or positional
+    ``a1..aN`` inputs (fallback)."""
 
     @staticmethod
     def _questions() -> list[dict]:
@@ -284,10 +302,34 @@ class TestGradeQuiz:
             inputs={"assessment_id": aid, "a1": "B", "a2": "wrong", "a3": "D"},  # 2 of 3
         )
         out = await handler.execute(ctx)
-        assert out == {"score": 67, "passed": True, "correct": 2, "total": 3}
+        assert out == {"score": 67, "passed": True, "correct": 2, "total": 3, "answered": 3}
         # Questions loaded by the assessment relation, ordered by sort_order.
         assert repo.list_calls[0]["filters"] == {"assessment": aid}
         assert repo.list_calls[0]["order_by"] == "sort_order"
+
+    @pytest.mark.asyncio
+    async def test_grades_by_question_id_map_ignores_order(self) -> None:
+        # The preferred id-keyed form matches on question id, so a view that renders
+        # questions in a different order (or a sort_order tie) still grades correctly.
+        handler = ACTION_REGISTRY["grade_quiz"]
+        questions = self._questions()
+        repo = FakeRepo(questions)
+        answers = {str(questions[0]["id"]): "B", str(questions[1]["id"]): "A", str(questions[2]["id"]): "X"}
+        out = await handler.execute(
+            _ctx({"assessment_id": "a", "answers": {"$ref": "inputs.answers"}, "pass_threshold": 60},
+                 repo=repo, inputs={"answers": answers}),
+        )
+        assert out == {"score": 67, "passed": True, "correct": 2, "total": 3, "answered": 3}
+
+    @pytest.mark.asyncio
+    async def test_answered_count_detects_partial_submission(self) -> None:
+        # answered < total is the signal a miswired view under-supplied answers.
+        handler = ACTION_REGISTRY["grade_quiz"]
+        repo = FakeRepo(self._questions())
+        out = await handler.execute(
+            _ctx({"assessment_id": "a"}, repo=repo, inputs={"a1": "B", "a2": "", "a3": "D"})
+        )
+        assert out["answered"] == 2 and out["total"] == 3 and out["correct"] == 2
 
     @pytest.mark.asyncio
     async def test_threshold_not_met_is_not_passed(self) -> None:
@@ -304,13 +346,13 @@ class TestGradeQuiz:
         repo = FakeRepo(self._questions())
         # No answers → 0 correct; default threshold 70 → not passed.
         out = await handler.execute(_ctx({"assessment_id": "a"}, repo=repo, inputs={}))
-        assert out == {"score": 0, "passed": False, "correct": 0, "total": 3}
+        assert out == {"score": 0, "passed": False, "correct": 0, "total": 3, "answered": 0}
 
     @pytest.mark.asyncio
     async def test_no_questions_scores_zero(self) -> None:
         handler = ACTION_REGISTRY["grade_quiz"]
         out = await handler.execute(_ctx({"assessment_id": "a"}, repo=FakeRepo([]), inputs={"a1": "x"}))
-        assert out == {"score": 0, "passed": False, "correct": 0, "total": 0}
+        assert out == {"score": 0, "passed": False, "correct": 0, "total": 0, "answered": 0}
 
     @pytest.mark.asyncio
     async def test_answer_match_is_trimmed_exact(self) -> None:
@@ -320,6 +362,17 @@ class TestGradeQuiz:
             _ctx({"assessment_id": "a", "pass_threshold": 1}, repo=repo, inputs={"a1": "Yes"})
         )
         assert out["correct"] == 1
+
+    @pytest.mark.asyncio
+    async def test_pages_beyond_a_single_repo_page(self) -> None:
+        # >200 questions must all be graded: the repo caps a page at 200, so grading
+        # loops the keyset cursor instead of truncating.
+        handler = ACTION_REGISTRY["grade_quiz"]
+        questions = [{"id": uuid.uuid4(), "sort_order": n, "correct_answer": "A"} for n in range(250)]
+        repo = _PagingRepo(questions, page=200)
+        inputs = {f"a{n + 1}": "A" for n in range(250)}
+        out = await handler.execute(_ctx({"assessment_id": "a", "pass_threshold": 1}, repo=repo, inputs=inputs))
+        assert out["total"] == 250 and out["correct"] == 250
 
     @pytest.mark.asyncio
     async def test_missing_assessment_id_raises(self) -> None:

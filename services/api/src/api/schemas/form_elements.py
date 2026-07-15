@@ -188,9 +188,11 @@ class Slide(BaseModel):
     ``slides`` element.
 
     ``video_url`` is a direct video file (mp4/webm) — not a YouTube/Vimeo page.
-    When ``require_video`` is set (and a ``video_url`` is present) the deck blocks
-    advancing past the slide until the learner has watched the video through
-    (seeking ahead is prevented), so a training video can't be skipped."""
+    When ``require_video`` is set (and a ``video_url`` is present) the deck
+    discourages skipping — it disables the forward controls and snaps forward seeks
+    back until the video finishes. This is a client-side nudge, not enforced viewing:
+    nothing is recorded server-side, so it deters casual skipping rather than
+    guaranteeing a training video was watched."""
 
     model_config = ConfigDict(extra="forbid")
     title: str | None = None

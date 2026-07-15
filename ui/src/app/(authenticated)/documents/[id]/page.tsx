@@ -109,17 +109,18 @@ export default function DocumentDetailPage() {
     void load();
   }, [load]);
 
-  // Land in the READ view by default: once a finished document has loaded, open
-  // the full-screen reader (the detail/manage page — chunks, reprocess, summary —
-  // sits behind it). Fires once per mount, so closing the reader doesn't reopen it,
-  // and a still-processing document isn't yanked into an empty reader.
+  // Land in the READ view by default: if the document is ALREADY finished when the
+  // page first loads, open the full-screen reader (the detail/manage page — chunks,
+  // reprocess, summary — sits behind it). The decision is made ONCE, on the first
+  // loaded document: closing the reader doesn't reopen it, a still-processing doc
+  // isn't yanked into an empty reader, and — crucially — a doc that finishes LATER
+  // (a poll flips PROCESSING→SUCCESS while the user is reading logs on the manage
+  // page) does NOT pull them into the reader mid-task.
   const autoOpenedReader = useRef(false);
   useEffect(() => {
-    if (autoOpenedReader.current) return;
-    if (doc && doc.processing_status === "SUCCESS") {
-      autoOpenedReader.current = true;
-      setReaderOpen(true);
-    }
+    if (autoOpenedReader.current || !doc) return;
+    autoOpenedReader.current = true; // decide once, regardless of the later status
+    if (doc.processing_status === "SUCCESS") setReaderOpen(true);
   }, [doc]);
 
   // While the ingest is still running, poll quietly so the progress bar, status,
