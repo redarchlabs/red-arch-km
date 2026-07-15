@@ -34,6 +34,7 @@ async def _read_with_fields(
         slug=definition.slug,
         description=definition.description,
         is_active=definition.is_active,
+        write_access=definition.write_access,
         fields=[EntityFieldRead.model_validate(f) for f in fields],
     )
 

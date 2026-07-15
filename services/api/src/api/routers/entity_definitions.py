@@ -27,6 +27,7 @@ from api.schemas.custom_entity import (
     EntityDefinitionUpdate,
     EntityFieldCreate,
     EntityFieldRead,
+    EntityFieldUpdate,
     EntityRelationshipCreate,
     EntityRelationshipRead,
 )
@@ -68,6 +69,7 @@ async def _read_with_fields(
         slug=definition.slug,
         description=definition.description,
         is_active=definition.is_active,
+        write_access=definition.write_access,
         fields=[EntityFieldRead.model_validate(f) for f in fields],
     )
 
@@ -118,7 +120,13 @@ async def update_definition(
     definition = await repo.get(definition_id)
     if definition is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="entity not found")
-    await repo.update(definition, name=body.name, description=body.description, is_active=body.is_active)
+    await repo.update(
+        definition,
+        name=body.name,
+        description=body.description,
+        is_active=body.is_active,
+        write_access=body.write_access,
+    )
     return await _read_with_fields(session, ctx.org_id, definition_id)
 
 
@@ -146,6 +154,25 @@ async def add_field(
     service = EntityService(session, ctx.org_id)
     try:
         field = await service.add_field(definition_id, body)
+    except EntityError as exc:
+        _raise_http(exc)
+    return EntityFieldRead.model_validate(field)
+
+
+@router.patch("/{definition_id}/fields/{field_id}", response_model=EntityFieldRead)
+async def update_field(
+    definition_id: uuid.UUID,
+    field_id: uuid.UUID,
+    body: EntityFieldUpdate,
+    ctx: Annotated[OrgContext, Depends(require_org_admin)],
+    session: Annotated[AsyncSession, Depends(get_db)],
+) -> EntityFieldRead:
+    """Update a field's catalog attributes (name, picklist options, order, and
+    ``read_access`` — toggling a field server-only). Type/required/slug changes
+    need a physical migration and are rejected here."""
+    service = EntityService(session, ctx.org_id)
+    try:
+        field = await service.update_field(definition_id, field_id, body)
     except EntityError as exc:
         _raise_http(exc)
     return EntityFieldRead.model_validate(field)
