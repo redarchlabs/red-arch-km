@@ -7,7 +7,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { getApiErrorMessage } from "@/lib/api/errors";
-import type { BundleDiff, GeneratedSecret } from "@/lib/api/migration";
+import type { BundleDiff, CollisionStrategy, GeneratedSecret } from "@/lib/api/migration";
 import {
   approveRelease,
   diffRelease,
@@ -42,6 +42,10 @@ export function ReleaseDetailView({
   const [blockers, setBlockers] = useState<InFlightBlocker[]>([]);
   const [override, setOverride] = useState(false);
   const [secrets, setSecrets] = useState<GeneratedSecret[]>([]);
+  // Promoting a release means "make the target match it", so default to overwrite
+  // (skip would leave every already-present object untouched — a silent no-op).
+  const [strategy, setStrategy] = useState<CollisionStrategy>("overwrite");
+  const [confirmRollbackId, setConfirmRollbackId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setDetail(await getRelease(releaseId));
@@ -77,7 +81,7 @@ export function ReleaseDetailView({
     setDiff(null);
     setBlockers([]);
     try {
-      const result = await diffRelease(releaseId, { target_id: targetId, apply_deletes: true });
+      const result = await diffRelease(releaseId, { target_id: targetId, strategy, apply_deletes: true });
       setDiff(result);
     } catch (error) {
       toast.error("Diff failed", { description: getApiErrorMessage(error, "Could not diff this release.") });
@@ -91,7 +95,7 @@ export function ReleaseDetailView({
     setBusy(true);
     setSecrets([]);
     try {
-      const res = await promoteRelease(releaseId, { target_id: targetId, override_inflight: override });
+      const res = await promoteRelease(releaseId, { target_id: targetId, strategy, override_inflight: override });
       setSecrets(res.generated_secrets);
       setBlockers([]);
       await load();
@@ -203,6 +207,16 @@ export function ReleaseDetailView({
                   </option>
                 ))}
               </select>
+              <select
+                value={strategy}
+                onChange={(e) => setStrategy(e.target.value as CollisionStrategy)}
+                className="rounded-md border bg-background px-3 py-2 text-sm"
+                title="How to handle objects that already exist on the target"
+              >
+                <option value="overwrite">Overwrite existing</option>
+                <option value="skip">Skip existing</option>
+                <option value="rename">Rename on collision</option>
+              </select>
               <Button variant="outline" size="sm" disabled={busy || !targetId} onClick={() => void runDiff()}>
                 Preview diff
               </Button>
@@ -281,23 +295,55 @@ export function ReleaseDetailView({
           ) : (
             <div className="space-y-2">
               {promotions.map((p) => (
-                <div key={p.id} className="flex items-center justify-between border-b pb-2 text-sm last:border-0">
-                  <div className="flex items-center gap-2">
-                    <StatusBadge status={p.status} />
-                    <span className="font-medium">{p.target_label}</span>
-                    <span className="text-xs text-muted-foreground">
-                      {p.rollback_source_id ? "(rollback)" : p.strategy}
-                    </span>
+                <div key={p.id} className="border-b pb-2 text-sm last:border-0">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <StatusBadge status={p.status} />
+                      <span className="font-medium">{p.target_label}</span>
+                      <span className="text-xs text-muted-foreground">
+                        {p.rollback_source_id ? "(rollback)" : p.strategy}
+                      </span>
+                    </div>
+                    {p.status === "promoted" && !p.rollback_source_id ? (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={busy}
+                        onClick={() => setConfirmRollbackId((cur) => (cur === p.id ? null : p.id))}
+                      >
+                        <Undo2 className="mr-1 h-3.5 w-3.5" /> Roll back
+                      </Button>
+                    ) : null}
                   </div>
-                  {p.status === "promoted" && !p.rollback_source_id ? (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      disabled={busy}
-                      onClick={() => void act(() => rollbackPromotion(p.id), "Rolled back")}
-                    >
-                      <Undo2 className="mr-1 h-3.5 w-3.5" /> Roll back
-                    </Button>
+                  {confirmRollbackId === p.id ? (
+                    <div className="mt-2 flex flex-col gap-2 rounded-md border border-destructive/40 bg-destructive/5 p-2 text-xs">
+                      <div className="flex items-start gap-2">
+                        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+                        <span>
+                          Rolling back restores the target to its state before this promotion:{" "}
+                          <strong>any config created on the target since then is deleted</strong>, and
+                          in-flight workflow runs may be disrupted. This cannot be undone.
+                        </span>
+                      </div>
+                      <div className="flex gap-2">
+                        <Button
+                          size="sm"
+                          variant="destructive"
+                          disabled={busy}
+                          onClick={() =>
+                            void act(async () => {
+                              await rollbackPromotion(p.id);
+                              setConfirmRollbackId(null);
+                            }, "Rolled back")
+                          }
+                        >
+                          Yes, roll back
+                        </Button>
+                        <Button size="sm" variant="ghost" disabled={busy} onClick={() => setConfirmRollbackId(null)}>
+                          Cancel
+                        </Button>
+                      </div>
+                    </div>
                   ) : null}
                 </div>
               ))}

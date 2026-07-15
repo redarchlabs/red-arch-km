@@ -41,6 +41,11 @@ from api.services.migration.bundle import RESOURCE_ORDER, ImportSummary
 DATA_RESOURCE_TYPES = frozenset({"records"})
 _UNSUPPORTED = frozenset({"folders", "records"})
 
+# Deleting these also destroys user DATA even though they are "config": dropping an
+# entity tears down its physical ``ce_`` table and every record row in it. So they
+# require the stronger ``allow_data`` gate, not just ``apply_deletes``.
+_DATA_DESTRUCTIVE = frozenset({"entities"})
+
 
 class MigrationDeleter:
     """Remove target objects addressed by ``lineage_id``, in reverse dependency order."""
@@ -70,10 +75,16 @@ class MigrationDeleter:
             wanted = deletions.get(rtype)
             if not wanted:
                 continue
-            if rtype in _UNSUPPORTED or (rtype in DATA_RESOURCE_TYPES and not allow_data):
+            if rtype in _UNSUPPORTED:
                 summary.warnings.append(
                     f"{len(wanted)} {rtype} marked for deletion were left in place "
                     f"({rtype} deletion is not applied automatically)"
+                )
+                continue
+            if rtype in (DATA_RESOURCE_TYPES | _DATA_DESTRUCTIVE) and not allow_data:
+                summary.warnings.append(
+                    f"{len(wanted)} {rtype} marked for deletion were left in place "
+                    f"(deleting {rtype} destroys user data; requires allow_data)"
                 )
                 continue
             count = await self._delete_type(rtype, wanted, summary)
