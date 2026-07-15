@@ -5,17 +5,15 @@ from __future__ import annotations
 import uuid
 
 import pytest
-from pydantic import ValidationError
-
 from api.schemas.form import FormConfig, upgrade_legacy_form_config
 from api.services import form_layout as fl
 from api.services.form_layout import (
-    BlockBinding,
     LayoutError,
     RelInfo,
     SectionBinding,
     TableBinding,
 )
+from pydantic import ValidationError
 
 
 @pytest.fixture
@@ -356,6 +354,28 @@ def test_record_list_row_link_template_scheme_guarded():
             FormConfig.model_validate(
                 {"version": 2, "elements": [{"type": "record_list", "entity": "course", "row_link_template": bad}]}
             )
+
+
+def test_record_list_row_workflow_inputs_round_trip():
+    """A record_list can carry per-row workflow inputs (expressions over the row +
+    parent scope) — e.g. a course board's Enroll passing course_id + learner_email."""
+    cfg = FormConfig.model_validate(
+        {
+            "version": 2,
+            "elements": [
+                {
+                    "type": "record_list",
+                    "entity": "course",
+                    "row_workflow_id": str(uuid.uuid4()),
+                    "row_action_label": "Enroll",
+                    "row_workflow_inputs": {"course_id": {"var": "id"}, "learner_email": {"var": "email"}},
+                }
+            ],
+        }
+    )
+    rl = cfg.model_dump(mode="json")["elements"][0]
+    assert rl["row_workflow_inputs"]["course_id"] == {"var": "id"}
+    assert rl["row_workflow_inputs"]["learner_email"] == {"var": "email"}
 
 
 def test_button_link_href_scheme_guarded():
