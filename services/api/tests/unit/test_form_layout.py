@@ -344,6 +344,44 @@ def test_link_column_rejects_dangerous_href_scheme(ids):
         )
 
 
+def test_record_list_row_link_template_scheme_guarded():
+    """A record_list's per-row link accepts relative/http(s) templates (with tokens)
+    and rejects a dangerous scheme — same guard as a table link column."""
+    for ok in ("/views/{player_view_slug}/view?record_id={id}", "https://x.example/{id}"):
+        FormConfig.model_validate(
+            {"version": 2, "elements": [{"type": "record_list", "entity": "course", "row_link_template": ok}]}
+        )
+    for bad in ("javascript:alert(1)", "data:text/html,x"):
+        with pytest.raises(ValidationError):
+            FormConfig.model_validate(
+                {"version": 2, "elements": [{"type": "record_list", "entity": "course", "row_link_template": bad}]}
+            )
+
+
+def test_button_link_href_scheme_guarded():
+    """A button link href accepts a templated relative URL and rejects a dangerous
+    scheme (it's navigated to at click time, so it must not smuggle javascript:)."""
+    FormConfig.model_validate(
+        {
+            "version": 2,
+            "elements": [
+                {"type": "button", "label": "Quiz", "style": "primary",
+                 "action": {"kind": "link", "href": "/views/{quiz_view_slug}/view?record_id=me"}}
+            ],
+        }
+    )
+    with pytest.raises(ValidationError):
+        FormConfig.model_validate(
+            {
+                "version": 2,
+                "elements": [
+                    {"type": "button", "label": "x", "style": "primary",
+                     "action": {"kind": "link", "href": "javascript:alert(1)"}}
+                ],
+            }
+        )
+
+
 def test_progress_element_fetches_expr_fields_without_writing(ids, fields_by_entity, rels):
     cfg = FormConfig.model_validate(
         {

@@ -47,6 +47,15 @@ def repos(monkeypatch: pytest.MonkeyPatch) -> dict[str, _FakeRepo]:
         return fakes[slug], None
 
     monkeypatch.setattr(course_generation, "build_record_repo", fake_build_record_repo)
+
+    # Isolate the record-graph creation from play-view creation (which resolves
+    # workflows + the learner entity + writes views — exercised by test_lms_play_views
+    # and end-to-end live). Stub it to a no-op so these record-focused tests need no
+    # workflow/view repos.
+    async def stub_play_views(self: CourseGenerationService, **kwargs: Any) -> dict[str, str | None]:
+        return {"quiz_view_slug": None, "scenario_view_slug": None}
+
+    monkeypatch.setattr(CourseGenerationService, "create_play_views", stub_play_views)
     return fakes
 
 
@@ -184,6 +193,8 @@ class TestCreateFromBlueprint:
             "assessment_id",
             "question_ids",
             "scenario_id",
+            "quiz_view_slug",
+            "scenario_view_slug",
             "title",
         }
         assert result["title"] == "Phishing Defense Basics"
