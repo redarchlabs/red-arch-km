@@ -144,12 +144,18 @@ class PromotionService:
         ok/error result rather than raising, so the UI can render either outcome."""
         if target.kind != PromotionTargetKind.REMOTE_INSTANCE.value:
             raise PromotionError("only remote-instance targets can be tested")
+        # Capture the connection details while attached, then release the session for
+        # the network probe so it doesn't sit idle-in-transaction during the ping.
+        base_url = target.base_url or ""
         try:
-            info = await OutboundPushClient(self._settings).ping(
-                target.base_url or "", self._remote_key(target)
-            )
+            api_key = self._remote_key(target)
+        except PromotionError as exc:
+            return {"ok": False, "remote_bundle_format_version": None, "error": str(exc)}
+        await self._session.close()
+        try:
+            info = await OutboundPushClient(self._settings).ping(base_url, api_key)
             return {"ok": True, "remote_bundle_format_version": info.get("bundle_format_version"), "error": None}
-        except (TransportError, PromotionError, httpx.HTTPError) as exc:
+        except (TransportError, httpx.HTTPError) as exc:
             return {"ok": False, "remote_bundle_format_version": None, "error": str(exc)}
 
     def _encrypt(self, api_key: str | None) -> str | None:
@@ -331,9 +337,10 @@ class PromotionService:
 
     async def _push_remote(
         self,
-        target: PromotionTarget,
-        bundle: dict[str, Any],
         *,
+        base_url: str,
+        api_key: str,
+        bundle: dict[str, Any],
         strategy: CollisionStrategy,
         apply_deletes: bool,
         allow_data: bool,
@@ -345,12 +352,19 @@ class PromotionService:
         The remote applies it and returns the result — including the reverse
         snapshot, which the source stores so a rollback can re-push it. A
         ``TransportError`` (SSRF/size/unreachable/remote error) surfaces as a 400;
-        an in-flight block surfaces as ``PromotionBlocked`` (409)."""
+        an in-flight block surfaces as ``PromotionBlocked`` (409).
+
+        Takes plain ``base_url``/``api_key`` (not the ORM target) and **closes the
+        DB session before the network call** so the up-to-300s push does not hold a
+        pooled connection open (idle-in-transaction). The caller must have captured
+        everything it needs from the session first, and reopens a fresh transaction
+        afterwards for any bookkeeping."""
+        await self._session.close()
         client = OutboundPushClient(self._settings)
         try:
             return await client.push(
-                base_url=target.base_url or "",
-                api_key=self._remote_key(target),
+                base_url=base_url,
+                api_key=api_key,
                 bundle=bundle,
                 strategy=strategy,
                 apply_deletes=apply_deletes,
@@ -382,8 +396,13 @@ class PromotionService:
             result = await executor.preview(bundle, strategy=strategy, apply_deletes=apply_deletes)
             await self._session.rollback()  # nothing persists; also clears the tenant scope
             return result
+        # Remote: capture the connection details while the target is attached, then
+        # push (which releases the session for the network leg).
+        base_url = target.base_url or ""
+        api_key = self._remote_key(target)
         return await self._push_remote(
-            target, bundle, strategy=strategy, apply_deletes=apply_deletes,
+            base_url=base_url, api_key=api_key, bundle=bundle,
+            strategy=strategy, apply_deletes=apply_deletes,
             allow_data=False, override_inflight=False, dry_run=True,
         )
 
@@ -413,6 +432,12 @@ class PromotionService:
             raise PromotionError("target not found")
         self._validate_target(target)
         bundle = release.bundle or {}
+        # Capture the scalar values the audit record needs now, while the ORM objects
+        # are attached — the remote path releases the session during its network push.
+        release_pk = release.id
+        target_pk = target.id
+        target_kind = target.kind
+        target_label = target.name
 
         importer = None
         if target.kind == PromotionTargetKind.LOCAL_ORG.value:
@@ -432,18 +457,24 @@ class PromotionService:
             await db_scope.exit_to_bypass(self._session)
             record_target_org = target.target_org_id
         else:
+            base_url = target.base_url or ""
+            api_key = self._remote_key(target)
+            record_target_org = target.remote_org_id
+            # _push_remote releases the DB connection for the network leg; reopen a
+            # privileged transaction afterwards to write the audit record.
             result = await self._push_remote(
-                target, bundle, strategy=strategy, apply_deletes=apply_deletes,
+                base_url=base_url, api_key=api_key, bundle=bundle,
+                strategy=strategy, apply_deletes=apply_deletes,
                 allow_data=allow_data, override_inflight=override_inflight, dry_run=False,
             )
-            record_target_org = target.remote_org_id
+            await db_scope.enter_bypass(self._session)
 
         promotion = ReleasePromotion(
             org_id=self._org_id,
-            release_id=release.id,
-            target_id=target.id,
-            target_kind=target.kind,
-            target_label=target.name,
+            release_id=release_pk,
+            target_id=target_pk,
+            target_kind=target_kind,
+            target_label=target_label,
             target_org_id=record_target_org,
             status=PromotionStatus.PROMOTED.value,
             strategy=strategy.value,
@@ -493,10 +524,20 @@ class PromotionService:
                 raise PromotionError("the remote target was removed; cannot roll back")
             # Rollback == re-push the reverse snapshot with deletes on (restore
             # overwrites + remove what the promotion created), overriding in-flight.
+            base_url = target.base_url or ""
+            api_key = self._remote_key(target)
+            snapshot = promotion.pre_state_bundle
             result = await self._push_remote(
-                target, promotion.pre_state_bundle, strategy=CollisionStrategy.OVERWRITE,
-                apply_deletes=True, allow_data=False, override_inflight=True, dry_run=False,
+                base_url=base_url, api_key=api_key, bundle=snapshot,
+                strategy=CollisionStrategy.OVERWRITE, apply_deletes=True,
+                allow_data=False, override_inflight=True, dry_run=False,
             )
+            # The push released the session (and its row lock). Reopen and re-lock,
+            # guarding against a concurrent rollback that completed while we pushed.
+            await db_scope.enter_bypass(self._session)
+            promotion = await self._lock_promotion(promotion_id)
+            if promotion is None or promotion.status != PromotionStatus.PROMOTED.value:
+                raise PromotionError("the promotion is no longer in a rollbackable state")
 
         promotion.status = PromotionStatus.ROLLED_BACK.value
         promotion.rolled_back_at = func.now()
