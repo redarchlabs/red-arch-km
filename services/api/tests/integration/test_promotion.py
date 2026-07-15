@@ -199,6 +199,55 @@ async def test_reject_resubmit_then_same_reviewer_approves(admin_session: AsyncS
 
 
 @pytest.mark.asyncio
+async def test_remote_promote_releases_session_during_network_leg(
+    admin_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A remote push must not hold the DB connection open during the (up to 300s)
+    network call: the session is closed before the push and reopened to write the
+    audit record afterwards."""
+    from api.services.migration import transport as transport_mod
+    from api.services.migration.diff import BundleDiff
+    from api.services.migration.promotion import PromotionResult
+
+    source = await _make_org(admin_session, "Remote Source")
+    await _seed_source(admin_session, source)
+    await set_tenant(admin_session, str(source.id))
+    svc = PromotionService(admin_session, source.id, _settings())
+    remote_org = uuid.uuid4()
+    tgt = await svc.create_target(
+        name="Prod Remote",
+        kind=PromotionTargetKind.REMOTE_INSTANCE,
+        base_url="https://prod.example.com",
+        remote_org_id=remote_org,
+        api_key="km2_secret",
+    )
+    release = await _approved_release(svc, admin_session)
+
+    in_txn_during_push: list[bool] = []
+
+    async def fake_push(self, **kwargs):  # noqa: ANN001, ANN003
+        # The service closed the session before calling us → no transaction in progress
+        # (so no pooled connection is held idle-in-transaction across the network leg).
+        in_txn_during_push.append(admin_session.in_transaction())
+        return PromotionResult(diff=BundleDiff(), import_summary=None, reverse_snapshot={"resources": {}})
+
+    monkeypatch.setattr(transport_mod.OutboundPushClient, "push", fake_push)
+
+    promotion, _ = await svc.promote_release(
+        release.id, tgt.id, strategy=CollisionStrategy.OVERWRITE, apply_deletes=False,
+        allow_data=False, override_inflight=False, promoted_by_id=None,
+    )
+
+    assert in_txn_during_push == [False]  # connection released for the push
+    assert promotion.status == "promoted"
+    assert promotion.target_kind == "remote_instance"
+    assert promotion.target_org_id == remote_org
+    # The record persisted → the session successfully reopened after the network leg.
+    fetched = await svc.get_promotion(promotion.id)
+    assert fetched is not None and fetched.status == "promoted"
+
+
+@pytest.mark.asyncio
 async def test_partial_release_does_not_delete_unmanaged_types(admin_session: AsyncSession) -> None:
     """A release that carries only some config types must not mark the target's
     other types for deletion (delete scope is limited to the types in the release)."""
