@@ -24,6 +24,7 @@ from api.repositories.custom_entity import (
 from api.schemas.custom_entity import (
     EntityDefinitionCreate,
     EntityFieldCreate,
+    EntityFieldUpdate,
     EntityRelationshipCreate,
 )
 from api.services import identifiers
@@ -86,6 +87,7 @@ class EntityService:
             slug=body.slug,
             physical_table=identifiers.table_name(def_id),
             description=body.description,
+            write_access=body.write_access,
         )
         fields = [await self._create_field_row(def_id, f) for f in body.fields]
         await self._schema.create_entity_table(definition, fields)
@@ -105,6 +107,7 @@ class EntityService:
             is_unique=body.is_unique,
             default_value=body.default_value,
             order=body.order,
+            read_access=body.read_access,
         )
 
     async def add_field(self, definition_id: uuid.UUID, body: EntityFieldCreate) -> EntityField:
@@ -123,6 +126,29 @@ class EntityService:
         field = await self._create_field_row(definition_id, body)
         await self._schema.add_field_column(definition, field)
         return field
+
+    async def update_field(
+        self, definition_id: uuid.UUID, field_id: uuid.UUID, body: EntityFieldUpdate
+    ) -> EntityField:
+        """Update a field's catalog-only attributes (name, picklist options, order,
+        and ``read_access``). Changing ``is_required`` needs a physical migration
+        (NOT NULL + backfill) and is rejected here to keep catalog and column in sync."""
+        field = await self._fields.get(field_id)
+        if field is None or field.entity_definition_id != definition_id:
+            raise EntityNotFoundError("field not found")
+        if body.is_required is not None and body.is_required != field.is_required:
+            raise EntityValidationError(
+                "changing 'is_required' needs a migration; not editable in place"
+            )
+        if body.picklist_options is not None and field.field_type != "picklist":
+            raise EntityValidationError("picklist_options is only valid for picklist fields")
+        return await self._fields.update(
+            field,
+            name=body.name,
+            picklist_options=body.picklist_options,
+            order=body.order,
+            read_access=body.read_access,
+        )
 
     async def drop_field(self, definition_id: uuid.UUID, field_id: uuid.UUID) -> None:
         """Drop a scalar field: its physical column (with data) and catalog row.

@@ -65,6 +65,7 @@ class EntityDefinitionRepository:
         slug: str,
         physical_table: str,
         description: str | None = None,
+        write_access: str = "member",
     ) -> EntityDefinition:
         instance = EntityDefinition(
             id=definition_id,
@@ -72,6 +73,7 @@ class EntityDefinitionRepository:
             slug=slug,
             physical_table=physical_table,
             description=description,
+            write_access=write_access,
             org_id=self._org_id,
         )
         self._session.add(instance)
@@ -85,6 +87,7 @@ class EntityDefinitionRepository:
         name: str | None = None,
         description: str | None = None,
         is_active: bool | None = None,
+        write_access: str | None = None,
     ) -> EntityDefinition:
         if name is not None:
             definition.name = name
@@ -92,6 +95,8 @@ class EntityDefinitionRepository:
             definition.description = description
         if is_active is not None:
             definition.is_active = is_active
+        if write_access is not None:
+            definition.write_access = write_access
         await self._session.flush()
         return definition
 
@@ -139,6 +144,7 @@ class EntityFieldRepository:
         is_unique: bool = False,
         default_value: Any | None = None,
         order: int = 0,
+        read_access: str = "member",
     ) -> EntityField:
         instance = EntityField(
             id=field_id,
@@ -152,11 +158,35 @@ class EntityFieldRepository:
             is_unique=is_unique,
             default_value=default_value,
             order=order,
+            read_access=read_access,
             org_id=self._org_id,
         )
         self._session.add(instance)
         await self._session.flush()
         return instance
+
+    async def update(
+        self,
+        field: EntityField,
+        *,
+        name: str | None = None,
+        picklist_options: list[str] | None = None,
+        order: int | None = None,
+        read_access: str | None = None,
+    ) -> EntityField:
+        """Update a field's catalog-only attributes (no DDL). ``is_required`` and
+        type/slug changes are intentionally excluded — those need a physical
+        migration and are handled elsewhere."""
+        if name is not None:
+            field.name = name
+        if picklist_options is not None:
+            field.picklist_options = picklist_options
+        if order is not None:
+            field.order = order
+        if read_access is not None:
+            field.read_access = read_access
+        await self._session.flush()
+        return field
 
     async def delete(self, field: EntityField) -> None:
         await self._session.delete(field)

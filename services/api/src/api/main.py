@@ -16,9 +16,13 @@ from api import db_scope
 from api.config import get_settings
 from api.db import dispose_engine, get_engine, get_session_factory
 from api.dependencies import close_redis_client, get_redis_client
-from api.exception_handlers import make_unhandled_exception_handler
+from api.exception_handlers import (
+    make_record_access_handler,
+    make_unhandled_exception_handler,
+)
 from api.middleware.request_logging import RequestLoggingMiddleware
 from api.observability import setup_observability
+from api.repositories.dynamic_entity import RecordAccessError
 from api.routers import (
     admin,
     agent,
@@ -166,6 +170,10 @@ def create_app() -> FastAPI:
     # "Network Error"). Re-attach them here so cross-origin callers see the 500.
     app.add_exception_handler(
         Exception, make_unhandled_exception_handler(settings.cors_origins)
+    )
+    # A member writing a workflow-only entity is a 403, not a 500.
+    app.add_exception_handler(
+        RecordAccessError, make_record_access_handler(settings.cors_origins)
     )
 
     # Observability must be wired here (before startup). Starlette forbids
