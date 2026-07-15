@@ -172,6 +172,10 @@ export interface RecordListElement extends ElementBase {
   empty_text?: string | null;
   row_workflow_id?: string | null;
   row_action_label?: string | null;
+  /** Optional per-row hyperlink with `{token}` placeholders filled from the row
+   * (`{id}` = row id, `{<field>}` = a field value) — e.g. `/views/{player_view_slug}/view`. */
+  row_link_template?: string | null;
+  row_link_label?: string | null;
   width?: FieldWidth | null;
 }
 

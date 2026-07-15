@@ -16,10 +16,25 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.repositories.custom_entity import EntityDefinitionRepository, EntityFieldRepository
+from api.repositories.workflow import WorkflowRepository
+from api.schemas.form import FormConfig
+from api.schemas.view import ViewCreate
+from api.services import lms_play_views
 from api.services.entity_records_helpers import build_record_repo
+from api.services.view_service import ViewService
 
 # Fallback per-module minutes when the blueprint carries no course estimate to split.
 _DEFAULT_MODULE_MINUTES = 10
+
+# The org workflows a generated course's play views submit to. Already generic
+# (parameterised by the assessment_id / scenario_id the view passes), so a generated
+# view reuses them exactly as the hand-built views do.
+_QUIZ_WORKFLOW_NAME = "Quiz: Grade"
+_SCENARIO_WORKFLOW_NAME = "Scenario: Grade & Certify"
+# Course fields that point at the play views, letting the generic catalog/player route
+# to a course's own quiz/scenario without any per-course view edits.
+_COURSE_VIEW_SLUG_FIELDS = ("quiz_view_slug", "scenario_view_slug")
 
 
 class CourseGenerationService:
@@ -45,6 +60,95 @@ class CourseGenerationService:
         if not record or not record.get("id"):
             raise RuntimeError(f"record create for entity '{slug}' returned no id")
         return record
+
+    async def _update(self, slug: str, record_id: str, values: dict[str, Any]) -> None:
+        """Patch fields on an existing record (privileged, like ``_create``)."""
+        repo, _definition = await build_record_repo(self._session, self._org_id, slug, privileged=True)
+        await repo.update(uuid.UUID(record_id), values)
+
+    async def _resolve_workflow_id(self, name: str) -> str | None:
+        """Resolve a workflow by name in this org (the play views submit to it)."""
+        for wf in await WorkflowRepository(self._session, self._org_id).list_all():
+            if wf.name == name:
+                return str(wf.id)
+        return None
+
+    async def _course_has_view_slug_fields(self) -> bool:
+        definition = await EntityDefinitionRepository(self._session, self._org_id).get_by_slug("course")
+        if definition is None:
+            return False
+        fields = await EntityFieldRepository(self._session, self._org_id).list_for_definition(definition.id)
+        have = {f.slug for f in fields}
+        return all(slug in have for slug in _COURSE_VIEW_SLUG_FIELDS)
+
+    async def create_play_views(
+        self,
+        *,
+        course_id: str,
+        code: str,
+        title: str,
+        assessment_id: str,
+        questions: list[dict[str, Any]],
+        passing_threshold: int | None,
+        scenario_id: str,
+        scenario_title: str,
+        scenario_prompt: str,
+    ) -> dict[str, str | None]:
+        """Create the learner-bound quiz + scenario play views for a generated course
+        and link the course to them (so the generic catalog/player can route to it).
+
+        Best-effort: if the org is missing the grading workflows or the ``learner``
+        entity, the course's records still stand (browsable) — it just isn't playable
+        yet, and the returned slugs are ``None``."""
+        quiz_wf = await self._resolve_workflow_id(_QUIZ_WORKFLOW_NAME)
+        scenario_wf = await self._resolve_workflow_id(_SCENARIO_WORKFLOW_NAME)
+        learner = await EntityDefinitionRepository(self._session, self._org_id).get_by_slug("learner")
+        if not (quiz_wf and scenario_wf and learner):
+            return {"quiz_view_slug": None, "scenario_view_slug": None}
+
+        views = ViewService(self._session, self._org_id)
+        quiz_slug = lms_play_views.play_view_slug("quiz", code)
+        scenario_slug = lms_play_views.play_view_slug("scenario", code)
+        await views.create_view(
+            ViewCreate(
+                name=f"Quiz: {title}",
+                slug=quiz_slug,
+                entity_definition_id=learner.id,
+                config=FormConfig.model_validate(
+                    lms_play_views.build_quiz_view_config(
+                        title=title,
+                        questions=questions,
+                        assessment_id=assessment_id,
+                        quiz_workflow_id=quiz_wf,
+                        passing_threshold=passing_threshold,
+                    )
+                ),
+            )
+        )
+        await views.create_view(
+            ViewCreate(
+                name=f"Scenario: {scenario_title}",
+                slug=scenario_slug,
+                entity_definition_id=learner.id,
+                config=FormConfig.model_validate(
+                    lms_play_views.build_scenario_view_config(
+                        title=scenario_title,
+                        prompt=scenario_prompt,
+                        scenario_id=scenario_id,
+                        course_id=course_id,
+                        scenario_workflow_id=scenario_wf,
+                    )
+                ),
+            )
+        )
+        # Link the course to its play views so the generic catalog/player route to it.
+        if await self._course_has_view_slug_fields():
+            await self._update(
+                "course",
+                course_id,
+                {"quiz_view_slug": quiz_slug, "scenario_view_slug": scenario_slug},
+            )
+        return {"quiz_view_slug": quiz_slug, "scenario_view_slug": scenario_slug}
 
     async def create_from_blueprint(self, blueprint: dict[str, Any], category: str) -> dict[str, Any]:
         """Create the linked records for a generated course and return their ids.
@@ -136,6 +240,20 @@ class CourseGenerationService:
             },
         )
 
+        # Create the learner-bound quiz + scenario play views and link the course to
+        # them, so the generated course is playable through the generic catalog/player.
+        play = await self.create_play_views(
+            course_id=course_id,
+            code=code,
+            title=title,
+            assessment_id=assessment_id,
+            questions=quiz.get("questions") or [],
+            passing_threshold=quiz.get("passing_threshold"),
+            scenario_id=str(scenario["id"]),
+            scenario_title=str(scenario_bp.get("title") or title),
+            scenario_prompt=str(scenario_bp.get("prompt") or ""),
+        )
+
         return {
             "course_id": course_id,
             "code": code,
@@ -143,5 +261,7 @@ class CourseGenerationService:
             "assessment_id": assessment_id,
             "question_ids": question_ids,
             "scenario_id": str(scenario["id"]),
+            "quiz_view_slug": play["quiz_view_slug"],
+            "scenario_view_slug": play["scenario_view_slug"],
             "title": title,
         }

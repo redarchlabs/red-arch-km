@@ -25,6 +25,7 @@ import { callConnection, runWorkflow } from "@/lib/api/workflows";
 import { ReportChart } from "@/components/reports/ReportChart";
 import { Dialog, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { buildCatalog, fieldMeta, relatedEntityId } from "@/lib/forms/catalog";
+import { fillTokens } from "@/lib/forms/href";
 import { evaluate } from "@/lib/forms/jsonLogic";
 
 import { FieldControl } from "./FieldControl";
@@ -79,25 +80,11 @@ function nonEmpty(v: Values): boolean {
   return Object.values(v).some((x) => x !== "" && x != null);
 }
 
-/** Reject any URL whose scheme isn't http(s); relative URLs pass through. Defense in
- * depth against a link-column stored-XSS (`javascript:`/`data:` …) alongside the
- * server-side `href_template` validator — the schema can't cover every authoring path. */
-function safeHref(url: string): string {
-  const scheme = /^\s*([a-zA-Z][a-zA-Z0-9+.-]*):/.exec(url);
-  if (scheme && !/^https?$/i.test(scheme[1])) return "#";
-  return url;
-}
-
 /** Substitute a link column's `{token}` placeholders from a table row: `{id}` is the
- * row record id, any other token is an anchor field value on the row. Each value is
- * URL-encoded; an unknown/absent token resolves to an empty string. The final URL is
- * scheme-checked so a stored template can't smuggle a `javascript:` link. */
+ * row record id, any other token is an anchor field value on the row. Delegates the
+ * fill + scheme-check to the shared `fillTokens`. */
 function fillHref(template: string, row: RowState): string {
-  const url = template.replace(/\{(\w+)\}/g, (_, key: string) => {
-    const v = key === "id" ? row.id : row.values?.[key];
-    return v == null ? "" : encodeURIComponent(String(v));
-  });
-  return safeHref(url);
+  return fillTokens(template, { ...row.values, id: row.id });
 }
 
 /** Collect `input` elements reachable in the root scope (layout containers only, since
@@ -310,6 +297,7 @@ function RecordListNode({
                     {c}
                   </th>
                 ))}
+                {el.row_link_template ? <th className="w-24 px-3 py-2" /> : null}
                 {el.row_workflow_id ? <th className="w-24 px-3 py-2" /> : null}
               </tr>
             </thead>
@@ -321,6 +309,16 @@ function RecordListNode({
                       {formatCell(row[c])}
                     </td>
                   ))}
+                  {el.row_link_template ? (
+                    <td className="px-3 py-2 text-right">
+                      <a
+                        href={fillTokens(el.row_link_template, row)}
+                        className="inline-block rounded-md border bg-background px-2 py-1 text-xs font-medium hover:bg-muted"
+                      >
+                        {el.row_link_label ?? "Open"}
+                      </a>
+                    </td>
+                  ) : null}
                   {el.row_workflow_id ? (
                     <td className="px-3 py-2 text-right">
                       <button
@@ -1123,8 +1121,11 @@ export function FormRenderer({
       }
     } else if (btn.action.kind === "link") {
       if (typeof window !== "undefined") {
-        if (btn.action.new_tab) window.open(btn.action.href, "_blank");
-        else window.location.href = btn.action.href;
+        // Fill `{token}` placeholders from the record's values (`{id}` = the bound
+        // record id) so a button can route per-record, then scheme-check the result.
+        const href = fillTokens(btn.action.href, { ...values, id: render.record_id ?? "" });
+        if (btn.action.new_tab) window.open(href, "_blank");
+        else window.location.href = href;
       }
     }
   };
