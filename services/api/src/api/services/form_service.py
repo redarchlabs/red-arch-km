@@ -395,6 +395,10 @@ class FormRenderService:
             description=form.description,
             status=status,
             root_entity_id=form.entity_definition_id,
+            # Echo back the bound record only when it actually resolved to a row, so a
+            # `record_id=me` view that found the caller's record can hand the client a
+            # concrete id for workflow-button targeting.
+            record_id=target_record_id if root_record is not None else None,
             config=config,
             catalog=catalog,
             relationships=relationships,

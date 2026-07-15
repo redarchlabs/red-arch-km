@@ -1,7 +1,7 @@
 "use client";
 
 import { ChevronDown, ChevronUp, Plus, Trash2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { useHelpOverride } from "@/context/HelpContext";
 import { helpForElement } from "@/lib/builderHelp";
@@ -16,6 +16,8 @@ import type {
   RecordListElement,
   RecordListFilterConfig,
   SectionElement,
+  Slide,
+  SlidesElement,
   TableColumn,
   TableElement,
 } from "@/lib/api/forms";
@@ -167,6 +169,8 @@ function ElementEditor({
       return <ReportEditor el={el} onChange={onChange} />;
     case "record_list":
       return <RecordListEditor el={el} ctx={ctx} onChange={onChange} />;
+    case "slides":
+      return <SlidesEditor el={el} onChange={onChange} />;
     case "chat":
       return <ChatEditor el={el} onChange={onChange} />;
     case "button":
@@ -203,7 +207,20 @@ function RecordListEditor({
 }) {
   const entities = [...ctx.entitiesById.values()];
   const filters = el.filters ?? [];
-  const setFilters = (next: RecordListFilterConfig[]) => onChange({ ...el, filters: next });
+  // Stable client keys per filter row (parallel to `filters`, never persisted) so
+  // deleting a middle row doesn't reassign identities below it — an index key would
+  // shift them and jump input focus. Falls back to the index if the two drift (e.g.
+  // an external edit adds a filter without going through these handlers).
+  const [rowKeys, setRowKeys] = useState<number[]>(() => filters.map((_, i) => i));
+  const nextKey = useRef(filters.length);
+  const setFilters = (next: RecordListFilterConfig[], keys?: number[]) => {
+    if (keys) setRowKeys(keys);
+    onChange({ ...el, filters: next });
+  };
+  const addFilter = () =>
+    setFilters([...filters, { field: "", op: "eq", value: "" }], [...rowKeys, nextKey.current++]);
+  const removeFilter = (i: number) =>
+    setFilters(filters.filter((_, j) => j !== i), rowKeys.filter((_, j) => j !== i));
   const updateFilter = (i: number, patch: Partial<RecordListFilterConfig>) =>
     setFilters(filters.map((f, j) => (j === i ? { ...f, ...patch } : f)));
 
@@ -245,16 +262,12 @@ function RecordListEditor({
       <div className="space-y-1">
         <div className="flex items-center justify-between">
           <span className="text-xs font-medium text-muted-foreground">Filters (all must match)</span>
-          <button
-            type="button"
-            className={btn}
-            onClick={() => setFilters([...filters, { field: "", op: "eq", value: "" }])}
-          >
+          <button type="button" className={btn} onClick={addFilter}>
             <Plus className="h-3 w-3" /> Filter
           </button>
         </div>
         {filters.map((f, i) => (
-          <div key={i} className="flex items-center gap-1.5">
+          <div key={rowKeys[i] ?? i} className="flex items-center gap-1.5">
             <input
               className={input}
               placeholder="field / relation slug"
@@ -281,7 +294,7 @@ function RecordListEditor({
             <button
               type="button"
               className={btn}
-              onClick={() => setFilters(filters.filter((_, j) => j !== i))}
+              onClick={() => removeFilter(i)}
               aria-label="Remove filter"
             >
               <Trash2 className="h-3 w-3" />
@@ -335,6 +348,111 @@ function RecordListEditor({
           onChange={(e) => onChange({ ...el, empty_text: e.target.value || null })}
         />
       </Row>
+    </div>
+  );
+}
+
+function SlidesEditor({
+  el,
+  onChange,
+}: {
+  el: SlidesElement;
+  onChange: (el: FormElement) => void;
+}) {
+  const slides = el.slides ?? [];
+  const setSlides = (next: Slide[]) => onChange({ ...el, slides: next });
+  const updateSlide = (i: number, patch: Partial<Slide>) =>
+    setSlides(slides.map((s, j) => (j === i ? { ...s, ...patch } : s)));
+
+  return (
+    <div className="space-y-1.5">
+      <Row label="Label">
+        <input
+          className={input}
+          value={el.label ?? ""}
+          onChange={(e) => onChange({ ...el, label: e.target.value || null })}
+        />
+      </Row>
+      <Row label="Bind to field">
+        <input
+          className={input}
+          placeholder="JSON field slug (e.g. slides) — blank = inline"
+          value={el.slug ?? ""}
+          onChange={(e) => onChange({ ...el, slug: e.target.value || null })}
+        />
+      </Row>
+      {el.slug ? (
+        <p className="text-[11px] text-muted-foreground">
+          Bound to <code>{el.slug}</code>: slides come from that record field. Clear it to author inline
+          slides here instead.
+        </p>
+      ) : (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-medium text-muted-foreground">Inline slides</span>
+            <button
+              type="button"
+              className={btn}
+              onClick={() => setSlides([...slides, { title: `Slide ${slides.length + 1}`, body: "" }])}
+            >
+              <Plus className="h-3 w-3" /> Slide
+            </button>
+          </div>
+          {slides.map((s, i) => (
+            <div key={i} className="space-y-1 rounded-md border border-dashed p-2">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-medium text-muted-foreground">Slide {i + 1}</span>
+                <button
+                  type="button"
+                  className={`${btn} text-destructive`}
+                  onClick={() => setSlides(slides.filter((_, j) => j !== i))}
+                  aria-label="Remove slide"
+                >
+                  <Trash2 className="h-3 w-3" />
+                </button>
+              </div>
+              <input
+                className={input}
+                placeholder="Title"
+                value={s.title ?? ""}
+                onChange={(e) => updateSlide(i, { title: e.target.value || null })}
+              />
+              <textarea
+                className={`${input} font-mono`}
+                rows={3}
+                placeholder="Body (Markdown)"
+                value={s.body ?? ""}
+                onChange={(e) => updateSlide(i, { body: e.target.value })}
+              />
+              <input
+                className={input}
+                placeholder="Image URL (optional)"
+                value={s.image_url ?? ""}
+                onChange={(e) => updateSlide(i, { image_url: e.target.value || null })}
+              />
+              <input
+                className={input}
+                placeholder="Video URL — direct mp4/webm (optional)"
+                value={s.video_url ?? ""}
+                onChange={(e) => updateSlide(i, { video_url: e.target.value || null })}
+              />
+              {s.video_url ? (
+                <label className="flex items-center gap-1 text-xs">
+                  <input
+                    type="checkbox"
+                    checked={s.require_video !== false}
+                    onChange={(e) => updateSlide(i, { require_video: e.target.checked })}
+                  />
+                  Nudge learner to finish before advancing
+                </label>
+              ) : null}
+            </div>
+          ))}
+          {slides.length === 0 ? (
+            <p className="text-[11px] text-muted-foreground">No slides yet — add one, or bind a field above.</p>
+          ) : null}
+        </div>
+      )}
     </div>
   );
 }

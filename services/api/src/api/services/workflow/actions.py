@@ -949,26 +949,74 @@ class LlmGrade:
         return {"score": 0, "passed": False, "feedback": ""}
 
 
+async def _list_all(
+    repo: Any,
+    *,
+    filters: dict[str, Any],
+    order_by: str,
+    page: int = 200,
+    max_pages: int = 50,
+) -> list[dict[str, Any]]:
+    """Fetch EVERY row matching ``filters`` by looping the keyset cursor.
+
+    The record repository caps a single page at 200 rows, so a one-shot ``limit=500``
+    silently truncated. This walks the ``(order_by asc, id desc)`` keyset until the
+    cursor is exhausted, bounded by ``max_pages`` (≤ 10k rows) so a pathological
+    entity can't spin the request."""
+    out: list[dict[str, Any]] = []
+    cursor: Any = None
+    for _ in range(max_pages):
+        rows, cursor = await repo.list(
+            filters=filters, cursor=cursor, limit=page, order_by=order_by, order_dir="asc"
+        )
+        out.extend(rows)
+        if cursor is None or not rows:
+            break
+    return out
+
+
 @register
 class GradeQuiz:
     """Deterministically grade a multiple-choice quiz SERVER-SIDE.
 
     Loads an assessment's ``question`` rows and compares each learner answer to the
-    stored ``correct_answer`` — so the correct answers are NEVER sent to the client
-    and a client can't forge a pass (unlike a client-side JsonLogic score that also
-    leaks every answer into the view). The learner's choices arrive as manual-run
-    inputs ``a1``, ``a2``, … : the i-th input maps to the i-th question ordered by
-    ``order_field``. Returns ``{score, passed, correct, total}`` (``score`` = integer
-    percent correct); wire ``capture`` (e.g. ``"quiz"``) so a downstream gateway
-    branches on ``{{vars.quiz.passed}}`` and a create_record step stores the score.
+    stored ``correct_answer``, returning ``{score, passed, correct, total, answered}``
+    (``score`` = integer percent correct, ``answered`` = count of non-blank answers).
+    Wire ``capture`` (e.g. ``"quiz"``) so a downstream gateway branches on
+    ``{{vars.quiz.passed}}`` and a create_record step stores the score.
 
-    Config: ``{"assessment_id": {"$ref": "inputs.assessment_id"}, "pass_threshold":
-    {"$ref": "vars.asm.passing_threshold"}, "question_slug"?: "question",
-    "assessment_ref"?: "assessment", "order_field"?: "sort_order",
-    "answers_prefix"?: "a"}``. ``pass_threshold`` defaults to 70 when unset. The
-    entity/field slugs are configurable so this isn't LMS-specific. Read-only."""
+    Answers may be supplied two ways:
+
+    * **By question id (preferred)** — an ``answers`` config value resolving to a map
+      ``{question_id: choice}`` (e.g. ``{"$ref": "inputs.answers"}``). Matching by id is
+      robust to question reordering, ties in ``order_field``, and questions added or
+      removed between render and grade.
+    * **By position (fallback)** — manual-run inputs ``a1``, ``a2``, … where the i-th
+      input maps to the i-th question ordered by ``order_field``. Simpler to wire, but
+      the rendering view MUST list questions in that same ``order_field`` order — a
+      reorder or a tie shifts every answer by one. Prefer the id-keyed form for new
+      quizzes; ``answered`` is returned so a miswired view (``answered`` != ``total``)
+      is detectable downstream.
+
+    Config: ``{"assessment_id": {"$ref": "inputs.assessment_id"}, "answers"?:
+    {"$ref": "inputs.answers"}, "pass_threshold": {"$ref": "vars.asm.passing_threshold"},
+    "question_slug"?: "question", "assessment_ref"?: "assessment", "order_field"?:
+    "sort_order", "answers_prefix"?: "a"}``. ``pass_threshold`` defaults to 70 when
+    unset. The entity/field slugs are configurable so this isn't LMS-specific. Read-only.
+
+    TRUST MODEL — this grades the quiz correctly, but it does NOT by itself make the
+    quiz tamper-proof. The records API grants any org member read/write on every
+    entity, so a determined learner can read a ``question`` row's ``correct_answer``
+    directly, or fabricate a passing attempt/certification record, WITHOUT running this
+    action. Treat the MCQ gate as an honest-effort check, not exam invigilation. Real
+    tamper-resistance needs entity/field-level permissions (hide ``correct_answer`` on
+    read, restrict writes to attempt/cert entities) — a platform feature, not something
+    this action can enforce on its own."""
 
     type = "grade_quiz"
+
+    # The record repository caps a page at 200; loop the cursor so every question counts.
+    _PAGE = 200
 
     async def execute(self, ctx: ActionContext) -> dict[str, Any]:
         context = _trigger_context(ctx)
@@ -980,24 +1028,31 @@ class GradeQuiz:
         order_field = str(ctx.config.get("order_field") or "sort_order")
         prefix = str(ctx.config.get("answers_prefix") or "a")
         pass_threshold = _as_int(_resolve_dynamic(ctx.config.get("pass_threshold"), context), 70)
+        # Preferred answer source: a {question_id: choice} map (order-independent). When
+        # absent, fall back to positional a1..aN inputs (older, view-rendered quizzes).
+        answers = _resolve_dynamic(ctx.config.get("answers"), context)
+        by_id = answers if isinstance(answers, dict) else None
 
         repo = await ctx.repo_for_slug(question_slug)
-        questions, _ = await repo.list(
-            filters={assessment_ref: assessment_id}, limit=500, order_by=order_field, order_dir="asc"
+        questions = await _list_all(
+            repo, filters={assessment_ref: assessment_id}, order_by=order_field, page=self._PAGE
         )
         total = len(questions)
         correct = 0
+        answered = 0
         for i, question in enumerate(questions, start=1):
-            chosen = ctx.inputs.get(f"{prefix}{i}")
             expected = question.get("correct_answer")
-            if chosen is not None and expected is not None and str(chosen).strip() == str(expected).strip():
-                correct += 1
+            chosen = by_id.get(str(question.get("id"))) if by_id is not None else ctx.inputs.get(f"{prefix}{i}")
+            if chosen is not None and str(chosen).strip() != "":
+                answered += 1
+                if expected is not None and str(chosen).strip() == str(expected).strip():
+                    correct += 1
         score = round(100 * correct / total) if total else 0
-        return {"score": score, "passed": score >= pass_threshold, "correct": correct, "total": total}
+        return {"score": score, "passed": score >= pass_threshold, "correct": correct, "total": total, "answered": answered}
 
     def simulate(self, ctx: ActionContext) -> dict[str, Any]:
         # Read-only, but keep the dry run out of the DB for symmetry with get_record.
-        return {"score": 0, "passed": False, "correct": 0, "total": 0}
+        return {"score": 0, "passed": False, "correct": 0, "total": 0, "answered": 0}
 
 
 @register

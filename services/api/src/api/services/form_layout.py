@@ -288,7 +288,19 @@ def _leaf_slugs(elements: list[Any]) -> tuple[list[str], set[str], list[CalcBind
     display: list[str] = []
     write: set[str] = set()
     calc: list[CalcBinding] = []
+
+    def declare(slug: str) -> None:
+        # A gate reads a field in this container's scope; fetch it even if it isn't a
+        # visible column, or its `visible_when` evaluates against `undefined` and the
+        # element silently always-hides.
+        if slug not in display:
+            display.append(slug)
+
     for el in elements:
+        gate = getattr(el, "visible_when", None)
+        if gate is not None:
+            for slug in _expr_var_slugs(gate):
+                declare(slug)
         if el.type == "field":
             display.append(el.slug)
             if not el.read_only:

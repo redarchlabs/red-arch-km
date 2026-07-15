@@ -7,9 +7,13 @@
  * survives FormRenderer re-renders. Slide bodies are Markdown.
  *
  * A slide may carry a `video_url` (a direct mp4/webm). When `require_video` is
- * set (the default), the deck GATES forward navigation until the learner has
- * watched that video through — the "Next"/forward controls stay disabled, and
- * seeking ahead of the furthest-played point is prevented so it can't be skipped.
+ * set (the default), the deck DISCOURAGES skipping a video: the "Next"/forward
+ * controls stay disabled and seeking ahead of the furthest-played point is snapped
+ * back until the learner watches it through. This is a client-side nudge, not
+ * enforced viewing — nothing is recorded server-side, so a determined user can still
+ * bypass it. If the video genuinely fails to load we release the gate (so a broken
+ * source can't trap the learner), but that "unavailable" state is tracked separately
+ * from a genuine "watched", so a load failure is never counted as completion.
  */
 import { ChevronLeft, ChevronRight, Lock } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -17,15 +21,20 @@ import { useEffect, useRef, useState } from "react";
 import { Markdown } from "@/components/common/Markdown";
 import type { Slide } from "@/lib/api/forms";
 
-/** True when a slide has a video that must be watched before advancing. */
-function gatesOn(slide: Slide | undefined): boolean {
+/** True when a slide has a video that must be watched before advancing. Exported for
+ * unit testing the gate predicate in isolation. */
+export function gatesOn(slide: Slide | undefined): boolean {
   return Boolean(slide?.video_url) && slide?.require_video !== false;
 }
 
 export function SlideDeck({ slides, label }: { slides: Slide[]; label?: string | null }) {
   const [index, setIndex] = useState(0);
-  // Indices whose required video has been watched through (gate satisfied).
+  // Indices whose required video the learner actually watched through (onEnded).
   const [watched, setWatched] = useState<Set<number>>(() => new Set());
+  // Indices whose video failed to load (onError). Kept SEPARATE from `watched` so a
+  // broken source releases the gate (no forever-trap) without being miscounted as a
+  // genuine completion.
+  const [errored, setErrored] = useState<Set<number>>(() => new Set());
   // Furthest playback point reached on the CURRENT slide's video — used to block
   // seeking ahead (skipping). Reset whenever the visible slide changes.
   const maxTimeRef = useRef(0);
@@ -46,15 +55,20 @@ export function SlideDeck({ slides, label }: { slides: Slide[]; label?: string |
   }
 
   const slide = slides[i];
-  const gated = gatesOn(slide) && !watched.has(i);
+  // Gate releases on a genuine watch-through OR an unplayable source (can't force
+  // viewing of a video that won't load) — but the two are tracked distinctly.
+  const gated = gatesOn(slide) && !watched.has(i) && !errored.has(i);
+  const unavailable = errored.has(i);
 
-  const markWatched = () =>
-    setWatched((prev) => {
+  const addTo = (set: React.Dispatch<React.SetStateAction<Set<number>>>) =>
+    set((prev) => {
       if (prev.has(i)) return prev;
       const next = new Set(prev);
       next.add(i);
       return next;
     });
+  const markWatched = () => addTo(setWatched);
+  const markErrored = () => addTo(setErrored);
 
   const go = (target: number) => {
     const clamped = Math.min(Math.max(target, 0), count - 1);
@@ -88,8 +102,9 @@ export function SlideDeck({ slides, label }: { slides: Slide[]; label?: string |
               controlsList="nodownload"
               className="max-h-72 w-full rounded-md bg-black"
               onEnded={markWatched}
-              // A broken/unplayable source shouldn't trap the learner forever.
-              onError={markWatched}
+              // A broken/unplayable source shouldn't trap the learner forever — release
+              // the gate, but as "unavailable", NOT as a genuine watch-through.
+              onError={markErrored}
               onTimeUpdate={(e) => {
                 const t = e.currentTarget.currentTime;
                 if (t > maxTimeRef.current) maxTimeRef.current = t;
@@ -105,6 +120,10 @@ export function SlideDeck({ slides, label }: { slides: Slide[]; label?: string |
             {gated ? (
               <p className="flex items-center gap-1 text-xs text-muted-foreground">
                 <Lock className="h-3 w-3" /> Finish the video to continue.
+              </p>
+            ) : unavailable ? (
+              <p className="text-xs text-muted-foreground">
+                Video couldn’t load — you may continue.
               </p>
             ) : null}
           </div>
@@ -169,7 +188,13 @@ export function SlideDeck({ slides, label }: { slides: Slide[]; label?: string |
   );
 }
 
-/** Coerce a bound JSON field value (array, JSON string, or null) into a Slide[]. */
+/** Coerce a bound JSON field value (array, JSON string, or null) into a Slide[].
+ *
+ * Field values are author/agent-supplied JSON and any org member can write them, so
+ * this is defensive: it rejects non-arrays and non-object entries (incl. arrays,
+ * which are `typeof "object"`), and coerces every field to its expected type so a
+ * malformed `body`/`title` can't reach `marked.parse()` or React as a non-string and
+ * crash the whole course view. */
 export function coerceSlides(raw: unknown): Slide[] {
   let value = raw;
   if (typeof value === "string") {
@@ -180,5 +205,20 @@ export function coerceSlides(raw: unknown): Slide[] {
     }
   }
   if (!Array.isArray(value)) return [];
-  return value.filter((s): s is Slide => typeof s === "object" && s !== null);
+  const str = (v: unknown): string | null => (typeof v === "string" ? v : null);
+  return value
+    .filter(
+      (s): s is Record<string, unknown> =>
+        typeof s === "object" && s !== null && !Array.isArray(s),
+    )
+    .map((s) => ({
+      title: str(s.title),
+      body: typeof s.body === "string" ? s.body : "",
+      image_url: str(s.image_url),
+      video_url: str(s.video_url),
+      // Gate unless explicitly opted out (matches `gatesOn`); a non-bool is treated as
+      // the default (gate on).
+      require_video: s.require_video !== false,
+      notes: str(s.notes),
+    }));
 }

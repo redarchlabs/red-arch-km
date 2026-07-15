@@ -473,6 +473,10 @@ export interface FormRender {
   description: string | null;
   status: string;
   root_entity_id: string | null;
+  /** The record this render is actually bound to, once resolved. For a `record_id=me`
+   * view it's the caller's own record id (or null if unresolved) — use it to target a
+   * workflow button at the right record instead of re-sending the `me` sentinel. */
+  record_id: string | null;
   config: FormConfig;
   catalog: EntityCatalogEntry[];
   relationships: RelationshipMeta[];

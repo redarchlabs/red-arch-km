@@ -138,6 +138,39 @@ def test_visible_when_rejects_unknown_key_still(ids):
         )
 
 
+def test_visible_when_in_section_child_fetches_gate_field(ids, fields_by_entity, rels):
+    """A gate on a section/block child must fetch the field it reads into the
+    container's values — otherwise the client evaluates it against `undefined` and the
+    child silently always-hides. Regression for the leaf-scope gate gap."""
+    cfg = FormConfig.model_validate(
+        {
+            "version": 2,
+            "elements": [
+                {
+                    "type": "section",
+                    "relationship_id": str(ids["rel_1to1"]),
+                    "mode": "inline",
+                    "elements": [
+                        {
+                            "type": "label",
+                            "text": "Only when named",
+                            "variant": "paragraph",
+                            "visible_when": {"!!": [{"var": "product_name"}]},
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+    fl.validate(cfg.elements, ids["root"], fields_by_entity, rels)  # no raise
+    b = fl.flatten(cfg.elements, rels)
+    section = next(c for c in b.containers if isinstance(c, SectionBinding))
+    # The gate's `product_name` is fetched into the section values even though it is
+    # not a visible column, so the client can evaluate the gate.
+    assert "product_name" in section.display_slugs
+    assert "product_name" not in section.write_slugs  # a gate read never implies write
+
+
 def test_table_anchor_must_target_root(ids, fields_by_entity, rels):
     # rel_1to1 is a to-one on root, illegal as a 1:M table anchor.
     cfg = FormConfig.model_validate(
