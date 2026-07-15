@@ -18,6 +18,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api import db_scope
 from api.auth.api_key import ApiKeyPrincipal, get_apikey_tenant_owner_db, require_scope
 from api.config import Settings, get_settings
 from api.routers.migration import _read_bundle
@@ -91,5 +92,9 @@ async def receive_promotion(
         ) from exc
 
     await session.commit()
+    # ``commit`` cleared the transaction-scoped RLS GUCs (role + tenant id); re-enter
+    # the owner scope so the post-commit ingest enqueue (which reads folders and
+    # writes doc.celery_task_id for this org) isn't blocked by RLS failing closed.
+    await db_scope.enter_tenant_owner(session, principal.org_id)
     await importer.dispatch_pending_ingests(result.import_summary)  # type: ignore[arg-type]
     return result

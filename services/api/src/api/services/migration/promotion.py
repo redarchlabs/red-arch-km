@@ -26,12 +26,28 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.config import Settings
-from api.services.migration.bundle import CollisionStrategy, ImportSummary
+from api.services.migration.bundle import RESOURCE_ORDER, CollisionStrategy, ImportSummary
 from api.services.migration.deleter import MigrationDeleter
-from api.services.migration.diff import BundleDiff, ObjectStatus, compute_diff
+from api.services.migration.diff import (
+    DATA_RESOURCE_TYPES,
+    BundleDiff,
+    ObjectStatus,
+    compute_diff,
+)
 from api.services.migration.exporter import MigrationExporter
 from api.services.migration.importer import MigrationImporter
 from api.services.migration.inflight import InFlightBlocker, InFlightGuard
+
+
+def _managed_delete_types(source_resources: dict[str, Any]) -> frozenset[str]:
+    """Which config types a release may delete on the target: only the ones the
+    release actually contains. A forms-only release must never mark the target's
+    workflows or entities (absent from the release) as deletions."""
+    return frozenset(
+        rtype
+        for rtype in RESOURCE_ORDER
+        if rtype not in DATA_RESOURCE_TYPES and source_resources.get(rtype)
+    )
 
 
 class PromotionBlocked(Exception):
@@ -83,14 +99,13 @@ class PromotionExecutor:
         *,
         strategy: CollisionStrategy = CollisionStrategy.SKIP,
         apply_deletes: bool = False,
-        allow_data: bool = False,
     ) -> PromotionResult:
         """Dry-run: diff + would-be import summary + in-flight blockers. The caller
         MUST roll the session back — the importer's dry-run leaves nothing, but the
         target export/diff read on the same session."""
         source = bundle.get("resources") or {}
         target = await self._target_config()
-        diff = compute_diff(source, target)
+        diff = compute_diff(source, target, manage_deletes_for=_managed_delete_types(source))
         summary = await MigrationImporter(self._session, self._org_id, self._settings).import_bundle(
             bundle, strategy, dry_run=True
         )
@@ -110,12 +125,18 @@ class PromotionExecutor:
         allow_data: bool = False,
         override_inflight: bool = False,
         capture_rollback: bool = True,
+        full_delete_scope: bool = False,
     ) -> tuple[PromotionResult, MigrationImporter]:
         """Apply ``bundle`` to the target. Does NOT commit — the caller commits, then
         calls ``importer.dispatch_pending_ingests(result.import_summary)``.
 
         Raises :class:`PromotionBlocked` if ``apply_deletes`` would remove an object
         with in-flight runs and ``override_inflight`` is not set.
+
+        ``full_delete_scope`` widens deletion management to every config type (used by
+        rollback, which restores the target to a captured full snapshot). A normal
+        forward promote instead limits deletes to the types the release carries, so a
+        partial release never marks unrelated types for deletion.
         """
         source = bundle.get("resources") or {}
         # Capture the reverse snapshot BEFORE any mutation, so rollback can restore.
@@ -126,7 +147,8 @@ class PromotionExecutor:
             )
 
         target = await self._target_config()
-        diff = compute_diff(source, target)
+        manage = None if full_delete_scope else _managed_delete_types(source)
+        diff = compute_diff(source, target, manage_deletes_for=manage)
         deletions = deletion_set(diff) if apply_deletes else {}
 
         # In-flight guard: block destructive deletes under live runs unless overridden.
@@ -155,20 +177,24 @@ class PromotionExecutor:
         return result, importer
 
     async def rollback(
-        self, reverse_snapshot: dict[str, Any], *, allow_data: bool = False
+        self, reverse_snapshot: dict[str, Any]
     ) -> tuple[PromotionResult, MigrationImporter]:
         """Undo a promotion by re-applying its reverse snapshot with deletes on:
         OVERWRITE restores changed objects, and objects created since (absent from
-        the snapshot) are removed. Config-layer, best-effort for data.
+        the snapshot) are removed across every config type.
 
-        The snapshot is a full ``km2-migration-bundle`` captured at promote time.
-        Overrides the in-flight guard (rollback is a corrective action).
+        The snapshot is a full ``km2-migration-bundle`` captured at promote time, so
+        restoring it necessarily removes what the promotion created — including
+        entities (and, with them, their data). Rollback therefore uses the full
+        delete scope and ``allow_data``; it is a deliberate, operator-confirmed
+        corrective action and overrides the in-flight guard.
         """
         return await self.promote(
             reverse_snapshot,
             strategy=CollisionStrategy.OVERWRITE,
             apply_deletes=True,
-            allow_data=allow_data,
+            allow_data=True,
             override_inflight=True,
             capture_rollback=False,
+            full_delete_scope=True,
         )
