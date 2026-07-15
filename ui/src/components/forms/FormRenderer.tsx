@@ -177,9 +177,13 @@ function formatCell(value: unknown): string {
 function RecordListNode({
   el,
   onRunWorkflow,
+  scopeValues,
 }: {
   el: RecordListElement;
   onRunWorkflow?: FormRendererProps["onRunWorkflow"];
+  // The enclosing view's values, so a per-row workflow input can reference a parent
+  // field (e.g. a learner-bound catalog's `email`) alongside the row's own fields.
+  scopeValues?: Record<string, unknown>;
 }) {
   const [rows, setRows] = useState<EntityRecord[] | null>(null);
   const [error, setError] = useState(false);
@@ -266,11 +270,20 @@ function RecordListNode({
         ? Object.keys(rows[0]).filter((k) => !["id", "created_at", "updated_at", "org_id"].includes(k))
         : [];
 
-  const runRow = async (recordId: string) => {
+  const runRow = async (row: EntityRecord) => {
     if (!el.row_workflow_id || !onRunWorkflow) return;
+    const recordId = String(row.id);
     setBusyRow(recordId);
     try {
-      await onRunWorkflow(el.row_workflow_id, {}, recordId);
+      // Evaluate each input over the row's values merged onto the parent scope, so
+      // `{var: id}` is the row id, `{var: <row field>}` a row value, and
+      // `{var: <parent field>}` a value from the enclosing view (e.g. `email`).
+      const evalScope = { ...scopeValues, ...row };
+      const inputs: Record<string, unknown> = {};
+      for (const [k, expr] of Object.entries(el.row_workflow_inputs ?? {})) {
+        inputs[k] = evaluate(expr, evalScope);
+      }
+      await onRunWorkflow(el.row_workflow_id, inputs, recordId);
     } finally {
       setBusyRow(null);
     }
@@ -325,7 +338,7 @@ function RecordListNode({
                         type="button"
                         className="rounded-md border bg-background px-2 py-1 text-xs font-medium hover:bg-muted disabled:opacity-60"
                         disabled={busyRow === String(row.id)}
-                        onClick={() => void runRow(String(row.id))}
+                        onClick={() => void runRow(row)}
                       >
                         {el.row_action_label ?? "Run"}
                       </button>
@@ -1219,7 +1232,7 @@ export function FormRenderer({
       case "record_list":
         return (
           <div className="sm:col-span-12">
-            <RecordListNode el={el} onRunWorkflow={onRunWorkflow} />
+            <RecordListNode el={el} onRunWorkflow={onRunWorkflow} scopeValues={scope.values} />
           </div>
         );
       case "chat":

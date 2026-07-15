@@ -294,6 +294,13 @@ class RecordListElement(_Element):
     empty_text: str | None = None
     row_workflow_id: uuid.UUID | None = None  # optional per-row run_workflow (row record is the target)
     row_action_label: str | None = None
+    # Inputs passed to ``row_workflow_id``, evaluated per row over the ROW's field
+    # values PLUS the enclosing view's values — so ``{"var": "id"}`` is the row id,
+    # ``{"var": "<row field>"}`` a row value, and ``{"var": "<view field>"}`` a value
+    # from the parent scope (e.g. a learner-bound catalog's ``email``). Lets a per-row
+    # action carry context, e.g. a course board's Enroll passing ``course_id`` + the
+    # caller's ``learner_email``.
+    row_workflow_inputs: dict[str, Expression] = Field(default_factory=dict)
     # Optional per-row hyperlink. A URL with ``{token}`` placeholders filled from the
     # row (``{id}`` = the row record id, ``{<field_slug>}`` = a field value, each
     # URL-encoded) — the record-list equivalent of a table link column. Lets a course
