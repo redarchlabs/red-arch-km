@@ -181,19 +181,26 @@ async def resolve_me_filters(
 
 
 async def build_record_repo(
-    session: AsyncSession, org_id: uuid.UUID, slug: str
+    session: AsyncSession, org_id: uuid.UUID, slug: str, *, privileged: bool = False
 ) -> tuple[DynamicEntityRepository, EntityDefinition]:
     """Resolve an entity by slug and build its record repository (404 if unknown).
 
     The repository is wired with an :class:`OutboxWriter` so record changes land
     in the workflow outbox in the same transaction (at-least-once workflow firing).
+
+    ``privileged`` bypasses the entity/field access policy (read server-only fields,
+    write workflow-only entities) — the internal router passes the caller's org-admin
+    status; the public API-key router leaves it ``False`` (external callers are always
+    subject to the policy).
     """
     definition = await EntityDefinitionRepository(session, org_id).get_by_slug(slug)
     if definition is None or not definition.is_active:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="entity not found")
     fields = await EntityFieldRepository(session, org_id).list_for_definition(definition.id)
     rels = await EntityRelationshipRepository(session, org_id).list_for_source(definition.id)
-    repo = DynamicEntityRepository(session, org_id, definition, fields, rels, outbox=OutboxWriter(session))
+    repo = DynamicEntityRepository(
+        session, org_id, definition, fields, rels, outbox=OutboxWriter(session), privileged=privileged
+    )
     return repo, definition
 
 

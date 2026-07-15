@@ -39,6 +39,13 @@ class EntityDefinition(Base, UUIDMixin, TimestampMixin, LineageMixin):
     physical_table: Mapped[str] = mapped_column(String(63))
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Who may write records of this entity via the record API. ``"member"`` (any
+    # org member, the default) or ``"workflow_only"`` (only the workflow engine +
+    # org admins; direct member create/update/delete is rejected). Lets an org make
+    # a certification/attempt entity forge-proof from the learner-facing API.
+    write_access: Mapped[str] = mapped_column(
+        String(20), default="member", server_default="member", nullable=False
+    )
 
     org_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True
@@ -68,6 +75,14 @@ class EntityField(Base, UUIDMixin, TimestampMixin, LineageMixin):
     is_unique: Mapped[bool] = mapped_column(Boolean, default=False)
     default_value: Mapped[Any | None] = mapped_column(JSONB, nullable=True)
     order: Mapped[int] = mapped_column(Integer, default=0)
+    # Who may READ this field's values via the record API. ``"member"`` (default) or
+    # ``"server_only"`` (stripped from record reads for regular members, and not
+    # filterable/sortable/groupable by them — only the workflow engine + org admins
+    # see it). Lets an org hide a quiz answer key from learners while the grading
+    # workflow still reads it.
+    read_access: Mapped[str] = mapped_column(
+        String(20), default="member", server_default="member", nullable=False
+    )
 
     org_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True

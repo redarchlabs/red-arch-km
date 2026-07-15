@@ -62,7 +62,7 @@ async def list_records(
     — used by the record-list view element (e.g. a "latest record" status board).
     Keyset ``cursor`` pagination applies under any sort and with filters applied.
     """
-    repo, definition = await build_record_repo(session, ctx.org_id, slug)
+    repo, definition = await build_record_repo(session, ctx.org_id, slug, privileged=ctx.is_org_admin)
     decoded = decode_cursor(cursor) if cursor else None
     # Resolve any ``@me`` filter to the caller's own record id server-side (e.g. a
     # ``filter=learner:eq:@me`` "my rows" board) — never trusting a client id.
@@ -95,7 +95,7 @@ async def aggregate_records(
     operators as the record list), ``having`` on a metric, ``order_by`` a group
     or metric column, and ``limit``. Runs under the tenant's RLS session.
     """
-    repo, _definition = await build_record_repo(session, ctx.org_id, slug)
+    repo, _definition = await build_record_repo(session, ctx.org_id, slug, privileged=ctx.is_org_admin)
     try:
         return await repo.aggregate(query)
     except EntityRecordError as exc:
@@ -110,7 +110,7 @@ async def create_record(
     session: Annotated[AsyncSession, Depends(get_tenant_db)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> dict[str, Any]:
-    repo, _definition = await build_record_repo(session, ctx.org_id, slug)
+    repo, _definition = await build_record_repo(session, ctx.org_id, slug, privileged=ctx.is_org_admin)
     try:
         created = await repo.create(body)
     except EntityRecordError as exc:
@@ -126,7 +126,7 @@ async def get_record(
     ctx: Annotated[OrgContext, Depends(require_org_access)],
     session: Annotated[AsyncSession, Depends(get_tenant_db)],
 ) -> dict[str, Any]:
-    repo, _definition = await build_record_repo(session, ctx.org_id, slug)
+    repo, _definition = await build_record_repo(session, ctx.org_id, slug, privileged=ctx.is_org_admin)
     record = await repo.get(record_id)
     if record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="record not found")
@@ -142,7 +142,7 @@ async def update_record(
     session: Annotated[AsyncSession, Depends(get_tenant_db)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> dict[str, Any]:
-    repo, _definition = await build_record_repo(session, ctx.org_id, slug)
+    repo, _definition = await build_record_repo(session, ctx.org_id, slug, privileged=ctx.is_org_admin)
     try:
         record = await repo.update(record_id, body)
     except EntityRecordError as exc:
@@ -161,7 +161,7 @@ async def delete_record(
     session: Annotated[AsyncSession, Depends(get_tenant_db)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> None:
-    repo, _definition = await build_record_repo(session, ctx.org_id, slug)
+    repo, _definition = await build_record_repo(session, ctx.org_id, slug, privileged=ctx.is_org_admin)
     if not await repo.delete(record_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="record not found")
     await dispatch_inline_workflows(session, ctx.org_id, repo.last_change_event, settings)

@@ -896,4 +896,8 @@ class WorkflowDispatchService:
             rels,
             outbox=OutboxWriter(self._session),
             origin_run_id=origin_run_id,
+            # The workflow engine is the trusted server-side path: it may read
+            # server-only fields (e.g. a quiz answer key, to grade it) and write
+            # workflow-only entities (e.g. issue a certification).
+            privileged=True,
         )
