@@ -19,7 +19,6 @@ from typing import TYPE_CHECKING, Any
 from fastapi import HTTPException
 from openai import AsyncOpenAI
 from pydantic import ValidationError
-from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from api import db_scope
@@ -40,7 +39,9 @@ from api.schemas.custom_entity import (
     EntityRelationshipCreate,
 )
 from api.services.brain_client import BrainAPIClient
+from api.services.course_generation import CourseGenerationService
 from api.services.entity_service import EntityError, EntityService
+from api.services.llm_generate_course import generate_course_blueprint
 from api.services.workflow.service import WorkflowError, WorkflowService
 
 logger = logging.getLogger(__name__)
@@ -64,6 +65,10 @@ _ADMIN_ONLY_TOOLS = frozenset(
         "add_entity_field",
         "create_relationship",
         "create_record",
+        # LLM course authoring creates a whole record graph (course, modules,
+        # quiz, scenario) and spends LLM budget, so it is admin-gated like the
+        # rest of the authoring surface.
+        "generate_course",
         "create_workflow",
         "create_folder",
         "update_folder",
@@ -163,7 +168,9 @@ _DRY_RUN_HINT: dict[str, str] = {
     "update_form": "Dry-run the new tree with validate_form_layout (pass entity_slug) before saving.",
     "create_view": "Dry-run first with validate_form_layout (omit entity_slug for a standalone view) before saving.",
     "update_view": "Dry-run the new tree with validate_form_layout before saving.",
-    "save_workflow_definition": "Check the graph with validate_workflow (no save) and fix the returned issues, then resend.",
+    "save_workflow_definition": (
+        "Check the graph with validate_workflow (no save) and fix the returned issues, then resend."
+    ),
 }
 
 
@@ -176,7 +183,10 @@ def _attach_recovery_hint(name: str, result: dict[str, Any]) -> dict[str, Any]:
     hint: str | None = None
     if "not found" in err:
         # A bad id/slug — point the model at the matching listing tool to verify.
-        hint = "Confirm the id/slug exists first with the matching list_/get_ tool (e.g. list_entities, list_workflows, list_forms)."
+        hint = (
+            "Confirm the id/slug exists first with the matching list_/get_ tool "
+            "(e.g. list_entities, list_workflows, list_forms)."
+        )
     elif "invalid arguments" in err or "required" in err or "valid" in err:
         hint = _DRY_RUN_HINT.get(name)
     else:
@@ -463,6 +473,37 @@ TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "generate_course",
+            "description": (
+                "Generate a full training course (modules with slide decks, a multiple-choice quiz, "
+                "and a scenario assessment) from a topic, and create all the records. Admin only."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "topic": {"type": "string", "description": "What the course should teach."},
+                    "category": {
+                        "type": "string",
+                        "enum": ["privacy", "security", "role", "compliance", "onboarding"],
+                    },
+                    "audience": {
+                        "type": "string",
+                        "description": "Who the course is for (default: all employees).",
+                    },
+                    "num_modules": {
+                        "type": "integer",
+                        "minimum": 2,
+                        "maximum": 5,
+                        "description": "How many modules to generate (default 3).",
+                    },
+                },
+                "required": ["topic", "category"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "list_workflows",
             "description": "List workflows in this workspace.",
             "parameters": {"type": "object", "properties": {}},
@@ -580,7 +621,10 @@ TOOLS: list[dict[str, Any]] = [
                                 },
                                 "path": {
                                     "type": "string",
-                                    "description": "http_request: path appended to the connection base_url (alternative to url).",
+                                    "description": (
+                                        "http_request: path appended to the connection base_url "
+                                        "(alternative to url)."
+                                    ),
                                 },
                                 "method": {
                                     "type": "string",
@@ -1142,7 +1186,9 @@ TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "list_connections",
-            "description": "List reusable HTTP connections (for http_request workflow steps). Secrets are never returned.",
+            "description": (
+                "List reusable HTTP connections (for http_request workflow steps). Secrets are never returned."
+            ),
             "parameters": {"type": "object", "properties": {}},
         },
     },
@@ -1856,6 +1902,36 @@ class AgentService:
         repo = DynamicEntityRepository(session, self._org_id, definition, fields, rels, outbox=OutboxWriter(session))
         record = await repo.create(args.get("values", {}))
         return {"created_record_id": str(record["id"])}
+
+    async def _tool_generate_course(self, session: AsyncSession, args: dict[str, Any]) -> dict[str, Any]:
+        """Author a course blueprint with the LLM, then persist it as linked records.
+
+        The blueprint call runs while this tool's session is open but idle — acceptable
+        for an occasional admin authoring action (this is not a hot record-write path).
+        """
+        if self._client is None:
+            return {"error": "No OpenAI API key configured for this org."}
+        topic = args["topic"]
+        category = args["category"]
+        audience = args.get("audience") or "all employees"
+        num_modules = max(2, min(5, int(args.get("num_modules") or 3)))
+        blueprint = await generate_course_blueprint(
+            self._client,
+            self._settings.openai_model,
+            topic=topic,
+            category=category,
+            audience=audience,
+            num_modules=num_modules,
+        )
+        result = await CourseGenerationService(session, self._org_id).create_from_blueprint(blueprint, category)
+        return {
+            "created": result,
+            "summary": (
+                f"Generated course '{result['title']}' ({result['code']}) with "
+                f"{len(result['module_ids'])} modules, {len(result['question_ids'])} quiz questions, "
+                "and a scenario."
+            ),
+        }
 
     async def _tool_list_workflows(self, session: AsyncSession, _args: dict[str, Any]) -> dict[str, Any]:
         from api.repositories.workflow import WorkflowRepository
@@ -2777,7 +2853,9 @@ class AgentService:
                         "answers": "preferred — a {question_id: choice} map (e.g. {$ref:'inputs.answers'})",
                         "answers_prefix": "fallback — positional inputs a1..aN by question order (default 'a')",
                         "pass_threshold": "percent needed to pass (default 70; id/$ref/token)",
-                        "question_slug/assessment_ref/order_field": "override entity/field slugs (default question/assessment/sort_order)",
+                        "question_slug/assessment_ref/order_field": (
+                            "override entity/field slugs (default question/assessment/sort_order)"
+                        ),
                     },
                     "use": (
                         "Deterministically grade an MCQ quiz server-side against each question's stored "
