@@ -46,14 +46,41 @@ def test_changed_when_content_differs() -> None:
     assert ent.objects[0].status == ObjectStatus.CHANGED
 
 
-def test_deleted_when_target_has_extra() -> None:
+def test_deleted_when_target_has_extra_managed_object() -> None:
+    # A *promotion-managed* target object — one whose adopted lineage differs from
+    # its own id — that is absent from the release is a deletion candidate.
     src: dict = {"entities": []}
-    tgt = {"entities": [_entity("z", "z", "obsolete", "Obsolete")]}
+    tgt = {"entities": [_entity("z", "src-lineage", "obsolete", "Obsolete")]}
     diff = compute_diff(src, tgt)
     ent = next(r for r in diff.resources if r.resource_type == "entities")
     assert ent.deleted == 1
     assert diff.has_deletes is True
     assert "entities" in diff.delete_order
+
+
+def test_managed_delete_types_limits_to_present_config_types() -> None:
+    from api.services.migration.promotion import _managed_delete_types
+
+    src = {
+        "entities": [{"id": "a"}],
+        "forms": [],  # present as an empty list → not managed (release carries none)
+        "workflows": [{"id": "b"}],
+        "records": [{"entity_slug": "x", "records": []}],  # data type, never delete-managed
+    }
+    assert _managed_delete_types(src) == frozenset({"entities", "workflows"})
+    assert _managed_delete_types({}) == frozenset()
+
+
+def test_self_origin_target_object_is_never_deleted() -> None:
+    # A target-authored (self-origin) object has lineage_id == id and must NOT be
+    # flagged for deletion just because it is absent from a (possibly partial)
+    # release — otherwise a partial promotion looks like it wipes the target.
+    src: dict = {"entities": []}
+    tgt = {"entities": [_entity("z", "z", "obsolete", "Obsolete")]}
+    diff = compute_diff(src, tgt)
+    ent = next(r for r in diff.resources if r.resource_type == "entities")
+    assert ent.deleted == 0
+    assert diff.has_deletes is False
 
 
 def test_lineage_match_survives_rename() -> None:

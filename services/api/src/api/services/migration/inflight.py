@@ -19,7 +19,7 @@ import uuid
 from typing import Any
 
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.models.workflow import WorkflowRun
@@ -109,16 +109,18 @@ class InFlightGuard:
     async def _run_count(self, workflow_ids: list[uuid.UUID]) -> int:
         if not workflow_ids:
             return 0
-        rows = (
-            await self._session.execute(
-                select(WorkflowRun.id).where(
+        return int(
+            await self._session.scalar(
+                select(func.count())
+                .select_from(WorkflowRun)
+                .where(
                     WorkflowRun.org_id == self._org_id,
                     WorkflowRun.workflow_id.in_(workflow_ids),
                     WorkflowRun.status.in_(NON_TERMINAL_RUN_STATUSES),
                 )
             )
-        ).all()
-        return len(rows)
+            or 0
+        )
 
     @staticmethod
     def _lineage(row: Any) -> str:

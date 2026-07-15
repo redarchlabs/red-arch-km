@@ -57,6 +57,25 @@ _NATURAL_KEY: dict[str, str] = {
 # timestamps, all of which legitimately differ across environments.
 _VOLATILE_KEYS: frozenset[str] = frozenset({"id", "lineage_id", "created_at", "updated_at"})
 
+# Embedded cross-reference keys normalized to lineage space ONLY for the diff
+# fingerprint (they are not part of the importer's ``_REMAP_KEYS`` remap set). These
+# hold a UUID or a *list* of UUIDs (``_canonicalize`` recurses into lists carrying
+# the parent key, so list elements are normalized too). Without this, an agent's
+# ``mcp_server_ids`` / ``workflow_allowlist`` or a document's ``folder_id`` would
+# carry env-specific UUIDs and read as "changed" forever even when identical.
+_FINGERPRINT_REF_KEYS: frozenset[str] = frozenset(
+    {
+        "folder_id",
+        "mcp_server_ids",
+        "workflow_allowlist",
+        "connection_id",
+        "view_id",
+        "tag_ids",
+        "target_definition_id",
+        "source_definition_id",
+    }
+)
+
 
 class ObjectStatus(StrEnum):
     ADDED = "added"
@@ -173,7 +192,7 @@ def _canonicalize(value: Any, lineage_by_id: dict[str, str], *, key: str | None 
         }
     if isinstance(value, list):
         return [_canonicalize(v, lineage_by_id, key=key) for v in value]
-    if key in _REMAP_KEYS and isinstance(value, str) and _UUID_RE.match(value):
+    if (key in _REMAP_KEYS or key in _FINGERPRINT_REF_KEYS) and isinstance(value, str) and _UUID_RE.match(value):
         return lineage_by_id.get(value, value)
     return value
 
@@ -211,6 +230,23 @@ def _count_only_diff(resource_type: str, src_items: list[dict], tgt_items: list[
     re-ingest), so a precise added/changed classification is not attempted here."""
     src_count = _record_row_count(src_items) if resource_type == "records" else len(src_items)
     return ResourceDiff(resource_type=resource_type, added=src_count, count_only=True)
+
+
+def _is_promotion_managed(obj: dict) -> bool:
+    """Whether a target object may be auto-deleted by a promotion.
+
+    Only objects that were themselves produced/adopted by a promotion are
+    delete-eligible — never target-authored ("self-origin") objects, otherwise a
+    partial release would look like it deletes everything the target owns. The
+    exporter synthesizes ``lineage_id = row.lineage_id or row.id``; a self-origin
+    row (stored ``lineage_id IS NULL``) therefore exports ``lineage_id == id``,
+    while a promotion-managed row carries an adopted lineage distinct from its own
+    id. Comparing the two is a bundle-format-free proxy for "stored lineage is
+    non-NULL", and it fails safe (a false negative merely leaves an object in
+    place)."""
+    lin = obj.get("lineage_id")
+    oid = obj.get("id")
+    return bool(lin) and str(lin) != str(oid)
 
 
 def _obj_diff(resource_type: str, obj: dict, status: ObjectStatus) -> ObjectDiff:
@@ -275,7 +311,9 @@ def compute_diff(
 
         if rtype in manage:
             for tgt in tgt_items:
-                if str(tgt.get("id")) not in matched:
+                # Only flag a target object as DELETED if it is promotion-managed —
+                # never a self-origin object the target authored itself.
+                if str(tgt.get("id")) not in matched and _is_promotion_managed(tgt):
                     rd.deleted += 1
                     rd.objects.append(_obj_diff(rtype, tgt, ObjectStatus.DELETED))
 
