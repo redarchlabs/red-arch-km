@@ -31,6 +31,19 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 # non-http(s) schemes (``javascript:``, ``data:``, …) in author-supplied link URLs.
 _URL_SCHEME_RE = re.compile(r"^\s*([a-zA-Z][a-zA-Z0-9+.\-]*):")
 
+
+def _assert_safe_href(v: str) -> str:
+    """Only relative URLs or ``http(s)`` absolute URLs are allowed. Any other scheme
+    (``javascript:``, ``data:``, ``vbscript:``, …) is rejected so a stored link can
+    never become an XSS vector when it's rendered/navigated. ``{token}`` placeholders
+    are URL-encoded at render time, so only the static scheme prefix is constrained."""
+    m = _URL_SCHEME_RE.match(v)
+    if m and m.group(1).lower() not in ("http", "https"):
+        raise ValueError(
+            f"link scheme {m.group(1)!r} is not allowed; use a relative URL or an http(s) URL"
+        )
+    return v
+
 # ------------------------------------------------------------------ #
 # Shared presentational vocabulary
 # ------------------------------------------------------------------ #
@@ -281,7 +294,18 @@ class RecordListElement(_Element):
     empty_text: str | None = None
     row_workflow_id: uuid.UUID | None = None  # optional per-row run_workflow (row record is the target)
     row_action_label: str | None = None
+    # Optional per-row hyperlink. A URL with ``{token}`` placeholders filled from the
+    # row (``{id}`` = the row record id, ``{<field_slug>}`` = a field value, each
+    # URL-encoded) — the record-list equivalent of a table link column. Lets a course
+    # board route each row to its own player, e.g. ``/views/{player_view_slug}/view``.
+    row_link_template: str | None = None
+    row_link_label: str = "Open"
     width: FieldWidth | None = None
+
+    @field_validator("row_link_template")
+    @classmethod
+    def _reject_dangerous_row_link(cls, v: str | None) -> str | None:
+        return v if v is None else _assert_safe_href(v)
 
 
 # ------------------------------------------------------------------ #
@@ -337,18 +361,7 @@ class LinkColumn(BaseModel):
     @field_validator("href_template")
     @classmethod
     def _reject_dangerous_scheme(cls, v: str) -> str:
-        """Only relative URLs or ``http(s)`` absolute URLs are allowed. Any other
-        scheme (``javascript:``, ``data:``, ``vbscript:``, …) is rejected so a link
-        column can never become a stored-XSS vector when the row is rendered. Token
-        placeholders are URL-encoded at render time, so only the static template
-        text — i.e. the scheme — is constrained here."""
-        m = _URL_SCHEME_RE.match(v)
-        if m and m.group(1).lower() not in ("http", "https"):
-            raise ValueError(
-                f"href_template scheme {m.group(1)!r} is not allowed; "
-                "use a relative URL or an http(s) URL"
-            )
-        return v
+        return _assert_safe_href(v)
 
 
 TableColumn = Annotated[
@@ -479,12 +492,20 @@ class RunWorkflowAction(BaseModel):
 
 
 class LinkAction(BaseModel):
-    """Navigate to another view or an external URL."""
+    """Navigate to another view or an external URL. ``href`` may carry ``{token}``
+    placeholders filled from the current record's values at click time (``{id}`` = the
+    bound record id, ``{<field_slug>}`` = a field value), so a button can route to a
+    per-record view — e.g. ``/views/{quiz_view_slug}/view?record_id=me``."""
 
     model_config = ConfigDict(extra="forbid")
     kind: Literal["link"] = "link"
     href: str
     new_tab: bool = False
+
+    @field_validator("href")
+    @classmethod
+    def _reject_dangerous_scheme(cls, v: str) -> str:
+        return _assert_safe_href(v)
 
 
 class CallConnectionAction(BaseModel):
