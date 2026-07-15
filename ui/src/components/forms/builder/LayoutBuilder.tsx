@@ -1,7 +1,7 @@
 "use client";
 
 import { ChevronDown, ChevronUp, Plus, Trash2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { useHelpOverride } from "@/context/HelpContext";
 import { helpForElement } from "@/lib/builderHelp";
@@ -13,10 +13,15 @@ import type {
   FieldElement,
   FormElement,
   LabelElement,
+  RecordListElement,
+  RecordListFilterConfig,
   SectionElement,
+  Slide,
+  SlidesElement,
   TableColumn,
   TableElement,
 } from "@/lib/api/forms";
+import { FILTER_OPERATORS } from "@/lib/api/filterOps";
 
 import {
   KIND_LABELS,
@@ -162,6 +167,10 @@ function ElementEditor({
       return <LiveValueEditor el={el} onChange={onChange} />;
     case "report":
       return <ReportEditor el={el} onChange={onChange} />;
+    case "record_list":
+      return <RecordListEditor el={el} ctx={ctx} onChange={onChange} />;
+    case "slides":
+      return <SlidesEditor el={el} onChange={onChange} />;
     case "chat":
       return <ChatEditor el={el} onChange={onChange} />;
     case "button":
@@ -185,6 +194,267 @@ function ElementEditor({
     default:
       return null;
   }
+}
+
+function RecordListEditor({
+  el,
+  ctx,
+  onChange,
+}: {
+  el: RecordListElement;
+  ctx: BuilderCtx;
+  onChange: (el: FormElement) => void;
+}) {
+  const entities = [...ctx.entitiesById.values()];
+  const filters = el.filters ?? [];
+  // Stable client keys per filter row (parallel to `filters`, never persisted) so
+  // deleting a middle row doesn't reassign identities below it — an index key would
+  // shift them and jump input focus. Falls back to the index if the two drift (e.g.
+  // an external edit adds a filter without going through these handlers).
+  const [rowKeys, setRowKeys] = useState<number[]>(() => filters.map((_, i) => i));
+  const nextKey = useRef(filters.length);
+  const setFilters = (next: RecordListFilterConfig[], keys?: number[]) => {
+    if (keys) setRowKeys(keys);
+    onChange({ ...el, filters: next });
+  };
+  const addFilter = () =>
+    setFilters([...filters, { field: "", op: "eq", value: "" }], [...rowKeys, nextKey.current++]);
+  const removeFilter = (i: number) =>
+    setFilters(filters.filter((_, j) => j !== i), rowKeys.filter((_, j) => j !== i));
+  const updateFilter = (i: number, patch: Partial<RecordListFilterConfig>) =>
+    setFilters(filters.map((f, j) => (j === i ? { ...f, ...patch } : f)));
+
+  return (
+    <div className="space-y-1.5">
+      <Row label="Label">
+        <input
+          className={input}
+          value={el.label ?? ""}
+          onChange={(e) => onChange({ ...el, label: e.target.value || null })}
+        />
+      </Row>
+      <Row label="Entity">
+        <select className={input} value={el.entity} onChange={(e) => onChange({ ...el, entity: e.target.value })}>
+          <option value="">Select entity…</option>
+          {entities.map((ent) => (
+            <option key={ent.id} value={ent.slug}>
+              {ent.name}
+            </option>
+          ))}
+        </select>
+      </Row>
+      <Row label="Columns">
+        <input
+          className={input}
+          placeholder="field slugs, comma-separated (blank = all)"
+          value={(el.fields ?? []).join(", ")}
+          onChange={(e) =>
+            onChange({
+              ...el,
+              fields: e.target.value
+                .split(",")
+                .map((s) => s.trim())
+                .filter(Boolean),
+            })
+          }
+        />
+      </Row>
+      <div className="space-y-1">
+        <div className="flex items-center justify-between">
+          <span className="text-xs font-medium text-muted-foreground">Filters (all must match)</span>
+          <button type="button" className={btn} onClick={addFilter}>
+            <Plus className="h-3 w-3" /> Filter
+          </button>
+        </div>
+        {filters.map((f, i) => (
+          <div key={rowKeys[i] ?? i} className="flex items-center gap-1.5">
+            <input
+              className={input}
+              placeholder="field / relation slug"
+              value={f.field}
+              onChange={(e) => updateFilter(i, { field: e.target.value })}
+            />
+            <select
+              className={input}
+              value={f.op ?? "eq"}
+              onChange={(e) => updateFilter(i, { op: e.target.value as (typeof FILTER_OPERATORS)[number] })}
+            >
+              {FILTER_OPERATORS.map((op) => (
+                <option key={op} value={op}>
+                  {op}
+                </option>
+              ))}
+            </select>
+            <input
+              className={input}
+              placeholder="value ( @me = current user )"
+              value={f.value == null ? "" : String(f.value)}
+              onChange={(e) => updateFilter(i, { value: e.target.value })}
+            />
+            <button
+              type="button"
+              className={btn}
+              onClick={() => removeFilter(i)}
+              aria-label="Remove filter"
+            >
+              <Trash2 className="h-3 w-3" />
+            </button>
+          </div>
+        ))}
+        <p className="text-[11px] text-muted-foreground">
+          Tip: a value of <code>@me</code> on a relation field (e.g. learner) scopes the list to the current
+          user’s own records.
+        </p>
+      </div>
+      <Row label="Sort by">
+        <input
+          className={input}
+          placeholder="field slug (blank = created_at)"
+          value={el.sort_by ?? ""}
+          onChange={(e) => onChange({ ...el, sort_by: e.target.value || null })}
+        />
+      </Row>
+      <Row label="Sort dir">
+        <select
+          className={input}
+          value={el.sort_dir ?? "desc"}
+          onChange={(e) => onChange({ ...el, sort_dir: e.target.value as "asc" | "desc" })}
+        >
+          <option value="desc">Desc</option>
+          <option value="asc">Asc</option>
+        </select>
+      </Row>
+      <Row label="Limit">
+        <input
+          className={input}
+          type="number"
+          value={el.limit ?? 20}
+          onChange={(e) => onChange({ ...el, limit: Number(e.target.value) || 20 })}
+        />
+      </Row>
+      <Row label="Poll (ms)">
+        <input
+          className={input}
+          type="number"
+          placeholder="blank = fetch once"
+          value={el.poll_ms ?? ""}
+          onChange={(e) => onChange({ ...el, poll_ms: Number(e.target.value) || null })}
+        />
+      </Row>
+      <Row label="Empty text">
+        <input
+          className={input}
+          value={el.empty_text ?? ""}
+          onChange={(e) => onChange({ ...el, empty_text: e.target.value || null })}
+        />
+      </Row>
+    </div>
+  );
+}
+
+function SlidesEditor({
+  el,
+  onChange,
+}: {
+  el: SlidesElement;
+  onChange: (el: FormElement) => void;
+}) {
+  const slides = el.slides ?? [];
+  const setSlides = (next: Slide[]) => onChange({ ...el, slides: next });
+  const updateSlide = (i: number, patch: Partial<Slide>) =>
+    setSlides(slides.map((s, j) => (j === i ? { ...s, ...patch } : s)));
+
+  return (
+    <div className="space-y-1.5">
+      <Row label="Label">
+        <input
+          className={input}
+          value={el.label ?? ""}
+          onChange={(e) => onChange({ ...el, label: e.target.value || null })}
+        />
+      </Row>
+      <Row label="Bind to field">
+        <input
+          className={input}
+          placeholder="JSON field slug (e.g. slides) — blank = inline"
+          value={el.slug ?? ""}
+          onChange={(e) => onChange({ ...el, slug: e.target.value || null })}
+        />
+      </Row>
+      {el.slug ? (
+        <p className="text-[11px] text-muted-foreground">
+          Bound to <code>{el.slug}</code>: slides come from that record field. Clear it to author inline
+          slides here instead.
+        </p>
+      ) : (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-medium text-muted-foreground">Inline slides</span>
+            <button
+              type="button"
+              className={btn}
+              onClick={() => setSlides([...slides, { title: `Slide ${slides.length + 1}`, body: "" }])}
+            >
+              <Plus className="h-3 w-3" /> Slide
+            </button>
+          </div>
+          {slides.map((s, i) => (
+            <div key={i} className="space-y-1 rounded-md border border-dashed p-2">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-medium text-muted-foreground">Slide {i + 1}</span>
+                <button
+                  type="button"
+                  className={`${btn} text-destructive`}
+                  onClick={() => setSlides(slides.filter((_, j) => j !== i))}
+                  aria-label="Remove slide"
+                >
+                  <Trash2 className="h-3 w-3" />
+                </button>
+              </div>
+              <input
+                className={input}
+                placeholder="Title"
+                value={s.title ?? ""}
+                onChange={(e) => updateSlide(i, { title: e.target.value || null })}
+              />
+              <textarea
+                className={`${input} font-mono`}
+                rows={3}
+                placeholder="Body (Markdown)"
+                value={s.body ?? ""}
+                onChange={(e) => updateSlide(i, { body: e.target.value })}
+              />
+              <input
+                className={input}
+                placeholder="Image URL (optional)"
+                value={s.image_url ?? ""}
+                onChange={(e) => updateSlide(i, { image_url: e.target.value || null })}
+              />
+              <input
+                className={input}
+                placeholder="Video URL — direct mp4/webm (optional)"
+                value={s.video_url ?? ""}
+                onChange={(e) => updateSlide(i, { video_url: e.target.value || null })}
+              />
+              {s.video_url ? (
+                <label className="flex items-center gap-1 text-xs">
+                  <input
+                    type="checkbox"
+                    checked={s.require_video !== false}
+                    onChange={(e) => updateSlide(i, { require_video: e.target.checked })}
+                  />
+                  Nudge learner to finish before advancing
+                </label>
+              ) : null}
+            </div>
+          ))}
+          {slides.length === 0 ? (
+            <p className="text-[11px] text-muted-foreground">No slides yet — add one, or bind a field above.</p>
+          ) : null}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function FormRefEditor({

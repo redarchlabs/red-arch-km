@@ -19,6 +19,7 @@ from api.config import Settings, get_settings
 from api.repositories.dynamic_entity import EntityRecordError
 from api.schemas.aggregate import AggregateQuery, AggregateResult
 from api.services.entity_records_helpers import (
+    ME_FILTER_SENTINEL,
     build_record_repo,
     decode_cursor,
     dispatch_inline_workflows,
@@ -50,6 +51,14 @@ async def list_records(
     repo, _definition = await build_record_repo(session, principal.org_id, slug)
     decoded = decode_cursor(cursor) if cursor else None
     filters = parse_filters(filter or [])
+    # `@me` resolves to the CALLING USER's own record — an API key authenticates an
+    # org, not a user, so there's nobody to resolve. Reject it with a clear message
+    # rather than letting it fall through to an opaque UUID-coercion error.
+    if any(isinstance(value, str) and value == ME_FILTER_SENTINEL for _slug, _op, value in filters):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"the {ME_FILTER_SENTINEL!r} filter is not supported for API-key requests (no calling user)",
+        )
     try:
         items, next_cursor = await repo.list(
             filters=filters, search=q, cursor=decoded, limit=limit, order_by=order_by, order_dir=order_dir

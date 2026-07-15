@@ -61,6 +61,15 @@ class _Element(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: str | None = None  # stable per-element id; server fills one if omitted
+    # Optional conditional visibility: a sandboxed JsonLogic expression evaluated
+    # over the enclosing scope's values (same evaluator as ``calculated``). The
+    # element renders only when this is truthy; ``None`` (the default) is always
+    # visible. Lets a view gate an element on record state — e.g. show the quiz
+    # only when ``{">=": [{"var": "progress_pct"}, 100]}``, or an "Enroll" button
+    # only when the learner isn't enrolled yet. Display-only: hiding an element
+    # never suppresses server-side validation of data the author marked required,
+    # so gate inputs, not required persisted fields.
+    visible_when: Expression = None
 
 
 # ------------------------------------------------------------------ #
@@ -173,6 +182,45 @@ class ProgressElement(_Element):
     width: FieldWidth | None = None
 
 
+class Slide(BaseModel):
+    """One slide in a deck: an optional title, a Markdown ``body``, an optional
+    image, and an optional video. Rendered as a single presentation page by the
+    ``slides`` element.
+
+    ``video_url`` is a direct video file (mp4/webm) — not a YouTube/Vimeo page.
+    When ``require_video`` is set (and a ``video_url`` is present) the deck
+    discourages skipping — it disables the forward controls and snaps forward seeks
+    back until the video finishes. This is a client-side nudge, not enforced viewing:
+    nothing is recorded server-side, so it deters casual skipping rather than
+    guaranteeing a training video was watched."""
+
+    model_config = ConfigDict(extra="forbid")
+    title: str | None = None
+    body: str = ""  # Markdown
+    image_url: str | None = None
+    video_url: str | None = None  # direct video file (mp4/webm)
+    require_video: bool = True  # when a video is present, gate "next" until it's watched (opt out per slide)
+    notes: str | None = None  # optional speaker/aside notes
+
+
+class SlidesElement(_Element):
+    """An in-app **slide deck** — module content shown as a navigable presentation
+    (prev/next + progress) instead of a wall of text. Display-only, so it is valid
+    in a standalone view. Two content sources (mutually exclusive, ``slug`` wins):
+
+    * ``slug`` — bind to a JSON entity field holding the slide array (the common
+      case: a Module's ``slides`` field), so the deck is data-driven per record.
+    * ``slides`` — inline slides authored directly on the element.
+
+    Each slide is ``{title?, body(markdown), image_url?, notes?}``."""
+
+    type: Literal["slides"] = "slides"
+    label: str | None = None
+    slug: str | None = None  # JSON field holding a list of slides (entity-bound case)
+    slides: list[Slide] = Field(default_factory=list)  # inline slides (standalone case)
+    width: FieldWidth | None = None
+
+
 class ReportElement(_Element):
     """Embeds a saved report on a dashboard — renders its chart, KPI tile, or table
     per the report's own visualization spec (fetched from ``/reports/{id}/run``).
@@ -190,6 +238,22 @@ class ReportElement(_Element):
     width: FieldWidth | None = None
 
 
+class RecordListFilter(BaseModel):
+    """One server-side filter narrowing a ``record_list``'s rows.
+
+    Mirrors the record endpoint's ``field:op[:value]`` filter (see
+    ``entity_records_helpers.parse_filters``). ``value`` may be the sentinel ``@me``
+    on a to-one relation field, which the endpoint resolves to the caller's OWN
+    record id (matched by email, like ``record_id=me``) — so a board can show just
+    the current user's rows without the author hard-coding an id."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    field: str
+    op: Literal["eq", "ne", "gt", "gte", "lt", "lte", "in", "contains", "isnull"] = "eq"
+    value: Any = None
+
+
 class RecordListElement(_Element):
     """A read-only display of existing records of an entity — a live "status board".
 
@@ -199,12 +263,17 @@ class RecordListElement(_Element):
     bound to the view's root record, so it is valid in a standalone view. An optional
     ``row_workflow_id`` renders a per-row button that runs that workflow against the
     row's record (e.g. re-announce this mission-state row) — the runtime targets the
-    row id, so an ``update_record``/``update_record_field`` step writes that row."""
+    row id, so an ``update_record``/``update_record_field`` step writes that row.
+
+    ``filters`` narrows the rows server-side (ANDed); a filter ``value`` of ``@me``
+    on a relation field scopes the board to the caller's own records (e.g. a
+    learner's own attempts/certificates)."""
 
     type: Literal["record_list"] = "record_list"
     entity: str  # entity slug to read records from
     label: str | None = None
     fields: list[str] = Field(default_factory=list)  # field slugs as columns; empty = every field
+    filters: list[RecordListFilter] = Field(default_factory=list)  # server-side row filters (ANDed)
     sort_by: str | None = None  # field slug or base column; defaults to created_at
     sort_dir: Literal["asc", "desc"] = "desc"
     limit: int = 20
@@ -539,6 +608,7 @@ FormElement = Annotated[
     | InputElement
     | LiveValueElement
     | ProgressElement
+    | SlidesElement
     | ReportElement
     | RecordListElement
     | ChatElement

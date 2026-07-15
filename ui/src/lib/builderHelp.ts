@@ -92,6 +92,25 @@ record's fields (or a literal); the bar fills \`value / max\`, clamped to that r
 - **Show percent** — draw the computed percentage on the bar.
 `,
   ),
+  slides: topic(
+    "Slide deck element",
+    `
+Shows content as an **in-app slide deck** — a navigable presentation (prev / next
+with progress dots) instead of a wall of scrolling text.
+
+- **Source** — bind to a **JSON field** (a *slug*) holding a list of slides (the
+  usual case, e.g. a module's \`slides\` field), or author **inline slides**.
+- **Each slide** — an optional title, a **Markdown** body, an optional image, and
+  an optional **video** (\`video_url\`, a direct mp4/webm).
+- **Encourage viewing** — when a slide has a video, the forward controls stay
+  disabled and forward seeks snap back until the learner watches it through. This is
+  a client-side **nudge**, not enforced viewing (nothing is recorded server-side), so
+  it deters casual skipping rather than guaranteeing it. Set \`require_video: false\`
+  for a supplementary clip that shouldn't block.
+
+Display-only, so it's valid in a standalone view too.
+`,
+  ),
   report: topic(
     "Report / chart",
     `
@@ -113,6 +132,10 @@ newest records (or sorted by a field) and can re-poll to stay current.
 
 - **Entity** — which entity's records to list (by slug).
 - **Fields** — the field slugs to show as columns; empty shows every field.
+- **Filters** — server-side row filters, all ANDed (field slug + operator + value).
+  A value of \`@me\` on a relation field (e.g. \`learner\`) scopes the board to the
+  **current user's own records** — resolved server-side by email, so it can't be
+  widened to other users' rows.
 - **Sort by / direction** — a field slug (defaults to newest first).
 - **Limit** — how many rows to show.
 - **Poll (ms)** — set to keep the board live; blank fetches once.

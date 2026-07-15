@@ -5,7 +5,13 @@ from __future__ import annotations
 import uuid
 
 import pytest
-from api.services.workflow.actions import ACTION_REGISTRY, ActionContext, ActionError, _render_template
+from api.services.workflow.actions import (
+    ACTION_REGISTRY,
+    ActionContext,
+    ActionError,
+    _render_template,
+    _trigger_context,
+)
 
 
 def _ctx(config, sent_box=None):
@@ -38,6 +44,20 @@ class TestRenderTemplate:
 
     def test_untemplated_text_unchanged(self) -> None:
         assert _render_template("plain text", {"after": {}}) == "plain text"
+
+    def test_now_and_today_clock_tokens(self) -> None:
+        ctx = {"after": {}, "now": "2026-07-14T06:30:00+00:00", "today": "2026-07-14"}
+        assert _render_template("issued {{today}}", ctx) == "issued 2026-07-14"
+        assert _render_template("at {{ now }}", ctx) == "at 2026-07-14T06:30:00+00:00"
+
+    def test_now_prefix_is_not_a_false_token(self) -> None:
+        # `now`/`today` match only as whole tokens, never as a prefix (`nowhere`).
+        assert _render_template("{{ nowhere }}", {"after": {}}) == "{{ nowhere }}"
+
+    def test_trigger_context_injects_clock(self) -> None:
+        tc = _trigger_context(_ctx({}))
+        assert "T" in tc["now"] and tc["now"].endswith("+00:00")  # UTC ISO-8601
+        assert tc["today"] == tc["now"][:10]  # date is the timestamp's date prefix
 
 
 class TestSendEmailAction:

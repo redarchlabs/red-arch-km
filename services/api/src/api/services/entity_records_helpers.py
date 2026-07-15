@@ -122,6 +122,64 @@ def parse_filters(raw_filters: list[str]) -> list[FilterClause]:
     return clauses
 
 
+# Sentinel filter value that resolves server-side to the caller's OWN record id in
+# the target entity of a relation field (matched by email) — the record-list
+# equivalent of the view's ``record_id=me``. The data is read-only + org-scoped, so
+# this is a display convenience; resolving it server-side (never trusting a
+# client-supplied id) means a crafted filter can't widen the scope past the caller's
+# own rows.
+ME_FILTER_SENTINEL = "@me"
+
+# A relation value that matches no real record — substituted for ``@me`` when the
+# caller has no own-record in the target entity, so a "my rows" board fails CLOSED
+# (empty) instead of leaking every row in the org.
+_NO_MATCH_ID = uuid.UUID(int=0)
+
+
+def _is_me_value(value: Any) -> bool:
+    return isinstance(value, str) and value == ME_FILTER_SENTINEL
+
+
+async def resolve_me_filters(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    definition: EntityDefinition,
+    filters: list[FilterClause],
+    email: str | None,
+) -> list[FilterClause]:
+    """Replace any ``@me`` filter value with the caller's own record id.
+
+    ``@me`` is only meaningful on a to-one RELATION field: it resolves to the current
+    user's record in that relation's target entity (matched by email — the same rule
+    as ``record_id=me``), so a board like ``filter=learner:eq:@me`` shows only the
+    caller's rows. Unresolvable (no user, or no own-record) → a no-match id so the
+    board is empty rather than org-wide. ``@me`` on a non-relation field is a 400.
+
+    Deferred import of :func:`resolve_own_record_id` avoids a module import cycle
+    (``self_record`` pulls in the same entity repositories this module owns).
+    """
+    if not any(_is_me_value(value) for _slug, _op, value in filters):
+        return filters
+    from api.services.self_record import resolve_own_record_id
+
+    rels = await EntityRelationshipRepository(session, org_id).list_for_source(definition.id)
+    rel_by_slug = {r.slug: r for r in rels}
+    resolved: list[FilterClause] = []
+    for slug, op, value in filters:
+        if not _is_me_value(value):
+            resolved.append((slug, op, value))
+            continue
+        rel = rel_by_slug.get(slug)
+        if rel is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"filter {slug!r} does not support '@me' (only relation fields do)",
+            )
+        own_id = await resolve_own_record_id(session, org_id, rel.target_definition_id, email) if email else None
+        resolved.append((slug, op, str(own_id or _NO_MATCH_ID)))
+    return resolved
+
+
 async def build_record_repo(
     session: AsyncSession, org_id: uuid.UUID, slug: str
 ) -> tuple[DynamicEntityRepository, EntityDefinition]:

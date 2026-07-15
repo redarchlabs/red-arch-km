@@ -100,6 +100,7 @@ export function buildRenderFromConfig(
     description: null,
     status: "editable",
     root_entity_id: rootEntityId,
+    record_id: null,
     config,
     catalog: entities.map(catalogEntry),
     relationships: relationshipMeta(config, relById),
