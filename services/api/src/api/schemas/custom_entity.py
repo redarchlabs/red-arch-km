@@ -26,6 +26,10 @@ FieldType = Literal[
 Cardinality = Literal["one_to_one", "one_to_many", "many_to_one", "many_to_many"]
 OnDelete = Literal["CASCADE", "SET NULL", "RESTRICT"]
 
+# Who may write an entity's records via the record API / who may read a field.
+WriteAccess = Literal["member", "workflow_only"]
+ReadAccess = Literal["member", "server_only"]
+
 _SLUG_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
 
 # A to-one FK physically lives on the source table (one_to_one, many_to_one).
@@ -51,6 +55,9 @@ class EntityFieldCreate(BaseModel):
     is_unique: bool = False
     default_value: Any | None = None
     order: int = Field(default=0, ge=0)
+    # "server_only" hides this field's values from the record API for regular
+    # members (only the workflow engine + org admins read it). Default is open.
+    read_access: ReadAccess = "member"
 
     _slug = field_validator("slug")(_validate_slug)
 
@@ -68,6 +75,8 @@ class EntityFieldUpdate(BaseModel):
     picklist_options: list[str] | None = None
     is_required: bool | None = None
     order: int | None = Field(default=None, ge=0)
+    # Toggle a field into/out of "server_only" (hide its values from members).
+    read_access: ReadAccess | None = None
     # field_type / is_unique / slug are not editable in place (see plan §1.6):
     # type changes are restricted, and renames go through a dedicated path.
 
@@ -84,6 +93,7 @@ class EntityFieldRead(BaseModel):
     is_unique: bool
     default_value: Any | None
     order: int
+    read_access: ReadAccess
 
 
 # --------------------------------------------------------------------------- #
@@ -129,6 +139,9 @@ class EntityDefinitionCreate(BaseModel):
     slug: str = Field(min_length=1, max_length=63)
     description: str | None = Field(default=None, max_length=2000)
     fields: list[EntityFieldCreate] = Field(default_factory=list)
+    # "workflow_only" blocks direct member writes (only the workflow engine + org
+    # admins). Default is open to any member.
+    write_access: WriteAccess = "member"
 
     _slug = field_validator("slug")(_validate_slug)
 
@@ -144,6 +157,7 @@ class EntityDefinitionUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=100)
     description: str | None = Field(default=None, max_length=2000)
     is_active: bool | None = None
+    write_access: WriteAccess | None = None
 
 
 class EntityDefinitionRead(BaseModel):
@@ -154,6 +168,7 @@ class EntityDefinitionRead(BaseModel):
     slug: str
     description: str | None
     is_active: bool
+    write_access: WriteAccess
     fields: list[EntityFieldRead] = Field(default_factory=list)
 
 

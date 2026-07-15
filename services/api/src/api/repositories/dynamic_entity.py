@@ -98,6 +98,13 @@ class EntityRecordError(ValueError):
     """Raised for invalid record payloads (mapped to HTTP 400 by the router)."""
 
 
+class RecordAccessError(Exception):
+    """Raised when a non-privileged caller tries to write a ``workflow_only`` entity.
+
+    Deliberately NOT an ``EntityRecordError`` subclass so the routers' 400 handling
+    doesn't swallow it — it maps to HTTP 403 via a dedicated exception handler."""
+
+
 class DynamicEntityRepository:
     def __init__(
         self,
@@ -111,11 +118,23 @@ class DynamicEntityRepository:
         actor_user_id: uuid.UUID | None = None,
         origin_run_id: uuid.UUID | None = None,
         outbox_source: str = "record",
+        privileged: bool = False,
     ) -> None:
         self._session = session
         self._org_id = org_id
         self._definition = definition
         self._fields = fields
+        # A privileged repo bypasses the entity/field access policy: it may write a
+        # ``workflow_only`` entity and read/filter ``server_only`` fields. Set True
+        # for the trusted server-side callers (the workflow engine, and org admins
+        # via the record API); False (default) for regular members — who are then
+        # subject to the tamper-proofing policy below.
+        self._privileged = privileged
+        # Field slugs whose values are hidden from non-privileged callers (e.g. a
+        # quiz answer key). Empty when nothing is locked down (the common case).
+        self._server_only_slugs = {
+            f.slug for f in fields if getattr(f, "read_access", "member") == "server_only"
+        }
         # Only to-one relationships add a physical FK column on this table.
         self._relationships = [r for r in (relationships or []) if r.cardinality != "many_to_many"]
         self._table = self._build_table()
@@ -213,9 +232,23 @@ class DynamicEntityRepository:
             raise EntityRecordError(f"{field.slug!r} must be a boolean")
         return value
 
+    def _guard_writable(self) -> None:
+        """Reject a direct member write to a ``workflow_only`` entity (403). The
+        workflow engine + org admins run privileged, so this only blocks the
+        learner-facing record API from forging e.g. a passing certification."""
+        if not self._privileged and getattr(self._definition, "write_access", "member") == "workflow_only":
+            raise RecordAccessError(
+                f"entity {self._definition.slug!r} is workflow-managed; direct writes are not allowed"
+            )
+
     def _to_row(self, payload: dict[str, Any], *, for_create: bool) -> dict[str, Any]:
         """Translate a slug-keyed payload to a physical-column-keyed row,
         validating unknown keys, picklist membership, and required presence."""
+        # A non-privileged caller can't set a server-only field (e.g. write the quiz
+        # answer key). Drop those keys before validation so a member update to the
+        # rest of the record still succeeds — the protected field is simply ignored.
+        if not self._privileged and self._server_only_slugs:
+            payload = {k: v for k, v in payload.items() if k not in self._server_only_slugs}
         if len(payload) > _MAX_PAYLOAD_KEYS:
             raise EntityRecordError(f"too many fields (max {_MAX_PAYLOAD_KEYS})")
         unknown = set(payload) - set(self._slug_to_col)
@@ -248,11 +281,15 @@ class DynamicEntityRepository:
         return row
 
     def _to_public(self, row: Any) -> dict[str, Any]:
-        """Translate a physical DB row (mapping) to a slug-keyed dict."""
+        """Translate a physical DB row (mapping) to a slug-keyed dict.
+
+        Server-only fields are omitted for a non-privileged caller — this is the
+        single chokepoint every read (get/list/find/create/update return) funnels
+        through, so a protected field (a quiz answer key) can't leak from any route."""
         m = row._mapping if hasattr(row, "_mapping") else row
         out: dict[str, Any] = {c: m[c] for c in _BASE_READ_COLUMNS if c in m}
         for col, slug in self._col_to_slug.items():
-            if col in m:
+            if col in m and (self._privileged or slug not in self._server_only_slugs):
                 out[slug] = m[col]
         return out
 
@@ -264,6 +301,12 @@ class DynamicEntityRepository:
         col_name = self._slug_to_col.get(slug)
         if col_name is None:
             raise EntityRecordError(f"unknown field: {slug!r}")
+        # A server-only field must not be filterable/sortable/groupable by a
+        # non-privileged caller — otherwise its values leak via a filter oracle
+        # (`filter=correct_answer:eq:B`) or an `aggregate` group_by, even though
+        # `_to_public` hides them from the row body.
+        if not self._privileged and slug in self._server_only_slugs:
+            raise EntityRecordError(f"field {slug!r} is not readable")
         return self._table.c[col_name]
 
     def _coerce_by_slug(self, slug: str, value: Any) -> Any:
@@ -467,6 +510,7 @@ class DynamicEntityRepository:
                 raise EntityRecordError(f"{bad_slug!r} references a record not in this org")
 
     async def create(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self._guard_writable()
         await self._validate_relationships(payload)
         row = self._to_row(payload, for_create=True)
         row["org_id"] = self._org_id
@@ -563,7 +607,12 @@ class DynamicEntityRepository:
         if search and search.strip():
             pattern = f"%{_escape_like(search.strip())}%"
             searchable = [
-                self._table.c[f.physical_column] for f in self._fields if f.field_type in SEARCHABLE_FIELD_TYPES
+                self._table.c[f.physical_column]
+                for f in self._fields
+                if f.field_type in SEARCHABLE_FIELD_TYPES
+                # Don't let a text search match against a hidden field — it would be a
+                # substring oracle on the protected values for a non-privileged caller.
+                and (self._privileged or f.slug not in self._server_only_slugs)
             ]
             if not searchable:
                 return [], None  # nothing to match a text query against
@@ -729,6 +778,7 @@ class DynamicEntityRepository:
         )
 
     async def update(self, record_id: uuid.UUID, patch: dict[str, Any]) -> dict[str, Any] | None:
+        self._guard_writable()
         await self._validate_relationships(patch)
         row = self._to_row(patch, for_create=False)
         if not row:
@@ -755,6 +805,7 @@ class DynamicEntityRepository:
         return after
 
     async def delete(self, record_id: uuid.UUID) -> bool:
+        self._guard_writable()
         before = await self.get(record_id) if self._outbox is not None else None
         stmt = (
             self._table.delete()

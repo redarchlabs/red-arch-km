@@ -54,3 +54,19 @@ def make_unhandled_exception_handler(
         )
 
     return handler
+
+
+def make_record_access_handler(
+    allow_origins: Sequence[str],
+) -> Callable[[Request, Exception], Awaitable[JSONResponse]]:
+    """Map a :class:`RecordAccessError` (a member writing a workflow-only entity)
+    to a clean 403 with CORS headers, instead of an opaque 500."""
+
+    async def handler(request: Request, exc: Exception) -> JSONResponse:
+        return JSONResponse(
+            status_code=403,
+            content={"detail": str(exc) or "forbidden"},
+            headers=_cors_headers(request, allow_origins),
+        )
+
+    return handler
