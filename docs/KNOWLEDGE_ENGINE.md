@@ -437,11 +437,10 @@ for the app-facing chat/search routes.
 
 ## Known gaps / TODO
 
-- **Content-hash short-circuit is not implemented.** `facts/pipeline.py`'s
-  docstring claims "the brain-api layer adds a content-hash short-circuit so an
-  unchanged document is skipped entirely," but no code computes or compares a
-  content hash — re-ingest always purges and re-extracts. Treat the comment as
-  aspirational.
+- **No content-hash short-circuit.** Re-ingest always purges and re-extracts,
+  even when the document content is unchanged. Skipping unchanged documents via
+  a content hash is a possible future optimization to save LLM spend on no-op
+  re-ingests (noted in `facts/pipeline.py`).
 - **`triplets` naming is overloaded** (see above) — the field means "claims"
   when the fact engine is on. A rename is deferred.
 - **Multi-hop neighborhood is agent-composed**, not a native quantified-path

@@ -1,11 +1,11 @@
 """Public, versioned enterprise API (``/api/v1``).
 
 Every route here is authenticated by an org **API key** (not a Clerk session) and
-per-key rate-limited. The routers are thin wrappers over the same services the
-first-party UI uses — reusing the shared helpers in ``services/`` — so the public
-contract can stay stable while the internals evolve.
+rate-limited per client IP and per key. The routers are thin wrappers over the same
+services the first-party UI uses — reusing the shared helpers in ``services/`` — so
+the public contract can stay stable while the internals evolve.
 
-``router`` aggregates the per-domain sub-routers and applies the rate limiter once
+``router`` aggregates the per-domain sub-routers and applies the rate limiters once
 for the whole surface; each endpoint declares the single scope it requires.
 """
 
@@ -13,12 +13,14 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
-from api.auth.api_key import enforce_api_rate_limit
+from api.auth.api_key import enforce_api_rate_limit, enforce_ip_rate_limit
 from api.routers.v1 import agents, config, entities, knowledge, records, reports, search, workflows
 
-# The rate limiter (which resolves + caches the API-key principal) runs for every
-# v1 route; individual endpoints add their scope + session dependencies.
-router = APIRouter(dependencies=[Depends(enforce_api_rate_limit)])
+# Two limiters run for every v1 route, in order: the per-client-IP throttle first
+# (pre-auth, so floods of missing/invalid keys can't hammer the key lookup), then
+# the per-key quota (which resolves + caches the API-key principal). Individual
+# endpoints add their scope + session dependencies.
+router = APIRouter(dependencies=[Depends(enforce_ip_rate_limit), Depends(enforce_api_rate_limit)])
 
 router.include_router(entities.router, prefix="/entities", tags=["v1: entities"])
 router.include_router(records.router, prefix="/entities", tags=["v1: records"])
