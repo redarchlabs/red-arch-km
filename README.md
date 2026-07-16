@@ -1,4 +1,4 @@
-# Red Arch Knowledge Management Platform v2
+# Red Arch Knowledge Management Platform
 
 AI-powered enterprise knowledge management with RAG, vector search, knowledge graphs, and fine-grained RBAC.
 
