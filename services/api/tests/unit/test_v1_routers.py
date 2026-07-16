@@ -91,13 +91,31 @@ class TestScopeGate:
 
 class TestRateLimit:
     async def test_429_on_real_route_carries_headers(self) -> None:
-        blocked = RateLimitResult(allowed=False, limit=600, remaining=0, retry_after=42)
-        with patch.object(ak, "check_rate_limit", AsyncMock(return_value=blocked)):
+        # The per-IP pre-auth throttle runs first: let it pass so the per-key
+        # limiter is the one that 429s (and must carry the X-RateLimit-* headers).
+        ip_ok = RateLimitResult(allowed=True, limit=1200, remaining=1199, retry_after=0)
+        key_blocked = RateLimitResult(allowed=False, limit=600, remaining=0, retry_after=42)
+
+        async def by_key(_redis: object, key: str, **_kw: object) -> RateLimitResult:
+            return ip_ok if key.startswith("ip:") else key_blocked
+
+        with patch.object(ak, "check_rate_limit", AsyncMock(side_effect=by_key)):
             async with _client(_app({"reports:read"})) as client:
                 resp = await client.get("/api/v1/reports")
         assert resp.status_code == 429
         assert resp.headers["Retry-After"] == "42"
         assert resp.headers["X-RateLimit-Remaining"] == "0"
+
+    async def test_ip_throttle_429s_before_key_resolution(self) -> None:
+        # When the per-IP throttle blocks, the 429 fires pre-auth: no per-key
+        # X-RateLimit-* headers, just Retry-After.
+        ip_blocked = RateLimitResult(allowed=False, limit=1200, remaining=0, retry_after=9)
+        with patch.object(ak, "check_rate_limit", AsyncMock(return_value=ip_blocked)):
+            async with _client(_app({"reports:read"})) as client:
+                resp = await client.get("/api/v1/reports")
+        assert resp.status_code == 429
+        assert resp.headers["Retry-After"] == "9"
+        assert "X-RateLimit-Remaining" not in resp.headers
 
 
 class TestRecordsRouter:

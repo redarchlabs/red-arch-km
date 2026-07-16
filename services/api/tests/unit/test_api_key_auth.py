@@ -175,3 +175,59 @@ class TestRateLimit:
                 resp = await client.get("/rl")
         assert resp.status_code == 429
         assert resp.headers["Retry-After"] == "42"
+
+
+class TestIpRateLimit:
+    """enforce_ip_rate_limit: the pre-auth, per-client-IP throttle."""
+
+    def _app(self) -> FastAPI:
+        app = FastAPI()
+
+        @app.get("/rl", dependencies=[Depends(ak.enforce_ip_rate_limit)])
+        async def rl():  # noqa: ANN202
+            return {"ok": True}
+
+        app.dependency_overrides[get_redis] = lambda: MagicMock()
+        return app
+
+    async def test_within_limit_allows(self) -> None:
+        allowed = RateLimitResult(allowed=True, limit=1200, remaining=1199, retry_after=0)
+        limiter = AsyncMock(return_value=allowed)
+        with patch.object(ak, "check_rate_limit", limiter):
+            async with _client(self._app()) as client:
+                resp = await client.get("/rl")
+        assert resp.status_code == 200
+        # Keyed by client IP, not by API key — it must run before key resolution.
+        assert limiter.await_args.args[1].startswith("ip:")
+
+    async def test_over_limit_is_429_with_retry_after(self) -> None:
+        blocked = RateLimitResult(allowed=False, limit=1200, remaining=0, retry_after=17)
+        with patch.object(ak, "check_rate_limit", AsyncMock(return_value=blocked)):
+            async with _client(self._app()) as client:
+                resp = await client.get("/rl")
+        assert resp.status_code == 429
+        assert resp.headers["Retry-After"] == "17"
+
+    async def test_requires_no_api_key(self) -> None:
+        """The IP throttle must engage without any Authorization header at all —
+        that is its purpose: bounding floods of invalid/missing keys."""
+        blocked = RateLimitResult(allowed=False, limit=1200, remaining=0, retry_after=9)
+        with patch.object(ak, "check_rate_limit", AsyncMock(return_value=blocked)):
+            async with _client(self._app()) as client:
+                resp = await client.get("/rl")  # no auth header
+        assert resp.status_code == 429  # throttled, not 401
+
+
+class TestV1RouterWiring:
+    """Both limiters must be attached to the /api/v1 router, IP throttle first
+    (it is documented to run BEFORE key resolution)."""
+
+    def test_ip_and_key_limiters_attached_in_order(self) -> None:
+        from api.routers.v1 import router as v1_router
+
+        deps = [d.dependency for d in v1_router.dependencies]
+        assert ak.enforce_ip_rate_limit in deps, "per-IP limiter not wired on /api/v1"
+        assert ak.enforce_api_rate_limit in deps, "per-key limiter not wired on /api/v1"
+        assert deps.index(ak.enforce_ip_rate_limit) < deps.index(ak.enforce_api_rate_limit), (
+            "IP throttle must run before per-key limiter (pre-auth)"
+        )

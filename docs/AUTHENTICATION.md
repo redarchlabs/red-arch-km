@@ -248,13 +248,14 @@ config-promotion receiver used by release promotion — see CHANGE_MANAGEMENT.md
 
 ### 5.5 Rate limits
 
-The `/api/v1` router (`services/api/src/api/routers/v1/__init__.py`) applies
-`enforce_api_rate_limit` to **every** route: a **per-key** Redis quota
-(`API_KEY_RATE_LIMIT_PER_MINUTE`, default 600), which also resolves the key principal.
-It sets `X-RateLimit-Limit` / `X-RateLimit-Remaining` and returns `429` with `Retry-After`
-when exhausted. A coarser **per-IP** pre-auth limiter (`enforce_ip_rate_limit`,
-`API_IP_RATE_LIMIT_PER_MINUTE`, default 1200) is implemented but **not currently wired
-into the router chain** (see [Known gaps](#known-gaps--todo)). `config:write` uses a
+The `/api/v1` router (`services/api/src/api/routers/v1/__init__.py`) applies two
+limiters to **every** route, in order. First, a coarse **per-IP** pre-auth throttle
+(`enforce_ip_rate_limit`, `API_IP_RATE_LIMIT_PER_MINUTE`, default 1200) that runs
+*before* key resolution, so floods of missing/invalid keys can't hammer the auth
+lookup. Then a **per-key** Redis quota (`enforce_api_rate_limit`,
+`API_KEY_RATE_LIMIT_PER_MINUTE`, default 600), which also resolves the key principal;
+it sets `X-RateLimit-Limit` / `X-RateLimit-Remaining` and returns `429` with
+`Retry-After` when exhausted. `config:write` uses a
 DDL-capable session (`get_apikey_tenant_owner_db`, `km_app` role, 300s statement timeout)
 because applying a promotion runs `ce_*` entity-table DDL; RLS still enforces.
 
@@ -361,7 +362,7 @@ any identity.
 | `CLERK_ALLOWED_AZP` | Comma-separated allowlist of UI origins (authorized parties). **Required** when `CLERK_JWT_ISSUER` is set; must match Clerk's emitted `azp` byte-for-byte. |
 | `CLERK_SECRET_KEY` | Clerk Backend API secret (`sk_…`). Reserved for Backend-API provisioning; not needed for JWKS verify. |
 | `API_KEY_RATE_LIMIT_PER_MINUTE` | Per-key `/api/v1` quota (default 600). |
-| `API_IP_RATE_LIMIT_PER_MINUTE` | Per-IP pre-auth quota (default 1200; limiter not currently wired — see Known gaps). |
+| `API_IP_RATE_LIMIT_PER_MINUTE` | Per-IP pre-auth quota on `/api/v1` (default 1200). |
 | `API_DOCS_ENABLED` | Serve `/api/v1/docs` (default true). |
 | `ORG_ENCRYPTION_KEY` | Fernet key for per-org secrets at rest (connection + webhook signing secrets, org provider keys). **Required in production**; a dev default warns at startup. |
 | `BRAIN_API_KEY` | Shared secret, api/worker → brain-api (`X-API-Key`). |
@@ -420,10 +421,6 @@ any identity.
 
 ## Known gaps / TODO
 
-- **Per-IP rate limiter not wired.** `enforce_ip_rate_limit` and
-  `API_IP_RATE_LIMIT_PER_MINUTE` exist in `services/api/src/api/auth/api_key.py` and
-  config, but the dependency is not attached to the `/api/v1` router (only the per-key
-  `enforce_api_rate_limit` is). Until wired, only the per-key quota is enforced.
 - **Go parity is not CI-gated.** The Go `services/api-go` verifier is intended to mirror
   `auth/clerk.py`, but the Python service is the authoritative, CI-covered implementation
   today (see ARCHITECTURE.md).

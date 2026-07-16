@@ -6,8 +6,9 @@ Chains the three ingest stages built in earlier slices:
 
 Idempotent by design: ``ingest_document`` purges the document's prior claims
 before re-inserting, so re-processing the same document converges instead of
-duplicating. (The brain-api layer adds a content-hash short-circuit so an
-unchanged document is skipped entirely.)
+duplicating. Re-ingest always runs the full purge + re-extract cycle — there is
+no content-hash short-circuit for unchanged documents (a possible future
+optimization to save LLM spend on no-op re-ingests).
 """
 
 from __future__ import annotations
