@@ -1,67 +1,117 @@
 # RBAC (Role-Based Access Control)
 
-Red Arch Knowledge Manager implements a fine-grained permission system using 32-bit access masks for efficient folder and document access control.
+How KM2 decides *who may do what* to *which* data. This doc covers the platform's
+authorization layers — administrative roles, the 32-bit access-mask model for folders
+and documents, per-workflow run permissions, per-entity/per-field access control, and how
+API-key scopes fit in. It is for engineers and evaluators. Identity and *authentication*
+(Clerk JWT verification, API-key hashing, RLS session setup) are owned by
+[AUTHENTICATION.md](AUTHENTICATION.md); this doc references it rather than repeating it.
 
-## Permission Hierarchy
+## Table of Contents
 
-```
-┌─────────────────────────────────────────────────────┐
-│                     Site Admin                       │
-│         (Platform-wide superuser access)             │
-└──────────────────────────┬──────────────────────────┘
-                           │
-┌──────────────────────────▼──────────────────────────┐
-│                      Org Admin                       │
-│          (Full access within organization)           │
-└──────────────────────────┬──────────────────────────┘
-                           │
-┌──────────────────────────▼──────────────────────────┐
-│                   Org Member                         │
-│      (Access controlled by permission masks)         │
-└─────────────────────────────────────────────────────┘
-```
+- [Layers at a glance](#layers-at-a-glance)
+- [Administrative roles](#administrative-roles)
+- [Tenant isolation (RLS) as the base layer](#tenant-isolation-rls-as-the-base-layer)
+- [The 32-bit access mask](#the-32-bit-access-mask)
+- [Folder & document permissions](#folder--document-permissions)
+- [Workflow run permissions](#workflow-run-permissions)
+- [Entity & field access control](#entity--field-access-control)
+- [API keys & scopes](#api-keys--scopes)
+- [Migration reference](#migration-reference)
+- [Security considerations](#security-considerations)
+- [Known gaps / TODO](#known-gaps--todo)
 
-## Access Levels
+## Layers at a glance
 
-### Site Admin
-- `is_site_admin = true` on user_profiles
-- Can CRUD all organizations
-- Bypasses org-level permission checks
-- Bootstrapped via the first-run setup wizard (`/setup` + one-time token from
-  the API logs, see [DEPLOYMENT.md](DEPLOYMENT.md)); afterwards existing site
-  admins promote/demote others in the Site Admin console
-  (`PATCH /api/admin/users/{id}`)
-- The last active site admin cannot be demoted or deactivated (409), and
-  admins cannot demote/deactivate themselves (400)
-- Accounts can be deactivated (`is_active = false`): authentication is refused
-  with 403 even when the Clerk JWT is valid
+Authorization is evaluated in independent layers; a request must pass all that apply:
 
-### Org Admin
-- `is_org_admin = true` on user_org_memberships
-- Full access to all folders/documents in their org
-- Can manage org members and permissions
-- Set by other org admins or site admins
+| Layer | Question it answers | Enforced by |
+|-------|---------------------|-------------|
+| Tenant isolation | Is this row in my org? | Postgres RLS (every FORCE-RLS table) |
+| Administrative role | Am I a site admin / org admin / member? | `is_site_admin`, `is_org_admin` on the auth context |
+| Access mask | Can I see this folder/document/chunk? | `access_mask` package + resolved masks |
+| Workflow run permission | May I manually run this workflow? | `workflows.run_permission` + `can_run()` |
+| Entity/field access | May I write this entity / read this field? | `write_access`, `read_access` + `privileged` repo flag |
+| API-key scope | Does this key grant this `/api/v1` operation? | `api_keys.scopes` + `require_scope()` |
 
-### Org Member
-- Access determined by dimension assignments
-- Permission mask calculated from membership
-- Can only view/contribute to folders matching their mask
+## Administrative roles
 
-## Permission Dimensions
+There are three role tiers. They are booleans on two different tables, resolved into the
+request's auth context in `services/api/src/api/auth/dependencies.py`.
 
-Five dimensions define access within an organization:
+| Role | Flag / source | Scope | Set by |
+|------|---------------|-------|--------|
+| Site admin | `user_profiles.is_site_admin` | Platform-wide (all orgs) | First-run bootstrap, then existing site admins |
+| Org admin | `user_org_memberships.is_org_admin` | One org | Org admins or site admins |
+| Member | A membership row with `is_org_admin = false` | One org, filtered by masks | Org admins |
 
-| Dimension | Bits | Max Value | Shift | Example |
-|-----------|------|-----------|-------|---------|
-| Org | 11 | 2047 | 21 | Acme Corp (slot 1) |
-| Region | 5 | 31 | 16 | North America (slot 3) |
-| Role | 5 | 31 | 11 | Manager (slot 2) |
-| Group | 7 | 127 | 4 | Project Alpha (slot 7) |
-| Dept | 4 | 15 | 0 | Engineering (slot 5) |
+### How the context is built
 
-**Total: 11 + 5 + 5 + 7 + 4 = 32 bits**
+- `get_current_user` verifies the bearer token, provisions/loads the `UserProfile`, and
+  returns a frozen `CurrentUser(sub, username, email, profile_id, is_site_admin)`. A
+  deactivated profile (`is_active = false`) is refused with **403** even when the Clerk JWT
+  is valid (`_ensure_active`).
+- `require_org_access` loads the caller's `UserOrgMembership` for the requested org
+  (eager-loading its regions/departments/roles/groups) and returns an
+  `OrgContext(user, org_id, membership, is_org_admin)`.
+  - A **site admin with no membership** in the org still gets access: a synthetic
+    membership is created and `is_org_admin` is forced `True`. So
+    `is_org_admin == membership.is_org_admin OR user.is_site_admin`.
+  - A non-site-admin with no membership is refused with **403**.
+- `require_org_admin` gates org-management endpoints (403 unless `ctx.is_org_admin`).
+- `require_site_admin` gates platform endpoints (403 unless `user.is_site_admin`).
 
-### Bit Layout
+### Site admin vs org admin
+
+Site admins are the platform superusers: they can CRUD organizations, manage users, and
+implicitly act as an admin inside any org. The Site Admin console, its tabs, the first-run
+bootstrap, and the guardrails (e.g. the last active site admin cannot be demoted, admins
+cannot demote themselves) are documented in [SITE_ADMIN.md](SITE_ADMIN.md). Org admins have
+full authority *within their own org only* — they bypass the access-mask, workflow-run, and
+entity/field policies described below, but never cross the tenant boundary.
+
+## Tenant isolation (RLS) as the base layer
+
+Before any RBAC check runs, Postgres Row-Level Security guarantees a request can only touch
+rows in its own org. Every tenant table is `FORCE ROW LEVEL SECURITY`; the app connects as
+the non-superuser `km_app` role (which cannot bypass RLS). Two cross-cutting mechanisms
+govern visibility, both set per-transaction in `services/api/src/api/db_scope.py`:
+
+- **Per-tenant path** (`enter_tenant`): drops to role `app_user`, sets
+  `app.current_tenant_id`, and forces `app.bypass = 'off'`. The tenant policy
+  (`org_id = current_setting('app.current_tenant_id')::uuid`) filters every row.
+- **Bypass path** (`enter_bypass`): sets `app.bypass = 'on'`. Migration
+  `034_admin_bypass_policies` adds a permissive `admin_bypass_all` policy
+  (`USING`/`WITH CHECK (current_setting('app.bypass', true) = 'on')`) to every FORCE-RLS
+  table. RLS policies are OR-combined, so a row is visible/writable when *either* the tenant
+  policy matches *or* the bypass GUC is on. Only the enumerated privileged paths
+  (`get_db`, workflow/agent poll sweeps, site-admin, provisioning, API-key resolution) turn
+  it on; normal request paths never do.
+
+This replaced the older Postgres-superuser bypass so the stack runs on managed Postgres
+(e.g. Cloud SQL) where the superuser cannot hold `BYPASSRLS`. The full model lives in
+[DATABASE.md](DATABASE.md) and [AUTHENTICATION.md](AUTHENTICATION.md#3-authorization--postgres-rls);
+**RLS is tenant isolation, not RBAC** — the layers below run on top of it.
+
+## The 32-bit access mask
+
+Folder and document visibility is expressed as a 32-bit integer. The `access_mask` package
+(`packages/access_mask/src/access_mask/`) encodes/decodes/matches these masks; the same
+layout is mirrored in Go at `packages/accessmask/mask.go`.
+
+### Dimensions and bit layout
+
+Five dimensions pack into 32 bits (`packages/access_mask/src/access_mask/constants.py`):
+
+| Dimension | Bits | Shift | Max value |
+|-----------|------|-------|-----------|
+| Org | 11 | 21 | 2047 (`MAX_ORG_ID`) |
+| Region | 5 | 16 | 31 (`MAX_REGION`) |
+| Role | 5 | 11 | 31 (`MAX_ROLE`) |
+| Group | 7 | 4 | 127 (`MAX_GROUP`) |
+| Dept | 4 | 0 | 15 (`MAX_DEPT`) |
+
+**Total: 11 + 5 + 5 + 7 + 4 = 32 bits.**
 
 ```
  31                                                       0
@@ -69,319 +119,288 @@ Five dimensions define access within an organization:
      bits 21-31       16-20         11-15         4-10         0-3
 ```
 
-## Access Mask Encoding
-
-The `access_mask` package encodes/decodes permission masks:
+### Encoding, decoding, matching
 
 ```python
 from access_mask import encode, decode, matches
 
-# Encode a user's permissions
-user_mask = encode(
-    org=1,       # Org slot 1
-    region=3,    # Region slot 3 (North America)
-    dept=5,      # Dept slot 5 (Engineering)
-    role=2,      # Role slot 2 (Manager)
-    group=7,     # Group slot 7 (Project Alpha)
-)
+# Encode a user's permissions (keyword-only; each value is range-validated)
+user_mask = encode(org=1, region=3, role=2, group=7, dept=5)
 
-# Decode for inspection
-decoded = decode(user_mask)
+decode(user_mask)
 # DecodedMask(org=1, region=3, role=2, group=7, dept=5)
 
-# Check if user can access a document
-# Document allows any role/group in Engineering, North America
+# A document open to ANY role/group in Engineering (dept 5), North America (region 3)
 doc_mask = encode(org=1, region=3, dept=5, role=31, group=127)
-can_access = matches(user_mask, doc_mask)  # True
+matches(user_mask, doc_mask)  # True
 ```
 
-### Wildcard Values
+`encode` raises `ValueError` if any component is out of range. `matches(user_mask, doc_mask)`
+implements the access rule (`access_mask.mask`):
 
-Setting a dimension to its maximum value acts as a wildcard (matches any user value):
+- **Org must match exactly** — there is no org wildcard, so a mask can never grant
+  cross-org access even before RLS.
+- Every other dimension matches when the **document** value is the wildcard (its `MAX`)
+  **or** equals the user's value (`_field_matches`).
 
-| Dimension | Wildcard Value |
-|-----------|----------------|
+### Wildcards
+
+Setting a dimension to its `MAX` on the *document/folder* side means "any user value":
+
+| Dimension | Wildcard |
+|-----------|----------|
 | Region | 31 |
 | Role | 31 |
 | Group | 127 |
 | Dept | 15 |
-
-**Note:** Org cannot be a wildcard — it must always match exactly.
+| Org | (none — must match exactly) |
 
 ```python
-# Folder accessible to ALL roles in Engineering, North America
-folder_mask = encode(
-    org=1,
-    region=3,      # North America only
-    dept=5,        # Engineering only
-    role=31,       # ANY role (wildcard)
-    group=127,     # ANY group (wildcard)
-)
+# Folder open to ALL roles/groups in Engineering, North America
+encode(org=1, region=3, dept=5, role=31, group=127)
 ```
 
-### Multiple Masks
+### Multiple masks
 
-Folders can have multiple permission masks for complex access rules:
+A folder or document carries a **list** of masks; a user is granted access if their mask
+matches **any** entry (logical OR):
 
 ```python
-# Folder accessible to Engineering OR Sales
-folder.view_permission_masks = [
-    encode(org=1, dept=5, region=31, role=31, group=127),  # Engineering, any region/role/group
-    encode(org=1, dept=2, region=31, role=31, group=127),  # Sales, any region/role/group
+# Accessible to Engineering OR Sales, any region/role/group
+view_permission_masks = [
+    encode(org=1, dept=5, region=31, role=31, group=127),  # Engineering
+    encode(org=1, dept=2, region=31, role=31, group=127),  # Sales
 ]
 ```
 
-A user with a mask matching ANY of the folder's masks gains access.
+A user asserts **all** the masks their membership implies — the Cartesian product of their
+assigned regions × departments × roles × groups
+(`calculate_user_masks_from_membership` in
+`services/api/src/api/services/permission_config.py`). Access is granted if any user mask
+matches any resource mask.
 
-## User Membership
+## Folder & document permissions
 
-### Assignment Flow
+Folders and documents are gated by two mask lists each: `view_permission_masks` and
+`contributor_permission_masks`. Documents were given their own columns in migration
+`015_add_document_permissions` (mirroring the four columns already on `folders`).
 
-1. User authenticates via Clerk
-2. API creates/updates user_profiles with Clerk sub
-3. Admin creates user_org_memberships linking user to org
-4. Admin assigns dimensions via junction tables:
-   - membership_regions
-   - membership_departments
-   - membership_roles
-   - membership_groups
+### Permission config → masks
 
-### Mask Calculation
-
-When evaluating access, the API calculates the user's mask:
-
-```python
-from api.services.permission_config import calculate_user_masks_from_membership
-
-# Given a membership with assigned dimensions
-masks = calculate_user_masks_from_membership(
-    membership,
-    org_permission_number=1
-)
-# Returns list of masks (one per dimension combination)
-```
-
-## Folder Permissions
-
-### Configuration Structure
+Admins don't hand-write integers. Each resource stores a human-readable
+`viewer_permissions_config` / `contributor_permissions_config` — a **list of entries**,
+each entry a dict of *singular* dimension names to a value
+(`list[dict[str, Any]]`, see `services/api/src/api/schemas/document.py`):
 
 ```json
-{
-  "viewer_permissions_config": [
-    {
-      "regions": ["North America", "Europe"],
-      "departments": ["Engineering"],
-      "roles": [],
-      "groups": []
-    }
-  ],
-  "contributor_permissions_config": [
-    {
-      "regions": ["North America"],
-      "departments": ["Engineering"],
-      "roles": ["Manager", "Senior"],
-      "groups": []
-    }
-  ]
-}
+[
+  { "region": "North America", "department": "Engineering" },
+  { "department": "Sales" }
+]
 ```
 
-### Mask Generation
+Semantics (`permission_config_to_masks` in `permission_config.py`):
 
-The permission config is compiled into integer masks:
+- **Within one entry**, all named dimensions must match (logical AND). A dimension omitted
+  from the entry becomes its wildcard `MAX`.
+- **Across entries**, the resulting masks are OR'd (the example above = "Engineering in
+  North America" OR "Sales anywhere").
+- Names are resolved to each dimension's `permission_number` from the org's
+  Region/Department/Role/Group tables; an unresolvable name is logged and skipped.
 
-```python
-# API calculates masks when folder is created/updated
-folder.view_permission_masks = compile_permissions(
-    config=folder.viewer_permissions_config,
-    org=org,
-)
-folder.contributor_permission_masks = compile_permissions(
-    config=folder.contributor_permissions_config,
-    org=org,
-)
-```
+`compute_folder_masks` (`services/api/src/api/services/folder_service.py`) wraps this for
+both viewer and contributor configs; the folder/document routers persist the resulting
+integer lists whenever the config is created or changed.
 
-## Document Access
+### Inheritance (documents ← folder)
 
-### Per-Document Permission Overrides
+A document's own `viewer_permissions_config` may be **NULL**, meaning "no per-document
+override — inherit the folder." A non-NULL config overrides the folder for that document.
+This lets a single document be tightened or loosened without moving it or nesting folders.
+Existing rows were left NULL so they keep inheriting (matching pre-migration behaviour).
 
-Documents can override their folder's permissions:
+### Feeding the knowledge brain (search / RAG chat)
 
-1. **Folder permissions (default):** If a document has `viewer_permissions_config = null`, its access falls back to its folder's masks
-2. **Per-document override:** If a document has a non-null `viewer_permissions_config`, those masks are used instead of the folder's
+A document's resolved masks become the `access_keys` stored with each of its chunks in the
+brain (Qdrant payload) at ingest time. At query time the API translates the *requester*
+into the same mask space and passes it to the brain so only matching chunks are returned
+(`services/api/src/api/services/search_access.py`):
+
+- **A user (Clerk session)** → `resolve_user_access_keys` returns the membership masks —
+  **or `None` for org admins**, meaning unrestricted.
+- **An org API key** → `service_key_access_keys` returns `None` (org-wide). An org key is an
+  org-level credential: its *operations* are gated by scopes, but its *data visibility* is
+  org-wide by design.
+
+Chats/searches can additionally be scoped to specific folders via synthetic `folder:<id>`
+tags (`folder_tags`).
+
+## Workflow run permissions
+
+Manually running a workflow (`POST /api/workflows/{workflow_id}/run`) is gated per workflow
+by the `workflows.run_permission` JSONB column (migration `012_workflow_run_permission`,
+default `{"mode": "org_admin"}`). The schema is `RunPermission`
+(`services/api/src/api/schemas/workflow.py`) with `extra="forbid"`:
 
 ```json
-{
-  "viewer_permissions_config": {
-    "regions": ["North America"],
-    "departments": ["Engineering"],
-    "roles": [],
-    "groups": []
-  },
-  "view_permission_masks": [...]
-}
+{ "mode": "roles", "role_ids": ["uuid"], "group_ids": ["uuid"] }
 ```
 
-This allows fine-tuning access on a per-document basis without moving the document or creating nested folders.
-
-### Inheritance
-
-Documents inherit access from their parent folder AT CREATION:
-
-1. Document created in folder
-2. Folder's view_permission_masks copied to document's access keys (if no per-document override)
-3. Access keys passed to brain-api during ingestion
-4. Qdrant stores access keys in point payload
-
-### Query Filtering
-
-When searching/chatting, user's masks filter results:
-
-```python
-# Brain API vector search
-results = search(
-    query="How do I configure...",
-    access_keys=[user_mask_1, user_mask_2],  # User's permission masks
-)
-# Only chunks with matching access keys returned
-```
-
-## Workflow Run Permissions
-
-Workflows can be manually executed by users with specified permissions:
-
-### Run Permission Model
-
-The `workflows.run_permission` JSONB column defines who may manually run a workflow via `POST /api/workflows/{id}/run`:
-
-```json
-{
-  "mode": "org_admin"
-}
-```
-
-### Run Permission Modes
-
-| Mode | Description |
+| Mode | Who may run |
 |------|-------------|
-| `org_admin` | Only org admins (default) |
-| `any_member` | Any org member |
-| `specific_roles` | Only members with specified role_ids; includes `role_ids` list |
-| `specific_groups` | Only members of specified group_ids; includes `group_ids` list |
+| `org_admin` | Org admins only (default) |
+| `any_member` | Any member of the org |
+| `roles` | Members whose membership includes any listed `role_ids` **or** `group_ids` |
 
-### Examples
+Enforcement is `can_run(ctx, run_permission)` in
+`services/api/src/api/services/workflow/permissions.py`:
 
-```json
-{
-  "mode": "org_admin"
-}
-```
+- **Org admins always pass**, regardless of mode.
+- `any_member` → any org member passes.
+- `roles` → the caller's membership roles/groups must intersect the configured
+  `role_ids`/`group_ids`. (There is a single `roles` mode that covers *both* roles and
+  groups; there is no separate `specific_groups` mode.)
+- Unknown/`org_admin` mode → only admins.
 
-```json
-{
-  "mode": "any_member"
-}
-```
+The same `can_run` check gates the chat agent's `run_workflow` tool — it honors the
+workflow's own `run_permission`, it is **not** silently admin-gated (`services/api/src/api/services/agent.py`).
+Automation triggered by record changes (create/update/delete) fires regardless of which user
+made the change; run permissions only govern *manual* runs. See
+[WORKFLOW_ENGINE.md](WORKFLOW_ENGINE.md).
 
-```json
-{
-  "mode": "specific_roles",
-  "role_ids": ["uuid-1", "uuid-2"]
-}
-```
+## Entity & field access control
 
-```json
-{
-  "mode": "specific_groups",
-  "group_ids": ["uuid-1", "uuid-2"]
-}
-```
+By default any org member may CRUD records of a custom entity through the record API. Two
+opt-in policies (migration `039_entity_access_control`) let an org lock down a record
+surface so members can read/interact with it but cannot tamper with it — e.g. a quiz answer
+key or a certification. Both default to the pre-existing fully-open behaviour, so existing
+entities are unaffected until an admin opts in.
 
-### Enforcement
+| Policy | Column | Values (default first) | Effect |
+|--------|--------|------------------------|--------|
+| Entity write | `entity_definitions.write_access` | `member`, `workflow_only` | `workflow_only` → direct member writes (create/update/delete) are refused |
+| Field read | `entity_fields.read_access` | `member`, `server_only` | `server_only` → the field's values are hidden from members and cannot be filtered/sorted/grouped on |
 
-The `can_run(ctx, run_permission)` function checks membership:
+### The `privileged` flag
 
-```python
-# User must be an org member
-# If mode = org_admin: user.is_org_admin must be True
-# If mode = any_member: any member passes
-# If mode = specific_roles: user's membership must include at least one role_id
-# If mode = specific_groups: user's membership must include at least one group_id
-```
+Enforcement lives in `DynamicEntityRepository`
+(`services/api/src/api/repositories/dynamic_entity.py`). The repository takes a
+`privileged: bool` flag (default `False`). A **privileged** repo bypasses both policies; a
+**non-privileged** repo is subject to them. Who is privileged:
 
-Org admins **always** have permission to run workflows, regardless of `run_permission` mode.
+| Caller | Built via | Privileged? |
+|--------|-----------|-------------|
+| Workflow engine (runner/dispatcher) | `build_record_repo(..., privileged=True)` | **Yes** |
+| Course generation (server-side) | `build_record_repo(..., privileged=True)` | **Yes** |
+| Record API — org admin | `build_record_repo(..., privileged=ctx.is_org_admin)` | **Yes** (admin) |
+| Record API — member | same, `is_org_admin` false | No |
+| `/api/v1` API-key records | `build_record_repo(session, principal.org_id, slug)` | **No** (default) |
+| Chat agent record tools | `build_record_repo(ctx.session, ...)` | **No** (default) |
 
-### Custom Entity Access
+So the workflow engine and org admins bypass the policy; regular members, API keys, and the
+chat agent do not. `build_record_repo` (`services/api/src/api/services/entity_records_helpers.py`)
+threads the flag through.
 
-Users can CRUD records of custom entities if they have org access (any org member). Workflow automation triggers
-on record changes (create/update/delete) regardless of which user changed the record.
+### How the two policies are enforced
 
-## API Authentication
+- **`write_access = workflow_only`**: on any create/update/delete, `_guard_writable` raises
+  `RecordAccessError` for a non-privileged caller. It is deliberately *not* an
+  `EntityRecordError` (400) subclass — a dedicated handler (`make_record_access_handler` in
+  `services/api/src/api/exception_handlers.py`) maps it to a clean **403**.
+- **`read_access = server_only`**: the repo computes `_server_only_slugs` at construction.
+  For a non-privileged caller it:
+  - strips those keys from any write payload before validation (`_to_row`) — a member
+    update to the rest of the record still succeeds; the protected field is silently
+    ignored, never written;
+  - omits those columns from every read projection;
+  - **refuses to filter/sort/group by them** — otherwise their values would leak via a
+    filter/substring oracle.
 
-### Clerk Session JWT
+### Why this makes records tamper-proof
 
-All API requests require a valid Clerk session JWT:
+The LMS uses this to make its gates real rather than theatre. `question.correct_answer` and
+`scenario.rubric` are `server_only`, so a learner cannot read the answer key or grading
+rubric through the record API. `assessment_attempt`, `simulation_attempt`, and
+`certification` are `workflow_only`, so a learner cannot forge a passing attempt or mint
+their own certificate — only the grading workflow (which runs privileged) can write them.
+Course generation writes privileged precisely so the `server_only` answer key survives the
+write (a non-privileged write would drop it). Full walkthrough:
+[LMS.md](LMS.md#tamper-proofing-via-entity-access-control).
 
-```http
-Authorization: Bearer <token>
-```
+## API keys & scopes
 
-The token is validated with these checks:
-- Issuer pinned to `CLERK_JWT_ISSUER` (configured from Clerk Dashboard)
-- Signature verified against Clerk's JWKS at `{issuer}/.well-known/jwks.json`
-- `azp` (authorized party) claim checked against allowlist in `CLERK_ALLOWED_AZP` (comma-separated origins)
-- Token lifetime validated (Clerk tokens typically expire in ~60 seconds; SDK auto-refreshes)
+The versioned public surface (`/api/v1/**`) is authenticated by an **organization API key**
+(`km2_…`, SHA-256 hashed, migration `028_api_keys`), not a Clerk session. Creation, storage,
+hashing, and the auth path are documented in
+[AUTHENTICATION.md](AUTHENTICATION.md#5-api-key-authentication-apiv1); this section covers
+only the *authorization* dimension — scopes.
 
-### User Context
+Each key carries a JSONB `scopes` list. An endpoint declares the one concrete scope it needs
+via `require_scope("<domain>:<action>")` (`services/api/src/api/auth/api_key.py`), and
+`has_scope` decides access (missing scope → **403**). The canonical catalog is
+`API_SCOPES` in `services/api/src/api/services/api_key_scopes.py`:
 
-After validation, the API builds user context:
+| Scope | Grants |
+|-------|--------|
+| `entities:read` | Read custom entity definitions (schema) |
+| `records:read` / `records:write` | Read / create-update-delete entity records |
+| `reports:read` / `reports:run` | Read saved reports / execute reports & aggregations |
+| `workflows:read` / `workflows:run` | Inspect workflows & runs / trigger runs (high privilege) |
+| `search:read` | Semantic search & RAG chat |
+| `knowledge:read` | Read documents & folders |
+| `agents:read` / `agents:run` | Inspect / run agents |
+| `work_orders:read` / `work_orders:write` | Read / file & update work orders |
+| `config:read` / `config:write` | Read instance config / receive & apply config promotions |
 
-```python
-@dataclass
-class CurrentUser:
-    keycloak_sub: str  # Clerk subject ID
-    username: str
-    email: str
-    profile_id: uuid.UUID
-    is_site_admin: bool
+Rules that matter for authorization:
 
-@dataclass
-class OrgContext:
-    user: CurrentUser
-    org_id: uuid.UUID
-    membership: UserOrgMembership | None
-    is_org_admin: bool
-```
+- **Wildcards** (`*` and `<domain>:*`) may be *granted* to a key, but an endpoint always
+  requires a concrete scope (`normalize_scopes`).
+- **`config:write` is a sensitive scope** (`SENSITIVE_SCOPES`): it can rewrite the whole org
+  configuration (used by change-management promotions), so it is **never** covered by a `*`
+  or `config:*` wildcard — a key must list `config:write` explicitly.
+- An API key's *data* visibility is org-wide (see [search](#feeding-the-knowledge-brain-search--rag-chat));
+  scopes only constrain which *operations* it can perform. Notably, `/api/v1` record access
+  is never privileged, so a key cannot write `workflow_only` entities or read `server_only`
+  fields even with `records:write`.
 
-## Service-to-Service Auth
+## Migration reference
 
-### Brain API Key
+| Migration | Adds |
+|-----------|------|
+| `012_workflow_run_permission` | `workflows.run_permission` JSONB |
+| `015_add_document_permissions` | Per-document viewer/contributor config + mask columns |
+| `028_api_keys` | `api_keys` table (hashed key, scopes, RLS) |
+| `034_admin_bypass_policies` | GUC-gated `admin_bypass_all` RLS policy on every FORCE-RLS table |
+| `039_entity_access_control` | `entity_definitions.write_access`, `entity_fields.read_access` |
 
-Internal services authenticate with shared secrets:
+## Security considerations
 
-```http
-X-API-Key: ${BRAIN_API_KEY}
-```
+1. **RLS is the floor.** Cross-tenant access is impossible without the bypass GUC, which
+   only enumerated privileged paths set. The org dimension of the access mask also has no
+   wildcard, giving a second cross-org guard.
+2. **Fail-closed enforcement.** `workflow_only` writes 403 via a dedicated handler (not a
+   swallowed 400); `server_only` fields are dropped from writes and excluded from
+   filter/sort/group so they cannot leak via an oracle.
+3. **Range-validated masks.** `encode` rejects out-of-range dimension values before packing.
+4. **Least privilege by default.** New entities/fields are fully open; write/read lockdown
+   is opt-in. API keys must be minted with explicit scopes; `config:write` is never granted
+   by a wildcard.
+5. **Deactivation is immediate.** A deactivated profile is refused at auth time (403) even
+   with a valid JWT.
+6. **Secret handling and auth mechanics** (JWT verification, key hashing, per-org OpenAI key
+   encryption, internal/brain service keys, webhook signing) are owned by
+   [AUTHENTICATION.md](AUTHENTICATION.md#11-security-notes).
 
-### Internal API Key
+## Known gaps / TODO
 
-Worker-to-API callbacks use a separate key:
+- **Contributor masks vs write path.** `contributor_permission_masks` are computed and
+  stored for folders/documents, but this doc does not trace every endpoint that consults
+  them for write authorization; verify against the folder/document routers before relying on
+  contributor-level write gating for a new surface.
+- **No per-record ACLs.** Access is by folder/document mask, per-entity write policy, and
+  per-field read policy — there is no per-*record* owner/ACL model. Record-scoping patterns
+  (e.g. the LMS `@me` filter) are conventions built in views/workflows, not an enforced
+  RBAC primitive.
 
-```http
-X-Internal-API-Key: ${INTERNAL_API_KEY}
-```
-
-## Security Considerations
-
-1. **RLS Enforcement**: PostgreSQL RLS prevents cross-tenant data access at the database level
-2. **Mask Validation**: All mask values validated within range before encoding
-3. **Key Rotation**: API keys should be rotated regularly via environment variables
-4. **Audit Logging**: Permission changes logged with user context
-5. **Token Expiry**: JWT tokens have limited lifetime (~60s); refresh handled automatically by Clerk SDK
-6. **Per-org Secret Encryption**: Per-org OpenAI API keys are encrypted at rest (Fernet symmetric encryption) using the `ORG_ENCRYPTION_KEY` configured in the environment. Decryption happens only when the secret is needed (e.g., worker consumption via internal API), and the decrypted value is **never** logged or cached beyond its immediate use.
-7. **Workflow Security**:
-   - Manual run execution: record ownership validated if `record_id` provided; side-effecting actions (email/webhook/form) rejected on free-form data
-   - Webhook delivery: targets validated against `WORKFLOW_WEBHOOK_ALLOWLIST` (SSRF guard)
-   - Dispatch: exactly-once claiming via `FOR UPDATE SKIP LOCKED`; pg_advisory_lock for scheduled workflows
-8. **Intake Form Security**: Links are single-use (token hashed, status transitions `pending → submitted`); optional expiry; email templating HTML-escaped
+> Reviewed 2026-07-16 against Alembic migration 039. Source of truth is the code; if this doc disagrees with the code, the code wins.
