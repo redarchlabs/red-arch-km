@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronRight, Maximize2, Plus, Trash2, X } from "lucide-react";
+import { ChevronRight, Maximize2, Mic, Plus, Trash2, X } from "lucide-react";
 import { Fragment, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -27,6 +27,7 @@ import { Dialog, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { buildCatalog, fieldMeta, relatedEntityId } from "@/lib/forms/catalog";
 import { fillTokens } from "@/lib/forms/href";
 import { evaluate } from "@/lib/forms/jsonLogic";
+import { useSpeechRecognition } from "@/lib/speech/useSpeechRecognition";
 
 import { FieldControl } from "./FieldControl";
 import { SlideDeck, coerceSlides } from "./SlideDeck";
@@ -496,6 +497,36 @@ function formatDuration(ms: number): string {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
+/** Rough estimate of how long it takes to speak `text` aloud, used by always-on
+ * voice to keep the mic paused until the robot has (approximately) finished
+ * talking — otherwise the mic transcribes the robot's own reply and loops.
+ * ~150 wpm ≈ 400ms/word, plus a base for startup/network, clamped to a sane band. */
+function estimateSpeechMs(text: string): number {
+  const words = text.trim().split(/\s+/).filter(Boolean).length;
+  return Math.min(20000, Math.max(1500, 800 + words * 400));
+}
+
+/** Normalize speech text for self-echo comparison: lowercase, strip everything but
+ * letters/digits/spaces, collapse whitespace. Lets us tell when a recognized
+ * utterance is really the robot's own last answer bleeding back through the mic. */
+function normalizeEcho(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** True when `heard` looks like the robot's own `spoken` answer echoing back
+ * (one contains the other, on a substantial chunk) — so always-on voice can drop
+ * it instead of treating the robot's speech as a new question. */
+function isSelfEcho(heard: string, spoken: string): boolean {
+  const h = normalizeEcho(heard);
+  const s = normalizeEcho(spoken);
+  if (h.length < 8 || s.length < 8) return false;
+  return s.includes(h) || h.includes(s);
+}
+
 /** Default "one moment…" chatter shown/spoken while a slow answer is still cooking.
  * `{q}` is swapped for the person's question so some lines restate what was asked
  * (which both reassures the asker and buys the robot time). */
@@ -560,6 +591,13 @@ function ChatNode({ el, preview }: { el: ChatElement; preview: boolean }) {
   const askedAtRef = useRef<number | null>(null);
   const [responseMs, setResponseMs] = useState<Record<string, number>>({});
   const [elapsedMs, setElapsedMs] = useState(0);
+  // Always-on voice self-echo control: `speakingUntil` is a timestamp the mic
+  // stays paused until (≈ how long the robot's reply takes to speak aloud), and
+  // `lastRobotSpokenRef` holds the robot's last reply so a bleed-through can be
+  // recognized and dropped. `willSpeakRef` mirrors whether the answer is spoken.
+  const [speakingUntil, setSpeakingUntil] = useState(0);
+  const lastRobotSpokenRef = useRef("");
+  const willSpeakRef = useRef(true);
   // Perceived-latency filler: ephemeral "one moment…" lines shown (and optionally
   // spoken) while the robot works. `lastQuestionRef` lets a filler restate the ask;
   // `fillerIdxRef` avoids picking the same phrase twice in a row.
@@ -628,6 +666,16 @@ function ChatNode({ el, preview }: { el: ChatElement; preview: boolean }) {
             askedAtRef.current = null;
             const id = String(last.id);
             setResponseMs((prev) => (prev[id] != null ? prev : { ...prev, [id]: elapsed }));
+            // Self-echo guard for always-on voice: remember what the robot is about
+            // to say, and (if it will speak it) hold the mic paused for roughly how
+            // long that takes so we don't transcribe the robot's own reply. Fires
+            // once per turn (askedAtRef null-guard), so the cooldown isn't re-pushed
+            // on every subsequent poll while the robot turn stays newest.
+            const replyText = String(last[textField] ?? "");
+            lastRobotSpokenRef.current = replyText;
+            if (willSpeakRef.current && replyText.trim()) {
+              setSpeakingUntil(Date.now() + estimateSpeechMs(replyText));
+            }
           }
         }
       } catch {
@@ -640,7 +688,7 @@ function ChatNode({ el, preview }: { el: ChatElement; preview: boolean }) {
       alive = false;
       window.clearInterval(id);
     };
-  }, [msgEntity, relSlug, roleField, conversationId, pollMs, preview]);
+  }, [msgEntity, relSlug, roleField, textField, conversationId, pollMs, preview]);
 
   // Track the reader's position: pinned to the bottom (follow new turns) vs.
   // scrolled up (leave them where they are). ~48px of slack counts as "bottom".
@@ -709,8 +757,8 @@ function ChatNode({ el, preview }: { el: ChatElement; preview: boolean }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [thinking, fillerEnabled]);
 
-  const send = async () => {
-    const text = input.trim();
+  const send = async (textOverride?: string) => {
+    const text = (textOverride ?? input).trim();
     if (!text || sending || preview) return;
     setSending(true);
     setErr(null);
@@ -787,7 +835,102 @@ function ChatNode({ el, preview }: { el: ChatElement; preview: boolean }) {
     setResponseMs({});
     setFillers([]);
     fillerIdxRef.current = -1;
+    setSpeakingUntil(0);
+    lastRobotSpokenRef.current = "";
   };
+
+  // ---- Voice input (browser microphone → speech-to-text) --------------------
+  // When enabled, a person can TALK to the robot instead of typing. Recognized
+  // speech is fed straight into `send()`, so the robot answers + speaks exactly
+  // as it does for a typed turn. Two runtime modes the viewer can switch between:
+  //  - "push_to_talk": hold the mic button to speak, release to send.
+  //  - "always_on":    the mic stays open; each finished utterance auto-sends.
+  const voiceCfg = el.voice ?? null;
+  const voiceEnabled = !!voiceCfg?.show;
+  const pauseWhileThinking = voiceCfg?.pause_while_thinking ?? true;
+  const [voiceMode, setVoiceMode] = useState<"push_to_talk" | "always_on">(voiceCfg?.mode ?? "push_to_talk");
+  // Intent flag for always-on: the viewer has clicked the mic to keep listening.
+  // Actual capture is paused while the robot answers (turn-taking) then resumed.
+  const [alwaysOnEngaged, setAlwaysOnEngaged] = useState(false);
+  // Mirror whether the answer is spoken aloud (so the poll loop, whose deps don't
+  // track the live controls, can decide if a speaking-cooldown is needed).
+  willSpeakRef.current = controlsEnabled ? speak : true;
+  const {
+    supported: voiceSupported,
+    listening: voiceListening,
+    interim: voiceInterim,
+    start: startVoice,
+    stop: stopVoice,
+  } = useSpeechRecognition({
+    lang: voiceCfg?.lang ?? "en-US",
+    onResult: (text) => {
+      // Drop the robot's own reply echoing back through the mic (always-on): the
+      // speaking-cooldown usually keeps the mic closed while it talks, and this is
+      // the backstop if the estimate runs short and the tail bleeds through.
+      if (isSelfEcho(text, lastRobotSpokenRef.current)) return;
+      void send(text);
+    },
+    onError: (m) => {
+      if (!mountedRef.current) return;
+      setErr(m);
+      // Drop always-on intent on any surfaced error (e.g. denied mic permission)
+      // so the reconcile effect can't re-arm the mic in a loop.
+      setAlwaysOnEngaged(false);
+    },
+  });
+
+  // Keep always-on capture in step with the robot's turn: listen while engaged,
+  // but pause while a turn is sending/thinking AND while the robot is still
+  // speaking its reply (`speakingUntil`), so the mic never hears the robot itself;
+  // resume once idle. Push-to-talk drives the mic directly instead.
+  useEffect(() => {
+    if (!voiceEnabled || voiceMode !== "always_on") return;
+    const now = Date.now();
+    const speaking = speakingUntil > now;
+    const busy = pauseWhileThinking && (thinking || sending || speaking);
+    const shouldListen = alwaysOnEngaged && !busy;
+    if (shouldListen && !voiceListening) startVoice(true);
+    else if (!shouldListen && voiceListening) stopVoice();
+    // If the only thing keeping us paused is the robot still speaking, wake up and
+    // resume the instant that window elapses — no other state change would re-run
+    // this effect, so the mic would otherwise stay off forever.
+    if (alwaysOnEngaged && pauseWhileThinking && speaking && !thinking && !sending) {
+      const id = window.setTimeout(() => setSpeakingUntil(0), Math.max(0, speakingUntil - now));
+      return () => window.clearTimeout(id);
+    }
+  }, [
+    voiceEnabled,
+    voiceMode,
+    alwaysOnEngaged,
+    pauseWhileThinking,
+    thinking,
+    sending,
+    speakingUntil,
+    voiceListening,
+    startVoice,
+    stopVoice,
+  ]);
+
+  // Hold-to-talk press/release. `startVoice`/`stopVoice` are no-ops if the mode
+  // or support doesn't allow it, so these stay simple.
+  const pressToTalkStart = () => {
+    if (preview || voiceMode !== "push_to_talk") return;
+    startVoice(false);
+  };
+  const pressToTalkEnd = () => {
+    if (voiceMode !== "push_to_talk") return;
+    stopVoice();
+  };
+  // Switch input modes cleanly: drop any live session + always-on intent first.
+  const switchVoiceMode = (mode: "push_to_talk" | "always_on") => {
+    if (mode === voiceMode) return;
+    setAlwaysOnEngaged(false);
+    setSpeakingUntil(0);
+    stopVoice();
+    setVoiceMode(mode);
+  };
+  const micActive = voiceListening; // truly capturing right now
+  const micArmed = voiceMode === "always_on" && alwaysOnEngaged; // intends to listen
 
   return (
     <div className="flex h-96 flex-col rounded-lg border bg-background">
@@ -885,12 +1028,89 @@ function ChatNode({ el, preview }: { el: ChatElement; preview: boolean }) {
         ) : null}
       </div>
       {err ? <p className="px-3 text-xs text-destructive">{err}</p> : null}
+      {voiceEnabled ? (
+        <div className="flex items-center gap-2 border-t px-2 pt-2">
+          <span className="text-xs text-muted-foreground">Voice</span>
+          <div className="flex rounded-md border p-0.5 text-xs">
+            <button
+              type="button"
+              onClick={() => switchVoiceMode("push_to_talk")}
+              disabled={preview}
+              className={`rounded px-2 py-0.5 transition-colors disabled:opacity-50 ${
+                voiceMode === "push_to_talk" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"
+              }`}
+            >
+              Hold to talk
+            </button>
+            <button
+              type="button"
+              onClick={() => switchVoiceMode("always_on")}
+              disabled={preview}
+              className={`rounded px-2 py-0.5 transition-colors disabled:opacity-50 ${
+                voiceMode === "always_on" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"
+              }`}
+            >
+              Always on
+            </button>
+          </div>
+          {micActive ? (
+            <span className="flex items-center gap-1 text-xs font-medium text-red-500">
+              <span className="h-2 w-2 animate-pulse rounded-full bg-red-500" />
+              Listening…
+            </span>
+          ) : micArmed ? (
+            <span className="text-xs text-muted-foreground">Paused — robot is answering…</span>
+          ) : !voiceSupported ? (
+            <span className="text-xs text-muted-foreground">Not supported in this browser</span>
+          ) : null}
+        </div>
+      ) : null}
       <div className="flex items-center gap-2 border-t p-2">
+        {voiceEnabled ? (
+          <button
+            type="button"
+            disabled={preview || !voiceSupported}
+            aria-pressed={micActive}
+            aria-label={voiceMode === "push_to_talk" ? "Hold to talk" : micArmed ? "Stop listening" : "Start listening"}
+            title={
+              !voiceSupported
+                ? "Voice input isn't supported in this browser — try Chrome or Edge."
+                : voiceMode === "push_to_talk"
+                  ? "Hold to talk"
+                  : micArmed
+                    ? "Listening — click to stop"
+                    : "Click to listen continuously"
+            }
+            // Push-to-talk: capture only while the button is held.
+            onPointerDown={
+              voiceMode === "push_to_talk"
+                ? (e) => {
+                    e.preventDefault();
+                    pressToTalkStart();
+                  }
+                : undefined
+            }
+            onPointerUp={voiceMode === "push_to_talk" ? () => pressToTalkEnd() : undefined}
+            onPointerLeave={voiceMode === "push_to_talk" ? () => pressToTalkEnd() : undefined}
+            onPointerCancel={voiceMode === "push_to_talk" ? () => pressToTalkEnd() : undefined}
+            // Always-on: click toggles continuous listening.
+            onClick={voiceMode === "always_on" ? () => !preview && setAlwaysOnEngaged((v) => !v) : undefined}
+            className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition-colors disabled:opacity-50 ${
+              micActive
+                ? "animate-pulse border-red-500 bg-red-500 text-white"
+                : micArmed
+                  ? "border-red-500 text-red-500"
+                  : "border-input text-muted-foreground hover:bg-muted"
+            }`}
+          >
+            <Mic className="h-4 w-4" />
+          </button>
+        ) : null}
         <input
           className="w-full rounded-md border bg-background px-3 py-2 text-sm disabled:opacity-60"
-          placeholder={el.placeholder ?? "Message the robot…"}
-          value={input}
-          disabled={preview || sending}
+          placeholder={micActive ? "Listening…" : el.placeholder ?? "Message the robot…"}
+          value={micActive && voiceInterim ? voiceInterim : input}
+          disabled={preview || sending || micActive}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) {
@@ -902,7 +1122,7 @@ function ChatNode({ el, preview }: { el: ChatElement; preview: boolean }) {
         <button
           type="button"
           onClick={() => void send()}
-          disabled={preview || sending || !input.trim()}
+          disabled={preview || sending || micActive || !input.trim()}
           className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-60"
         >
           {sending ? "…" : "Send"}
