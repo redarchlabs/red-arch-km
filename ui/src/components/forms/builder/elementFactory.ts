@@ -107,6 +107,12 @@ export function newElement(kind: PaletteKind): FormElement {
           concise_words: 20,
           verbose_words: 45,
         },
+        voice: {
+          show: false,
+          mode: "push_to_talk",
+          lang: "en-US",
+          pause_while_thinking: true,
+        },
         poll_ms: 1500,
         placeholder: "Message the robot…",
       };
