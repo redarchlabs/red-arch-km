@@ -7,12 +7,12 @@ import time
 from collections.abc import Iterator
 from typing import Any, cast
 
-from openai import OpenAI
 from openai.types.chat import ChatCompletionMessageParam
 from shared_config import get_tracer
 
 from brain_api.config import BrainAPISettings
 from brain_api.observability import get_metrics
+from brain_api.openai_client import make_openai
 from brain_api.stores import Stores
 
 logger = logging.getLogger(__name__)
@@ -71,7 +71,9 @@ class SearchService:
     def __init__(self, stores: Stores, settings: BrainAPISettings) -> None:
         self._stores = stores
         self._settings = settings
-        self._llm = OpenAI(api_key=settings.openai_api_key)
+        # Honours OPENAI_BASE_URL so this instance's chat can run against a local
+        # OpenAI-compatible server; unset, this is exactly OpenAI(api_key=…) as before.
+        self._llm = make_openai(settings, settings.openai_api_key)
 
     def warm_up(self) -> None:
         """Exercise the read path once so the first *real* user query is warm.
