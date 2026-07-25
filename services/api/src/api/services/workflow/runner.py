@@ -25,6 +25,7 @@ from api.repositories.custom_entity import (
 )
 from api.repositories.dynamic_entity import DynamicEntityRepository
 from api.repositories.workflow import OutboxWriter
+from api.services.openai_client import api_key_required, make_async_openai
 from api.services.workflow.actions import ACTION_REGISTRY, ActionContext, ActionError
 
 
@@ -210,13 +211,11 @@ class ActionExecutor:
         if self._settings is None:
             raise ActionError("summarization requires Settings (not wired in this context)")
         key = await self._org_openai_key(org_id) or self._settings.openai_api_key.get_secret_value()
-        if not key:
+        if not key and api_key_required(self._settings):
             raise ActionError("summarization requires an OpenAI API key (org or central)")
-        from openai import AsyncOpenAI
-
         from api.services.spoken_summary import summarize_for_speech
 
-        client = AsyncOpenAI(api_key=key)
+        client = make_async_openai(self._settings, key)
         model = opts.get("model") or self._settings.openai_summary_model
         return await summarize_for_speech(
             client,
@@ -233,13 +232,11 @@ class ActionExecutor:
         if self._settings is None:
             raise ActionError("llm_decide requires Settings (not wired in this context)")
         key = await self._org_openai_key(org_id) or self._settings.openai_api_key.get_secret_value()
-        if not key:
+        if not key and api_key_required(self._settings):
             raise ActionError("llm_decide requires an OpenAI API key (org or central)")
-        from openai import AsyncOpenAI
-
         from api.services.llm_decide import decide_action
 
-        client = AsyncOpenAI(api_key=key)
+        client = make_async_openai(self._settings, key)
         model = opts.get("model") or self._settings.openai_model
         return await decide_action(
             client,
@@ -260,13 +257,11 @@ class ActionExecutor:
         if self._settings is None:
             raise ActionError("llm_grade requires Settings (not wired in this context)")
         key = await self._org_openai_key(org_id) or self._settings.openai_api_key.get_secret_value()
-        if not key:
+        if not key and api_key_required(self._settings):
             raise ActionError("llm_grade requires an OpenAI API key (org or central)")
-        from openai import AsyncOpenAI
-
         from api.services.llm_grade import grade_answer
 
-        client = AsyncOpenAI(api_key=key)
+        client = make_async_openai(self._settings, key)
         model = opts.get("model") or self._settings.openai_model
         return await grade_answer(
             client,
@@ -283,13 +278,11 @@ class ActionExecutor:
         if self._settings is None:
             raise ActionError("llm_respond requires Settings (not wired in this context)")
         key = await self._org_openai_key(org_id) or self._settings.openai_api_key.get_secret_value()
-        if not key:
+        if not key and api_key_required(self._settings):
             raise ActionError("llm_respond requires an OpenAI API key (org or central)")
-        from openai import AsyncOpenAI
-
         from api.services.llm_respond import respond_action
 
-        client = AsyncOpenAI(api_key=key)
+        client = make_async_openai(self._settings, key)
         model = opts.get("model") or self._settings.openai_model
         return await respond_action(
             client,

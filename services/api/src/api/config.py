@@ -69,6 +69,13 @@ class Settings(BaseSettings):
     # `summarize` action that compresses a RAG answer into one spoken line for a
     # robot). Falls back to the chat model if the env var is unset.
     openai_summary_model: str = Field(default="gpt-5-nano", validation_alias="OPENAI_SUMMARY_MODEL")
+    # Point the OpenAI SDK at an OpenAI-compatible server (Ollama, vLLM, llama.cpp)
+    # instead of api.openai.com — the SDK speaks plain HTTP to whatever base_url it is
+    # given, so "run the LLM locally" is a deployment setting, not a code change. Empty
+    # (the default) preserves today's behaviour exactly, so production is unaffected;
+    # the robot's own KM2 instance sets it. A local endpoint needs no credential, so
+    # this also makes the API key optional — see api/services/openai_client.py.
+    openai_base_url: str = Field(default="", validation_alias="OPENAI_BASE_URL")
 
     # Additional LLM providers for the multi-provider agent org (services/agents/).
     # Each central key is a fallback; an org's own key (org_provider_credentials)

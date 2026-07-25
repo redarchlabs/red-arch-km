@@ -33,6 +33,16 @@ class BrainAPISettings(BaseSettings):
 
     openai_api_key: str = Field(default="", validation_alias="OPENAI_API_KEY")
     openai_chat_model: str = Field(default="gpt-5-mini", validation_alias="OPENAI_CHAT_MODEL")
+    # Point the OpenAI SDK at an OpenAI-compatible server (Ollama, vLLM, llama.cpp)
+    # instead of api.openai.com. Empty (the default) keeps the hosted behaviour, so
+    # existing deployments are unaffected; a fully-local instance sets it.
+    #
+    # Scope today: the **chat/RAG path only** (SearchService) — the robot's live path.
+    # Ingest-time chat (ChunkSummarizer, TripletExtractor) and, deliberately,
+    # **embeddings** still go to OpenAI. Embeddings are held back on purpose: changing
+    # the embedding model invalidates every stored vector, so switching means
+    # re-embedding the whole corpus and is a migration, not a config flip.
+    openai_base_url: str = Field(default="", validation_alias="OPENAI_BASE_URL")
     openai_embedding_model: str = Field(
         default="text-embedding-3-small",
         validation_alias="OPENAI_EMBEDDING_MODEL",
