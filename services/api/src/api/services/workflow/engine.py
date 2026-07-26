@@ -96,6 +96,7 @@ class TokenEngine:
         org_encryption_key: str = "",
         settings: Any = None,
         worker_id: str | None = None,
+        delta_sink: Any = None,
     ) -> None:
         self._session = session
         self._executor = ActionExecutor(
@@ -106,6 +107,7 @@ class TokenEngine:
             email_sender=email_sender,
             org_encryption_key=org_encryption_key,
             settings=settings,
+            delta_sink=delta_sink,
         )
         self._worker_id = worker_id or f"engine-{uuid.uuid4().hex[:8]}"
 

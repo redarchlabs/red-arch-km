@@ -7,7 +7,15 @@ Kept deliberately tiny and side-effect-free (given a client) so it is easy to te
 
 from __future__ import annotations
 
+import inspect
+import logging
+from collections.abc import Awaitable, Callable
 from typing import Any
+
+logger = logging.getLogger(__name__)
+
+# Called with each token as it arrives; may be sync or async.
+DeltaSink = Callable[[str], Awaitable[None] | None]
 
 # Default persona/format: one spoken sentence, factual, no markup or citations.
 # The speaker is a character (e.g. a robot), NOT a search interface, so it must never
@@ -45,6 +53,20 @@ def _reasoning_effort_for(model: str) -> str | None:
     return None
 
 
+async def _emit(sink: DeltaSink, delta: str) -> None:
+    """Hand one token to ``sink``, tolerating a sync or async callable.
+
+    Publishing is best-effort: a viewer that has gone away (or a Redis blip) must
+    never fail the run that is producing the answer.
+    """
+    try:
+        result = sink(delta)
+        if inspect.isawaitable(result):
+            await result
+    except Exception:  # noqa: BLE001 — a broken sink must not break the answer
+        logger.debug("summary delta sink failed", exc_info=True)
+
+
 async def summarize_for_speech(
     client: Any,
     model: str,
@@ -53,12 +75,18 @@ async def summarize_for_speech(
     question: str | None = None,
     max_words: int = 30,
     instruction: str | None = None,
+    on_delta: DeltaSink | None = None,
 ) -> str:
     """Return a <= ``max_words`` spoken-style condensation of ``text``.
 
     ``client`` is an ``AsyncOpenAI`` instance (typed ``Any`` to keep this module
     import-light and mockable). ``question`` gives the model context for what to
     keep. Falls back to the raw text if the model returns nothing.
+
+    Pass ``on_delta`` to also receive each token as it is generated — the return
+    value is unchanged, so a caller that ignores streaming behaves exactly as
+    before. Used by the robot chat to paint the reply while it is still being
+    written instead of waiting for the whole run.
     """
     system = (instruction or _DEFAULT_INSTRUCTION) + f" Keep it to at most {max_words} words."
     user = text if not question else f"Question: {question}\n\nText to condense into a spoken reply:\n{text}"
@@ -69,6 +97,22 @@ async def summarize_for_speech(
     effort = _reasoning_effort_for(model)
     if effort is not None:
         kwargs["reasoning_effort"] = effort
-    response = await client.chat.completions.create(**kwargs)
-    spoken = (response.choices[0].message.content or "").strip()
+
+    if on_delta is None:
+        response = await client.chat.completions.create(**kwargs)
+        spoken = (response.choices[0].message.content or "").strip()
+        return spoken or text.strip()
+
+    stream = await client.chat.completions.create(**kwargs, stream=True)
+    pieces: list[str] = []
+    async for chunk in stream:
+        choices = getattr(chunk, "choices", None) or []
+        if not choices:
+            continue
+        delta = getattr(getattr(choices[0], "delta", None), "content", None)
+        if not delta:
+            continue
+        pieces.append(delta)
+        await _emit(on_delta, delta)
+    spoken = "".join(pieces).strip()
     return spoken or text.strip()

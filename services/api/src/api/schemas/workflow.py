@@ -73,6 +73,11 @@ class ManualRunRequest(BaseModel):
     before: dict[str, Any] | None = None
     after: dict[str, Any] | None = None
     inputs: dict[str, Any] = Field(default_factory=dict)
+    # Opaque caller-minted UUID naming a live token stream for this run. The
+    # caller subscribes to it (GET /workflows/runs/stream/{token}) BEFORE firing
+    # the run, so an LLM step's tokens can be shown while the run is still going.
+    # Purely a preview channel: the run's recorded output is unaffected.
+    stream_token: uuid.UUID | None = None
 
 
 class ManualRunResult(BaseModel):

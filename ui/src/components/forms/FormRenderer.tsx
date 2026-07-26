@@ -21,6 +21,7 @@ import {
 } from "@/lib/api/forms";
 import { createRecord, listRecords, type EntityRecord } from "@/lib/api/entityRecords";
 import { getReport, runReport, type AggregateResult, type Visualization } from "@/lib/api/reports";
+import { streamRunTokens } from "@/lib/api/runStream";
 import { callConnection, runWorkflow } from "@/lib/api/workflows";
 import { ReportChart } from "@/components/reports/ReportChart";
 import { Dialog, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -497,6 +498,15 @@ function formatDuration(ms: number): string {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
+/** Mint a token naming this turn's live answer stream, or "" where the browser
+ * can't (non-secure origins have no `crypto.randomUUID`) — the caller then just
+ * runs the workflow without a stream, as it always did. */
+function newStreamToken(): string {
+  return typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID()
+    : "";
+}
+
 /** Rough estimate of how long it takes to speak `text` aloud, used by always-on
  * voice to keep the mic paused until the robot has (approximately) finished
  * talking — otherwise the mic transcribes the robot's own reply and loops.
@@ -591,6 +601,11 @@ function ChatNode({ el, preview }: { el: ChatElement; preview: boolean }) {
   const askedAtRef = useRef<number | null>(null);
   const [responseMs, setResponseMs] = useState<Record<string, number>>({});
   const [elapsedMs, setElapsedMs] = useState(0);
+  // The answer as it streams out of the run's LLM step, shown until the saved
+  // robot_message lands. Preview only — the polled record stays the source of
+  // truth, so if the stream fails the chat behaves exactly as it did before.
+  const [liveAnswer, setLiveAnswer] = useState("");
+  const streamAbortRef = useRef<AbortController | null>(null);
   // Always-on voice self-echo control: `speakingUntil` is a timestamp the mic
   // stays paused until (≈ how long the robot's reply takes to speak aloud), and
   // `lastRobotSpokenRef` holds the robot's last reply so a bleed-through can be
@@ -618,6 +633,9 @@ function ChatNode({ el, preview }: { el: ChatElement; preview: boolean }) {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      // Don't leave an SSE connection open behind a closed view.
+      streamAbortRef.current?.abort();
+      streamAbortRef.current = null;
     };
   }, []);
 
@@ -658,6 +676,8 @@ function ChatNode({ el, preview }: { el: ChatElement; preview: boolean }) {
         if (last && String(last[roleField] ?? "") !== "person") {
           setThinking(false);
           setFillers([]);
+          // The saved reply supersedes the streamed preview of it.
+          stopAnswerStream();
           // Freeze the latency for this reply once. `askedAtRef` is nulled after
           // recording, so a still-answered conversation re-polled later won't
           // overwrite the time with the (much larger) idle gap.
@@ -757,6 +777,38 @@ function ChatNode({ el, preview }: { el: ChatElement; preview: boolean }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [thinking, fillerEnabled]);
 
+  /** Drop any in-flight answer stream and clear what it had painted. */
+  const stopAnswerStream = () => {
+    streamAbortRef.current?.abort();
+    streamAbortRef.current = null;
+    setLiveAnswer("");
+  };
+
+  /**
+   * Consume this turn's token stream in the background. Everything here is
+   * best-effort: an unavailable stream (no Redis, older API, dropped connection)
+   * simply leaves the typing indicator up until the reply record arrives.
+   */
+  const watchAnswerStream = (streamToken: string) => {
+    const controller = new AbortController();
+    streamAbortRef.current = controller;
+    setLiveAnswer("");
+    void (async () => {
+      try {
+        for await (const event of streamRunTokens(streamToken, { signal: controller.signal })) {
+          if (!mountedRef.current || controller.signal.aborted) return;
+          if (event.type === "delta" && event.text) {
+            setLiveAnswer((prev) => prev + event.text);
+          } else if (event.type === "done" || event.type === "error") {
+            return;
+          }
+        }
+      } catch {
+        /* preview only — the polled reply record is the real answer */
+      }
+    })();
+  };
+
   const send = async (textOverride?: string) => {
     const text = (textOverride ?? input).trim();
     if (!text || sending || preview) return;
@@ -811,11 +863,24 @@ function ChatNode({ el, preview }: { el: ChatElement; preview: boolean }) {
         }
         askedAtRef.current = Date.now();
         setThinking(true);
-        void runWorkflow(el.answer_workflow_id, { inputs }, 120000).catch((e: unknown) => {
+        // Subscribe BEFORE firing the run: pub/sub drops anything published
+        // while nobody is listening, and the run's first tokens can arrive
+        // moments after it starts.
+        const streamToken = newStreamToken();
+        if (streamToken) {
+          inputs.stream_token = streamToken;
+          watchAnswerStream(streamToken);
+        }
+        void runWorkflow(
+          el.answer_workflow_id,
+          { inputs, ...(streamToken ? { stream_token: streamToken } : {}) },
+          120000,
+        ).catch((e: unknown) => {
           if (!mountedRef.current) return;
           askedAtRef.current = null;
           setThinking(false);
           setFillers([]);
+          stopAnswerStream();
           setErr(e instanceof Error ? e.message : "The robot could not answer");
         });
       }
@@ -827,6 +892,7 @@ function ChatNode({ el, preview }: { el: ChatElement; preview: boolean }) {
   };
 
   const startNew = () => {
+    stopAnswerStream();
     setConversationId(null);
     setMessages([]);
     setThinking(false);
@@ -1014,7 +1080,19 @@ function ChatNode({ el, preview }: { el: ChatElement; preview: boolean }) {
             </div>
           </div>
         ))}
-        {thinking ? (
+        {thinking && liveAnswer ? (
+          // The answer as it is being written. Replaced by the robot's saved
+          // message the moment the run's record lands in the poll.
+          <div className="flex flex-col items-start" data-testid="live-answer">
+            <div className="max-w-[80%] whitespace-pre-wrap break-words rounded-2xl bg-muted px-3 py-2 text-sm">
+              {liveAnswer}
+              <span className="ml-0.5 inline-block h-3.5 w-1 animate-pulse rounded-sm bg-current align-text-bottom" />
+            </div>
+            <span className="mt-0.5 px-1 text-[11px] tabular-nums text-muted-foreground">
+              {formatDuration(elapsedMs)}
+            </span>
+          </div>
+        ) : thinking ? (
           <div className="flex justify-start">
             <div className="flex max-w-[80%] items-center gap-2 rounded-2xl bg-muted px-3 py-2 text-sm text-muted-foreground">
               <span className="flex items-center gap-1">

@@ -82,8 +82,12 @@ class ActionExecutor:
         email_sender: Any = None,
         org_encryption_key: str = "",
         settings: Any = None,
+        delta_sink: Any = None,
     ) -> None:
         self._session = session
+        # Optional per-run publisher for live LLM tokens (see workflow/stream.py).
+        # Set only for a run the caller is watching; None = generate normally.
+        self._delta_sink = delta_sink
         self._webhook_allowlist = webhook_allowlist
         self._trusted_local_hosts = trusted_local_hosts
         self._public_base_url = public_base_url
@@ -224,7 +228,20 @@ class ActionExecutor:
             question=opts.get("question"),
             max_words=int(opts.get("max_words") or 30),
             instruction=opts.get("instruction"),
+            # Only streams when the caller is watching this run; the returned
+            # summary — and everything downstream of it — is identical either way.
+            on_delta=self._on_delta(opts),
         )
+
+    def _on_delta(self, opts: dict[str, Any]) -> Any:
+        """Live-token sink for a watched run whose NODE opted in, else None.
+
+        Opt-in matters: a chat answer workflow runs several small-LLM steps and
+        only the author-designated one is the answer a viewer should watch.
+        """
+        if not opts.get("stream") or self._delta_sink is None:
+            return None
+        return self._delta_sink.delta
 
     async def _decide(self, org_id: uuid.UUID, opts: dict[str, Any]) -> dict[str, Any]:
         """Constrained-LLM steering for the llm_decide action. Uses the org's OpenAI key
@@ -247,6 +264,8 @@ class ActionExecutor:
             moods=list(opts.get("moods") or []),
             system=opts.get("system"),
             history=opts.get("history"),
+            # Streams the spoken 'say' line only — never the internal reason.
+            on_delta=self._on_delta(opts),
         )
 
     async def _grade(self, org_id: uuid.UUID, opts: dict[str, Any]) -> dict[str, Any]:
@@ -293,6 +312,8 @@ class ActionExecutor:
             objective=str(opts.get("objective") or ""),
             grounding=str(opts.get("grounding") or ""),
             history=opts.get("history"),
+            # Streams the in-character 'reply' only — never the coaching tip.
+            on_delta=self._on_delta(opts),
         )
 
     async def _org_openai_key(self, org_id: uuid.UUID) -> str | None:

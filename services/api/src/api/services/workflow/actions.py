@@ -820,6 +820,11 @@ class Summarize:
                 "max_words": max_words,
                 "instruction": ctx.config.get("instruction"),
                 "model": model,
+                # Opt-in live streaming. A chat answer workflow has SEVERAL small-LLM
+                # steps — condensing a follow-up into a search query, a not-found
+                # line — and only the one the viewer is meant to read should be
+                # painted live. Off by default so an internal step never leaks.
+                "stream": bool(ctx.config.get("stream")),
             }
         )
         return {"text": spoken, "input_chars": len(text), "output_chars": len(spoken)}
@@ -871,6 +876,7 @@ class LlmDecide:
                 "moods": moods,
                 "history": ctx.config.get("history"),
                 "model": ctx.config.get("model"),
+                "stream": bool(ctx.config.get("stream")),
             }
         )
         # Defense-in-depth: enforce the vocabulary even if a model ignored the schema, so a
@@ -1111,6 +1117,7 @@ class LlmRespond:
                 "history": _resolve_dynamic(ctx.config.get("history"), context),
                 "user_message": user_message,
                 "model": model,
+                "stream": bool(ctx.config.get("stream")),
             }
         )
         # Defensive shaping so a downstream /say + gateway always read a well-formed turn.
