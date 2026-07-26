@@ -260,6 +260,24 @@ class TestSummarizeForSpeech:
         out = await summarize_for_speech(client, "gpt-5-nano", text="fallback text")
         assert out == "fallback text"
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("model", "effort"),
+        [
+            ("gpt-5-nano", "minimal"),
+            ("gpt-5-mini", "minimal"),
+            ("o4-mini", "low"),
+            ("gpt-5-chat-latest", None),
+            ("gpt-4o-mini", None),
+        ],
+    )
+    async def test_pins_cheapest_reasoning_effort_per_model(self, model, effort) -> None:
+        from api.services.spoken_summary import summarize_for_speech
+
+        calls: list[dict] = []
+        await summarize_for_speech(_FakeClient(sink=calls), model, text="some text")
+        assert calls[0].get("reasoning_effort") == effort
+
 
 def _summ_ctx(config, *, after=None, vars=None, summarize=None):
     return ActionContext(
