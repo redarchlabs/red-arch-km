@@ -60,6 +60,13 @@ export default function DocumentDetailPage() {
   // Chunk to briefly highlight when arrived-at via a chat citation deep-link
   // (`/documents/<key>#chunk-<order>`).
   const [highlightOrder, setHighlightOrder] = useState<number | null>(null);
+  // Same deep-link target, for the full-screen reader (which auto-opens over
+  // this page for finished documents and does its own scroll + highlight).
+  const [citedOrder, setCitedOrder] = useState<number | null>(null);
+  useEffect(() => {
+    const match = window.location.hash.match(/^#chunk-(\d+)$/);
+    if (match) setCitedOrder(Number(match[1]));
+  }, []);
 
   // `silent` refreshes (polling while an ingest runs) skip the spinner so the
   // page doesn't blank out every few seconds.
@@ -275,6 +282,7 @@ export default function DocumentDetailPage() {
         summaryTree={summaryTree}
         open={readerOpen}
         onClose={() => setReaderOpen(false)}
+        targetChunkOrder={citedOrder}
       />
 
       {editorOpen ? (

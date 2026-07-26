@@ -12,6 +12,13 @@ export default defineConfig({
     globals: true,
     setupFiles: ["./src/test/setup.ts"],
     include: ["src/**/*.test.{ts,tsx}"],
+    // jest-dom's ESM build uses extensionless lodash imports that Node's ESM
+    // resolver rejects — let Vitest's module runner process it instead.
+    server: {
+      deps: {
+        inline: ["@testing-library/jest-dom"],
+      },
+    },
   },
   resolve: {
     alias: {

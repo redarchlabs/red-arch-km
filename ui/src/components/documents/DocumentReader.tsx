@@ -13,6 +13,7 @@ import {
   getDocumentChunks,
   getDocumentContent,
 } from "@/lib/api/documents";
+import { cn } from "@/lib/utils";
 
 /** How many chunks to pull per lazy-load page. */
 const PAGE_SIZE = 50;
@@ -26,6 +27,12 @@ interface DocumentReaderProps {
   summaryTree: SummaryTreeNode | null;
   open: boolean;
   onClose: () => void;
+  /**
+   * Chunk to scroll to and highlight — set when the reader is reached via a
+   * chat-citation deep-link (`#chunk-<order>`). The reader pages through the
+   * lazy-loaded chunks until the target is present.
+   */
+  targetChunkOrder?: number | null;
 }
 
 /**
@@ -44,6 +51,7 @@ export function DocumentReader({
   summaryTree,
   open,
   onClose,
+  targetChunkOrder = null,
 }: DocumentReaderProps) {
   const [mode, setMode] = useState<ViewMode>("side-by-side");
   const [chunks, setChunks] = useState<DocumentChunk[]>([]);
@@ -159,6 +167,35 @@ export function DocumentReader({
     };
   }, [open, mode, chunks.length, original]);
 
+  // When opened via a citation deep-link, keep pulling pages until the cited
+  // chunk is loaded (chunks arrive lazily, PAGE_SIZE at a time). Terminates
+  // once the target is present or every chunk is loaded without a match.
+  const targetLoaded =
+    targetChunkOrder != null && chunks.some((c) => c.chunk_order === targetChunkOrder);
+  useEffect(() => {
+    if (!open || targetChunkOrder == null || targetLoaded) return;
+    if (total > 0 && chunks.length >= total) return;
+    void loadNextPage();
+  }, [open, targetChunkOrder, targetLoaded, chunks.length, total, loadNextPage]);
+
+  // Scroll the cited chunk into view once per open — the full-text block when
+  // rendered, otherwise its summary card (side-by-side over a readable
+  // original; pane-sync then aligns the text). The highlight itself is styling
+  // on the matching elements and persists while the reader stays open.
+  const scrolledToTarget = useRef(false);
+  useEffect(() => {
+    scrolledToTarget.current = false;
+  }, [open, targetChunkOrder]);
+  useEffect(() => {
+    if (!open || targetChunkOrder == null || !targetLoaded || scrolledToTarget.current) return;
+    const el =
+      document.getElementById(`reader-chunk-${targetChunkOrder}`) ??
+      document.getElementById(`reader-summary-${targetChunkOrder}`);
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    scrolledToTarget.current = true;
+  }, [open, targetChunkOrder, targetLoaded, mode, original]);
+
   const hasMore = total === 0 || chunks.length < total;
 
   return (
@@ -216,7 +253,16 @@ export function DocumentReader({
               <>
                 <ol className="space-y-2">
                   {chunks.map((chunk) => (
-                    <li key={chunk.id} className="rounded-md border bg-muted/20 p-2">
+                    <li
+                      key={chunk.id}
+                      id={`reader-summary-${chunk.chunk_order}`}
+                      className={cn(
+                        "rounded-md border p-2",
+                        chunk.chunk_order === targetChunkOrder
+                          ? "border-primary bg-primary/10"
+                          : "bg-muted/20",
+                      )}
+                    >
                       <div className="mb-0.5 text-xs font-medium text-muted-foreground">
                         Section {chunk.chunk_order + 1}
                       </div>
@@ -263,7 +309,7 @@ export function DocumentReader({
                 />
               ) : (
                 <>
-                  <FullText chunks={chunks} />
+                  <FullText chunks={chunks} targetChunkOrder={targetChunkOrder} />
                   <div ref={sentinelRef}>
                     <LoadSentinel
                       loading={loading}
@@ -280,7 +326,14 @@ export function DocumentReader({
         <div className="min-h-0 flex-1 overflow-y-auto p-5">
           <ol className="space-y-5">
             {chunks.map((chunk) => (
-              <li key={chunk.id}>
+              <li
+                key={chunk.id}
+                id={`reader-chunk-${chunk.chunk_order}`}
+                className={cn(
+                  chunk.chunk_order === targetChunkOrder &&
+                    "rounded-md border border-primary bg-primary/10 p-3",
+                )}
+              >
                 {chunk.summary ? (
                   <div className="mb-1.5 rounded-md border-l-2 border-primary/60 bg-muted/40 px-3 py-1.5 text-sm italic text-muted-foreground">
                     {chunk.summary}
@@ -323,11 +376,25 @@ function ModeButton({ active, onClick, icon, label }: ModeButtonProps) {
 }
 
 /** Document text rendered as continuous reading order (one block per chunk). */
-function FullText({ chunks }: { chunks: DocumentChunk[] }) {
+function FullText({
+  chunks,
+  targetChunkOrder,
+}: {
+  chunks: DocumentChunk[];
+  targetChunkOrder?: number | null;
+}) {
   return (
     <div className="space-y-3">
       {chunks.map((chunk) => (
-        <p key={chunk.id} className="whitespace-pre-wrap text-sm leading-relaxed">
+        <p
+          key={chunk.id}
+          id={`reader-chunk-${chunk.chunk_order}`}
+          className={cn(
+            "whitespace-pre-wrap text-sm leading-relaxed",
+            chunk.chunk_order === targetChunkOrder &&
+              "rounded-md border border-primary bg-primary/10 p-3",
+          )}
+        >
           {chunk.text}
         </p>
       ))}
