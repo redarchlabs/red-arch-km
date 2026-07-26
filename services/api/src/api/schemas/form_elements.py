@@ -39,10 +39,9 @@ def _assert_safe_href(v: str) -> str:
     are URL-encoded at render time, so only the static scheme prefix is constrained."""
     m = _URL_SCHEME_RE.match(v)
     if m and m.group(1).lower() not in ("http", "https"):
-        raise ValueError(
-            f"link scheme {m.group(1)!r} is not allowed; use a relative URL or an http(s) URL"
-        )
+        raise ValueError(f"link scheme {m.group(1)!r} is not allowed; use a relative URL or an http(s) URL")
     return v
+
 
 # ------------------------------------------------------------------ #
 # Shared presentational vocabulary
@@ -371,9 +370,7 @@ class LinkColumn(BaseModel):
         return _assert_safe_href(v)
 
 
-TableColumn = Annotated[
-    AnchorColumn | RelatedColumn | LinkColumn, Field(discriminator="kind")
-]
+TableColumn = Annotated[AnchorColumn | RelatedColumn | LinkColumn, Field(discriminator="kind")]
 
 
 class TableElement(_Element):

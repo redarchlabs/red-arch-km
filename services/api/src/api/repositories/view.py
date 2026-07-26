@@ -16,27 +16,19 @@ class ViewRepository:
         self._org_id = org_id
 
     async def list_all(self) -> list[View]:
-        result = await self._session.execute(
-            select(View).where(View.org_id == self._org_id).order_by(View.name)
-        )
+        result = await self._session.execute(select(View).where(View.org_id == self._org_id).order_by(View.name))
         return list(result.scalars().all())
 
     async def count(self) -> int:
-        result = await self._session.execute(
-            select(func.count()).select_from(View).where(View.org_id == self._org_id)
-        )
+        result = await self._session.execute(select(func.count()).select_from(View).where(View.org_id == self._org_id))
         return int(result.scalar_one())
 
     async def get(self, view_id: uuid.UUID) -> View | None:
-        result = await self._session.execute(
-            select(View).where(View.id == view_id, View.org_id == self._org_id)
-        )
+        result = await self._session.execute(select(View).where(View.id == view_id, View.org_id == self._org_id))
         return result.scalar_one_or_none()
 
     async def get_by_slug(self, slug: str) -> View | None:
-        result = await self._session.execute(
-            select(View).where(View.slug == slug, View.org_id == self._org_id)
-        )
+        result = await self._session.execute(select(View).where(View.slug == slug, View.org_id == self._org_id))
         return result.scalar_one_or_none()
 
     async def create(self, view: View) -> View:

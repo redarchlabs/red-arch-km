@@ -124,9 +124,7 @@ class _FakeRepo:
 
 
 def _ctx() -> OrgContext:
-    user = CurrentUser(
-        sub="user_x", username="x", email="x@example.com", profile_id=PROFILE_ID, is_site_admin=False
-    )
+    user = CurrentUser(sub="user_x", username="x", email="x@example.com", profile_id=PROFILE_ID, is_site_admin=False)
     return OrgContext(user=user, org_id=ORG_ID, membership=MagicMock(), is_org_admin=True)
 
 
@@ -182,7 +180,5 @@ async def test_create_rejects_duplicate_key_with_409(app: FastAPI) -> None:
 
 async def test_create_rejects_invalid_key_with_422(app: FastAPI) -> None:
     async with _client(app) as client:
-        resp = await client.post(
-            "/api/documents/", json={"title": "bad", "text": "body", "document_key": "has/slash"}
-        )
+        resp = await client.post("/api/documents/", json={"title": "bad", "text": "body", "document_key": "has/slash"})
     assert resp.status_code == 422

@@ -42,9 +42,7 @@ def _repo(fields, *, privileged: bool = False, write_access: str = "member"):  #
     definition.id = uuid.uuid4()
     definition.slug = "certification"
     definition.write_access = write_access
-    return DynamicEntityRepository(
-        MagicMock(), uuid.uuid4(), definition, fields, [], privileged=privileged
-    )
+    return DynamicEntityRepository(MagicMock(), uuid.uuid4(), definition, fields, [], privileged=privileged)
 
 
 def _phys_row(repo, **values):  # type: ignore[no-untyped-def]

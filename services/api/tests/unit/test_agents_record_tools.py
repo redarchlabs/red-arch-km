@@ -13,7 +13,6 @@ the same governance as any other WRITE tool:
 from __future__ import annotations
 
 import pytest
-
 from api.models.agent import Agent
 from api.services.agents.authority import Decision, decide
 from api.services.agents.tools.documents import CREATE_DOCUMENT

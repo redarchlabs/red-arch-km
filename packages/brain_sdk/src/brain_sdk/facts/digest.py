@@ -109,9 +109,7 @@ class DigestBuilder:
     def _summarise(self, tenant_id: str, members: list[Entity]) -> str:
         facts: list[str] = []
         for entity in members[: self._max_members]:
-            rows = self._store.query_claims(
-                tenant_id, subject_id=entity.entity_id, limit=self._claims_per_member
-            )
+            rows = self._store.query_claims(tenant_id, subject_id=entity.entity_id, limit=self._claims_per_member)
             facts.extend(f"{r.get('subject')} {r.get('predicate')} {r.get('object')}" for r in rows)
 
         names = ", ".join(e.canonical_name for e in members[: self._max_members])

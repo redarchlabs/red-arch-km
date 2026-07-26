@@ -344,15 +344,11 @@ def flatten(elements: list[Any], rels: dict[uuid.UUID, RelInfo]) -> Bindings:
         elif etype == "section":
             info = rels[el.relationship_id]
             display, write, calc = _leaf_slugs(el.elements)
-            containers.append(
-                SectionBinding(el.relationship_id, el.mode, info.target_id, display, write, calc)
-            )
+            containers.append(SectionBinding(el.relationship_id, el.mode, info.target_id, display, write, calc))
         elif etype == "block":
             info = rels[el.anchor_relationship_id]
             display, write, calc = _leaf_slugs(el.elements)
-            containers.append(
-                BlockBinding(el.anchor_relationship_id, info.source_id, display, write, calc)
-            )
+            containers.append(BlockBinding(el.anchor_relationship_id, info.source_id, display, write, calc))
         elif etype == "table":
             info = rels[el.anchor_relationship_id]
             display: list[str] = []
@@ -371,9 +367,7 @@ def flatten(elements: list[Any], rels: dict[uuid.UUID, RelInfo]) -> Bindings:
                             display.append(tok)
                 else:  # related
                     rinfo = rels[col.relationship_id]
-                    related.append(
-                        RelatedColBinding(col.relationship_id, rinfo.target_id, col.slug, col.editable)
-                    )
+                    related.append(RelatedColBinding(col.relationship_id, rinfo.target_id, col.slug, col.editable))
             containers.append(
                 TableBinding(
                     el.anchor_relationship_id,

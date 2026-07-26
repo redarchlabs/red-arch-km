@@ -125,9 +125,7 @@ class TestReconciliation:
         active = store.query_claims(tenant, subject_id=acme.entity_id)
         assert [r["object"] for r in active] == ["Paris"]
 
-        history = store.query_claims(
-            tenant, subject_id=acme.entity_id, statuses=[ClaimStatus.SUPERSEDED.value]
-        )
+        history = store.query_claims(tenant, subject_id=acme.entity_id, statuses=[ClaimStatus.SUPERSEDED.value])
         assert [r["object"] for r in history] == ["London"]
 
     def test_unorderable_contradicts(self, store: Neo4jFactStore, tenant: str) -> None:
@@ -142,9 +140,7 @@ class TestReconciliation:
 
         # Neither is 'active' any more — the conflict is surfaced, not resolved.
         assert store.query_claims(tenant, subject_id=acme.entity_id) == []
-        flagged = store.query_claims(
-            tenant, subject_id=acme.entity_id, statuses=[ClaimStatus.CONTRADICTED.value]
-        )
+        flagged = store.query_claims(tenant, subject_id=acme.entity_id, statuses=[ClaimStatus.CONTRADICTED.value])
         assert {r["object"] for r in flagged} == {"London", "Paris"}
 
 
@@ -156,8 +152,12 @@ class TestTemporalAndProvenance:
             tenant,
             [
                 _literal_claim(
-                    tenant, acme, "headquartered_in", "London",
-                    recorded_at="2010-01-01T00:00:00+00:00", valid_from="2010-01-01T00:00:00+00:00",
+                    tenant,
+                    acme,
+                    "headquartered_in",
+                    "London",
+                    recorded_at="2010-01-01T00:00:00+00:00",
+                    valid_from="2010-01-01T00:00:00+00:00",
                 )
             ],
         )
@@ -165,14 +165,20 @@ class TestTemporalAndProvenance:
             tenant,
             [
                 _literal_claim(
-                    tenant, acme, "headquartered_in", "Paris",
-                    recorded_at="2020-01-01T00:00:00+00:00", valid_from="2020-01-01T00:00:00+00:00",
+                    tenant,
+                    acme,
+                    "headquartered_in",
+                    "Paris",
+                    recorded_at="2020-01-01T00:00:00+00:00",
+                    valid_from="2020-01-01T00:00:00+00:00",
                 )
             ],
         )
         # As of 2015, the London value was the truth of record.
         as_of_2015 = store.query_claims(
-            tenant, subject_id=acme.entity_id, as_of="2015-01-01T00:00:00+00:00",
+            tenant,
+            subject_id=acme.entity_id,
+            as_of="2015-01-01T00:00:00+00:00",
             statuses=[ClaimStatus.ACTIVE.value, ClaimStatus.SUPERSEDED.value],
         )
         assert [r["object"] for r in as_of_2015] == ["London"]
@@ -218,8 +224,11 @@ class TestIsolationAndTraversal:
             tenant,
             [
                 Claim(
-                    tenant_id=tenant, subject_id=acme.entity_id, predicate="acquired",
-                    object_type=ObjectType.ENTITY, object_id=widgets.entity_id,
+                    tenant_id=tenant,
+                    subject_id=acme.entity_id,
+                    predicate="acquired",
+                    object_type=ObjectType.ENTITY,
+                    object_id=widgets.entity_id,
                     provenance=(_prov("docA", "docA#0"),),
                 )
             ],

@@ -86,7 +86,5 @@ class StorageClient:
         params: dict[str, str] = {"Bucket": self._bucket, "Key": key}
         if content_type:
             params["ResponseContentType"] = content_type
-        url: str = self._client.generate_presigned_url(
-            "get_object", Params=params, ExpiresIn=expires_seconds
-        )
+        url: str = self._client.generate_presigned_url("get_object", Params=params, ExpiresIn=expires_seconds)
         return url

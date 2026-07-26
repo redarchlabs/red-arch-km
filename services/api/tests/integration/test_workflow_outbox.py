@@ -41,16 +41,12 @@ async def _entity_with_outbox(admin_session: AsyncSession, session: AsyncSession
 
     await set_tenant(session, str(org.id))
     fields = await EntityFieldRepository(admin_session, org.id).list_for_definition(definition.id)
-    repo = DynamicEntityRepository(
-        session, org.id, definition, fields, outbox=OutboxWriter(session)
-    )
+    repo = DynamicEntityRepository(session, org.id, definition, fields, outbox=OutboxWriter(session))
     return org, definition, repo
 
 
 class TestOutboxCapture:
-    async def test_create_update_delete_write_outbox(
-        self, admin_session: AsyncSession, session: AsyncSession
-    ) -> None:
+    async def test_create_update_delete_write_outbox(self, admin_session: AsyncSession, session: AsyncSession) -> None:
         org, definition, repo = await _entity_with_outbox(admin_session, session)
 
         created = await repo.create({"title": "A", "status": "open"})
@@ -60,12 +56,16 @@ class TestOutboxCapture:
 
         await set_tenant(session, str(org.id))
         rows = (
-            await session.execute(
-                select(WorkflowOutbox)
-                .where(WorkflowOutbox.entity_definition_id == definition.id)
-                .order_by(WorkflowOutbox.seq)
+            (
+                await session.execute(
+                    select(WorkflowOutbox)
+                    .where(WorkflowOutbox.entity_definition_id == definition.id)
+                    .order_by(WorkflowOutbox.seq)
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
 
         assert [r.operation for r in rows] == ["create", "update", "delete"]
 
@@ -82,9 +82,7 @@ class TestOutboxCapture:
         assert {r.org_id for r in rows} == {org.id}
         assert [r.seq for r in rows] == sorted(r.seq for r in rows)
 
-    async def test_no_outbox_when_writer_absent(
-        self, admin_session: AsyncSession, session: AsyncSession
-    ) -> None:
+    async def test_no_outbox_when_writer_absent(self, admin_session: AsyncSession, session: AsyncSession) -> None:
         org, definition, _ = await _entity_with_outbox(admin_session, session)
         # A repo without an outbox writer must not emit events.
         await set_tenant(session, str(org.id))
@@ -95,10 +93,8 @@ class TestOutboxCapture:
 
         await set_tenant(session, str(org.id))
         count = len(
-            (
-                await session.execute(
-                    select(WorkflowOutbox).where(WorkflowOutbox.entity_definition_id == definition.id)
-                )
-            ).scalars().all()
+            (await session.execute(select(WorkflowOutbox).where(WorkflowOutbox.entity_definition_id == definition.id)))
+            .scalars()
+            .all()
         )
         assert count == 0

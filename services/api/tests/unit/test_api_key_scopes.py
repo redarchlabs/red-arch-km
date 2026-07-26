@@ -70,9 +70,7 @@ class TestNormalizeScopes:
             normalize_scopes(["nope:*"])
 
     def test_every_catalog_scope_is_valid(self) -> None:
-        assert normalize_scopes(sorted(VALID_SCOPES)) == [
-            s for s in _catalog_order() if s in VALID_SCOPES
-        ]
+        assert normalize_scopes(sorted(VALID_SCOPES)) == [s for s in _catalog_order() if s in VALID_SCOPES]
 
 
 def _catalog_order() -> list[str]:

@@ -32,14 +32,18 @@ async def _seed(admin_session: AsyncSession, identity: str) -> tuple[Org, McpSer
     admin_session.add(org)
     await admin_session.flush()
     user = UserProfile(
-        auth_subject=f"s-{uuid.uuid4()}", username=f"u{uuid.uuid4().hex[:8]}",
+        auth_subject=f"s-{uuid.uuid4()}",
+        username=f"u{uuid.uuid4().hex[:8]}",
         email=f"u{uuid.uuid4().hex[:6]}@t.local",
     )
     admin_session.add(user)
     server = McpServer(
-        name="linear", transport="sse", url="https://mcp.example.com/sse",
+        name="linear",
+        transport="sse",
+        url="https://mcp.example.com/sse",
         config={"auth_type": "oauth", "oauth": {"token_endpoint": "https://a/token", "client_id": "cid"}},
-        oauth_identity=identity, org_id=org.id,
+        oauth_identity=identity,
+        org_id=org.id,
     )
     admin_session.add(server)
     await admin_session.commit()

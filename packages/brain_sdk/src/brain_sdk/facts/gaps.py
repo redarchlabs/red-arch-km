@@ -115,9 +115,7 @@ class GapLog(Protocol):
 
     def list_open(self, tenant_id: str, *, limit: int = 100) -> list[KnowledgeGap]: ...
 
-    def set_status(
-        self, tenant_id: str, gap_id: str, status: GapStatus, *, resolved_at: str | None = None
-    ) -> bool:
+    def set_status(self, tenant_id: str, gap_id: str, status: GapStatus, *, resolved_at: str | None = None) -> bool:
         """Update a gap's status. Returns ``False`` if not found."""
         ...
 
@@ -131,11 +129,7 @@ class InMemoryGapLog:
     def record(self, gap: KnowledgeGap) -> KnowledgeGap:
         # Fold into an existing OPEN gap with the same dedup_key.
         for key, existing in self._by_id.items():
-            if (
-                key[0] == gap.tenant_id
-                and existing.dedup_key == gap.dedup_key
-                and existing.status is GapStatus.OPEN
-            ):
+            if key[0] == gap.tenant_id and existing.dedup_key == gap.dedup_key and existing.status is GapStatus.OPEN:
                 folded = replace(
                     existing,
                     occurrences=existing.occurrences + 1,
@@ -148,17 +142,11 @@ class InMemoryGapLog:
         return gap
 
     def list_open(self, tenant_id: str, *, limit: int = 100) -> list[KnowledgeGap]:
-        open_gaps = [
-            g
-            for (tid, _), g in self._by_id.items()
-            if tid == tenant_id and g.status is GapStatus.OPEN
-        ]
+        open_gaps = [g for (tid, _), g in self._by_id.items() if tid == tenant_id and g.status is GapStatus.OPEN]
         open_gaps.sort(key=lambda g: (g.occurrences, g.last_seen_at), reverse=True)
         return open_gaps[:limit]
 
-    def set_status(
-        self, tenant_id: str, gap_id: str, status: GapStatus, *, resolved_at: str | None = None
-    ) -> bool:
+    def set_status(self, tenant_id: str, gap_id: str, status: GapStatus, *, resolved_at: str | None = None) -> bool:
         gap = self._by_id.get((tenant_id, gap_id))
         if gap is None:
             return False

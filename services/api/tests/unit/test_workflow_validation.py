@@ -90,7 +90,11 @@ def test_boundary_attached_to_unknown_is_error() -> None:
         "schema_version": 2,
         "nodes": [
             {"id": "start", "type": "trigger", "data": {}},
-            {"id": "b1", "type": "event", "data": {"position": "boundary", "event_type": "error", "attached_to": "ghost"}},
+            {
+                "id": "b1",
+                "type": "event",
+                "data": {"position": "boundary", "event_type": "error", "attached_to": "ghost"},
+            },
         ],
     }
     assert "boundary-bad-attach" in _codes(defn)
@@ -206,7 +210,11 @@ def test_event_based_gateway_to_catch_ok() -> None:
         "nodes": [
             {"id": "start", "type": "trigger", "data": {}},
             {"id": "gw", "type": "gateway", "data": {"gateway_type": "event_based"}},
-            {"id": "timer", "type": "event", "data": {"position": "intermediate", "event_type": "timer", "throw_catch": "catch"}},
+            {
+                "id": "timer",
+                "type": "event",
+                "data": {"position": "intermediate", "event_type": "timer", "throw_catch": "catch"},
+            },
             {"id": "recv", "type": "task", "data": {"task_type": "receive"}},
         ],
         "edges": [
@@ -242,7 +250,11 @@ def test_loop_with_task_is_allowed() -> None:
         "schema_version": 2,
         "nodes": [
             {"id": "start", "type": "trigger", "data": {}},
-            {"id": "gw", "type": "gateway", "data": {"gateway_type": "exclusive", "expr": {"var": "vars.done"}, "default_handle": "loop"}},
+            {
+                "id": "gw",
+                "type": "gateway",
+                "data": {"gateway_type": "exclusive", "expr": {"var": "vars.done"}, "default_handle": "loop"},
+            },
             {"id": "work", "type": "task", "data": {"task_type": "service"}},
         ],
         "edges": [

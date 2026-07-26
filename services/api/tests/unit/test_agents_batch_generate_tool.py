@@ -90,7 +90,8 @@ async def test_check_batch_done():
     with (
         patch(f"{BG}.resolve_provider_key", AsyncMock(return_value="ak")),
         patch.object(
-            LLMProvider, "retrieve_batch",
+            LLMProvider,
+            "retrieve_batch",
             AsyncMock(return_value={"status": "done", "text": "t", "batch_id": "b1"}),
         ),
     ):

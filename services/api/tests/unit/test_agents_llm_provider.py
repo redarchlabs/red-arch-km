@@ -10,7 +10,6 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
-
 from api.services.agents.llm import provider as prov
 from api.services.agents.llm.catalog import (
     PROVIDERS,
@@ -42,7 +41,7 @@ def test_provider_for_model_maps_prefixes():
 
 
 def test_catalog_providers_are_valid_and_nonempty():
-    assert VALID_PROVIDERS == {"anthropic", "openai", "gemini"}
+    assert {"anthropic", "openai", "gemini"} == VALID_PROVIDERS
     for p in PROVIDERS:
         assert p.models, f"{p.name} has no models"
         for m in p.models:
@@ -88,7 +87,9 @@ def test_extract_usage():
 
 def _chunk(*, content=None, tool_calls=None, finish_reason=None, usage=None):
     return SimpleNamespace(
-        choices=[SimpleNamespace(finish_reason=finish_reason, delta=SimpleNamespace(content=content, tool_calls=tool_calls))],
+        choices=[
+            SimpleNamespace(finish_reason=finish_reason, delta=SimpleNamespace(content=content, tool_calls=tool_calls))
+        ],
         usage=usage,
     )
 
@@ -120,7 +121,9 @@ async def test_stream_yields_text_then_completion_with_tool_call(monkeypatch):
         _chunk(content="Work"),
         _chunk(content="ing…"),
         _chunk(tool_calls=[_tc(0, id="call_1", name="run_workflow", arguments='{"id":"w1"}')]),
-        _chunk(finish_reason="tool_calls", usage=SimpleNamespace(prompt_tokens=7, completion_tokens=3, total_tokens=10)),
+        _chunk(
+            finish_reason="tool_calls", usage=SimpleNamespace(prompt_tokens=7, completion_tokens=3, total_tokens=10)
+        ),
     ]
     monkeypatch.setattr(prov, "_litellm", lambda: _FakeLiteLLM(chunks))
 

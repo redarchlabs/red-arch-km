@@ -45,7 +45,8 @@ async def _seed(admin_session: AsyncSession):
     await set_tenant(admin_session, str(org.id))
     entity = await EntityService(admin_session, org.id).create_definition(
         EntityDefinitionCreate(
-            name="Lead", slug="lead",
+            name="Lead",
+            slug="lead",
             fields=[EntityFieldCreate(name="Score", slug="score", field_type="integer")],
         )
     )
@@ -54,8 +55,11 @@ async def _seed(admin_session: AsyncSession):
         "schema_version": 2,
         "nodes": [
             {"id": "s", "type": "trigger", "data": {}},
-            {"id": "calc", "type": "task",
-             "data": {"task_type": "script", "transform": {"doubled": {"*": [{"var": "after.score"}, 2]}}}},
+            {
+                "id": "calc",
+                "type": "task",
+                "data": {"task_type": "script", "transform": {"doubled": {"*": [{"var": "after.score"}, 2]}}},
+            },
             {"id": "e", "type": "event", "data": {"position": "end", "event_type": "none"}},
         ],
         "edges": [{"id": "e0", "source": "s", "target": "calc"}, {"id": "e1", "source": "calc", "target": "e"}],
@@ -98,16 +102,16 @@ async def test_inbound_signed_endpoint_runs_with_valid_signature(admin_session: 
     await set_tenant(admin_session, str(org.id))
     secret = "whsec_" + uuid.uuid4().hex
     await WorkflowInboundEndpointRepository(admin_session, org.id).create(
-        name="robot", workflow_id=wf.id, token_hash=hash_token("tok_SIGNED"),
+        name="robot",
+        workflow_id=wf.id,
+        token_hash=hash_token("tok_SIGNED"),
         signing_secret_encrypted=encrypt_secret(secret, _ENC_KEY),
     )
     await admin_session.commit()
 
     raw = json.dumps({"score": 21}).encode()
     header = sign(secret, raw, timestamp=int(time.time()))
-    result = await trigger_from_inbound(
-        admin_session, "tok_SIGNED", raw, signature=header, org_encryption_key=_ENC_KEY
-    )
+    result = await trigger_from_inbound(admin_session, "tok_SIGNED", raw, signature=header, org_encryption_key=_ENC_KEY)
     assert result is not None and result["status"] == "succeeded"
     await admin_session.commit()
     fresh = await WorkflowRunRepository(admin_session, org.id).get_by_id(uuid.UUID(result["run_id"]))
@@ -119,7 +123,9 @@ async def _make_signed_endpoint(admin_session: AsyncSession, token: str) -> tupl
     await set_tenant(admin_session, str(org.id))
     secret = "whsec_" + uuid.uuid4().hex
     await WorkflowInboundEndpointRepository(admin_session, org.id).create(
-        name="signed", workflow_id=wf.id, token_hash=hash_token(token),
+        name="signed",
+        workflow_id=wf.id,
+        token_hash=hash_token(token),
         signing_secret_encrypted=encrypt_secret(secret, _ENC_KEY),
     )
     await admin_session.commit()
@@ -131,9 +137,7 @@ async def test_inbound_signed_endpoint_rejects_missing_signature(admin_session: 
     (the router maps SignatureError → 401)."""
     await _make_signed_endpoint(admin_session, "tok_NOSIG")
     with pytest.raises(SignatureError):
-        await trigger_from_inbound(
-            admin_session, "tok_NOSIG", b'{"score":5}', org_encryption_key=_ENC_KEY
-        )
+        await trigger_from_inbound(admin_session, "tok_NOSIG", b'{"score":5}', org_encryption_key=_ENC_KEY)
 
 
 async def test_inbound_signed_endpoint_rejects_tampered_body(admin_session: AsyncSession) -> None:
@@ -161,4 +165,3 @@ async def test_inbound_disabled_endpoint_returns_none(admin_session: AsyncSessio
     endpoint.enabled = False
     await admin_session.commit()
     assert await trigger_from_inbound(admin_session, "tok_OFF", b"{}") is None
-

@@ -119,9 +119,7 @@ async def run_agent_loop(
             tool_calls = pending
             pending = None
         else:
-            completion = await _stream_turn(
-                provider, model, messages, schemas, temperature, max_tokens, emit
-            )
+            completion = await _stream_turn(provider, model, messages, schemas, temperature, max_tokens, emit)
             if completion.usage:
                 result.prompt_tokens += completion.usage.prompt_tokens
                 result.completion_tokens += completion.usage.completion_tokens
@@ -142,9 +140,7 @@ async def run_agent_loop(
             tool_calls = list(completion.tool_calls)
 
         # Phase 1: authority-gate every call BEFORE any executes (parks cleanly).
-        plans = await _gate_tools(
-            agent, tool_calls, specs_by_name, emit, approval_strategy, messages, autonomy
-        )
+        plans = await _gate_tools(agent, tool_calls, specs_by_name, emit, approval_strategy, messages, autonomy)
         # Phase 2: execute (or return the pre-set deny/error output).
         for tc, spec, preset in plans:
             result.tool_calls += 1
@@ -161,8 +157,11 @@ async def _stream_turn(provider, model, messages, schemas, temperature, max_toke
     completion: Completion | None = None
     try:
         async for event in provider.stream(
-            model=model, messages=messages, tools=schemas,
-            temperature=temperature, max_tokens=max_tokens,
+            model=model,
+            messages=messages,
+            tools=schemas,
+            temperature=temperature,
+            max_tokens=max_tokens,
         ):
             if isinstance(event, TextDelta):
                 await emit({"type": "delta", "content": event.text})
@@ -175,9 +174,7 @@ async def _stream_turn(provider, model, messages, schemas, temperature, max_toke
     return completion
 
 
-async def _gate_tools(
-    agent, tool_calls, specs_by_name, emit, approval_strategy, messages, autonomy="high_touch"
-):
+async def _gate_tools(agent, tool_calls, specs_by_name, emit, approval_strategy, messages, autonomy="high_touch"):
     """Return a plan of (tc, spec, preset_output|None). Raises RunParked to suspend."""
     plans: list[tuple[ToolCallRequest, ToolSpec | None, dict[str, Any] | None]] = []
     for tc in tool_calls:

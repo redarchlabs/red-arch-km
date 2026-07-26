@@ -120,7 +120,9 @@ def upgrade() -> None:
         sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.Column("seq", sa.BigInteger, sa.Identity(always=False), nullable=False),
-        sa.Column("org_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("orgs.id", ondelete="CASCADE"), nullable=False),
+        sa.Column(
+            "org_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("orgs.id", ondelete="CASCADE"), nullable=False
+        ),
         sa.Column("entity_definition_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("entity_table", sa.String(63), nullable=False),
         sa.Column("record_id", postgresql.UUID(as_uuid=True), nullable=False),
@@ -140,8 +142,7 @@ def upgrade() -> None:
     # created_at, seq) so the claim uses a Merge Append index scan, not a sort.
     op.execute("CREATE INDEX ix_wf_outbox_pending ON workflow_outbox (seq) WHERE status = 'pending'")
     op.execute(
-        "CREATE INDEX ix_wf_outbox_entity ON workflow_outbox (org_id, entity_definition_id) "
-        "WHERE status = 'pending'"
+        "CREATE INDEX ix_wf_outbox_entity ON workflow_outbox (org_id, entity_definition_id) WHERE status = 'pending'"
     )
 
     # --- Partitioned: runs ---
@@ -149,7 +150,9 @@ def upgrade() -> None:
         "workflow_runs",
         sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("org_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("orgs.id", ondelete="CASCADE"), nullable=False),
+        sa.Column(
+            "org_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("orgs.id", ondelete="CASCADE"), nullable=False
+        ),
         sa.Column("workflow_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("workflow_version_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("outbox_id", postgresql.UUID(as_uuid=True), nullable=False),
@@ -174,7 +177,9 @@ def upgrade() -> None:
         "workflow_run_steps",
         sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("org_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("orgs.id", ondelete="CASCADE"), nullable=False),
+        sa.Column(
+            "org_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("orgs.id", ondelete="CASCADE"), nullable=False
+        ),
         sa.Column("run_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("run_created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("node_id", sa.String(64), nullable=False),

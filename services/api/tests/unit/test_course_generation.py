@@ -128,9 +128,7 @@ class TestCreateFromBlueprint:
             ("onboarding", "ONB"),
         ],
     )
-    async def test_code_prefix_follows_category(
-        self, repos: dict[str, _FakeRepo], category: str, prefix: str
-    ) -> None:
+    async def test_code_prefix_follows_category(self, repos: dict[str, _FakeRepo], category: str, prefix: str) -> None:
         result = await _service().create_from_blueprint(_blueprint(), category)
         assert result["code"].startswith(f"{prefix}-")
 

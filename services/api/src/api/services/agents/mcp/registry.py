@@ -61,8 +61,13 @@ async def resolve_for_call(
             logger.info("MCP server %s not connected (oauth); its tools are unavailable this run", row.name)
             return None
         return ResolvedMcpServer(
-            id=str(row.id), name=row.name, transport=row.transport, command=row.command,
-            url=row.url, config={**cfg, "auth_type": "bearer"}, secret=token,
+            id=str(row.id),
+            name=row.name,
+            transport=row.transport,
+            command=row.command,
+            url=row.url,
+            config={**cfg, "auth_type": "bearer"},
+            secret=token,
         )
     return resolve_server(row, settings)
 
@@ -110,9 +115,7 @@ async def build_mcp_tool_specs(
     from api.repositories.mcp_server import McpServerRepository
 
     client = client or McpClient(settings)
-    rows = [
-        r for r in await McpServerRepository(session, org_id).list_all() if str(r.id) in wanted and r.enabled
-    ]
+    rows = [r for r in await McpServerRepository(session, org_id).list_all() if str(r.id) in wanted and r.enabled]
     specs: list[ToolSpec] = []
     for row in rows:
         server = await resolve_for_call(session, org_id, row, settings, actor_user_id)

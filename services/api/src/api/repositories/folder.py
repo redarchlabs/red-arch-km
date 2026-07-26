@@ -99,11 +99,7 @@ class FolderRepository:
         rows are returned (used internally by document permission filtering).
         """
         all_folders = list(
-            (
-                await self._session.execute(
-                    select(Folder).where(Folder.org_id == self._org_id).order_by(Folder.dot_path)
-                )
-            )
+            (await self._session.execute(select(Folder).where(Folder.org_id == self._org_id).order_by(Folder.dot_path)))
             .scalars()
             .all()
         )

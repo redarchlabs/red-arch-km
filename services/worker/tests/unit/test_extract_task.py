@@ -79,9 +79,7 @@ def test_whitespace_only_extraction_reports_failed(
     assert failed and failed[0][1]["reason"] == "empty_text"  # type: ignore[index]
 
 
-def test_real_text_extraction_posts_to_brain(
-    captured: dict[str, object], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_real_text_extraction_posts_to_brain(captured: dict[str, object], monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(extract_mod, "extract_text", lambda *_a, **_k: "real extracted text")
     result = _run(_data())
 
@@ -92,9 +90,7 @@ def test_real_text_extraction_posts_to_brain(
     assert STAGE_INGESTING in captured["stages"]  # type: ignore[operator]
 
 
-def test_cancellation_before_extraction_aborts(
-    captured: dict[str, object], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_cancellation_before_extraction_aborts(captured: dict[str, object], monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(extract_mod, "extract_text", lambda *_a, **_k: "real text")
 
     # Simulate a cancel arriving: the first stage-boundary check raises.

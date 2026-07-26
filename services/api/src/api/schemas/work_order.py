@@ -8,9 +8,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-WorkOrderStatus = Literal[
-    "draft", "awaiting_approval", "approved", "in_progress", "done", "cancelled"
-]
+WorkOrderStatus = Literal["draft", "awaiting_approval", "approved", "in_progress", "done", "cancelled"]
 Priority = Literal["low", "normal", "high", "urgent"]
 
 

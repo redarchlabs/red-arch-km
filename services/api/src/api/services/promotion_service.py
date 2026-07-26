@@ -88,9 +88,7 @@ class PromotionService:
 
     async def get_target(self, target_id: uuid.UUID) -> PromotionTarget | None:
         row = await self._session.execute(
-            select(PromotionTarget).where(
-                PromotionTarget.id == target_id, PromotionTarget.org_id == self._org_id
-            )
+            select(PromotionTarget).where(PromotionTarget.id == target_id, PromotionTarget.org_id == self._org_id)
         )
         return row.scalar_one_or_none()
 
@@ -239,9 +237,7 @@ class PromotionService:
 
     async def list_items(self, release_id: uuid.UUID) -> list[ReleaseItem]:
         rows = await self._session.execute(
-            select(ReleaseItem).where(
-                ReleaseItem.release_id == release_id, ReleaseItem.org_id == self._org_id
-            )
+            select(ReleaseItem).where(ReleaseItem.release_id == release_id, ReleaseItem.org_id == self._org_id)
         )
         return list(rows.scalars().all())
 
@@ -401,9 +397,14 @@ class PromotionService:
         base_url = target.base_url or ""
         api_key = self._remote_key(target)
         return await self._push_remote(
-            base_url=base_url, api_key=api_key, bundle=bundle,
-            strategy=strategy, apply_deletes=apply_deletes,
-            allow_data=False, override_inflight=False, dry_run=True,
+            base_url=base_url,
+            api_key=api_key,
+            bundle=bundle,
+            strategy=strategy,
+            apply_deletes=apply_deletes,
+            allow_data=False,
+            override_inflight=False,
+            dry_run=True,
         )
 
     async def promote_release(
@@ -463,9 +464,14 @@ class PromotionService:
             # _push_remote releases the DB connection for the network leg; reopen a
             # privileged transaction afterwards to write the audit record.
             result = await self._push_remote(
-                base_url=base_url, api_key=api_key, bundle=bundle,
-                strategy=strategy, apply_deletes=apply_deletes,
-                allow_data=allow_data, override_inflight=override_inflight, dry_run=False,
+                base_url=base_url,
+                api_key=api_key,
+                bundle=bundle,
+                strategy=strategy,
+                apply_deletes=apply_deletes,
+                allow_data=allow_data,
+                override_inflight=override_inflight,
+                dry_run=False,
             )
             await db_scope.enter_bypass(self._session)
 
@@ -528,9 +534,14 @@ class PromotionService:
             api_key = self._remote_key(target)
             snapshot = promotion.pre_state_bundle
             result = await self._push_remote(
-                base_url=base_url, api_key=api_key, bundle=snapshot,
-                strategy=CollisionStrategy.OVERWRITE, apply_deletes=True,
-                allow_data=False, override_inflight=True, dry_run=False,
+                base_url=base_url,
+                api_key=api_key,
+                bundle=snapshot,
+                strategy=CollisionStrategy.OVERWRITE,
+                apply_deletes=True,
+                allow_data=False,
+                override_inflight=True,
+                dry_run=False,
             )
             # The push released the session (and its row lock). Reopen and re-lock,
             # guarding against a concurrent rollback that completed while we pushed.
@@ -570,9 +581,7 @@ class PromotionService:
     # ------------------------------------------------------------------ #
     async def _lock_release(self, release_id: uuid.UUID) -> Release:
         row = await self._session.execute(
-            select(Release)
-            .where(Release.id == release_id, Release.org_id == self._org_id)
-            .with_for_update()
+            select(Release).where(Release.id == release_id, Release.org_id == self._org_id).with_for_update()
         )
         release = row.scalar_one_or_none()
         if release is None:
@@ -589,9 +598,7 @@ class PromotionService:
 
     async def get_promotion(self, promotion_id: uuid.UUID) -> ReleasePromotion | None:
         row = await self._session.execute(
-            select(ReleasePromotion).where(
-                ReleasePromotion.id == promotion_id, ReleasePromotion.org_id == self._org_id
-            )
+            select(ReleasePromotion).where(ReleasePromotion.id == promotion_id, ReleasePromotion.org_id == self._org_id)
         )
         return row.scalar_one_or_none()
 

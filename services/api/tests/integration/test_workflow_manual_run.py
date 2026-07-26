@@ -41,7 +41,8 @@ async def test_manual_run_performs_real_side_effect(admin_session: AsyncSession)
 
     definition = await EntityService(admin_session, org.id).create_definition(
         EntityDefinitionCreate(
-            name="Ticket", slug="ticket",
+            name="Ticket",
+            slug="ticket",
             fields=[EntityFieldCreate(name="Title", slug="title", field_type="text")],
         )
     )
@@ -63,9 +64,13 @@ async def test_manual_run_performs_real_side_effect(admin_session: AsyncSession)
     # Run it for real against the record.
     dispatcher = WorkflowDispatchService(admin_session, public_base_url="http://x")
     run, executed = await dispatcher.run_version_manually(
-        org.id, workflow, version,
-        operation="update", record_id=record_id,
-        before={"title": "before"}, after={"title": "before"},
+        org.id,
+        workflow,
+        version,
+        operation="update",
+        record_id=record_id,
+        before={"title": "before"},
+        after={"title": "before"},
     )
     await admin_session.commit()
 

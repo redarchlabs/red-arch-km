@@ -83,9 +83,7 @@ class WorkOrderService:
             return wo
         allowed = _TRANSITIONS.get(wo.status, set())
         if new_status not in allowed:
-            raise WorkOrderValidationError(
-                f"Cannot move work order from '{wo.status}' to '{new_status}'"
-            )
+            raise WorkOrderValidationError(f"Cannot move work order from '{wo.status}' to '{new_status}'")
         wo.status = new_status
         await self._repo.flush()
         return wo
@@ -125,9 +123,7 @@ class WorkOrderService:
     ) -> WorkOrderEntry:
         await self.get_work_order(wo_id)
         return await self._repo.add_entry(
-            WorkOrderEntry(
-                work_order_id=wo_id, text=text, agent_id=agent_id, agent_run_id=agent_run_id, role=role
-            )
+            WorkOrderEntry(work_order_id=wo_id, text=text, agent_id=agent_id, agent_run_id=agent_run_id, role=role)
         )
 
     async def list_entries(self, wo_id: uuid.UUID) -> list[WorkOrderEntry]:

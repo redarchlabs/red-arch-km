@@ -51,6 +51,7 @@ _FALSE_STRINGS = frozenset({"false", "f", "0", "no", "n", "off"})
 # Base columns present on every entity table, exposed read-only.
 _BASE_READ_COLUMNS = ("id", "created_at", "updated_at")
 
+
 class RecordCursor(NamedTuple):
     """Keyset position: the sort key + id of the last row on the previous page.
 
@@ -132,9 +133,7 @@ class DynamicEntityRepository:
         self._privileged = privileged
         # Field slugs whose values are hidden from non-privileged callers (e.g. a
         # quiz answer key). Empty when nothing is locked down (the common case).
-        self._server_only_slugs = {
-            f.slug for f in fields if getattr(f, "read_access", "member") == "server_only"
-        }
+        self._server_only_slugs = {f.slug for f in fields if getattr(f, "read_access", "member") == "server_only"}
         # Only to-one relationships add a physical FK column on this table.
         self._relationships = [r for r in (relationships or []) if r.cardinality != "many_to_many"]
         self._table = self._build_table()

@@ -35,11 +35,7 @@ class AnthropicLLMClient:
     ) -> str:
         # Anthropic takes the system prompt as a top-level arg, not a message.
         system = "\n\n".join(m.content for m in messages if m.role == "system")
-        turns = [
-            {"role": m.role, "content": m.content}
-            for m in messages
-            if m.role in ("user", "assistant")
-        ]
+        turns = [{"role": m.role, "content": m.content} for m in messages if m.role in ("user", "assistant")]
         if json_object:
             system = f"{system}\n\nRespond with a single valid JSON object and nothing else.".strip()
         response = self._client.messages.create(

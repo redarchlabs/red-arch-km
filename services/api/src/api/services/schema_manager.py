@@ -191,10 +191,7 @@ class SchemaManager:
         qt = identifiers.quote(table_name)
         org_fk = identifiers.quote(identifiers.fk_constraint_name(definition.id))
         await self._session.execute(
-            text(
-                f"ALTER TABLE {qt} ADD CONSTRAINT {org_fk} "
-                "FOREIGN KEY (org_id) REFERENCES orgs(id) ON DELETE CASCADE"
-            )
+            text(f"ALTER TABLE {qt} ADD CONSTRAINT {org_fk} FOREIGN KEY (org_id) REFERENCES orgs(id) ON DELETE CASCADE")
         )
         # Index org_id for tenant-scoped scans (mirrors the static schema).
         org_idx = Index(identifiers.index_name(definition.id), table.c["org_id"])
@@ -215,17 +212,13 @@ class SchemaManager:
     async def _create_keyset_index(self, table_name: str, definition: EntityDefinition) -> None:
         qt = identifiers.quote(table_name)
         ix = identifiers.quote(identifiers.keyset_index_name(definition.id))
-        await self._session.execute(
-            text(f"CREATE INDEX IF NOT EXISTS {ix} ON {qt} (created_at DESC, id DESC)")
-        )
+        await self._session.execute(text(f"CREATE INDEX IF NOT EXISTS {ix} ON {qt} (created_at DESC, id DESC)"))
 
     async def _create_trgm_index(self, table_name: str, field: EntityField) -> None:
         qt = identifiers.quote(table_name)
         qc = identifiers.quote(field.physical_column)
         ix = identifiers.quote(identifiers.trgm_index_name(field.id))
-        await self._session.execute(
-            text(f"CREATE INDEX IF NOT EXISTS {ix} ON {qt} USING gin ({qc} gin_trgm_ops)")
-        )
+        await self._session.execute(text(f"CREATE INDEX IF NOT EXISTS {ix} ON {qt} USING gin ({qc} gin_trgm_ops)"))
 
     async def _create_btree_index(self, table_name: str, field: EntityField) -> None:
         # Composite (org_id, col DESC, id DESC): every tenant-scoped query filters
@@ -236,9 +229,7 @@ class SchemaManager:
         qt = identifiers.quote(table_name)
         qc = identifiers.quote(field.physical_column)
         ix = identifiers.quote(identifiers.btree_index_name(field.id))
-        await self._session.execute(
-            text(f"CREATE INDEX IF NOT EXISTS {ix} ON {qt} (org_id, {qc} DESC, id DESC)")
-        )
+        await self._session.execute(text(f"CREATE INDEX IF NOT EXISTS {ix} ON {qt} (org_id, {qc} DESC, id DESC)"))
 
     async def drop_entity_table(self, definition: EntityDefinition) -> None:
         """Drop an entity's physical table (RLS policies drop with it)."""

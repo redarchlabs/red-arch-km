@@ -71,9 +71,7 @@ def _ent(name: str) -> Entity:
 class TestDigestBuilder:
     def test_builds_summary_for_multi_entity_community(self) -> None:
         acme, widgets, lonely = _ent("Acme"), _ent("Widgets"), _ent("Unrelated")
-        store = FakeDigestStore(
-            [acme, widgets, lonely], [(acme.entity_id, widgets.entity_id)]
-        )
+        store = FakeDigestStore([acme, widgets, lonely], [(acme.entity_id, widgets.entity_id)])
         llm = FakeLLM()
         written = DigestBuilder(store, llm).build("t1")  # type: ignore[arg-type]
 

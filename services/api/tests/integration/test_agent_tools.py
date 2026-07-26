@@ -45,9 +45,7 @@ async def _org(admin_session: AsyncSession) -> Org:
     return org
 
 
-async def test_agent_creates_entity_and_workflow(
-    engine: AsyncEngine, admin_session: AsyncSession
-) -> None:
+async def test_agent_creates_entity_and_workflow(engine: AsyncEngine, admin_session: AsyncSession) -> None:
     org = await _org(admin_session)
     agent = _agent(engine, org.id)
 
@@ -89,9 +87,7 @@ async def test_agent_creates_entity_and_workflow(
     assert wf["created_workflow"]["fires_on"] == "customer"
 
 
-async def test_agent_wires_workflow_trigger_and_action(
-    engine: AsyncEngine, admin_session: AsyncSession
-) -> None:
+async def test_agent_wires_workflow_trigger_and_action(engine: AsyncEngine, admin_session: AsyncSession) -> None:
     """create_workflow seeds a draft graph with the intended trigger operation
     and a create_record action targeting another entity."""
     from api.repositories.workflow import WorkflowRepository, WorkflowVersionRepository
@@ -108,9 +104,7 @@ async def test_agent_wires_workflow_trigger_and_action(
             "name": "Create Patient on Customer Creation",
             "entity_slug": "customer",
             "operations": ["create"],
-            "actions": [
-                {"type": "create_record", "target_slug": "patient", "values": {"name": "New patient"}}
-            ],
+            "actions": [{"type": "create_record", "target_slug": "patient", "values": {"name": "New patient"}}],
         },
     )
     assert result["trigger"]["operations"] == ["create"]
@@ -132,9 +126,7 @@ async def test_agent_wires_workflow_trigger_and_action(
     assert any(e["source"] == "trigger" and e["target"] == action["id"] for e in definition["edges"])
 
 
-async def test_agent_create_workflow_rejects_unknown_target(
-    engine: AsyncEngine, admin_session: AsyncSession
-) -> None:
+async def test_agent_create_workflow_rejects_unknown_target(engine: AsyncEngine, admin_session: AsyncSession) -> None:
     org = await _org(admin_session)
     agent = _agent(engine, org.id)
     await agent._dispatch("create_entity", {"name": "Customer", "fields": [{"name": "Email", "field_type": "text"}]})
@@ -154,9 +146,7 @@ async def test_agent_create_workflow_rejects_unknown_target(
     assert await WorkflowRepository(admin_session, org.id).list_all() == []
 
 
-async def test_agent_tool_errors_are_returned_not_raised(
-    engine: AsyncEngine, admin_session: AsyncSession
-) -> None:
+async def test_agent_tool_errors_are_returned_not_raised(engine: AsyncEngine, admin_session: AsyncSession) -> None:
     org = await _org(admin_session)
     agent = _agent(engine, org.id)
 

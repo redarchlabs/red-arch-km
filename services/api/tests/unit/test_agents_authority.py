@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import pytest
-
 from api.models.agent import Agent
 from api.services.agents.authority import (
-    AuthorityVerdict,
     Decision,
     available_tools,
     decide,
@@ -72,10 +70,7 @@ def test_execute_denied_without_grant_then_allowed_with_grant():
     # Grant mechanics in isolation (hands_off posture, so side-effecting isn't force-gated).
     spec = _spec("run_workflow", Category.EXECUTE, side_effecting=True)
     assert decide(_agent("operator"), spec, autonomy="hands_off").decision is Decision.DENY
-    assert (
-        decide(_agent("operator", tools=["run_workflow"]), spec, autonomy="hands_off").decision
-        is Decision.ALLOW
-    )
+    assert decide(_agent("operator", tools=["run_workflow"]), spec, autonomy="hands_off").decision is Decision.ALLOW
 
 
 def test_execute_asks_when_in_approval_list():

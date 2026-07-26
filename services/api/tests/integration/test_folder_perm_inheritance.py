@@ -45,8 +45,12 @@ async def _seed_tree(session: AsyncSession) -> tuple[Org, dict[str, Folder], dic
     await session.flush()
     b.parent_id = a.id
     c = Folder(
-        name="C", org_id=org.id, dot_path="A.B.C", parent_id=b.id,
-        viewer_permissions_config=_CFG, view_permission_masks=[9],
+        name="C",
+        org_id=org.id,
+        dot_path="A.B.C",
+        parent_id=b.id,
+        viewer_permissions_config=_CFG,
+        view_permission_masks=[9],
     )
     session.add(c)
     await session.flush()
@@ -60,8 +64,12 @@ async def _seed_tree(session: AsyncSession) -> tuple[Org, dict[str, Folder], dic
         "c": Document(title="docC", org_id=org.id, folder_id=c.id, text="c"),
         "d": Document(title="docD", org_id=org.id, folder_id=d.id, text="d"),
         "override": Document(
-            title="docOverride", org_id=org.id, folder_id=b.id, text="o",
-            viewer_permissions_config=_CFG, view_permission_masks=[42],
+            title="docOverride",
+            org_id=org.id,
+            folder_id=b.id,
+            text="o",
+            viewer_permissions_config=_CFG,
+            view_permission_masks=[42],
         ),
     }
     session.add_all(list(docs.values()))

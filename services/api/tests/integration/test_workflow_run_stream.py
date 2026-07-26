@@ -37,7 +37,8 @@ async def _seed(admin_session: AsyncSession, definition: dict):
     await set_tenant(admin_session, str(org.id))
     entity = await EntityService(admin_session, org.id).create_definition(
         EntityDefinitionCreate(
-            name="Thing", slug="thing",
+            name="Thing",
+            slug="thing",
             fields=[EntityFieldCreate(name="Title", slug="title", field_type="text")],
         )
     )
@@ -51,9 +52,15 @@ async def _seed(admin_session: AsyncSession, definition: dict):
     await admin_session.commit()
     await set_tenant(admin_session, str(org.id))
     run = await WorkflowRunRepository(admin_session, org.id).create_run_if_absent(
-        workflow_id=wf.id, workflow_version_id=version.id, outbox_id=uuid.uuid4(), outbox_seq=None,
-        created_at=datetime.now(UTC), trigger_operation="update", record_id=None,
-        input_snapshot={"before": None, "after": {}}, depth=0,
+        workflow_id=wf.id,
+        workflow_version_id=version.id,
+        outbox_id=uuid.uuid4(),
+        outbox_seq=None,
+        created_at=datetime.now(UTC),
+        trigger_operation="update",
+        record_id=None,
+        input_snapshot={"before": None, "after": {}},
+        depth=0,
     )
     await admin_session.commit()
     return org, run
@@ -65,8 +72,11 @@ async def test_snapshot_reports_node_status_and_parked_token(admin_session: Asyn
         "schema_version": 2,
         "nodes": [
             {"id": "start", "type": "trigger", "data": {}},
-            {"id": "log1", "type": "task",
-             "data": {"task_type": "service", "action_type": "log", "config": {"message": "hi"}}},
+            {
+                "id": "log1",
+                "type": "task",
+                "data": {"task_type": "service", "action_type": "log", "config": {"message": "hi"}},
+            },
             {"id": "approve", "type": "task", "data": {"task_type": "user"}},
             {"id": "end", "type": "event", "data": {"position": "end", "event_type": "none"}},
         ],
@@ -99,8 +109,11 @@ async def test_snapshot_terminal_run_has_no_live_tokens(admin_session: AsyncSess
         "schema_version": 2,
         "nodes": [
             {"id": "start", "type": "trigger", "data": {}},
-            {"id": "log1", "type": "task",
-             "data": {"task_type": "service", "action_type": "log", "config": {"message": "done"}}},
+            {
+                "id": "log1",
+                "type": "task",
+                "data": {"task_type": "service", "action_type": "log", "config": {"message": "done"}},
+            },
             {"id": "end", "type": "event", "data": {"position": "end", "event_type": "none"}},
         ],
         "edges": [{"id": "e0", "source": "start", "target": "log1"}, {"id": "e1", "source": "log1", "target": "end"}],

@@ -94,9 +94,7 @@ async def test_admin_full_document_lifecycle(
     folder = await agent._dispatch("create_folder", {"name": "Policies"})
     fid = folder["created_folder"]["id"]
 
-    created = await agent._dispatch(
-        "create_document", {"title": "Vacation", "text": "# Vacation\n", "folder_id": fid}
-    )
+    created = await agent._dispatch("create_document", {"title": "Vacation", "text": "# Vacation\n", "folder_id": fid})
     did = created["created_document"]["id"]
 
     listing = await agent._dispatch("list_documents", {"folder_id": fid})
@@ -116,9 +114,7 @@ async def test_admin_full_document_lifecycle(
 # --------------------------------------------------------------------------- #
 # Admin-only boundary: members cannot manage folders or permissions
 # --------------------------------------------------------------------------- #
-async def test_member_cannot_create_or_update_folders(
-    engine: AsyncEngine, admin_session: AsyncSession
-) -> None:
+async def test_member_cannot_create_or_update_folders(engine: AsyncEngine, admin_session: AsyncSession) -> None:
     org = await _org(admin_session)
     user = await _seed_user(admin_session)
     folder = Folder(name="Existing", org_id=org.id, dot_path="Existing")
@@ -162,9 +158,7 @@ async def test_member_reads_and_writes_are_visibility_scoped(
     assert "Public" in names
     assert "Secret" not in names
 
-    denied_create = await agent._dispatch(
-        "create_document", {"title": "N", "folder_id": str(restricted.id)}
-    )
+    denied_create = await agent._dispatch("create_document", {"title": "N", "folder_id": str(restricted.id)})
     assert "not visible" in denied_create["error"].lower()
 
     denied_read = await agent._dispatch("get_document", {"document_id": str(hidden_doc.id)})

@@ -263,9 +263,7 @@ class FormService:
     async def delete_form(self, form_id: uuid.UUID) -> None:
         await self._forms.delete(await self.get_form(form_id))
 
-    async def generate_link(
-        self, form_id: uuid.UUID, body: GenerateLinkRequest
-    ) -> tuple[FormLink, str, str, bool]:
+    async def generate_link(self, form_id: uuid.UUID, body: GenerateLinkRequest) -> tuple[FormLink, str, str, bool]:
         """Mint a single-use link for ``target_record_id``. Returns
         ``(link, raw_token, url, email_sent)`` — the raw token is only available here."""
         form = await self.get_form(form_id)
@@ -277,9 +275,7 @@ class FormService:
             raise FormNotFoundError("target record not found")
 
         raw_token, token_hash = form_token.generate_token()
-        expires_at = (
-            datetime.now(UTC) + timedelta(days=body.expires_in_days) if body.expires_in_days else None
-        )
+        expires_at = datetime.now(UTC) + timedelta(days=body.expires_in_days) if body.expires_in_days else None
         link = await self._links.create(
             FormLink(
                 id=uuid.uuid4(),
@@ -356,8 +352,13 @@ class FormRenderService:
         fields = await self._fields.list_for_definition(entity_id)
         rels = await self._rels.list_for_source(entity_id)
         repo = DynamicEntityRepository(
-            self._session, self._org_id, definition, fields, rels,
-            outbox=OutboxWriter(self._session), outbox_source="form",
+            self._session,
+            self._org_id,
+            definition,
+            fields,
+            rels,
+            outbox=OutboxWriter(self._session),
+            outbox_source="form",
         )
         self._repo_cache[entity_id] = repo
         return repo
@@ -371,9 +372,7 @@ class FormRenderService:
         return ctx, flatten(config.elements, ctx.rels)
 
     # ---- render -------------------------------------------------------- #
-    async def build_render(
-        self, form: Form, target_record_id: uuid.UUID | None, status: str
-    ) -> FormRenderRead:
+    async def build_render(self, form: Form, target_record_id: uuid.UUID | None, status: str) -> FormRenderRead:
         config = FormConfig.model_validate(form.config or {})
         ctx, bindings = await self._context(form, config)
 
@@ -406,9 +405,7 @@ class FormRenderService:
             related=related,
         )
 
-    def _build_catalog(
-        self, root_id: uuid.UUID, ctx: _LayoutContext, bindings: Bindings
-    ) -> list[EntityCatalogEntry]:
+    def _build_catalog(self, root_id: uuid.UUID, ctx: _LayoutContext, bindings: Bindings) -> list[EntityCatalogEntry]:
         needed: set[uuid.UUID] = {root_id}
         for c in bindings.containers:
             needed.add(c.entity_id)
@@ -437,9 +434,7 @@ class FormRenderService:
             )
         return out
 
-    def _build_relationship_meta(
-        self, ctx: _LayoutContext, bindings: Bindings
-    ) -> list[RelationshipMeta]:
+    def _build_relationship_meta(self, ctx: _LayoutContext, bindings: Bindings) -> list[RelationshipMeta]:
         out: list[RelationshipMeta] = []
         seen: set[uuid.UUID] = set()
 
@@ -496,9 +491,7 @@ class FormRenderService:
                 sort_kw: dict[str, Any] = {}
                 if isinstance(c, TableBinding) and c.sort_by:
                     sort_kw = {"order_by": c.sort_by, "order_dir": c.sort_dir}
-                items, _ = await repo.list(
-                    filters={rel_slug: root_id}, limit=MAX_SECTION_ROWS, **sort_kw
-                )
+                items, _ = await repo.list(filters={rel_slug: root_id}, limit=MAX_SECTION_ROWS, **sort_kw)
                 rows = []
                 for item in items:
                     row: dict[str, Any] = {
@@ -534,9 +527,7 @@ class FormRenderService:
         return ctx.rel_slugs.get(rel_id)
 
     # ---- submit -------------------------------------------------------- #
-    async def apply_submit(
-        self, form: Form, target_record_id: uuid.UUID, payload: FormSubmit
-    ) -> None:
+    async def apply_submit(self, form: Form, target_record_id: uuid.UUID, payload: FormSubmit) -> None:
         config = FormConfig.model_validate(form.config or {})
         ctx, bindings = await self._context(form, config)
         try:
@@ -639,9 +630,7 @@ class FormRenderService:
                 created = await repo.create({rel_slug: root_id, **clean})
                 child_id = _as_uuid(created["id"])
                 child_current = None
-            await self._write_row_related(
-                repo, ctx, related_cols, child_id, child_current, row.get("related") or {}
-            )
+            await self._write_row_related(repo, ctx, related_cols, child_id, child_current, row.get("related") or {})
 
     async def _write_row_related(
         self,

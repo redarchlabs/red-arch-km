@@ -155,9 +155,7 @@ async def test_patch_allows_demoting_admin_when_another_remains(patch_repo: dict
 
 async def test_patch_combined_flags_in_one_request(patch_repo: dict[str, Any]) -> None:
     async with _client(_build_app(_admin_user())) as client:
-        resp = await client.patch(
-            f"/api/admin/users/{TARGET_ID}", json={"is_site_admin": True, "is_active": False}
-        )
+        resp = await client.patch(f"/api/admin/users/{TARGET_ID}", json={"is_site_admin": True, "is_active": False})
     assert resp.status_code == 200
     body = resp.json()
     assert body["is_site_admin"] is True
@@ -168,9 +166,7 @@ async def test_patch_combined_demote_and_deactivate_last_admin_409(patch_repo: d
     patch_repo["target"] = _target_profile(is_site_admin=True, is_active=True)
     patch_repo["active_admin_count"] = 1
     async with _client(_build_app(_admin_user())) as client:
-        resp = await client.patch(
-            f"/api/admin/users/{TARGET_ID}", json={"is_site_admin": False, "is_active": False}
-        )
+        resp = await client.patch(f"/api/admin/users/{TARGET_ID}", json={"is_site_admin": False, "is_active": False})
     assert resp.status_code == 409
     # Guard must reject before either flag is applied.
     assert patch_repo["target"].is_site_admin is True

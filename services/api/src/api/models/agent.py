@@ -62,6 +62,4 @@ class Agent(Base, UUIDMixin, TimestampMixin, LineageMixin):
     # Specific workflow ids this agent may run (list of ids as str); empty = none.
     workflow_allowlist: Mapped[list] = mapped_column(JSONB, default=list)
 
-    org_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True
-    )
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True)

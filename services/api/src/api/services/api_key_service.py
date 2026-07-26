@@ -111,9 +111,7 @@ class ApiKeyService:
         if expires_at is not None and expires_at <= datetime.now(UTC):
             raise ApiKeyValidationError("Expiry must be in the future")
         if await self._repo.count() >= MAX_KEYS_PER_ORG:
-            raise ApiKeyValidationError(
-                f"This organization has reached the maximum of {MAX_KEYS_PER_ORG} API keys"
-            )
+            raise ApiKeyValidationError(f"This organization has reached the maximum of {MAX_KEYS_PER_ORG} API keys")
 
         generated = generate_key()
         api_key = ApiKey(

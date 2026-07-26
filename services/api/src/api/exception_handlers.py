@@ -44,9 +44,7 @@ def make_unhandled_exception_handler(
     """Build the 500 handler bound to the configured CORS origins."""
 
     async def handler(request: Request, exc: Exception) -> JSONResponse:
-        logger.exception(
-            "Unhandled exception on %s %s", request.method, request.url.path
-        )
+        logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
         return JSONResponse(
             status_code=500,
             content={"detail": "Internal server error"},

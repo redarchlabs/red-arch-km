@@ -52,18 +52,14 @@ class McpServer(Base, UUIDMixin, TimestampMixin, LineageMixin):
     oauth_refresh_token_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     oauth_token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
-    org_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True
-    )
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True)
 
 
 class McpServerUserToken(Base, UUIDMixin, TimestampMixin):
     """A per-user OAuth token for an ``oauth_identity == "user"`` MCP server."""
 
     __tablename__ = "mcp_server_user_tokens"
-    __table_args__ = (
-        UniqueConstraint("mcp_server_id", "user_profile_id", name="uq_mcp_user_token"),
-    )
+    __table_args__ = (UniqueConstraint("mcp_server_id", "user_profile_id", name="uq_mcp_user_token"),)
 
     mcp_server_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("mcp_servers.id", ondelete="CASCADE"), index=True
@@ -75,9 +71,7 @@ class McpServerUserToken(Base, UUIDMixin, TimestampMixin):
     refresh_token_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
-    org_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True
-    )
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True)
 
 
 class McpOAuthFlow(Base, UUIDMixin, TimestampMixin):
@@ -101,6 +95,4 @@ class McpOAuthFlow(Base, UUIDMixin, TimestampMixin):
     code_verifier: Mapped[str] = mapped_column(String(256))
     redirect_uri: Mapped[str] = mapped_column(String(1000))
 
-    org_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True
-    )
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True)

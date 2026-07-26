@@ -80,14 +80,23 @@ def _two_action_def(target_missing_slug: str, *, continue_on_error: bool) -> dic
     return {
         "nodes": [
             {"id": "t", "type": "trigger", "data": {"operations": ["update"]}},
-            {"id": "a1", "type": "action", "data": {
-                "action_type": "create_record",
-                "config": {"target_slug": target_missing_slug, "values": {}},
-                "continue_on_error": continue_on_error,
-            }},
-            {"id": "a2", "type": "action", "data": {
-                "action_type": "log", "config": {"message": "reached"},
-            }},
+            {
+                "id": "a1",
+                "type": "action",
+                "data": {
+                    "action_type": "create_record",
+                    "config": {"target_slug": target_missing_slug, "values": {}},
+                    "continue_on_error": continue_on_error,
+                },
+            },
+            {
+                "id": "a2",
+                "type": "action",
+                "data": {
+                    "action_type": "log",
+                    "config": {"message": "reached"},
+                },
+            },
         ],
         "edges": [
             {"id": "e0", "source": "t", "target": "a1"},
@@ -112,8 +121,13 @@ async def test_continue_on_error_true_continues(admin_session: AsyncSession) -> 
 
     disp = WorkflowDispatchService(admin_session, public_base_url="http://x")
     run, executed = await disp.run_version_manually(
-        org.id, wf, version, operation="update",
-        record_id=rec_id, before={"title": "x"}, after={"title": "x"},
+        org.id,
+        wf,
+        version,
+        operation="update",
+        record_id=rec_id,
+        before={"title": "x"},
+        after={"title": "x"},
     )
     await admin_session.commit()
 
@@ -141,8 +155,13 @@ async def test_continue_on_error_false_stops(admin_session: AsyncSession) -> Non
 
     disp = WorkflowDispatchService(admin_session, public_base_url="http://x")
     run, executed = await disp.run_version_manually(
-        org.id, wf, version, operation="update",
-        record_id=rec_id, before={"title": "x"}, after={"title": "x"},
+        org.id,
+        wf,
+        version,
+        operation="update",
+        record_id=rec_id,
+        before={"title": "x"},
+        after={"title": "x"},
     )
     await admin_session.commit()
 
@@ -154,9 +173,7 @@ async def test_continue_on_error_false_stops(admin_session: AsyncSession) -> Non
     assert run.status == "failed"
 
 
-async def test_poison_event_is_isolated(
-    admin_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_poison_event_is_isolated(admin_session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
     """If processing one event raises unexpectedly, that event is marked skipped
     and the sibling event in the same batch still succeeds."""
     org = await _new_org(admin_session, "WF-POISON")
@@ -165,14 +182,11 @@ async def test_poison_event_is_isolated(
 
     from api.repositories.workflow import OutboxWriter
 
-    repo = DynamicEntityRepository(
-        admin_session, org.id, definition, fields, outbox=OutboxWriter(admin_session)
-    )
+    repo = DynamicEntityRepository(admin_session, org.id, definition, fields, outbox=OutboxWriter(admin_session))
     good_def = {
         "nodes": [
             {"id": "t", "type": "trigger", "data": {"operations": ["update"]}},
-            {"id": "a", "type": "action",
-             "data": {"action_type": "log", "config": {"message": "ok"}}},
+            {"id": "a", "type": "action", "data": {"action_type": "log", "config": {"message": "ok"}}},
         ],
         "edges": [{"id": "e0", "source": "t", "target": "a"}],
     }

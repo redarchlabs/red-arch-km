@@ -389,10 +389,7 @@ async def cancel_job(
     """
     row = (
         await session.execute(
-            text(
-                "SELECT org_id, document_key, celery_task_id, processing_status "
-                "FROM documents WHERE id = :id"
-            ),
+            text("SELECT org_id, document_key, celery_task_id, processing_status FROM documents WHERE id = :id"),
             {"id": document_id},
         )
     ).first()
@@ -416,7 +413,7 @@ async def cancel_job(
     await session.execute(
         text(
             "UPDATE documents SET processing_status = 'CANCELLED', "
-            "processing_details = '{\"stage\": \"cancelled\"}'::jsonb WHERE id = :id"
+            'processing_details = \'{"stage": "cancelled"}\'::jsonb WHERE id = :id'
         ),
         {"id": document_id},
     )

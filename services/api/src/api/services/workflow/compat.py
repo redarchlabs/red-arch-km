@@ -68,11 +68,7 @@ def normalize(definition: dict[str, Any] | WorkflowDefinitionModel | None) -> Wo
     node types is returned parsed-but-unchanged. Never mutates or persists the
     input (safe against the published-version immutability trigger).
     """
-    model = (
-        definition
-        if isinstance(definition, WorkflowDefinitionModel)
-        else WorkflowDefinitionModel.parse(definition)
-    )
+    model = definition if isinstance(definition, WorkflowDefinitionModel) else WorkflowDefinitionModel.parse(definition)
     if not any(node.type in C.LEGACY_NODE_TYPES for node in model.nodes):
         return model
     return model.model_copy(

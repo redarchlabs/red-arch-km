@@ -83,9 +83,7 @@ class TestCreate:
         svc.create_key = AsyncMock(return_value=(_key_obj(), "km2_the_only_time_you_see_this"))
         with patch.object(api_keys, "ApiKeyService", return_value=svc):
             async with _client(_app()) as client:
-                resp = await client.post(
-                    "/api/api-keys/", json={"name": "Integration", "scopes": ["reports:run"]}
-                )
+                resp = await client.post("/api/api-keys/", json={"name": "Integration", "scopes": ["reports:run"]})
         assert resp.status_code == 201
         body = resp.json()
         assert body["key"] == "km2_the_only_time_you_see_this"

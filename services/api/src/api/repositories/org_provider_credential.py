@@ -41,9 +41,7 @@ class OrgProviderCredentialRepository:
             existing.secret_encrypted = secret_encrypted
             await self._session.flush()
             return existing
-        cred = OrgProviderCredential(
-            org_id=self._org_id, provider=provider, secret_encrypted=secret_encrypted
-        )
+        cred = OrgProviderCredential(org_id=self._org_id, provider=provider, secret_encrypted=secret_encrypted)
         self._session.add(cred)
         await self._session.flush()
         return cred

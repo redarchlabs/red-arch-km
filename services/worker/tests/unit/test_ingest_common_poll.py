@@ -73,9 +73,7 @@ def _terminal_status(captured: dict[str, Any]) -> str:
     return captured["statuses"][-1][0]
 
 
-def test_submit_then_poll_to_done_reports_success(
-    captured: dict[str, Any], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_submit_then_poll_to_done_reports_success(captured: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ic.httpx, "post", lambda *a, **k: _Resp(json_data={"status": "accepted"}, status_code=202))
     states = iter(
         [
@@ -166,9 +164,7 @@ def test_submit_timeout_is_not_retried(captured: dict[str, Any], monkeypatch: py
     assert _terminal_status(captured) == "FAILED"
 
 
-def test_connect_error_is_retried_then_succeeds(
-    captured: dict[str, Any], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_connect_error_is_retried_then_succeeds(captured: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
     calls = {"n": 0}
 
     def _post(*_a: Any, **_k: Any) -> _Resp:
@@ -185,9 +181,7 @@ def test_connect_error_is_retried_then_succeeds(
     assert calls["n"] == 2  # first ConnectError retried, second accepted
 
 
-def test_cancel_during_poll_returns_cancelled(
-    captured: dict[str, Any], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_cancel_during_poll_returns_cancelled(captured: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ic.httpx, "post", lambda *a, **k: _Resp(json_data={"status": "accepted"}, status_code=202))
     monkeypatch.setattr(ic.httpx, "get", lambda *a, **k: _Resp(json_data={"state": "running"}))
 
@@ -199,9 +193,7 @@ def test_cancel_during_poll_returns_cancelled(
     assert result["status"] == "cancelled"
 
 
-def test_persistent_unknown_reports_failed(
-    captured: dict[str, Any], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_persistent_unknown_reports_failed(captured: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ic.httpx, "post", lambda *a, **k: _Resp(json_data={"status": "accepted"}, status_code=202))
     monkeypatch.setattr(ic.httpx, "get", lambda *a, **k: _Resp(json_data={"state": "unknown"}))
 
@@ -211,9 +203,7 @@ def test_persistent_unknown_reports_failed(
     assert _terminal_status(captured) == "FAILED"
 
 
-def test_max_wait_exceeded_reports_failed(
-    captured: dict[str, Any], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_max_wait_exceeded_reports_failed(captured: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ic.httpx, "post", lambda *a, **k: _Resp(json_data={"status": "accepted"}, status_code=202))
     monkeypatch.setattr(ic.httpx, "get", lambda *a, **k: _Resp(json_data={"state": "running"}))
 

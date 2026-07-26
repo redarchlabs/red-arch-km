@@ -58,8 +58,13 @@ class TestDelegation:
         org, boss, report, _stranger = await _seed(admin_session)
         wo = await WorkOrderService(admin_session, org.id).create_work_order(title="Ship it")
         run = await delegate(
-            admin_session, org.id, boss, "report", "Handle the thing",
-            run_id=None, work_order_id=wo.id,
+            admin_session,
+            org.id,
+            boss,
+            "report",
+            "Handle the thing",
+            run_id=None,
+            work_order_id=wo.id,
         )
         await admin_session.commit()
         assert run.agent_id == report.id

@@ -73,9 +73,7 @@ def _service(session: AsyncSession, ctx: OrgContext, settings: Settings) -> Form
 _public_limiter: SlidingWindowLimiter | None = None
 
 
-def _rate_limit_public(
-    token: str, settings: Annotated[Settings, Depends(get_settings)]
-) -> None:
+def _rate_limit_public(token: str, settings: Annotated[Settings, Depends(get_settings)]) -> None:
     global _public_limiter
     if _public_limiter is None:
         _public_limiter = SlidingWindowLimiter(settings.rate_limit_per_minute)
@@ -193,9 +191,7 @@ async def generate_link(
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> FormLinkCreated:
     try:
-        link, raw_token, url, email_sent = await _service(session, ctx, settings).generate_link(
-            form_id, body
-        )
+        link, raw_token, url, email_sent = await _service(session, ctx, settings).generate_link(form_id, body)
     except FormError as exc:
         _raise_http(exc)
     return FormLinkCreated(
@@ -254,9 +250,7 @@ async def submit_form(
 # ------------------------------------------------------------------ #
 # Public (unauthenticated) — resolves org from the token
 # ------------------------------------------------------------------ #
-@public_router.get(
-    "/{token}", response_model=PublicFormRead, dependencies=[Depends(_rate_limit_public)]
-)
+@public_router.get("/{token}", response_model=PublicFormRead, dependencies=[Depends(_rate_limit_public)])
 async def public_get_form(
     token: str,
     session: Annotated[AsyncSession, Depends(get_db)],

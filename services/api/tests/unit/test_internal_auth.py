@@ -22,9 +22,7 @@ pytestmark = pytest.mark.unit
 def _app(internal_api_key: str) -> FastAPI:
     app = FastAPI()
     app.include_router(internal.router, prefix="/api/internal")
-    app.dependency_overrides[get_settings] = lambda: SimpleNamespace(
-        internal_api_key=internal_api_key
-    )
+    app.dependency_overrides[get_settings] = lambda: SimpleNamespace(internal_api_key=internal_api_key)
     return app
 
 

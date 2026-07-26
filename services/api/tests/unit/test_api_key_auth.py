@@ -46,7 +46,7 @@ class _FakeSession:
 def _fake_auth_session():  # noqa: ANN202
     """require_api_key opens its own session; give it a mock so the touch/commit
     never hit a real DB."""
-    with patch.object(ak, "get_session_factory", lambda _settings: (lambda: _FakeSession())):
+    with patch.object(ak, "get_session_factory", lambda _settings: lambda: _FakeSession()):
         yield
 
 

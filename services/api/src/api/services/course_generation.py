@@ -175,9 +175,7 @@ class CourseGenerationService:
         course_id = str(course["id"])
 
         modules: list[dict[str, Any]] = blueprint.get("modules") or []
-        module_minutes = (
-            max(1, estimated_minutes // len(modules)) if estimated_minutes > 0 else _DEFAULT_MODULE_MINUTES
-        )
+        module_minutes = max(1, estimated_minutes // len(modules)) if estimated_minutes > 0 else _DEFAULT_MODULE_MINUTES
         module_ids: list[str] = []
         for i, module in enumerate(modules):
             created = await self._create(

@@ -39,7 +39,8 @@ async def _seed(admin_session: AsyncSession, definition: dict):
     await set_tenant(admin_session, str(org.id))
     entity = await EntityService(admin_session, org.id).create_definition(
         EntityDefinitionCreate(
-            name="Thing", slug="thing",
+            name="Thing",
+            slug="thing",
             fields=[EntityFieldCreate(name="Title", slug="title", field_type="text")],
         )
     )
@@ -115,8 +116,8 @@ async def test_error_boundary_catches_task_failure(admin_session: AsyncSession) 
         ],
         "edges": [
             {"id": "e0", "source": "start", "target": "call"},
-            {"id": "e1", "source": "call", "target": "end_ok"},        # normal path (task succeeds) — not taken
-            {"id": "e2", "source": "onerr", "target": "recover"},       # error path
+            {"id": "e1", "source": "call", "target": "end_ok"},  # normal path (task succeeds) — not taken
+            {"id": "e2", "source": "onerr", "target": "recover"},  # error path
             {"id": "e3", "source": "recover", "target": "end_err"},
         ],
     }
@@ -124,12 +125,12 @@ async def test_error_boundary_catches_task_failure(admin_session: AsyncSession) 
     await _run_to_quiescence(admin_session, run, definition)
 
     steps = {s.node_id: s for s in await _steps(admin_session, run)}
-    assert steps["call"].status == "failed"          # the task really failed
-    assert steps["recover"].status == "succeeded"    # ...but the error path ran
+    assert steps["call"].status == "failed"  # the task really failed
+    assert steps["recover"].status == "succeeded"  # ...but the error path ran
     assert steps["recover"].output == {"logged": "recovered"}
     fresh = await _reload_run(admin_session, run)
-    assert fresh.status == "succeeded"               # a caught error does NOT fail the run
-    assert fresh.dead_letter is False                # ...nor dead-letter it
+    assert fresh.status == "succeeded"  # a caught error does NOT fail the run
+    assert fresh.dead_letter is False  # ...nor dead-letter it
 
 
 async def test_uncaught_task_failure_dead_letters(admin_session: AsyncSession) -> None:

@@ -25,7 +25,6 @@ from api.models.org import Org
 from api.models.workflow import WorkflowInboundEndpoint
 from api.repositories.workflow import (
     WorkflowRepository,
-    WorkflowRunRepository,
     WorkflowVersionRepository,
 )
 from api.services.crypto import encrypt_secret
@@ -128,7 +127,12 @@ def _definition(port: int, *, synthesize: bool = True) -> dict:
                 "data": {
                     "task_type": "service",
                     "action_type": "http_request",
-                    "config": {"method": "POST", "url": f"{robot}/say", "headers": hdr, "body": {"text": "{{vars.decision.say}}"}},
+                    "config": {
+                        "method": "POST",
+                        "url": f"{robot}/say",
+                        "headers": hdr,
+                        "body": {"text": "{{vars.decision.say}}"},
+                    },
                 },
             },
             {
@@ -137,7 +141,12 @@ def _definition(port: int, *, synthesize: bool = True) -> dict:
                 "data": {
                     "task_type": "service",
                     "action_type": "http_request",
-                    "config": {"method": "POST", "url": f"{robot}/gesture", "headers": hdr, "body": {"name": "{{vars.decision.gesture}}"}},
+                    "config": {
+                        "method": "POST",
+                        "url": f"{robot}/gesture",
+                        "headers": hdr,
+                        "body": {"name": "{{vars.decision.gesture}}"},
+                    },
                 },
             },
             {
@@ -209,9 +218,7 @@ async def _fire(admin_session: AsyncSession, token: str, signature: str | None =
     )
 
 
-async def test_workflow_drives_robot_end_to_end(
-    admin_session: AsyncSession, robot_bridge, monkeypatch
-) -> None:
+async def test_workflow_drives_robot_end_to_end(admin_session: AsyncSession, robot_bridge, monkeypatch) -> None:
     """Happy path: signed heard → KB → llm_decide → authenticated /say + /gesture → done."""
     port, received = robot_bridge
 
@@ -224,7 +231,13 @@ async def test_workflow_drives_robot_end_to_end(
         # The steering LLM sees the rules of engagement + KB context (proves wiring).
         assert opts["context"] == KB_ANSWER
         assert "space-museum robot" in opts["system"]
-        return {"say": "The Sun is huge — about 1.4 million kilometers across!", "gesture": "celebrate", "mood": "excited", "done": True, "reason": "answered"}
+        return {
+            "say": "The Sun is huge — about 1.4 million kilometers across!",
+            "gesture": "celebrate",
+            "mood": "excited",
+            "done": True,
+            "reason": "answered",
+        }
 
     monkeypatch.setattr(ActionExecutor, "_search_knowledge", _fake_search)
     monkeypatch.setattr(ActionExecutor, "_decide", _fake_decide)
@@ -263,7 +276,13 @@ async def test_retrieval_only_single_llm_path_drives_robot(
     async def _fake_decide(self, org_id, opts):  # noqa: ANN001
         # llm_decide sees the RAW retrieved passages as context (not a pre-synthesized answer).
         assert opts["context"] == passages
-        return {"say": "The Sun is about 1.4 million kilometers across!", "gesture": "nod", "mood": "curious", "done": True, "reason": "grounded"}
+        return {
+            "say": "The Sun is about 1.4 million kilometers across!",
+            "gesture": "nod",
+            "mood": "curious",
+            "done": True,
+            "reason": "grounded",
+        }
 
     monkeypatch.setattr(ActionExecutor, "_search_knowledge", _boom_search)
     monkeypatch.setattr(ActionExecutor, "_retrieve_knowledge", _fake_retrieve)
@@ -278,9 +297,7 @@ async def test_retrieval_only_single_llm_path_drives_robot(
     assert say["command_key"] == COMMAND_KEY
 
 
-async def test_bounded_goal_loop_until_done(
-    admin_session: AsyncSession, robot_bridge, monkeypatch
-) -> None:
+async def test_bounded_goal_loop_until_done(admin_session: AsyncSession, robot_bridge, monkeypatch) -> None:
     """Goal-directed: the exclusive gateway loops back to the LLM until it signals done,
     then terminates — bounded, no runaway."""
     port, received = robot_bridge
@@ -291,7 +308,13 @@ async def test_bounded_goal_loop_until_done(
 
     async def _fake_decide(self, org_id, opts):  # noqa: ANN001
         calls["n"] += 1
-        return {"say": f"turn {calls['n']}", "gesture": "nod", "mood": "curious", "done": calls["n"] >= 3, "reason": "x"}
+        return {
+            "say": f"turn {calls['n']}",
+            "gesture": "nod",
+            "mood": "curious",
+            "done": calls["n"] >= 3,
+            "reason": "x",
+        }
 
     monkeypatch.setattr(ActionExecutor, "_search_knowledge", _fake_search)
     monkeypatch.setattr(ActionExecutor, "_decide", _fake_decide)
@@ -305,9 +328,7 @@ async def test_bounded_goal_loop_until_done(
     assert [s["body"]["text"] for s in says] == ["turn 1", "turn 2", "turn 3"]
 
 
-async def test_forged_trigger_is_rejected(
-    admin_session: AsyncSession, robot_bridge, monkeypatch
-) -> None:
+async def test_forged_trigger_is_rejected(admin_session: AsyncSession, robot_bridge, monkeypatch) -> None:
     """A heard event with a bad HMAC signature never triggers the workflow (control on the
     trigger side, mirroring the command-plane auth on the robot side)."""
     port, received = robot_bridge

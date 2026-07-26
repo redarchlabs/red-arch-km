@@ -88,13 +88,13 @@ def render_intake_email(*, form_name: str, url: str, org_name: str | None = None
     esc_who = f"{html.escape(org_name)} " if org_name else ""
     esc_url = html.escape(url, quote=True)
     html_body = (
-        f"<div style=\"font-family:system-ui,sans-serif;max-width:480px;margin:0 auto\">"
-        f"<h2 style=\"margin:0 0 12px\">{esc_form_name}</h2>"
-        f"<p style=\"color:#444\">{esc_who}has asked you to fill out a short form.</p>"
-        f"<p style=\"margin:24px 0\"><a href=\"{esc_url}\" "
-        f"style=\"background:#b45309;color:#fff;padding:10px 18px;border-radius:6px;"
-        f"text-decoration:none;display:inline-block\">Open the form</a></p>"
-        f"<p style=\"color:#888;font-size:12px\">This link is personal to you — please don't forward it.</p>"
+        f'<div style="font-family:system-ui,sans-serif;max-width:480px;margin:0 auto">'
+        f'<h2 style="margin:0 0 12px">{esc_form_name}</h2>'
+        f'<p style="color:#444">{esc_who}has asked you to fill out a short form.</p>'
+        f'<p style="margin:24px 0"><a href="{esc_url}" '
+        f'style="background:#b45309;color:#fff;padding:10px 18px;border-radius:6px;'
+        f'text-decoration:none;display:inline-block">Open the form</a></p>'
+        f'<p style="color:#888;font-size:12px">This link is personal to you — please don\'t forward it.</p>'
         f"</div>"
     )
     return subject, text, html_body

@@ -133,21 +133,37 @@ async def _seed_two_orgs_entities(
         admin_session.add_all(
             [
                 EntityDefinition(
-                    id=parent_id, org_id=org.id, name="Parent", slug="parent",
+                    id=parent_id,
+                    org_id=org.id,
+                    name="Parent",
+                    slug="parent",
                     physical_table=identifiers.table_name(parent_id),
                 ),
                 EntityDefinition(
-                    id=child_id, org_id=org.id, name="Child", slug="child",
+                    id=child_id,
+                    org_id=org.id,
+                    name="Child",
+                    slug="child",
                     physical_table=identifiers.table_name(child_id),
                 ),
                 EntityField(
-                    id=field_id, org_id=org.id, entity_definition_id=child_id, name="Label",
-                    slug="label", physical_column=identifiers.column_name(field_id), field_type="text",
+                    id=field_id,
+                    org_id=org.id,
+                    entity_definition_id=child_id,
+                    name="Label",
+                    slug="label",
+                    physical_column=identifiers.column_name(field_id),
+                    field_type="text",
                 ),
                 EntityRelationship(
-                    id=rel_id, org_id=org.id, source_definition_id=child_id,
-                    target_definition_id=parent_id, name="Parent", slug="parent",
-                    cardinality="many_to_one", physical_name=identifiers.relation_column_name(rel_id),
+                    id=rel_id,
+                    org_id=org.id,
+                    source_definition_id=child_id,
+                    target_definition_id=parent_id,
+                    name="Parent",
+                    slug="parent",
+                    cardinality="many_to_one",
+                    physical_name=identifiers.relation_column_name(rel_id),
                 ),
             ]
         )

@@ -46,9 +46,7 @@ async def _make_org(admin_session: AsyncSession, name: str) -> Org:
     return org
 
 
-async def _load_repo(
-    session: AsyncSession, org_id: uuid.UUID, definition_id: uuid.UUID
-) -> DynamicEntityRepository:
+async def _load_repo(session: AsyncSession, org_id: uuid.UUID, definition_id: uuid.UUID) -> DynamicEntityRepository:
     """Build a DynamicEntityRepository from the catalog (as the router would)."""
     definition = await EntityDefinitionRepository(session, org_id).get(definition_id)
     assert definition is not None
@@ -78,9 +76,7 @@ class TestRuntimeTableRLS:
         table = definition.physical_table
 
         # Table exists.
-        exists = (
-            await admin_session.execute(text("SELECT to_regclass(:t)"), {"t": table})
-        ).scalar_one()
+        exists = (await admin_session.execute(text("SELECT to_regclass(:t)"), {"t": table})).scalar_one()
         assert exists is not None
 
         # FORCE RLS enabled.
@@ -93,10 +89,10 @@ class TestRuntimeTableRLS:
 
         # All four tenant_isolation policies + the GUC-gated cross-org bypass.
         policies = (
-            await admin_session.execute(
-                text("SELECT policyname FROM pg_policies WHERE tablename = :t"), {"t": table}
-            )
-        ).scalars().all()
+            (await admin_session.execute(text("SELECT policyname FROM pg_policies WHERE tablename = :t"), {"t": table}))
+            .scalars()
+            .all()
+        )
         assert set(policies) == {
             "tenant_isolation_select",
             "tenant_isolation_insert",
@@ -107,14 +103,18 @@ class TestRuntimeTableRLS:
 
         # app_user has CRUD grants.
         grants = (
-            await admin_session.execute(
-                text(
-                    "SELECT privilege_type FROM information_schema.role_table_grants "
-                    "WHERE table_name = :t AND grantee = 'app_user'"
-                ),
-                {"t": table},
+            (
+                await admin_session.execute(
+                    text(
+                        "SELECT privilege_type FROM information_schema.role_table_grants "
+                        "WHERE table_name = :t AND grantee = 'app_user'"
+                    ),
+                    {"t": table},
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         assert {"SELECT", "INSERT", "UPDATE", "DELETE"} <= set(grants)
 
     async def test_duplicate_slug_conflicts(self, admin_session: AsyncSession) -> None:
@@ -129,9 +129,7 @@ class TestRuntimeTableRLS:
 
 
 class TestRecordCrudAndIsolation:
-    async def test_crud_and_cross_org_isolation(
-        self, admin_session: AsyncSession, session: AsyncSession
-    ) -> None:
+    async def test_crud_and_cross_org_isolation(self, admin_session: AsyncSession, session: AsyncSession) -> None:
         org_a = await _make_org(admin_session, "CE-A")
         org_b = await _make_org(admin_session, "CE-B")
 
@@ -208,9 +206,7 @@ class TestRecordCrudAndIsolation:
 
         await set_tenant(session, str(org.id))
         repo = await _load_repo(session, org.id, definition.id)
-        created = await repo.create(
-            {"name": "Jeremy", "dob": "2026-07-05", "seen_at": "2026-07-05T14:30"}
-        )
+        created = await repo.create({"name": "Jeremy", "dob": "2026-07-05", "seen_at": "2026-07-05T14:30"})
         await session.commit()
 
         assert str(created["dob"]) == "2026-07-05"
@@ -258,9 +254,7 @@ class TestRecordCrudAndIsolation:
         assert len(set(seen)) == 25  # no duplicates across pages
         assert pages == 3  # 10 + 10 + 5
 
-    async def test_picklist_and_required_validation(
-        self, admin_session: AsyncSession, session: AsyncSession
-    ) -> None:
+    async def test_picklist_and_required_validation(self, admin_session: AsyncSession, session: AsyncSession) -> None:
         org = await _make_org(admin_session, "CE-VALID")
         await set_tenant(admin_session, str(org.id))
         definition = await EntityService(admin_session, org.id).create_definition(
@@ -295,9 +289,7 @@ class TestRecordCrudAndIsolation:
 
 
 class TestDropField:
-    async def test_drop_field_removes_column_and_catalog_row(
-        self, admin_session: AsyncSession
-    ) -> None:
+    async def test_drop_field_removes_column_and_catalog_row(self, admin_session: AsyncSession) -> None:
         org = await _make_org(admin_session, "CE-DROP")
         await set_tenant(admin_session, str(org.id))
         service = EntityService(admin_session, org.id)
@@ -346,21 +338,18 @@ class TestDropField:
 
 
 class TestDropDefinitionForce:
-    async def test_force_drop_referenced_entity_cleans_up_fk(
-        self, admin_session: AsyncSession
-    ) -> None:
+    async def test_force_drop_referenced_entity_cleans_up_fk(self, admin_session: AsyncSession) -> None:
         """Force-dropping an entity that another entity references (to-one FK)
         must succeed: the referencing FK column + its relationship catalog row are
         torn down first, so neither the table drop nor the catalog delete 500s."""
         org = await _make_org(admin_session, "CE-FORCE")
         await set_tenant(admin_session, str(org.id))
         service = EntityService(admin_session, org.id)
-        customer = await service.create_definition(
-            EntityDefinitionCreate(name="Customer", slug="customer")
-        )
+        customer = await service.create_definition(EntityDefinitionCreate(name="Customer", slug="customer"))
         order = await service.create_definition(
             EntityDefinitionCreate(
-                name="Order", slug="order",
+                name="Order",
+                slug="order",
                 fields=[EntityFieldCreate(name="Ref", slug="ref", field_type="text")],
             )
         )
@@ -368,8 +357,11 @@ class TestDropDefinitionForce:
         rel = await service.create_relationship(
             order.id,
             EntityRelationshipCreate(
-                name="Customer", slug="customer",
-                cardinality="many_to_one", target_definition_id=customer.id, on_delete="RESTRICT",
+                name="Customer",
+                slug="customer",
+                cardinality="many_to_one",
+                target_definition_id=customer.id,
+                on_delete="RESTRICT",
             ),
         )
         await admin_session.commit()
@@ -389,8 +381,7 @@ class TestDropDefinitionForce:
             col = (
                 await admin_session.execute(
                     text(
-                        "SELECT column_name FROM information_schema.columns "
-                        "WHERE table_name = :t AND column_name = :c"
+                        "SELECT column_name FROM information_schema.columns WHERE table_name = :t AND column_name = :c"
                     ),
                     {"t": order_table, "c": rel_name},
                 )
@@ -411,17 +402,13 @@ class TestDropDefinitionForce:
         await admin_session.commit()
 
         # Customer table + catalog row gone.
-        assert (
-            await admin_session.execute(text("SELECT to_regclass(:t)"), {"t": customer_table})
-        ).scalar_one() is None
+        assert (await admin_session.execute(text("SELECT to_regclass(:t)"), {"t": customer_table})).scalar_one() is None
         assert await EntityDefinitionRepository(admin_session, org_id).get(customer_id) is None
         # Referencing FK column dropped from the order table, catalog rel removed.
         assert not await _order_has_fk()
         assert await EntityRelationshipRepository(admin_session, org_id).list_for_source(order_id) == []
 
-    async def test_force_drop_referenced_by_m2m_drops_join_table(
-        self, admin_session: AsyncSession
-    ) -> None:
+    async def test_force_drop_referenced_by_m2m_drops_join_table(self, admin_session: AsyncSession) -> None:
         org = await _make_org(admin_session, "CE-FORCE-M2M")
         await set_tenant(admin_session, str(org.id))
         service = EntityService(admin_session, org.id)
@@ -431,8 +418,10 @@ class TestDropDefinitionForce:
         rel = await service.create_relationship(
             student.id,
             EntityRelationshipCreate(
-                name="Courses", slug="courses",
-                cardinality="many_to_many", target_definition_id=course.id,
+                name="Courses",
+                slug="courses",
+                cardinality="many_to_many",
+                target_definition_id=course.id,
             ),
         )
         await admin_session.commit()
@@ -457,7 +446,8 @@ class TestUpdateValidation:
         await set_tenant(admin_session, str(org.id))
         definition = await EntityService(admin_session, org.id).create_definition(
             EntityDefinitionCreate(
-                name="Widget", slug="widget",
+                name="Widget",
+                slug="widget",
                 fields=[
                     EntityFieldCreate(name="Name", slug="name", field_type="text", is_required=True),
                     EntityFieldCreate(name="Qty", slug="qty", field_type="integer"),
@@ -482,21 +472,21 @@ class TestUpdateValidation:
 
 
 class TestRelationships:
-    async def test_many_to_one_fk_column(
-        self, admin_session: AsyncSession, session: AsyncSession
-    ) -> None:
+    async def test_many_to_one_fk_column(self, admin_session: AsyncSession, session: AsyncSession) -> None:
         org = await _make_org(admin_session, "CE-REL")
         await set_tenant(admin_session, str(org.id))
         service = EntityService(admin_session, org.id)
         customer = await service.create_definition(
             EntityDefinitionCreate(
-                name="Customer", slug="customer",
+                name="Customer",
+                slug="customer",
                 fields=[EntityFieldCreate(name="Name", slug="name", field_type="text")],
             )
         )
         order = await service.create_definition(
             EntityDefinitionCreate(
-                name="Order", slug="order",
+                name="Order",
+                slug="order",
                 fields=[EntityFieldCreate(name="Ref", slug="ref", field_type="text")],
             )
         )
@@ -505,8 +495,11 @@ class TestRelationships:
         rel = await service.create_relationship(
             order.id,
             EntityRelationshipCreate(
-                name="Customer", slug="customer",
-                cardinality="many_to_one", target_definition_id=customer.id, on_delete="CASCADE",
+                name="Customer",
+                slug="customer",
+                cardinality="many_to_one",
+                target_definition_id=customer.id,
+                on_delete="CASCADE",
             ),
         )
         await admin_session.commit()
@@ -514,10 +507,7 @@ class TestRelationships:
         # FK column exists on the order table.
         col = (
             await admin_session.execute(
-                text(
-                    "SELECT column_name FROM information_schema.columns "
-                    "WHERE table_name = :t AND column_name = :c"
-                ),
+                text("SELECT column_name FROM information_schema.columns WHERE table_name = :t AND column_name = :c"),
                 {"t": order.physical_table, "c": rel.physical_name},
             )
         ).scalar_one_or_none()
@@ -541,18 +531,23 @@ class TestRelationships:
         await set_tenant(admin_session, str(org_a.id))
         svc_a = EntityService(admin_session, org_a.id)
         customer = await svc_a.create_definition(
-            EntityDefinitionCreate(name="Customer", slug="customer",
-                                   fields=[EntityFieldCreate(name="Name", slug="name", field_type="text")])
+            EntityDefinitionCreate(
+                name="Customer",
+                slug="customer",
+                fields=[EntityFieldCreate(name="Name", slug="name", field_type="text")],
+            )
         )
         order = await svc_a.create_definition(
-            EntityDefinitionCreate(name="Order", slug="order",
-                                   fields=[EntityFieldCreate(name="Ref", slug="ref", field_type="text")])
+            EntityDefinitionCreate(
+                name="Order", slug="order", fields=[EntityFieldCreate(name="Ref", slug="ref", field_type="text")]
+            )
         )
         await admin_session.commit()
         await svc_a.create_relationship(
             order.id,
-            EntityRelationshipCreate(name="Customer", slug="customer",
-                                     cardinality="many_to_one", target_definition_id=customer.id),
+            EntityRelationshipCreate(
+                name="Customer", slug="customer", cardinality="many_to_one", target_definition_id=customer.id
+            ),
         )
         await admin_session.commit()
 
@@ -561,8 +556,11 @@ class TestRelationships:
         await set_tenant(admin_session, str(org_b.id))
         svc_b = EntityService(admin_session, org_b.id)
         cust_b_def = await svc_b.create_definition(
-            EntityDefinitionCreate(name="Customer", slug="customer",
-                                   fields=[EntityFieldCreate(name="Name", slug="name", field_type="text")])
+            EntityDefinitionCreate(
+                name="Customer",
+                slug="customer",
+                fields=[EntityFieldCreate(name="Name", slug="name", field_type="text")],
+            )
         )
         await admin_session.commit()
         await set_tenant(session, str(org_b.id))
@@ -578,9 +576,7 @@ class TestRelationships:
         with pytest.raises(EntityRecordError):
             await repo_a.create({"ref": "PO", "customer": foreign["id"]})
 
-    async def test_many_to_many_join_table_has_rls(
-        self, admin_session: AsyncSession, session: AsyncSession
-    ) -> None:
+    async def test_many_to_many_join_table_has_rls(self, admin_session: AsyncSession, session: AsyncSession) -> None:
         org = await _make_org(admin_session, "CE-M2M")
         await set_tenant(admin_session, str(org.id))
         service = EntityService(admin_session, org.id)
@@ -591,8 +587,10 @@ class TestRelationships:
         rel = await service.create_relationship(
             student.id,
             EntityRelationshipCreate(
-                name="Courses", slug="courses",
-                cardinality="many_to_many", target_definition_id=course.id,
+                name="Courses",
+                slug="courses",
+                cardinality="many_to_many",
+                target_definition_id=course.id,
             ),
         )
         await admin_session.commit()

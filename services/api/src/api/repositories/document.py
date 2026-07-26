@@ -125,9 +125,7 @@ class DocumentRepository:
         await self._session.flush()
 
         if tag_ids:
-            tag_result = await self._session.execute(
-                select(Tag).where(Tag.id.in_(tag_ids), Tag.org_id == self._org_id)
-            )
+            tag_result = await self._session.execute(select(Tag).where(Tag.id.in_(tag_ids), Tag.org_id == self._org_id))
             doc.tags = list(tag_result.scalars().all())
             await self._session.flush()
 

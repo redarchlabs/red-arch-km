@@ -111,9 +111,7 @@ async def test_cross_org_membership_listing(admin_session: AsyncSession) -> None
     ]
 
 
-async def test_membership_delete_respects_rls(
-    admin_session: AsyncSession, session: AsyncSession
-) -> None:
+async def test_membership_delete_respects_rls(admin_session: AsyncSession, session: AsyncSession) -> None:
     """DELETE via the tenant session only sees the membership under the right GUC."""
     user = _user("deletee")
     org = Org(name=f"Org-Del-{uuid.uuid4().hex[:6]}", permission_number=3)

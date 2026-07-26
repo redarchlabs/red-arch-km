@@ -59,9 +59,7 @@ def validate_definition(
     """
     try:
         raw = (
-            definition
-            if isinstance(definition, WorkflowDefinitionModel)
-            else WorkflowDefinitionModel.parse(definition)
+            definition if isinstance(definition, WorkflowDefinitionModel) else WorkflowDefinitionModel.parse(definition)
         )
     except ValidationError as exc:
         return [Issue("error", "malformed", _fmt_error(err)) for err in exc.errors()] or [
@@ -142,9 +140,7 @@ def _makes_progress(node: WorkflowNode) -> bool:
 def _check_triggers(model: WorkflowDefinitionModel, issues: list[Issue]) -> None:
     triggers = [n for n in model.nodes if n.type == C.NODE_TRIGGER]
     if not triggers:
-        issues.append(
-            Issue("error", "no-trigger", "The workflow has no trigger/start event, so it can never run.")
-        )
+        issues.append(Issue("error", "no-trigger", "The workflow has no trigger/start event, so it can never run."))
     elif len(triggers) > 1:
         issues.append(
             Issue(
@@ -286,17 +282,14 @@ def _check_loops(model: WorkflowDefinitionModel, out_edges, issues: list[Issue])
                 Issue(
                     "warning",
                     "loop-no-progress",
-                    f"Loop through {sorted(scc)} contains no task or wait step and may spin without "
-                    f"making progress.",
+                    f"Loop through {sorted(scc)} contains no task or wait step and may spin without making progress.",
                     node_id=sorted(scc)[0],
                 )
             )
 
 
 def _check_end_presence(model: WorkflowDefinitionModel, issues: list[Issue]) -> None:
-    has_end = any(
-        n.type == C.NODE_EVENT and n.data.get("position") == C.EVENT_END for n in model.nodes
-    )
+    has_end = any(n.type == C.NODE_EVENT and n.data.get("position") == C.EVENT_END for n in model.nodes)
     if not has_end:
         issues.append(
             Issue("warning", "no-end-event", "No explicit end event; add one so the flow's completion reads clearly.")

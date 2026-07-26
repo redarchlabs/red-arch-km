@@ -117,9 +117,7 @@ async def test_http_request_injects_auth_and_captures_response(
 
     monkeypatch.setattr(httpx, "AsyncClient", _FakeClient)
 
-    executor = ActionExecutor(
-        admin_session, webhook_allowlist=("api.example.com",), org_encryption_key=_KEY
-    )
+    executor = ActionExecutor(admin_session, webhook_allowlist=("api.example.com",), org_encryption_key=_KEY)
     result = await executor.execute(
         org_id=org.id,
         action_type="http_request",

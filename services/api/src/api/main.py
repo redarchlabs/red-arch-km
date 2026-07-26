@@ -168,13 +168,9 @@ def create_app() -> FastAPI:
     # ServerErrorMiddleware sits above CORSMiddleware, so an unhandled 500 would
     # otherwise reach the browser without CORS headers (surfacing as a bare
     # "Network Error"). Re-attach them here so cross-origin callers see the 500.
-    app.add_exception_handler(
-        Exception, make_unhandled_exception_handler(settings.cors_origins)
-    )
+    app.add_exception_handler(Exception, make_unhandled_exception_handler(settings.cors_origins))
     # A member writing a workflow-only entity is a 403, not a 500.
-    app.add_exception_handler(
-        RecordAccessError, make_record_access_handler(settings.cors_origins)
-    )
+    app.add_exception_handler(RecordAccessError, make_record_access_handler(settings.cors_origins))
 
     # Observability must be wired here (before startup). Starlette forbids
     # adding middleware once the app enters the lifespan context, and the
@@ -198,9 +194,7 @@ def create_app() -> FastAPI:
     app.include_router(dimensions.router, prefix="/api/dimensions", tags=["dimensions"])
     app.include_router(memberships.router, prefix="/api/memberships", tags=["memberships"])
     app.include_router(attributes.router, prefix="/api/attributes", tags=["attributes"])
-    app.include_router(
-        entity_definitions.router, prefix="/api/entity-definitions", tags=["custom-entities"]
-    )
+    app.include_router(entity_definitions.router, prefix="/api/entity-definitions", tags=["custom-entities"])
     app.include_router(entity_records.router, prefix="/api/entities", tags=["custom-entities"])
     app.include_router(workflows.router, prefix="/api/workflows", tags=["workflows"])
     app.include_router(forms.router, prefix="/api/forms", tags=["forms"])

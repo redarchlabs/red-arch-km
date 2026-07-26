@@ -101,9 +101,7 @@ class WorkflowRepository:
         )
         return list(result.scalars().all())
 
-    async def list_enabled_for_entity(
-        self, entity_definition_id: uuid.UUID
-    ) -> list[tuple[Workflow, WorkflowVersion]]:
+    async def list_enabled_for_entity(self, entity_definition_id: uuid.UUID) -> list[tuple[Workflow, WorkflowVersion]]:
         """Enabled workflows for an entity paired with their published active version."""
         stmt = (
             select(Workflow, WorkflowVersion)
@@ -135,9 +133,7 @@ class WorkflowRepository:
         )
         return bool((await self._session.execute(stmt)).scalar())
 
-    async def create(
-        self, *, name: str, entity_definition_id: uuid.UUID | None, description: str | None
-    ) -> Workflow:
+    async def create(self, *, name: str, entity_definition_id: uuid.UUID | None, description: str | None) -> Workflow:
         wf = Workflow(
             name=name,
             entity_definition_id=entity_definition_id,
@@ -186,9 +182,7 @@ class WorkflowVersionRepository:
 
     async def get(self, version_id: uuid.UUID) -> WorkflowVersion | None:
         result = await self._session.execute(
-            select(WorkflowVersion).where(
-                WorkflowVersion.id == version_id, WorkflowVersion.org_id == self._org_id
-            )
+            select(WorkflowVersion).where(WorkflowVersion.id == version_id, WorkflowVersion.org_id == self._org_id)
         )
         return result.scalar_one_or_none()
 
@@ -561,9 +555,7 @@ class WorkflowConnectionRepository:
 
     async def get_by_name(self, name: str) -> WorkflowConnection | None:
         result = await self._session.execute(
-            select(WorkflowConnection).where(
-                WorkflowConnection.name == name, WorkflowConnection.org_id == self._org_id
-            )
+            select(WorkflowConnection).where(WorkflowConnection.name == name, WorkflowConnection.org_id == self._org_id)
         )
         return result.scalar_one_or_none()
 

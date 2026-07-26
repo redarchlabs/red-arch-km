@@ -23,9 +23,7 @@ class TestEntityFieldCreate:
             EntityFieldCreate(name="Status", slug="status", field_type="picklist")
 
     def test_picklist_with_options_ok(self) -> None:
-        f = EntityFieldCreate(
-            name="Status", slug="status", field_type="picklist", picklist_options=["new", "done"]
-        )
+        f = EntityFieldCreate(name="Status", slug="status", field_type="picklist", picklist_options=["new", "done"])
         assert f.picklist_options == ["new", "done"]
 
     def test_options_rejected_for_non_picklist(self) -> None:
@@ -69,9 +67,7 @@ class TestEntityRelationshipCreate:
 
     def test_bad_cardinality_rejected(self) -> None:
         with pytest.raises(ValidationError):
-            EntityRelationshipCreate(
-                name="X", slug="x", cardinality="one_to_none", target_definition_id=uuid.uuid4()
-            )
+            EntityRelationshipCreate(name="X", slug="x", cardinality="one_to_none", target_definition_id=uuid.uuid4())
 
 
 class TestEntityDefinitionCreate:
