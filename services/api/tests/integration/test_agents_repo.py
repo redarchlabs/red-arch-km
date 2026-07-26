@@ -17,7 +17,7 @@ from api.services.agents.service import (
 )
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from tests.integration.helpers import set_tenant
+from .helpers import set_tenant
 
 pytestmark = pytest.mark.integration
 
@@ -31,7 +31,7 @@ async def _seed_two_orgs(admin_session: AsyncSession) -> tuple[Org, Org]:
 
 
 def _create(name: str, **over) -> AgentCreate:
-    base = dict(name=name, provider="openai", model="gpt-5-mini", kind="operator")
+    base = {"name": name, "provider": "openai", "model": "gpt-5-mini", "kind": "operator"}
     base.update(over)
     return AgentCreate(**base)
 
@@ -80,9 +80,7 @@ class TestAgentServiceValidation:
 
 
 class TestAgentRLS:
-    async def test_rls_hides_other_orgs_agents(
-        self, session: AsyncSession, admin_session: AsyncSession
-    ) -> None:
+    async def test_rls_hides_other_orgs_agents(self, session: AsyncSession, admin_session: AsyncSession) -> None:
         org_a, org_b = await _seed_two_orgs(admin_session)
         admin_session.add_all(
             [
