@@ -19,6 +19,12 @@ interface MarkdownProps {
    * put in the query string. Document text keeps its images.
    */
   stripImages?: boolean;
+  /**
+   * Rewrite the parsed HTML before it is sanitized — used to turn chat citation
+   * markers into links. Runs on parsed output (not the Markdown source) so it
+   * can tell prose from code spans, and its result still goes through DOMPurify.
+   */
+  transformHtml?: (html: string) => string;
 }
 
 /**
@@ -26,9 +32,15 @@ interface MarkdownProps {
  * formatted text (headings, lists, code, tables) instead of the whitespace-
  * flattened index chunks. Output is sanitized with DOMPurify before injection.
  */
-export function Markdown({ content, className, stripImages = false }: MarkdownProps) {
+export function Markdown({
+  content,
+  className,
+  stripImages = false,
+  transformHtml,
+}: MarkdownProps) {
+  const parsed = marked.parse(content, { async: false }) as string;
   const html = DOMPurify.sanitize(
-    marked.parse(content, { async: false }) as string,
+    transformHtml ? transformHtml(parsed) : parsed,
     stripImages ? { FORBID_TAGS: ["img"] } : {},
   );
   return (
