@@ -66,8 +66,13 @@ async def _run_workflow(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any
     )
     try:
         result = await execute_workflow_run(
-            ctx.session, ctx.org_id, wf, version,
-            request=request, actor_user_id=ctx.actor_user_id, settings=ctx.settings,
+            ctx.session,
+            ctx.org_id,
+            wf,
+            version,
+            request=request,
+            actor_user_id=ctx.actor_user_id,
+            settings=ctx.settings,
         )
     except HTTPException as exc:
         return {"error": str(exc.detail)}

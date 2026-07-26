@@ -61,14 +61,10 @@ class TestExplicitDocumentKey:
         """Uniqueness is per-org; brain-api scopes by tenant, so two orgs may
         each own a ``privacy-02-pii`` without colliding."""
         org_a = await _org(session, "DocKeyA")
-        doc_a = await DocumentRepository(session, org_a).create(
-            title="A", text="a", document_key="privacy-02-pii"
-        )
+        doc_a = await DocumentRepository(session, org_a).create(title="A", text="a", document_key="privacy-02-pii")
 
         org_b = await _org(session, "DocKeyB")
-        doc_b = await DocumentRepository(session, org_b).create(
-            title="B", text="b", document_key="privacy-02-pii"
-        )
+        doc_b = await DocumentRepository(session, org_b).create(title="B", text="b", document_key="privacy-02-pii")
 
         assert doc_a.document_key == doc_b.document_key == "privacy-02-pii"
         assert doc_a.id != doc_b.id

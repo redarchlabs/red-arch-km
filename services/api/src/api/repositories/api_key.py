@@ -62,4 +62,3 @@ class ApiKeyRepository:
         self._session.add(api_key)
         await self._session.flush()
         return api_key
-

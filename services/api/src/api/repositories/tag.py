@@ -19,9 +19,7 @@ class TagRepository:
         self._org_id = org_id
 
     async def get(self, tag_id: uuid.UUID) -> Tag | None:
-        result = await self._session.execute(
-            select(Tag).where(Tag.id == tag_id, Tag.org_id == self._org_id)
-        )
+        result = await self._session.execute(select(Tag).where(Tag.id == tag_id, Tag.org_id == self._org_id))
         return result.scalar_one_or_none()
 
     async def list_all(self, *, offset: int = 0, limit: int = 200) -> tuple[list[Tag], int]:

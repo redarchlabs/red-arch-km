@@ -57,9 +57,7 @@ class TestRLSBypass:
         rows = (await session.execute(select(Document))).scalars().all()
         assert rows == []
 
-    async def test_cross_org_read_allowed_with_bypass(
-        self, admin_session: AsyncSession, session: AsyncSession
-    ) -> None:
+    async def test_cross_org_read_allowed_with_bypass(self, admin_session: AsyncSession, session: AsyncSession) -> None:
         """With app.bypass='on' the non-superuser session sees every org's rows."""
         await _seed_two_orgs(admin_session, 9020)
         await set_tenant(session, None)
@@ -94,9 +92,7 @@ class TestRLSBypass:
         with pytest.raises(SQLAlchemyError):
             await session.flush()
 
-    async def test_tenant_scope_holds_with_bypass_off(
-        self, admin_session: AsyncSession, session: AsyncSession
-    ) -> None:
+    async def test_tenant_scope_holds_with_bypass_off(self, admin_session: AsyncSession, session: AsyncSession) -> None:
         """Bypass off + tenant=A → only A's rows, exactly as before the refactor."""
         org_a, _ = await _seed_two_orgs(admin_session, 9050)
         await set_bypass(session, False)

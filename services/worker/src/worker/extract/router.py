@@ -15,9 +15,7 @@ from worker.extract import docx, legacy_doc, openai_vision, tesseract
 logger = logging.getLogger(__name__)
 
 TEXT_EXTENSIONS: frozenset[str] = frozenset({".txt", ".md"})
-IMAGE_EXTENSIONS: frozenset[str] = frozenset(
-    {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".gif", ".webp"}
-)
+IMAGE_EXTENSIONS: frozenset[str] = frozenset({".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".gif", ".webp"})
 PDF_EXTENSION = ".pdf"
 DOCX_EXTENSION = ".docx"
 DOC_EXTENSION = ".doc"

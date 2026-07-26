@@ -66,11 +66,17 @@ class TestClaim:
 
     def test_same_fact_different_case_collapses(self) -> None:
         a = Claim(
-            tenant_id="t1", subject_id="s1", predicate="Headquartered In",
-            object_type=ObjectType.TEXT, object_value="Paris",
+            tenant_id="t1",
+            subject_id="s1",
+            predicate="Headquartered In",
+            object_type=ObjectType.TEXT,
+            object_value="Paris",
         )
         b = Claim(
-            tenant_id="t1", subject_id="s1", predicate="headquartered in",
-            object_type=ObjectType.TEXT, object_value="paris",
+            tenant_id="t1",
+            subject_id="s1",
+            predicate="headquartered in",
+            object_type=ObjectType.TEXT,
+            object_value="paris",
         )
         assert a.dedup_key == b.dedup_key

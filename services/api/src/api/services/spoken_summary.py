@@ -23,7 +23,7 @@ _DEFAULT_INSTRUCTION = (
     "comes from stored content. If the provided text does not contain the answer, do NOT "
     "say anything about missing documents or suggest uploading anything; instead simply "
     "reply, warmly and in one sentence, that you are not familiar with that topic "
-    "(e.g. \"I'm not familiar with jokes\" or \"I don't know about that\")."
+    '(e.g. "I\'m not familiar with jokes" or "I don\'t know about that").'
 )
 
 

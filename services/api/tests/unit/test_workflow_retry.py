@@ -51,7 +51,7 @@ def test_policy_rejects_bad_types() -> None:
 def test_backoff_is_within_full_jitter_bounds() -> None:
     p = RetryPolicy(max_attempts=6, base_delay=2.0, max_delay=1000.0)
     for attempt in range(6):
-        ceiling = min(1000.0, 2.0 * (2 ** attempt))
+        ceiling = min(1000.0, 2.0 * (2**attempt))
         for _ in range(50):
             delay = backoff(attempt, p)
             assert 0.0 <= delay <= ceiling

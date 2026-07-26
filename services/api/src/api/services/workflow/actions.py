@@ -966,9 +966,7 @@ async def _list_all(
     out: list[dict[str, Any]] = []
     cursor: Any = None
     for _ in range(max_pages):
-        rows, cursor = await repo.list(
-            filters=filters, cursor=cursor, limit=page, order_by=order_by, order_dir="asc"
-        )
+        rows, cursor = await repo.list(filters=filters, cursor=cursor, limit=page, order_by=order_by, order_dir="asc")
         out.extend(rows)
         if cursor is None or not rows:
             break
@@ -1048,7 +1046,13 @@ class GradeQuiz:
                 if expected is not None and str(chosen).strip() == str(expected).strip():
                     correct += 1
         score = round(100 * correct / total) if total else 0
-        return {"score": score, "passed": score >= pass_threshold, "correct": correct, "total": total, "answered": answered}
+        return {
+            "score": score,
+            "passed": score >= pass_threshold,
+            "correct": correct,
+            "total": total,
+            "answered": answered,
+        }
 
     def simulate(self, ctx: ActionContext) -> dict[str, Any]:
         # Read-only, but keep the dry run out of the DB for symmetry with get_record.

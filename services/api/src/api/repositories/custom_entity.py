@@ -43,9 +43,7 @@ class EntityDefinitionRepository:
     async def list_all(self, *, offset: int = 0, limit: int = 200) -> tuple[list[EntityDefinition], int]:
         base = select(EntityDefinition).where(EntityDefinition.org_id == self._org_id)
         total = (await self._session.execute(select(func.count()).select_from(base.subquery()))).scalar_one()
-        result = await self._session.execute(
-            base.order_by(EntityDefinition.name).offset(offset).limit(limit)
-        )
+        result = await self._session.execute(base.order_by(EntityDefinition.name).offset(offset).limit(limit))
         return list(result.scalars().all()), total
 
     async def count(self) -> int:

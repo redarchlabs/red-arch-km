@@ -45,9 +45,7 @@ class Settings(BaseSettings):
     # Coarse per-client-IP quota applied BEFORE key resolution, so a flood of
     # invalid/unknown keys can't hammer the auth lookup unbounded. Generous by
     # design (a legitimate high-throughput client behind one IP must not trip it).
-    api_ip_rate_limit_per_minute: int = Field(
-        default=1200, validation_alias="API_IP_RATE_LIMIT_PER_MINUTE"
-    )
+    api_ip_rate_limit_per_minute: int = Field(default=1200, validation_alias="API_IP_RATE_LIMIT_PER_MINUTE")
     # Whether to serve the public API docs (/api/v1/docs).
     # On by default; set false to hide the interactive docs in a hardened deploy.
     api_docs_enabled: bool = Field(default=True, validation_alias="API_DOCS_ENABLED")
@@ -91,12 +89,8 @@ class Settings(BaseSettings):
     # timers auto-bubble a stalled escalation to a human (see services/agents/notify.py).
     agent_max_iterations: int = Field(default=32, validation_alias="AGENT_MAX_ITERATIONS")
     agent_run_concurrency: int = Field(default=4, validation_alias="AGENT_RUN_CONCURRENCY")
-    agent_escalation_timeout_seconds: int = Field(
-        default=2700, validation_alias="AGENT_ESCALATION_TIMEOUT_SECONDS"
-    )
-    agent_supervisor_idle_seconds: int = Field(
-        default=1200, validation_alias="AGENT_SUPERVISOR_IDLE_SECONDS"
-    )
+    agent_escalation_timeout_seconds: int = Field(default=2700, validation_alias="AGENT_ESCALATION_TIMEOUT_SECONDS")
+    agent_supervisor_idle_seconds: int = Field(default=1200, validation_alias="AGENT_SUPERVISOR_IDLE_SECONDS")
     # Default recipient for bubbled escalations/approvals when no org admin email
     # resolves; empty means fall back to the org admins only.
     agent_notify_email: str = Field(default="", validation_alias="AGENT_NOTIFY_EMAIL")
@@ -129,12 +123,8 @@ class Settings(BaseSettings):
     )
     # Batch single-shot generation (batch_generate tool): how often to poll the
     # Anthropic Message Batch and how long to wait before returning a batch id.
-    agent_batch_poll_interval_seconds: int = Field(
-        default=10, validation_alias="AGENT_BATCH_POLL_INTERVAL_SECONDS"
-    )
-    agent_batch_max_wait_seconds: int = Field(
-        default=180, validation_alias="AGENT_BATCH_MAX_WAIT_SECONDS"
-    )
+    agent_batch_poll_interval_seconds: int = Field(default=10, validation_alias="AGENT_BATCH_POLL_INTERVAL_SECONDS")
+    agent_batch_max_wait_seconds: int = Field(default=180, validation_alias="AGENT_BATCH_MAX_WAIT_SECONDS")
 
     # Public base URL of THIS API service — used to build the OAuth redirect URI for
     # the MCP "Connect" flow (the provider redirects the browser back to
@@ -151,26 +141,20 @@ class Settings(BaseSettings):
 
     # Allow-listed webhook hosts for workflow send_webhook actions (SSRF guard).
     # Comma-separated; empty means webhooks are disabled.
-    workflow_webhook_allowlist_raw: str = Field(
-        default="", validation_alias="WORKFLOW_WEBHOOK_ALLOWLIST"
-    )
+    workflow_webhook_allowlist_raw: str = Field(default="", validation_alias="WORKFLOW_WEBHOOK_ALLOWLIST")
 
     # Local hosts the workflow HTTP actions may reach even though they resolve to
     # a private/loopback address — e.g. a robot-control bridge on localhost/LAN.
     # A host listed here passes the allow-list check AND bypasses the private-IP
     # SSRF guard; it is matched EXACTLY against the request host. Comma-separated;
     # empty (default) keeps the strict deny-by-default guard for every host.
-    workflow_trusted_local_hosts_raw: str = Field(
-        default="", validation_alias="WORKFLOW_TRUSTED_LOCAL_HOSTS"
-    )
+    workflow_trusted_local_hosts_raw: str = Field(default="", validation_alias="WORKFLOW_TRUSTED_LOCAL_HOSTS")
 
     # Global kill-switch for the BPMN token engine. When true (default),
     # schema_version-2 workflows (or any using the new node vocabulary) run on the
     # token engine; legacy v1 workflows always run on the walker regardless. Turn
     # off only to pause v2 execution in an emergency.
-    workflow_token_engine_enabled: bool = Field(
-        default=True, validation_alias="WORKFLOW_TOKEN_ENGINE_ENABLED"
-    )
+    workflow_token_engine_enabled: bool = Field(default=True, validation_alias="WORKFLOW_TOKEN_ENGINE_ENABLED")
 
     # Internal API key for service-to-service callbacks (worker → api).
     # Separate from brain_api_key so compromise of one doesn't grant the other.

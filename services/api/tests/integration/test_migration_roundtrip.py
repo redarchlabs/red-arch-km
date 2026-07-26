@@ -126,12 +126,18 @@ async def _seed_source(admin_session: AsyncSession, org: Org) -> None:
     fields_repo = EntityFieldRepository(admin_session, org.id)
     rels_repo = EntityRelationshipRepository(admin_session, org.id)
     company_repo = DynamicEntityRepository(
-        admin_session, org.id, company, await fields_repo.list_for_definition(company.id),
+        admin_session,
+        org.id,
+        company,
+        await fields_repo.list_for_definition(company.id),
         await rels_repo.list_for_source(company.id),
     )
     created_company = await company_repo.create({"name": "Acme"})
     contact_repo = DynamicEntityRepository(
-        admin_session, org.id, contact, await fields_repo.list_for_definition(contact.id),
+        admin_session,
+        org.id,
+        contact,
+        await fields_repo.list_for_definition(contact.id),
         await rels_repo.list_for_source(contact.id),
     )
     await contact_repo.create({"full_name": "Ada", "employer": created_company["id"]})
@@ -194,7 +200,10 @@ async def test_export_import_roundtrip_remaps_references(admin_session: AsyncSes
     # Records: contact's employer FK points at the TARGET company record.
     fields_repo = EntityFieldRepository(admin_session, target.id)
     company_repo = DynamicEntityRepository(
-        admin_session, target.id, tgt_company, await fields_repo.list_for_definition(tgt_company.id),
+        admin_session,
+        target.id,
+        tgt_company,
+        await fields_repo.list_for_definition(tgt_company.id),
         await rels_repo.list_for_source(tgt_company.id),
     )
     companies, _ = await company_repo.list(limit=10)
@@ -202,7 +211,10 @@ async def test_export_import_roundtrip_remaps_references(admin_session: AsyncSes
     tgt_company_record_id = str(companies[0]["id"])
 
     contact_repo = DynamicEntityRepository(
-        admin_session, target.id, tgt_contact, await fields_repo.list_for_definition(tgt_contact.id),
+        admin_session,
+        target.id,
+        tgt_contact,
+        await fields_repo.list_for_definition(tgt_contact.id),
         await rels_repo.list_for_source(tgt_contact.id),
     )
     contacts, _ = await contact_repo.list(limit=10)
@@ -271,9 +283,7 @@ async def test_import_collision_strategies(admin_session: AsyncSession) -> None:
     bundle = await MigrationExporter(admin_session, org.id).export()
 
     # SKIP: existing entities/forms/workflows are left untouched.
-    skip = await MigrationImporter(admin_session, org.id, _settings()).import_bundle(
-        bundle, CollisionStrategy.SKIP
-    )
+    skip = await MigrationImporter(admin_session, org.id, _settings()).import_bundle(bundle, CollisionStrategy.SKIP)
     await admin_session.commit()
     assert skip.resources["entities"].skipped == 2
     assert skip.resources["entities"].created == 0
@@ -282,9 +292,7 @@ async def test_import_collision_strategies(admin_session: AsyncSession) -> None:
     assert len((await defs_repo.list_all(limit=100))[0]) == 2  # no duplicates
 
     # RENAME: a fresh suffixed copy of each entity is created.
-    rename = await MigrationImporter(admin_session, org.id, _settings()).import_bundle(
-        bundle, CollisionStrategy.RENAME
-    )
+    rename = await MigrationImporter(admin_session, org.id, _settings()).import_bundle(bundle, CollisionStrategy.RENAME)
     await admin_session.commit()
     assert rename.errors == [], rename.errors
     assert rename.resources["entities"].renamed == 2

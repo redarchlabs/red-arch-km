@@ -38,9 +38,7 @@ class TestCursorCodec:
 
 
 def _ctx() -> OrgContext:
-    return OrgContext(
-        user=MagicMock(), org_id=uuid.uuid4(), membership=MagicMock(), is_org_admin=True
-    )
+    return OrgContext(user=MagicMock(), org_id=uuid.uuid4(), membership=MagicMock(), is_org_admin=True)
 
 
 def _app() -> FastAPI:
@@ -95,8 +93,10 @@ class TestAggregateEndpoint:
         repo = MagicMock()
         repo.aggregate = AsyncMock(
             return_value={
-                "group_by": ["stage"], "metrics": ["count"],
-                "rows": [{"stage": "won", "count": 2}], "row_count": 1,
+                "group_by": ["stage"],
+                "metrics": ["count"],
+                "rows": [{"stage": "won", "count": 2}],
+                "row_count": 1,
             }
         )
         with patch.object(entity_records, "build_record_repo", AsyncMock(return_value=(repo, MagicMock()))):

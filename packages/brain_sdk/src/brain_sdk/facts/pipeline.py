@@ -134,9 +134,7 @@ class FactIngestPipeline:
                 tenant_id,
                 total_chunks,
             )
-            raise FactIngestError(
-                f"all {total_chunks} chunk(s) failed extraction for document {document_key!r}"
-            )
+            raise FactIngestError(f"all {total_chunks} chunk(s) failed extraction for document {document_key!r}")
 
         counts = self._store.insert_claims(tenant_id, claims)
         counts["claims_extracted"] = len(claims)
@@ -147,9 +145,7 @@ class FactIngestPipeline:
         log("Fact ingest for %s (tenant %s): %s", document_key, tenant_id, counts)
         return counts
 
-    def _safe_extract(
-        self, chunk: Chunk, profile: DocumentProfile | None = None
-    ) -> tuple[list[ClaimCandidate], bool]:
+    def _safe_extract(self, chunk: Chunk, profile: DocumentProfile | None = None) -> tuple[list[ClaimCandidate], bool]:
         """Extract candidates for one chunk. Returns ``(candidates, failed)`` —
         a raised extractor error is swallowed (one bad chunk must not abort the
         doc) but reported via the flag so the caller can track the failure rate."""
@@ -159,9 +155,7 @@ class FactIngestPipeline:
             logger.warning("Extraction failed for chunk %s: %s", chunk.chunk_id, exc)
             return [], True
 
-    def _safe_structured(
-        self, chunk: Chunk, profile: DocumentProfile | None
-    ) -> list[ClaimCandidate]:
+    def _safe_structured(self, chunk: Chunk, profile: DocumentProfile | None) -> list[ClaimCandidate]:
         """Deterministic table/key-value candidates for a chunk (never raises).
 
         Cheap and additive to the LLM pass; a parse failure yields no structured

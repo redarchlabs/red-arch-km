@@ -150,8 +150,6 @@ class TestInheritingDocuments:
         session.add(folder)
         await session.flush()
 
-        doc = await DocumentRepository(session, org.id).create(
-            title="Fresh", text="x", folder_id=folder.id
-        )
+        doc = await DocumentRepository(session, org.id).create(title="Fresh", text="x", folder_id=folder.id)
         assert doc.viewer_permissions_config is None
         assert doc.view_permission_masks == []

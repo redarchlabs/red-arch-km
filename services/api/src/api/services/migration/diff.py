@@ -185,11 +185,7 @@ def _canonicalize(value: Any, lineage_by_id: dict[str, str], *, key: str | None 
     UUIDs to lineage space, so two logically-identical objects in different
     environments canonicalize identically."""
     if isinstance(value, dict):
-        return {
-            k: _canonicalize(v, lineage_by_id, key=k)
-            for k, v in value.items()
-            if k not in _VOLATILE_KEYS
-        }
+        return {k: _canonicalize(v, lineage_by_id, key=k) for k, v in value.items() if k not in _VOLATILE_KEYS}
     if isinstance(value, list):
         return [_canonicalize(v, lineage_by_id, key=key) for v in value]
     if (key in _REMAP_KEYS or key in _FINGERPRINT_REF_KEYS) and isinstance(value, str) and _UUID_RE.match(value):
@@ -272,11 +268,7 @@ def compute_diff(
     ``manage_deletes_for`` limits which resource types report ``deleted`` (target
     objects absent from the source); defaults to all config types. Data types are
     count-only unless ``include_data`` (still not correlated per row here)."""
-    manage = (
-        manage_deletes_for
-        if manage_deletes_for is not None
-        else (frozenset(RESOURCE_ORDER) - DATA_RESOURCE_TYPES)
-    )
+    manage = manage_deletes_for if manage_deletes_for is not None else (frozenset(RESOURCE_ORDER) - DATA_RESOURCE_TYPES)
     src_lineage = _lineage_by_id(source_resources)
     tgt_lineage = _lineage_by_id(target_resources)
 

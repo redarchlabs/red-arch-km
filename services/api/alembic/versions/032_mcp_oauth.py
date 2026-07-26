@@ -37,8 +37,11 @@ def _apply_rls(table: str) -> None:
 
 def _org_col():
     return sa.Column(
-        "org_id", postgresql.UUID(as_uuid=True),
-        sa.ForeignKey("orgs.id", ondelete="CASCADE"), nullable=False, index=True,
+        "org_id",
+        postgresql.UUID(as_uuid=True),
+        sa.ForeignKey("orgs.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
     )
 
 
@@ -60,12 +63,18 @@ def upgrade() -> None:
         "mcp_server_user_tokens",
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
         sa.Column(
-            "mcp_server_id", postgresql.UUID(as_uuid=True),
-            sa.ForeignKey("mcp_servers.id", ondelete="CASCADE"), nullable=False, index=True,
+            "mcp_server_id",
+            postgresql.UUID(as_uuid=True),
+            sa.ForeignKey("mcp_servers.id", ondelete="CASCADE"),
+            nullable=False,
+            index=True,
         ),
         sa.Column(
-            "user_profile_id", postgresql.UUID(as_uuid=True),
-            sa.ForeignKey("user_profiles.id", ondelete="CASCADE"), nullable=False, index=True,
+            "user_profile_id",
+            postgresql.UUID(as_uuid=True),
+            sa.ForeignKey("user_profiles.id", ondelete="CASCADE"),
+            nullable=False,
+            index=True,
         ),
         sa.Column("access_token_encrypted", sa.Text, nullable=True),
         sa.Column("refresh_token_encrypted", sa.Text, nullable=True),
@@ -79,12 +88,17 @@ def upgrade() -> None:
         "mcp_oauth_flows",
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
         sa.Column(
-            "mcp_server_id", postgresql.UUID(as_uuid=True),
-            sa.ForeignKey("mcp_servers.id", ondelete="CASCADE"), nullable=False, index=True,
+            "mcp_server_id",
+            postgresql.UUID(as_uuid=True),
+            sa.ForeignKey("mcp_servers.id", ondelete="CASCADE"),
+            nullable=False,
+            index=True,
         ),
         sa.Column(
-            "user_profile_id", postgresql.UUID(as_uuid=True),
-            sa.ForeignKey("user_profiles.id", ondelete="CASCADE"), nullable=True,
+            "user_profile_id",
+            postgresql.UUID(as_uuid=True),
+            sa.ForeignKey("user_profiles.id", ondelete="CASCADE"),
+            nullable=True,
         ),
         sa.Column("state", sa.String(128), nullable=False, index=True),
         sa.Column("code_verifier", sa.String(256), nullable=False),
@@ -104,7 +118,10 @@ def downgrade() -> None:
             op.execute(f"DROP POLICY IF EXISTS tenant_isolation_{suffix} ON {table}")
         op.drop_table(table)
     for col in (
-        "oauth_token_expires_at", "oauth_refresh_token_encrypted", "oauth_access_token_encrypted",
-        "oauth_client_secret_encrypted", "oauth_identity",
+        "oauth_token_expires_at",
+        "oauth_refresh_token_encrypted",
+        "oauth_access_token_encrypted",
+        "oauth_client_secret_encrypted",
+        "oauth_identity",
     ):
         op.drop_column("mcp_servers", col)

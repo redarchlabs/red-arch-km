@@ -231,9 +231,7 @@ async def list_gaps(
     """Open knowledge gaps — questions the fact store could not answer — ranked
     by how often they recur, so the operator sees the highest-value gaps first."""
     stores.ensure_fact_schema()
-    gaps = await asyncio.to_thread(
-        stores.fact_store.list_open_gaps, tenant_id, limit=max(1, min(limit, 500))
-    )
+    gaps = await asyncio.to_thread(stores.fact_store.list_open_gaps, tenant_id, limit=max(1, min(limit, 500)))
     return {"tenant_id": tenant_id, "gaps": [_gap_dict(g) for g in gaps]}
 
 

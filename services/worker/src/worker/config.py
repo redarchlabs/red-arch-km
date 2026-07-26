@@ -32,21 +32,15 @@ class WorkerSettings(BaseSettings):
     # POLLS for the outcome, so a long background pipeline (a whole book can take
     # tens of minutes) is never gated by a single long-held HTTP request.
     # accept: timeout for the submit + each status poll (both are quick calls).
-    brain_ingest_accept_timeout_seconds: int = Field(
-        default=60, validation_alias="BRAIN_INGEST_ACCEPT_TIMEOUT_SECONDS"
-    )
+    brain_ingest_accept_timeout_seconds: int = Field(default=60, validation_alias="BRAIN_INGEST_ACCEPT_TIMEOUT_SECONDS")
     # poll_interval: seconds between status polls.
-    brain_ingest_poll_interval_seconds: int = Field(
-        default=5, validation_alias="BRAIN_INGEST_POLL_INTERVAL_SECONDS"
-    )
+    brain_ingest_poll_interval_seconds: int = Field(default=5, validation_alias="BRAIN_INGEST_POLL_INTERVAL_SECONDS")
     # max_wait: hard ceiling on total time spent waiting for one ingest before
     # giving up and reporting FAILED (a backstop against a wedged background job).
     # Sized to let a very large document (whole book, full knowledge phase) finish;
     # the Celery task_time_limit (celery_app.py) MUST stay above this + the OCR
     # budget, or the task is killed mid-poll and redelivered in a restart loop.
-    brain_ingest_max_wait_seconds: int = Field(
-        default=14400, validation_alias="BRAIN_INGEST_MAX_WAIT_SECONDS"
-    )
+    brain_ingest_max_wait_seconds: int = Field(default=14400, validation_alias="BRAIN_INGEST_MAX_WAIT_SECONDS")
 
     # Hard cap on PDF pages OCR'd per document — bounds total cost (and, for the
     # AI path, per-page billing). Pages beyond the cap are skipped with a warning

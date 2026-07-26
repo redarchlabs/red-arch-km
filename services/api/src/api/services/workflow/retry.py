@@ -60,9 +60,7 @@ def read_policy(node_data: dict[str, Any] | None) -> RetryPolicy:
     spec = (node_data or {}).get("retry")
     if not isinstance(spec, dict) or not spec:
         return RetryPolicy()
-    max_attempts = _clamp_int(
-        spec.get("max_attempts"), default=_DEFAULT_MAX_ATTEMPTS, low=1, high=_MAX_ATTEMPTS_CAP
-    )
+    max_attempts = _clamp_int(spec.get("max_attempts"), default=_DEFAULT_MAX_ATTEMPTS, low=1, high=_MAX_ATTEMPTS_CAP)
     base_delay = _clamp_float(
         spec.get("base_delay_seconds"), default=_DEFAULT_BASE_DELAY, low=0.0, high=_MAX_DELAY_CAP_SECONDS
     )

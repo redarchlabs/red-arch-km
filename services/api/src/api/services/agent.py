@@ -622,8 +622,7 @@ TOOLS: list[dict[str, Any]] = [
                                 "path": {
                                     "type": "string",
                                     "description": (
-                                        "http_request: path appended to the connection base_url "
-                                        "(alternative to url)."
+                                        "http_request: path appended to the connection base_url (alternative to url)."
                                     ),
                                 },
                                 "method": {
@@ -1655,9 +1654,7 @@ class AgentService:
         key = org_openai_key or settings.openai_api_key.get_secret_value()
         # A self-hosted endpoint (OPENAI_BASE_URL) authenticates nothing, so a missing key
         # is not a reason to go client-less there — see api/services/openai_client.py.
-        self._client = (
-            make_async_openai(settings, key) if key or not api_key_required(settings) else None
-        )
+        self._client = make_async_openai(settings, key) if key or not api_key_required(settings) else None
 
     @asynccontextmanager
     async def _tenant_session(self) -> AsyncGenerator[AsyncSession]:
@@ -2558,7 +2555,7 @@ class AgentService:
                 "Widths: full|half|third|quarter. "
                 "ANY element may carry `visible_when`: a JsonLogic expression over the enclosing "
                 "scope's values (same vocabulary as `calculated`); the element renders only when it "
-                'is truthy (absent = always visible). Use it to gate flow, e.g. show a quiz button '
+                "is truthy (absent = always visible). Use it to gate flow, e.g. show a quiz button "
                 'only when done: {"visible_when": {">=": [{"var": "progress_pct"}, 100]}}, or an '
                 '"Enroll" button only when not enrolled. Hiding never bypasses server-side required-'
                 "field validation, so gate inputs/buttons, not required persisted fields."

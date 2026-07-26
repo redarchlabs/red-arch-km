@@ -114,9 +114,7 @@ class Workflow(Base, UUIDMixin, TimestampMixin, LineageMixin):
         JSONB, default=lambda: {"mode": "org_admin"}, server_default='{"mode": "org_admin"}'
     )
 
-    org_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True
-    )
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True)
     org: Mapped[Org] = relationship()
 
 
@@ -138,9 +136,7 @@ class WorkflowVersion(Base, UUIDMixin, TimestampMixin):
     published_by_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("user_profiles.id", ondelete="SET NULL"), nullable=True
     )
-    org_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True
-    )
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True)
 
 
 class WorkflowOutbox(Base):
@@ -163,9 +159,7 @@ class WorkflowOutbox(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), default=uuid.uuid4)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     seq: Mapped[int] = mapped_column(BigInteger, Identity(always=False))
-    org_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE")
-    )
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"))
     entity_definition_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
     entity_table: Mapped[str] = mapped_column(String(63))
     record_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
@@ -197,9 +191,7 @@ class WorkflowRun(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), default=uuid.uuid4)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    org_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE")
-    )
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"))
     workflow_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
     workflow_version_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
     outbox_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
@@ -222,9 +214,7 @@ class WorkflowRun(Base):
     # Run-scoped variables accumulated across steps; written via jsonb_set under
     # the per-run advisory lock so parallel tokens setting different keys don't
     # clobber. Expression context = {before, after, vars, steps, run, token}.
-    variables: Mapped[dict[str, Any]] = mapped_column(
-        JSONB, default=dict, server_default="{}", nullable=False
-    )
+    variables: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}", nullable=False)
     # Monotonic per-run step counter (allocated under the run advisory lock) —
     # gives deterministic step_index ordering even with concurrent tokens, and
     # bounds a run against MAX_RUN_STEPS regardless of branch fan-out.
@@ -234,9 +224,7 @@ class WorkflowRun(Base):
     parent_token_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     # Set when the run terminated with an uncaught error that exhausted retries
     # and hit no catcher — surfaced in the dead-letter queue for manual replay.
-    dead_letter: Mapped[bool] = mapped_column(
-        Boolean, default=False, server_default=text("false"), nullable=False
-    )
+    dead_letter: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"), nullable=False)
 
 
 class WorkflowRunStep(Base):
@@ -251,9 +239,7 @@ class WorkflowRunStep(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), default=uuid.uuid4)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    org_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE")
-    )
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"))
     run_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
     run_created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     node_id: Mapped[str] = mapped_column(String(64))
@@ -319,9 +305,7 @@ class WorkflowRunToken(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), default=uuid.uuid4)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     seq: Mapped[int] = mapped_column(BigInteger, Identity(always=False))
-    org_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE")
-    )
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"))
     run_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
     run_created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     # The node this token sits at / will execute next.
@@ -370,9 +354,7 @@ class WorkflowConnection(Base, UUIDMixin, TimestampMixin, LineageMixin):
     # Non-secret auth/config: api-key header name, basic username, static headers.
     config: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
 
-    org_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True
-    )
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True)
     org: Mapped[Org] = relationship()
 
 
@@ -396,9 +378,7 @@ class WorkflowInboundEndpoint(Base, UUIDMixin, TimestampMixin, LineageMixin):
     # ⇒ the receiver REQUIRES a valid X-KM2-Signature; NULL ⇒ legacy token-only.
     signing_secret_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    org_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True
-    )
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True)
     org: Mapped[Org] = relationship()
 
 

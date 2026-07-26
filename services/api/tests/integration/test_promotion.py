@@ -54,9 +54,7 @@ async def test_release_lifecycle_promote_and_rollback(admin_session: AsyncSessio
     svc = PromotionService(admin_session, source.id, _settings())
 
     # Register a local-org target + freeze a release.
-    tgt = await svc.create_target(
-        name="Staging", kind=PromotionTargetKind.LOCAL_ORG, target_org_id=target.id
-    )
+    tgt = await svc.create_target(name="Staging", kind=PromotionTargetKind.LOCAL_ORG, target_org_id=target.id)
     release = await svc.create_release(name="R1", description=None, selection=None, created_by_id=None)
     await admin_session.commit()
     assert release.status == "draft"
@@ -130,9 +128,7 @@ async def test_target_cannot_be_source_org(admin_session: AsyncSession) -> None:
     await set_tenant(admin_session, str(source.id))
     svc = PromotionService(admin_session, source.id, _settings())
     with pytest.raises(PromotionError):
-        await svc.create_target(
-            name="Self", kind=PromotionTargetKind.LOCAL_ORG, target_org_id=source.id
-        )
+        await svc.create_target(name="Self", kind=PromotionTargetKind.LOCAL_ORG, target_org_id=source.id)
 
 
 @pytest.mark.asyncio
@@ -148,8 +144,13 @@ async def test_promote_then_change_and_repromote_is_idempotent_by_lineage(admin_
 
     r1 = await _approved_release(svc, admin_session)
     await svc.promote_release(
-        r1.id, tgt.id, strategy=CollisionStrategy.SKIP, apply_deletes=False,
-        allow_data=False, override_inflight=False, promoted_by_id=None,
+        r1.id,
+        tgt.id,
+        strategy=CollisionStrategy.SKIP,
+        apply_deletes=False,
+        allow_data=False,
+        override_inflight=False,
+        promoted_by_id=None,
     )
     tgt_defs = EntityDefinitionRepository(admin_session, target.id)
     count_after_first = len((await tgt_defs.list_all(limit=100))[0])
@@ -162,8 +163,13 @@ async def test_promote_then_change_and_repromote_is_idempotent_by_lineage(admin_
     await svc.approve_release(r2.id, approver_id=None, comment="again")
     await admin_session.commit()
     await svc.promote_release(
-        r2.id, tgt.id, strategy=CollisionStrategy.OVERWRITE, apply_deletes=False,
-        allow_data=False, override_inflight=False, promoted_by_id=None,
+        r2.id,
+        tgt.id,
+        strategy=CollisionStrategy.OVERWRITE,
+        apply_deletes=False,
+        allow_data=False,
+        override_inflight=False,
+        promoted_by_id=None,
     )
     count_after_second = len((await tgt_defs.list_all(limit=100))[0])
     assert count_after_second == count_after_first  # lineage match → no duplicates
@@ -234,8 +240,13 @@ async def test_remote_promote_releases_session_during_network_leg(
     monkeypatch.setattr(transport_mod.OutboundPushClient, "push", fake_push)
 
     promotion, _ = await svc.promote_release(
-        release.id, tgt.id, strategy=CollisionStrategy.OVERWRITE, apply_deletes=False,
-        allow_data=False, override_inflight=False, promoted_by_id=None,
+        release.id,
+        tgt.id,
+        strategy=CollisionStrategy.OVERWRITE,
+        apply_deletes=False,
+        allow_data=False,
+        override_inflight=False,
+        promoted_by_id=None,
     )
 
     assert in_txn_during_push == [False]  # connection released for the push
@@ -269,9 +280,7 @@ async def test_partial_release_does_not_delete_unmanaged_types(admin_session: As
 
     # Preview with apply_deletes on: the target's forms/workflows (absent from this
     # entities-only release) must NOT be flagged for deletion.
-    result = await svc.preview_promotion(
-        release.id, tgt.id, strategy=CollisionStrategy.OVERWRITE, apply_deletes=True
-    )
+    result = await svc.preview_promotion(release.id, tgt.id, strategy=CollisionStrategy.OVERWRITE, apply_deletes=True)
     deleted_types = {r.resource_type for r in result.diff.resources if r.deleted > 0}
     assert "forms" not in deleted_types
     assert "workflows" not in deleted_types

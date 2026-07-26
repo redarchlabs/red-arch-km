@@ -28,9 +28,7 @@ def test_play_view_slug_sanitizes_code():
 
 class TestQuizView:
     def _cfg(self, n=3):
-        questions = [
-            {"prompt": f"Q{i}?", "options": ["A", "B", "C"], "correct_answer": "A"} for i in range(1, n + 1)
-        ]
+        questions = [{"prompt": f"Q{i}?", "options": ["A", "B", "C"], "correct_answer": "A"} for i in range(1, n + 1)]
         return lms_play_views.build_quiz_view_config(
             title="Fire Safety",
             questions=questions,

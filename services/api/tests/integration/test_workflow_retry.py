@@ -40,7 +40,8 @@ async def _seed(admin_session: AsyncSession, definition: dict):
     await set_tenant(admin_session, str(org.id))
     entity = await EntityService(admin_session, org.id).create_definition(
         EntityDefinitionCreate(
-            name="Thing", slug="thing",
+            name="Thing",
+            slug="thing",
             fields=[EntityFieldCreate(name="Title", slug="title", field_type="text")],
         )
     )
@@ -189,9 +190,7 @@ async def test_no_retry_policy_is_legacy_fail_fast(admin_session: AsyncSession) 
 async def test_continue_on_error_swallows_exhausted_failure(admin_session: AsyncSession) -> None:
     """After retries are exhausted, continue_on_error follows the normal out-edge
     (the run completes) instead of failing — and does NOT dead-letter."""
-    definition = _graph(
-        _webhook_task("w", retry={"max_attempts": 2, "base_delay_seconds": 0}, continue_on_error=True)
-    )
+    definition = _graph(_webhook_task("w", retry={"max_attempts": 2, "base_delay_seconds": 0}, continue_on_error=True))
     org, _wf, run = await _seed(admin_session, definition)
     engine = TokenEngine(admin_session)
     await engine.start_run(run, definition)

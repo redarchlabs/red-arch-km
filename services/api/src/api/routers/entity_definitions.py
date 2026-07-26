@@ -55,9 +55,7 @@ def _raise_http(exc: Exception) -> NoReturn:
     raise HTTPException(status_code=code, detail=str(exc)) from exc
 
 
-async def _read_with_fields(
-    session: AsyncSession, org_id: uuid.UUID, definition_id: uuid.UUID
-) -> EntityDefinitionRead:
+async def _read_with_fields(session: AsyncSession, org_id: uuid.UUID, definition_id: uuid.UUID) -> EntityDefinitionRead:
     defs = EntityDefinitionRepository(session, org_id)
     definition = await defs.get(definition_id)
     if definition is None:
@@ -232,5 +230,3 @@ async def create_relationship(
     except EntityError as exc:
         _raise_http(exc)
     return EntityRelationshipRead.model_validate(rel)
-
-

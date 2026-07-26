@@ -28,9 +28,7 @@ FOLDER_ID = uuid.uuid4()
 
 
 def _ctx() -> OrgContext:
-    user = CurrentUser(
-        sub="u", username="u", email="u@x.com", profile_id=uuid.uuid4(), is_site_admin=False
-    )
+    user = CurrentUser(sub="u", username="u", email="u@x.com", profile_id=uuid.uuid4(), is_site_admin=False)
     return OrgContext(user=user, org_id=ORG_ID, membership=MagicMock(), is_org_admin=True)
 
 

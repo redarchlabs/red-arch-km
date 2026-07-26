@@ -43,9 +43,7 @@ async def _make_org(admin_session: AsyncSession, name: str) -> Org:
     return org
 
 
-async def _make_learner_entity(
-    admin_session: AsyncSession, org: Org, *, with_email: bool = True
-) -> uuid.UUID:
+async def _make_learner_entity(admin_session: AsyncSession, org: Org, *, with_email: bool = True) -> uuid.UUID:
     await set_tenant(admin_session, str(org.id))
     fields = [EntityFieldCreate(name="Full name", slug="full_name", field_type="text")]
     if with_email:
@@ -57,9 +55,7 @@ async def _make_learner_entity(
     return definition.id
 
 
-async def _create_record(
-    session: AsyncSession, org: Org, def_id: uuid.UUID, values: dict
-) -> uuid.UUID:
+async def _create_record(session: AsyncSession, org: Org, def_id: uuid.UUID, values: dict) -> uuid.UUID:
     await set_tenant(session, str(org.id))
     definition = await EntityDefinitionRepository(session, org.id).get(def_id)
     assert definition is not None
@@ -69,9 +65,7 @@ async def _create_record(
     return uuid.UUID(str(rec["id"]))
 
 
-async def _make_view(
-    session: AsyncSession, org: Org, def_id: uuid.UUID, elements: list[dict], slug: str
-) -> uuid.UUID:
+async def _make_view(session: AsyncSession, org: Org, def_id: uuid.UUID, elements: list[dict], slug: str) -> uuid.UUID:
     await set_tenant(session, str(org.id))
     view = await ViewService(session, org.id).create_view(
         ViewCreate(
@@ -91,41 +85,33 @@ class TestRenderMeSentinel:
     ) -> None:
         org = await _make_org(admin_session, "VIEW-ME-MATCH")
         def_id = await _make_learner_entity(admin_session, org)
-        await _create_record(
-            session, org, def_id, {"full_name": "Alice", "email": "Alice@Example.COM"}
-        )
+        await _create_record(session, org, def_id, {"full_name": "Alice", "email": "Alice@Example.COM"})
         # A second, unrelated learner must not be picked up.
         await _create_record(session, org, def_id, {"full_name": "Bob", "email": "bob@example.com"})
         view_id = await _make_view(
-            session, org, def_id,
+            session,
+            org,
+            def_id,
             [{"type": "field", "slug": "full_name"}, {"type": "field", "slug": "email"}],
             "my-training",
         )
 
         await set_tenant(session, str(org.id))
         # Caller's email differs only in casing from the stored value.
-        read = await ViewService(session, org.id).render(
-            view_id, None, current_user_email="alice@example.com"
-        )
+        read = await ViewService(session, org.id).render(view_id, None, current_user_email="alice@example.com")
         assert read.root_entity_id == def_id
         # Alice's record was bound, not Bob's — proving a case-insensitive match.
         assert read.values.get("full_name") == "Alice"
         assert read.values.get("email") == "Alice@Example.COM"
 
-    async def test_me_no_match_renders_unbound(
-        self, admin_session: AsyncSession, session: AsyncSession
-    ) -> None:
+    async def test_me_no_match_renders_unbound(self, admin_session: AsyncSession, session: AsyncSession) -> None:
         org = await _make_org(admin_session, "VIEW-ME-NOMATCH")
         def_id = await _make_learner_entity(admin_session, org)
         await _create_record(session, org, def_id, {"full_name": "Alice", "email": "alice@example.com"})
-        view_id = await _make_view(
-            session, org, def_id, [{"type": "field", "slug": "email"}], "my-training-nomatch"
-        )
+        view_id = await _make_view(session, org, def_id, [{"type": "field", "slug": "email"}], "my-training-nomatch")
 
         await set_tenant(session, str(org.id))
-        read = await ViewService(session, org.id).render(
-            view_id, None, current_user_email="nobody@example.com"
-        )
+        read = await ViewService(session, org.id).render(view_id, None, current_user_email="nobody@example.com")
         # No matching record → unbound render (same as record_id=None), no error.
         assert read.root_entity_id == def_id
         assert read.values == {}
@@ -141,9 +127,7 @@ class TestRenderMeSentinel:
         )
 
         await set_tenant(session, str(org.id))
-        read = await ViewService(session, org.id).render(
-            view_id, None, current_user_email="alice@example.com"
-        )
+        read = await ViewService(session, org.id).render(view_id, None, current_user_email="alice@example.com")
         # Entity has no `email` field → unbound render, no error.
         assert read.root_entity_id == def_id
         assert read.values == {}

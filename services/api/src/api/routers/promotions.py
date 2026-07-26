@@ -341,8 +341,7 @@ async def get_release(
     return ReleaseDetail(
         release=ReleaseOut.of(release),
         items=[
-            ReleaseItemOut(object_type=i.object_type, lineage_id=i.lineage_id, natural_key=i.natural_key)
-            for i in items
+            ReleaseItemOut(object_type=i.object_type, lineage_id=i.lineage_id, natural_key=i.natural_key) for i in items
         ],
         approvals=[ApprovalOut.of(a) for a in approvals],
         promotions=[PromotionOut.of(p) for p in promotions],

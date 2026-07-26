@@ -32,7 +32,8 @@ async def _seed(admin_session: AsyncSession, definition: dict, snapshot: dict):
     await set_tenant(admin_session, str(org.id))
     entity = await EntityService(admin_session, org.id).create_definition(
         EntityDefinitionCreate(
-            name="Order", slug="order",
+            name="Order",
+            slug="order",
             fields=[EntityFieldCreate(name="Amount", slug="amount", field_type="integer")],
         )
     )
@@ -46,9 +47,15 @@ async def _seed(admin_session: AsyncSession, definition: dict, snapshot: dict):
     await admin_session.commit()
     await set_tenant(admin_session, str(org.id))
     run = await WorkflowRunRepository(admin_session, org.id).create_run_if_absent(
-        workflow_id=workflow.id, workflow_version_id=version.id, outbox_id=uuid.uuid4(),
-        outbox_seq=None, created_at=datetime.now(UTC), trigger_operation="update",
-        record_id=None, input_snapshot=snapshot, depth=0,
+        workflow_id=workflow.id,
+        workflow_version_id=version.id,
+        outbox_id=uuid.uuid4(),
+        outbox_seq=None,
+        created_at=datetime.now(UTC),
+        trigger_operation="update",
+        record_id=None,
+        input_snapshot=snapshot,
+        depth=0,
     )
     await admin_session.commit()
     return org, workflow, run
@@ -59,19 +66,28 @@ async def test_script_task_computes_variables_and_routes(admin_session: AsyncSes
         "schema_version": 2,
         "nodes": [
             {"id": "start", "type": "trigger", "data": {}},
-            {"id": "calc", "type": "task", "data": {
-                "task_type": "script",
-                "transform": {
-                    "total": {"*": [{"var": "after.amount"}, 2]},
-                    "is_big": {">=": [{"var": "after.amount"}, 100]},
+            {
+                "id": "calc",
+                "type": "task",
+                "data": {
+                    "task_type": "script",
+                    "transform": {
+                        "total": {"*": [{"var": "after.amount"}, 2]},
+                        "is_big": {">=": [{"var": "after.amount"}, 100]},
+                    },
                 },
-            }},
-            {"id": "gw", "type": "gateway",
-             "data": {"gateway_type": "exclusive", "expr": {"var": "vars.is_big"}}},
-            {"id": "big", "type": "task",
-             "data": {"task_type": "service", "action_type": "log", "config": {"message": "big"}}},
-            {"id": "small", "type": "task",
-             "data": {"task_type": "service", "action_type": "log", "config": {"message": "small"}}},
+            },
+            {"id": "gw", "type": "gateway", "data": {"gateway_type": "exclusive", "expr": {"var": "vars.is_big"}}},
+            {
+                "id": "big",
+                "type": "task",
+                "data": {"task_type": "service", "action_type": "log", "config": {"message": "big"}},
+            },
+            {
+                "id": "small",
+                "type": "task",
+                "data": {"task_type": "service", "action_type": "log", "config": {"message": "small"}},
+            },
             {"id": "end", "type": "event", "data": {"position": "end", "event_type": "none"}},
         ],
         "edges": [

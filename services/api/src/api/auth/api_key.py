@@ -182,9 +182,7 @@ async def enforce_api_rate_limit(
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> None:
     """Per-key Redis quota. Sets ``X-RateLimit-*`` headers; 429 when exhausted."""
-    result = await check_rate_limit(
-        redis, f"apikey:{principal.api_key_id}", limit=settings.api_rate_limit_per_minute
-    )
+    result = await check_rate_limit(redis, f"apikey:{principal.api_key_id}", limit=settings.api_rate_limit_per_minute)
     rate_headers = {
         "X-RateLimit-Limit": str(result.limit),
         "X-RateLimit-Remaining": str(result.remaining),

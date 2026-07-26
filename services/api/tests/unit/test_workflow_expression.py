@@ -12,7 +12,10 @@ _CTX = {"before": None, "after": {"amount": 120, "qty": 3}, "vars": {"rate": 2}}
 
 def test_literals_pass_through() -> None:
     assert evaluate_transform({"a": "x", "b": 5, "c": True, "d": None}, _CTX) == {
-        "a": "x", "b": 5, "c": True, "d": None,
+        "a": "x",
+        "b": 5,
+        "c": True,
+        "d": None,
     }
 
 

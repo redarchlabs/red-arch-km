@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import uuid
 from datetime import UTC, datetime, timedelta
-
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -133,9 +132,7 @@ def _heartbeat(age_seconds: float, interval: float = 15) -> str:
 
 
 def _message(task: str, task_id: str = "abc12345def") -> str:
-    return json.dumps(
-        {"headers": {"task": task, "id": task_id, "argsrepr": "()", "kwargsrepr": "{}"}}
-    )
+    return json.dumps({"headers": {"task": task, "id": task_id, "argsrepr": "()", "kwargsrepr": "{}"}})
 
 
 async def test_celery_requires_site_admin() -> None:

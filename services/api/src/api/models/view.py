@@ -34,7 +34,5 @@ class View(Base, UUIDMixin, TimestampMixin, LineageMixin):
     config: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
-    org_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True
-    )
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True)
     org: Mapped[Org] = relationship()

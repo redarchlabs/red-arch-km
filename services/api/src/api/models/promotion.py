@@ -60,9 +60,7 @@ class PromotionTarget(Base, UUIDMixin, TimestampMixin):
 
     __tablename__ = "promotion_targets"
 
-    org_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True
-    )
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True)
     name: Mapped[str] = mapped_column(String(120))
     kind: Mapped[str] = mapped_column(String(20))
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -88,9 +86,7 @@ class Release(Base, UUIDMixin, TimestampMixin):
 
     __tablename__ = "releases"
 
-    org_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True
-    )
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True)
     name: Mapped[str] = mapped_column(String(200))
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(20), default=ReleaseStatus.DRAFT.value)
@@ -114,9 +110,7 @@ class ReleaseItem(Base, UUIDMixin, TimestampMixin):
 
     __tablename__ = "release_items"
 
-    org_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True
-    )
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True)
     release_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("releases.id", ondelete="CASCADE"), index=True
     )
@@ -132,9 +126,7 @@ class ReleaseApproval(Base, UUIDMixin, TimestampMixin):
 
     __tablename__ = "release_approvals"
 
-    org_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True
-    )
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True)
     release_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("releases.id", ondelete="CASCADE"), index=True
     )
@@ -155,12 +147,8 @@ class ReleasePromotion(Base, UUIDMixin, TimestampMixin):
 
     __tablename__ = "release_promotions"
 
-    org_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True
-    )
-    release_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("releases.id", ondelete="CASCADE")
-    )
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True)
+    release_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("releases.id", ondelete="CASCADE"))
     target_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("promotion_targets.id", ondelete="SET NULL"), nullable=True
     )

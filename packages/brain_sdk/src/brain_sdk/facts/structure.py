@@ -72,9 +72,7 @@ def _predicate_for(header: str) -> str:
     return _HEADER_PREDICATES.get(key) or slug_predicate(header) or "has_attribute"
 
 
-def extract_structured(
-    text: str, profile: DocumentProfile | None = None
-) -> list[ClaimCandidate]:
+def extract_structured(text: str, profile: DocumentProfile | None = None) -> list[ClaimCandidate]:
     """Deterministically pull claims from markdown tables in ``text``.
 
     Each data row's first non-empty cell is the subject entity; every other
@@ -121,9 +119,7 @@ def _iter_tables(lines: list[str]) -> list[tuple[list[str], list[list[str]]]]:
     return tables
 
 
-def _claims_from_table(
-    header: list[str], rows: list[list[str]], subject_type: str
-) -> list[ClaimCandidate]:
+def _claims_from_table(header: list[str], rows: list[list[str]], subject_type: str) -> list[ClaimCandidate]:
     if len(header) < 2:
         return []  # need a subject column + at least one attribute column
     claims: list[ClaimCandidate] = []

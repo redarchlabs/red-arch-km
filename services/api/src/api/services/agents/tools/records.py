@@ -131,7 +131,10 @@ LIST_RECORDS = ToolSpec(
         "type": "object",
         "properties": {
             "entity": _ENTITY_PROP,
-            "search": {"type": "string", "description": "Optional case-insensitive substring match across text fields."},
+            "search": {
+                "type": "string",
+                "description": "Optional case-insensitive substring match across text fields.",
+            },
             "order_by": {"type": "string", "description": "Field slug to sort by (default created_at)."},
             "order_dir": {"type": "string", "enum": ["asc", "desc"], "description": "Sort direction (default desc)."},
             "limit": {"type": "integer", "description": f"Max rows to return (<= {_MAX_LIST})."},

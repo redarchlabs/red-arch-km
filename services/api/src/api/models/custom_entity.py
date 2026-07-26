@@ -43,13 +43,9 @@ class EntityDefinition(Base, UUIDMixin, TimestampMixin, LineageMixin):
     # org member, the default) or ``"workflow_only"`` (only the workflow engine +
     # org admins; direct member create/update/delete is rejected). Lets an org make
     # a certification/attempt entity forge-proof from the learner-facing API.
-    write_access: Mapped[str] = mapped_column(
-        String(20), default="member", server_default="member", nullable=False
-    )
+    write_access: Mapped[str] = mapped_column(String(20), default="member", server_default="member", nullable=False)
 
-    org_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True
-    )
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True)
 
     org: Mapped[Org] = relationship()
     fields: Mapped[list[EntityField]] = relationship(
@@ -80,13 +76,9 @@ class EntityField(Base, UUIDMixin, TimestampMixin, LineageMixin):
     # filterable/sortable/groupable by them — only the workflow engine + org admins
     # see it). Lets an org hide a quiz answer key from learners while the grading
     # workflow still reads it.
-    read_access: Mapped[str] = mapped_column(
-        String(20), default="member", server_default="member", nullable=False
-    )
+    read_access: Mapped[str] = mapped_column(String(20), default="member", server_default="member", nullable=False)
 
-    org_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True
-    )
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True)
     entity_definition_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("entity_definitions.id", ondelete="CASCADE"), index=True
     )
@@ -111,9 +103,7 @@ class EntityRelationship(Base, UUIDMixin, TimestampMixin, LineageMixin):
     physical_name: Mapped[str] = mapped_column(String(63))
     is_required: Mapped[bool] = mapped_column(Boolean, default=False)
 
-    org_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True
-    )
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True)
     source_definition_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("entity_definitions.id", ondelete="CASCADE"), index=True
     )

@@ -87,12 +87,19 @@ async def _try_notify_workflow(
         async with session.begin_nested():
             version = await resolve_published_version(session, org_id, wf)
             await execute_workflow_run(
-                session, org_id, wf, version,
+                session,
+                org_id,
+                wf,
+                version,
                 request=ManualRunRequest(
-                    operation="manual", record_id=None, before=None, after=None,
+                    operation="manual",
+                    record_id=None,
+                    before=None,
+                    after=None,
                     inputs={"kind": kind, "title": title, "body": body or ""},
                 ),
-                actor_user_id=None, settings=settings,
+                actor_user_id=None,
+                settings=settings,
             )
         return True
     except Exception:  # noqa: BLE001 - notify fan-out must never fail the run

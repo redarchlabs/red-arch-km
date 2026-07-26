@@ -36,7 +36,8 @@ async def _seed(admin_session: AsyncSession, definition: dict):
     await set_tenant(admin_session, str(org.id))
     entity = await EntityService(admin_session, org.id).create_definition(
         EntityDefinitionCreate(
-            name="Thing", slug="thing",
+            name="Thing",
+            slug="thing",
             fields=[EntityFieldCreate(name="Flag", slug="flag", field_type="boolean")],
         )
     )
@@ -65,8 +66,11 @@ async def _seed(admin_session: AsyncSession, definition: dict):
 
 
 def _log(node_id: str, message: str) -> dict:
-    return {"id": node_id, "type": "task",
-            "data": {"task_type": "service", "action_type": "log", "config": {"message": message}}}
+    return {
+        "id": node_id,
+        "type": "task",
+        "data": {"task_type": "service", "action_type": "log", "config": {"message": message}},
+    }
 
 
 def _split_join_graph(join_type: str) -> dict:
@@ -74,8 +78,7 @@ def _split_join_graph(join_type: str) -> dict:
         "schema_version": 2,
         "nodes": [
             {"id": "start", "type": "trigger", "data": {}},
-            {"id": "split", "type": "gateway",
-             "data": {"gateway_type": "exclusive", "expr": {"var": "after.flag"}}},
+            {"id": "split", "type": "gateway", "data": {"gateway_type": "exclusive", "expr": {"var": "after.flag"}}},
             _log("a", "A"),
             _log("b", "B"),
             {"id": "join", "type": "gateway", "data": {"gateway_type": join_type}},
@@ -112,8 +115,8 @@ async def test_inclusive_join_fires_after_exclusive_split(admin_session: AsyncSe
     await _drive(admin_session, run, definition)
 
     steps = {s.node_id for s in await _steps(admin_session, run)}
-    assert "a" in steps and "b" not in steps   # exclusive picked the true branch
-    assert "after" in steps                     # the OR-join fired with the single token
+    assert "a" in steps and "b" not in steps  # exclusive picked the true branch
+    assert "after" in steps  # the OR-join fired with the single token
     fresh = await WorkflowRunRepository(admin_session, org.id).get(run.id, run.created_at)
     assert fresh.status == "succeeded"
 
@@ -128,4 +131,4 @@ async def test_parallel_join_deadlocks_on_the_same_graph(admin_session: AsyncSes
     steps = {s.node_id for s in await _steps(admin_session, run)}
     assert "a" in steps and "after" not in steps  # blocked at the AND-join
     fresh = await WorkflowRunRepository(admin_session, org.id).get(run.id, run.created_at)
-    assert fresh.status == "waiting"              # parked at the join, not completed
+    assert fresh.status == "waiting"  # parked at the join, not completed
