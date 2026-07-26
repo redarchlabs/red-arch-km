@@ -136,7 +136,17 @@ async def _grant_app_user(engine: AsyncEngine) -> None:
     """
     async with engine.begin() as conn:
         await conn.execute(text("GRANT USAGE ON SCHEMA public TO app_user"))
+        # Custom entities are backed by real tables created at runtime (ce_*), so the
+        # enforcement role needs DDL on the schema. PostgreSQL 15 revoked the implicit
+        # CREATE that PUBLIC used to hold, so on the pinned postgres:18 this must be
+        # granted explicitly or every dynamic-entity test dies with "permission denied
+        # for schema public". Mirrors docker/init-db.sql, which grants it to km_app.
+        await conn.execute(text("GRANT CREATE ON SCHEMA public TO app_user"))
         await conn.execute(text("GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO app_user"))
+        # Those ce_* tables carry `org_id REFERENCES orgs(id)`, and adding a foreign
+        # key requires REFERENCES on the *parent* table — a separate privilege from
+        # the CRUD set above.
+        await conn.execute(text("GRANT REFERENCES ON ALL TABLES IN SCHEMA public TO app_user"))
         await conn.execute(text("GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO app_user"))
 
 
@@ -182,7 +192,13 @@ async def session(engine: AsyncEngine) -> AsyncGenerator[AsyncSession]:
         await session.execute(text("SET ROLE app_user"))
         yield session
         await session.rollback()
+        # RESET ROLE must be COMMITTED. Role changes are transactional, and closing
+        # the session rolls back the transaction this statement runs in — so without
+        # the commit the reset is undone and the connection goes back to the pool
+        # still as app_user. Any later test that picks it up then runs RLS-enforced
+        # with no tenant set, and its reads silently return nothing.
         await session.execute(text("RESET ROLE"))
+        await session.commit()
 
 
 @pytest_asyncio.fixture
@@ -198,6 +214,10 @@ async def admin_session(engine: AsyncEngine) -> AsyncGenerator[AsyncSession]:
     """
     factory = async_sessionmaker(engine, expire_on_commit=False)
     async with factory() as session:
+        # Committed for the same reason as the enforcement fixture's reset, and
+        # because this session commits repeatedly: each commit returns its
+        # connection to the pool, so a later statement may land on a different one.
         await session.execute(text("RESET ROLE"))
+        await session.commit()
         yield session
         await session.rollback()
