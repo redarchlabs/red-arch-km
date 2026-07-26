@@ -230,13 +230,18 @@ class ActionExecutor:
             instruction=opts.get("instruction"),
             # Only streams when the caller is watching this run; the returned
             # summary — and everything downstream of it — is identical either way.
-            on_delta=self._on_delta,
+            on_delta=self._on_delta(opts),
         )
 
-    @property
-    def _on_delta(self) -> Any:
-        """Live-token sink for a watched run, else None (generate normally)."""
-        return self._delta_sink.delta if self._delta_sink is not None else None
+    def _on_delta(self, opts: dict[str, Any]) -> Any:
+        """Live-token sink for a watched run whose NODE opted in, else None.
+
+        Opt-in matters: a chat answer workflow runs several small-LLM steps and
+        only the author-designated one is the answer a viewer should watch.
+        """
+        if not opts.get("stream") or self._delta_sink is None:
+            return None
+        return self._delta_sink.delta
 
     async def _decide(self, org_id: uuid.UUID, opts: dict[str, Any]) -> dict[str, Any]:
         """Constrained-LLM steering for the llm_decide action. Uses the org's OpenAI key
@@ -260,7 +265,7 @@ class ActionExecutor:
             system=opts.get("system"),
             history=opts.get("history"),
             # Streams the spoken 'say' line only — never the internal reason.
-            on_delta=self._on_delta,
+            on_delta=self._on_delta(opts),
         )
 
     async def _grade(self, org_id: uuid.UUID, opts: dict[str, Any]) -> dict[str, Any]:
@@ -308,7 +313,7 @@ class ActionExecutor:
             grounding=str(opts.get("grounding") or ""),
             history=opts.get("history"),
             # Streams the in-character 'reply' only — never the coaching tip.
-            on_delta=self._on_delta,
+            on_delta=self._on_delta(opts),
         )
 
     async def _org_openai_key(self, org_id: uuid.UUID) -> str | None:
