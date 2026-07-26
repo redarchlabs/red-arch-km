@@ -81,7 +81,13 @@ pidfile_of() { echo "$LAB/llama-$1.pid"; }
 # the embedder needs --embeddings and nothing else.
 flags_of() {
   case "$1" in
-    chat)  printf '%s\n' -c 16384 -ngl 99 --cpu-moe --jinja \
+    # -ncmoe 44 keeps the first 44 layers' experts on CPU and puts the last 4 on the
+    # GPU — measured ~12% faster than --cpu-moe (all 48 on CPU) on a RAG-shaped prompt,
+    # at 4.5 GB VRAM instead of 2.8 GB. Do not raise it further on a 6 GB card: -ncmoe 40
+    # fails at startup with "failed to allocate compute pp buffers".
+    # -np 2 rather than the default 4: fewer slots means a larger KV budget each and a
+    # better chance the previous turn's prefix is still cached.
+    chat)  printf '%s\n' -c 16384 -np 2 -ngl 99 -ncmoe "${CHAT_NCMOE:-44}" --jinja \
              --chat-template-kwargs '{"enable_thinking":false}' ;;
     embed) printf '%s\n' --embeddings -ngl 99 ;;
   esac
