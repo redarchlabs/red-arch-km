@@ -12,6 +12,7 @@ and UI run on the host for fast iteration.
 - [Quick start](#quick-start)
 - [Environment files: `.env` vs `.env.host`](#environment-files-env-vs-envhost)
 - [The hybrid dev stack](#the-hybrid-dev-stack)
+- [Running with local models](#running-with-local-models)
 - [Service ports](#service-ports)
 - [Make command reference](#make-command-reference)
 - [Database migrations](#database-migrations)
@@ -144,6 +145,47 @@ the Docker gateway while reaching the **dockerized** brain-api by service name.
 Beat is a separate single-process container so the periodic tasks (the workflow
 outbox sweep every 10s, partition maintenance) fire exactly once regardless of
 worker concurrency — see [Debugging](#debugging) for why beat matters.
+
+## Running with local models
+
+`./run-stack.sh` uses hosted OpenAI. `./run-local.sh` brings up the same stack with
+inference on this machine — no third-party model calls:
+
+```bash
+./run-local.sh          # start everything, fully local
+./run-local.sh verify   # where is every LLM call actually going?
+./run-local.sh stop     # stop the stack and the model servers
+```
+
+It does three things `run-stack.sh` does not: starts two llama.cpp servers
+(`./run-local-llm-stack.sh`), layers `docker/docker-compose.local-llm.yml` over
+brain-api, and exports `OPENAI_BASE_URL` so the host API's workflow actions go local
+too. It edits no config, so `./run-stack.sh` is the way back to hosted OpenAI.
+
+Two servers are required because one llama.cpp process cannot serve both chat and
+embeddings — a chat server answers `/v1/embeddings` with `501`. Weights and the
+llama.cpp build live outside the repo in `$LLM_LAB` (default `~/llm-lab`);
+`./run-local-llm-stack.sh setup` prints the one-time build/download commands.
+
+**`verify` is the one to remember.** Nothing errors when a service quietly falls back
+to OpenAI, so read it rather than assuming:
+
+```
+brain-api  OPENAI_BASE_URL     http://172.22.0.1:8099/v1
+brain-api  EMBEDDING_BASE_URL  http://172.22.0.1:8098/v1
+host api   OPENAI_BASE_URL     http://127.0.0.1:8099/v1
+820f1683-…-chunks   dim=768    points=20
+a9d3d34b-…-chunks   dim=1536   points=88   <-- MISMATCH, re-ingest needed
+```
+
+That mismatch line matters: vector collections are **per-org** and fixed-width, so an
+org indexed against OpenAI (1536) returns nothing useful under a local model (768)
+until re-ingested. Switching embedding models is a migration — see
+[DEPLOYMENT.md](DEPLOYMENT.md#self-hosted-models).
+
+Local inference is markedly slower for bulk work: ingest costs ~5.5 LLM calls per
+chunk (chunk summary + claim extraction), so a large corpus is hours, not minutes.
+Chat/RAG latency is dominated by prompt processing, not generation.
 
 ## Service ports
 
