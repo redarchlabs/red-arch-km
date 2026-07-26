@@ -111,18 +111,47 @@ jobs:
         working-directory: ui
     steps:
       - uses: actions/checkout@v4
+      # Playwright boots the Next dev server, which refuses to start without a
+      # Clerk publishable key, and /login only finishes rendering once Clerk's
+      # browser bundle loads from the instance encoded in that key — so a dummy
+      # value is not enough. Rather than fail every run, the job announces itself
+      # as unconfigured and stops.
+      #
+      # The annotation is deliberate: this job was previously gated behind
+      # lint-and-type-check and sat in "skipped" for months, which is how a
+      # non-collecting test suite and 8 broken tests went unnoticed. A silent
+      # skip is the failure mode being avoided here, so make it loud.
+      #
+      # To enable:  gh variable set CLERK_PUBLISHABLE_KEY --body 'pk_test_...'
+      #             gh secret   set CLERK_SECRET_KEY      --body 'sk_test_...'
+      - name: Check Clerk configuration
+        id: clerk
+        run: |
+          if [ -n "${{ vars.CLERK_PUBLISHABLE_KEY }}" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::warning title=E2E tests did not run::CLERK_PUBLISHABLE_KEY is not configured, so the browser smoke tests were skipped. Set the repo variable to enable them."
+          fi
       - uses: oven-sh/setup-bun@v2
+        if: steps.clerk.outputs.configured == 'true'
         with:
           bun-version: "1.3.11"
-      - run: bun install --frozen-lockfile
+      - if: steps.clerk.outputs.configured == 'true'
+        run: bun install --frozen-lockfile
       - name: Install Playwright browsers
+        if: steps.clerk.outputs.configured == 'true'
         run: bunx playwright install --with-deps
       - name: Run Playwright smoke tests
+        if: steps.clerk.outputs.configured == 'true'
         run: bun run test:e2e
         # Note: E2E_WITH_BACKEND is unset, so test.skip() guards fire correctly
         # BASE_URL is unset, so playwright.config.ts boots the dev server
+        env:
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ vars.CLERK_PUBLISHABLE_KEY }}
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
       - name: Upload Playwright report
-        if: always()
+        if: always() && steps.clerk.outputs.configured == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report
