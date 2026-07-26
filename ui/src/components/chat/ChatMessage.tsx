@@ -69,13 +69,17 @@ function dedupeSources(sources: ChatSource[]): ChatSource[] {
   return [...byKey.values()].map((s, i) => ({ ...s, number: s.number ?? i + 1 }));
 }
 
-/** Citation numbers (`[n]`) that appear in the answer text. */
-function citedNumbers(text: string): Set<number> {
-  const cited = new Set<number>();
+/** Citation numbers (`[n]`) in the answer, in the order they first appear. */
+function citedNumbers(text: string): number[] {
+  const seen = new Set<number>();
+  const order: number[] = [];
   for (const match of text.matchAll(/\[(\d+)\]/g)) {
-    cited.add(Number(match[1]));
+    const n = Number(match[1]);
+    if (seen.has(n)) continue;
+    seen.add(n);
+    order.push(n);
   }
-  return cited;
+  return order;
 }
 
 const CITATION_CLASS =
@@ -85,7 +89,8 @@ const CITATION_CLASS =
 const NON_PROSE = "code, pre, a";
 
 /**
- * Turn `[n]` citation markers into links to the cited passage.
+ * Turn `[n]` citation markers into links to the cited passage, relabelled with
+ * the number the footer shows for that passage.
  *
  * Works on the PARSED document rather than the Markdown source, so an array
  * index in `arr[1]` or the label of a real `[1](https://…)` link is left alone —
@@ -93,7 +98,11 @@ const NON_PROSE = "code, pre, a";
  * matching source stay as plain text. Built with DOM APIs, so href/title values
  * are escaped by the serializer; the result is sanitized by `Markdown`.
  */
-function linkifyCitations(html: string, sources: ChatSource[]): string {
+function linkifyCitations(
+  html: string,
+  sources: ChatSource[],
+  displayNumbers: Map<number, number>,
+): string {
   if (typeof DOMParser === "undefined") return html; // no DOM (SSR): leave as-is
   const byNumber = new Map(sources.map((s) => [s.number, s]));
   const doc = new DOMParser().parseFromString(html, "text/html");
@@ -108,8 +117,10 @@ function linkifyCitations(html: string, sources: ChatSource[]): string {
     const fragment = doc.createDocumentFragment();
     let lastIndex = 0;
     for (const match of node.data.matchAll(/\[(\d+)\]/g)) {
-      const src = byNumber.get(Number(match[1]));
-      if (!src?.document_id || match.index === undefined) continue;
+      const original = Number(match[1]);
+      const src = byNumber.get(original);
+      const display = displayNumbers.get(original);
+      if (!src?.document_id || display === undefined || match.index === undefined) continue;
       if (match.index > lastIndex) {
         fragment.append(doc.createTextNode(node.data.slice(lastIndex, match.index)));
       }
@@ -119,9 +130,9 @@ function linkifyCitations(html: string, sources: ChatSource[]): string {
         "title",
         src.snippet ? `${sourceLabel(src)} — "${src.snippet}"` : sourceLabel(src),
       );
-      anchor.setAttribute("data-citation", match[1]);
+      anchor.setAttribute("data-citation", String(display));
       anchor.setAttribute("class", CITATION_CLASS);
-      anchor.textContent = match[0];
+      anchor.textContent = `[${display}]`;
       fragment.append(anchor);
       lastIndex = match.index + match[0].length;
     }
@@ -143,9 +154,19 @@ export function ChatMessage({ message }: ChatMessageProps) {
   // finished answer carries no usable [n] markers (older persisted messages, or
   // a model that answered without citing), fall back to listing everything
   // retrieved rather than hiding provenance entirely.
-  const cited = citedNumbers(message.content);
-  const citedSources = sources.filter((s) => cited.has(s.number as number));
-  const listedSources = message.streaming || citedSources.length === 0 ? sources : citedSources;
+  // Sources the answer actually cites, in the order it cites them.
+  const citedSources = citedNumbers(message.content)
+    .map((n) => sources.find((s) => s.number === n))
+    .filter((s): s is ChatSource => s !== undefined);
+  const showCitedOnly = !message.streaming && citedSources.length > 0;
+  const listedSources = showCitedOnly ? citedSources : sources;
+  // Renumber the kept passages from 1: the backend numbers everything it
+  // retrieved, so an answer citing retrieved passages 3 and 4 would otherwise
+  // list "[3], [4]" against two sources. Inline markers are relabelled to match.
+  // Numbering is left alone mid-stream, where the set is still changing.
+  const displayNumbers = new Map(
+    listedSources.map((s, i) => [s.number as number, showCitedOnly ? i + 1 : (s.number as number)]),
+  );
   const awaitingFirstToken = !isUser && !!message.streaming && message.content.trim() === "";
 
   return (
@@ -171,7 +192,7 @@ export function ChatMessage({ message }: ChatMessageProps) {
             <Markdown
               content={message.content}
               stripImages
-              transformHtml={(html) => linkifyCitations(html, sources)}
+              transformHtml={(html) => linkifyCitations(html, sources, displayNumbers)}
             />
             {message.streaming ? (
               <span
@@ -206,7 +227,9 @@ export function ChatMessage({ message }: ChatMessageProps) {
                     href={passageHref(src)}
                     className="inline-flex items-baseline gap-1.5 text-muted-foreground hover:text-foreground hover:underline"
                   >
-                    <span className="font-medium text-primary">[{src.number}]</span>
+                    <span className="font-medium text-primary">
+                      [{displayNumbers.get(src.number as number) ?? src.number}]
+                    </span>
                     <span>{sourceLabel(src)}</span>
                   </Link>
                   {src.snippet ? (
