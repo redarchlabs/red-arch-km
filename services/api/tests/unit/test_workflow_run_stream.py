@@ -217,14 +217,22 @@ class TestRunnerWiring:
 
     @pytest.mark.asyncio
     async def test_summarize_passes_no_sink_without_a_watcher(self, monkeypatch) -> None:
-        captured = await self._summarize_with(monkeypatch, delta_sink=None)
+        captured = await self._summarize_with(monkeypatch, delta_sink=None, stream=True)
         assert captured["on_delta"] is None
 
     @pytest.mark.asyncio
     async def test_summarize_passes_the_publisher_delta_when_watched(self, monkeypatch) -> None:
         publisher = RunStreamPublisher(_FakeRedis(), uuid.uuid4(), str(uuid.uuid4()))
-        captured = await self._summarize_with(monkeypatch, delta_sink=publisher)
+        captured = await self._summarize_with(monkeypatch, delta_sink=publisher, stream=True)
         assert captured["on_delta"] == publisher.delta
+
+    @pytest.mark.asyncio
+    async def test_a_node_that_did_not_opt_in_never_streams(self, monkeypatch) -> None:
+        """A chat workflow's internal steps (condensing a follow-up into a search
+        query, a not-found line) must not paint themselves into the viewer's chat."""
+        publisher = RunStreamPublisher(_FakeRedis(), uuid.uuid4(), str(uuid.uuid4()))
+        captured = await self._summarize_with(monkeypatch, delta_sink=publisher, stream=False)
+        assert captured["on_delta"] is None
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -255,10 +263,13 @@ class TestRunnerWiring:
         executor = ActionExecutor(None, settings=_StubSettings(), delta_sink=publisher)  # type: ignore[arg-type]
         monkeypatch.setattr(executor, "_org_openai_key", lambda org_id: _none())
 
-        await getattr(executor, method)(uuid.uuid4(), {})
+        await getattr(executor, method)(uuid.uuid4(), {"stream": True})
         assert captured["on_delta"] == publisher.delta
 
-    async def _summarize_with(self, monkeypatch, *, delta_sink) -> dict:
+        await getattr(executor, method)(uuid.uuid4(), {})  # no opt-in
+        assert captured["on_delta"] is None
+
+    async def _summarize_with(self, monkeypatch, *, delta_sink, stream: bool) -> dict:
         from api.services import spoken_summary
         from api.services.workflow.runner import ActionExecutor
 
@@ -275,7 +286,7 @@ class TestRunnerWiring:
 
         executor = ActionExecutor(None, settings=_StubSettings(), delta_sink=delta_sink)  # type: ignore[arg-type]
         monkeypatch.setattr(executor, "_org_openai_key", lambda org_id: _none())
-        await executor._summarize(uuid.uuid4(), {"text": "some text"})
+        await executor._summarize(uuid.uuid4(), {"text": "some text", "stream": stream})
         return captured
 
 
