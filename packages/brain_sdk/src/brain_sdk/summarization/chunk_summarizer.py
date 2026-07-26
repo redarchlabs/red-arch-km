@@ -18,6 +18,8 @@ from typing import Any, TypedDict
 
 from openai import OpenAI
 
+from brain_sdk.embedding.openai_provider import _clean_base_url
+
 logger = logging.getLogger(__name__)
 
 
@@ -61,8 +63,12 @@ class ChunkSummarizer:
         max_depth: int = 5,
         chunk_summary_max_tokens: int = 300,
         group_summary_max_tokens: int = 600,
+        base_url: str | None = None,
     ) -> None:
-        self._client = OpenAI(api_key=api_key)
+        # Explicit base_url, never inherited. Omitting it lets the OpenAI SDK read the
+        # OPENAI_BASE_URL environment variable, which makes "where does this call go?"
+        # depend on process environment rather than on configuration we can see.
+        self._client = OpenAI(api_key=api_key, base_url=_clean_base_url(base_url))
         self._model = model
         self._max_workers = max_workers
         self._group_size = group_size

@@ -8,6 +8,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Self-hosted inference: chat and embeddings on your own hardware
+
+- **`OPENAI_BASE_URL` / `EMBEDDING_BASE_URL` / `EMBEDDING_DIMENSION`** — point KM2 at any
+  OpenAI-compatible server (llama.cpp, vLLM, Ollama). Empty defaults preserve hosted-OpenAI
+  behaviour exactly. Chat and embeddings are **separate** settings because one llama.cpp process
+  cannot serve both: a chat server answers `/v1/embeddings` with
+  `501 This server does not support embeddings`.
+- **`base_url` is now passed explicitly at every client construction**
+  (`api/services/openai_client.py`, `brain_api/openai_client.py`,
+  `brain_sdk/embedding/openai_provider.py`, `ChunkSummarizer`, `TripletExtractor`). The OpenAI SDK
+  falls back to the `OPENAI_BASE_URL` *environment variable* when the argument is omitted, so a
+  variable intended to redirect chat silently captured embeddings and broke every document ingest.
+  Regression test: `services/brain_api/tests/unit/test_embedding_endpoint.py`.
+- **`OpenAIEmbeddingProvider` refuses to guess a dimension** for a self-hosted model. Guessing builds
+  the vector store at the wrong width, which corrupts retrieval instead of raising.
+- **`./run-local.sh`** — one command for a fully local stack, with `verify` reporting where every
+  service currently sends its calls and flagging vector collections whose stored width no longer
+  matches the active embedding model. **`./run-local-llm-stack.sh`** manages the two model servers.
+  `run-stack.sh` gains one optional variable (`KM2_COMPOSE_OVERRIDE`); its default behaviour is
+  unchanged and it remains the way back to hosted OpenAI.
+- **Docs** — [ARCHITECTURE.md §9](docs/ARCHITECTURE.md), [DEPLOYMENT.md](docs/DEPLOYMENT.md)
+  (Self-hosted models), [DEVELOPMENT.md](docs/DEVELOPMENT.md) (Running with local models),
+  [KNOWLEDGE_ENGINE.md](docs/KNOWLEDGE_ENGINE.md).
+
+> **Changing the embedding model is a migration, not a config flip.** Qdrant collections and the
+> Neo4j `entity_embedding` index are created at a fixed width and are per-org; switching means
+> dropping both and re-ingesting. The Neo4j index uses `CREATE VECTOR INDEX … IF NOT EXISTS`, so it
+> is not re-dimensioned by a config change — drop it explicitly and confirm with `SHOW INDEXES`.
+> Clerk and OpenAI vision OCR remain external.
+
 ### Added — Agent LLM layer: prompt caching, web grounding, batch generation
 
 - **Anthropic prompt caching** (`services/agents/llm/caching.py`) — applied automatically inside the

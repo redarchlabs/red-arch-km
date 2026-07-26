@@ -27,6 +27,24 @@ _DEFAULT_INSTRUCTION = (
 )
 
 
+def _reasoning_effort_for(model: str) -> str | None:
+    """Cheapest reasoning tier for ``model``, or None if it rejects the parameter.
+
+    Reasoning models (gpt-5 family, o-series) default to medium effort and can spend
+    20s+ of hidden reasoning tokens on a one-sentence condensation, so pin the lowest
+    tier. The o-series has no "minimal"; gpt-5-chat-* and non-reasoning models reject
+    ``reasoning_effort`` outright.
+    """
+    name = model.lower()
+    if name.startswith("gpt-5-chat"):
+        return None
+    if name.startswith("gpt-5"):
+        return "minimal"
+    if name.startswith(("o1", "o3", "o4")):
+        return "low"
+    return None
+
+
 async def summarize_for_speech(
     client: Any,
     model: str,
@@ -44,9 +62,13 @@ async def summarize_for_speech(
     """
     system = (instruction or _DEFAULT_INSTRUCTION) + f" Keep it to at most {max_words} words."
     user = text if not question else f"Question: {question}\n\nText to condense into a spoken reply:\n{text}"
-    response = await client.chat.completions.create(
-        model=model,
-        messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
-    )
+    kwargs: dict[str, Any] = {
+        "model": model,
+        "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+    }
+    effort = _reasoning_effort_for(model)
+    if effort is not None:
+        kwargs["reasoning_effort"] = effort
+    response = await client.chat.completions.create(**kwargs)
     spoken = (response.choices[0].message.content or "").strip()
     return spoken or text.strip()

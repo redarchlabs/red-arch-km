@@ -36,6 +36,11 @@ for arg in "$@"; do
   esac
 done
 
+# Optional extra compose layer, set by ./run-local.sh to redirect brain-api at locally
+# hosted models. Empty by default, so a plain run of this script is unchanged.
+COMPOSE_OVERRIDE=()
+[ -n "${KM2_COMPOSE_OVERRIDE:-}" ] && COMPOSE_OVERRIDE=(-f "$KM2_COMPOSE_OVERRIDE")
+
 say() { printf '\033[1;36m[stack]\033[0m %s\n' "$*"; }
 
 api_up() { curl -sf -m 2 http://localhost:8000/healthz >/dev/null 2>&1; }
@@ -116,14 +121,14 @@ make migrate
 # already-created km2_worker_fixed / km2_beat / km2_brain_api containers.
 if [ "$REBUILD" = "1" ]; then
   say "rebuilding brain-api + worker images from source…"
-  docker compose --env-file .env -f docker/docker-compose.yml build brain-api worker
+  docker compose --env-file .env -f docker/docker-compose.yml "${COMPOSE_OVERRIDE[@]}" build brain-api worker
   say "removing app containers so they recreate from the fresh image…"
   docker rm -f km2_worker_fixed km2_beat km2_brain_api 2>/dev/null || true
 fi
 
 # --- 2. brain-api (python, RAG) ----------------------------------------------
 say "brain-api…"
-docker compose --env-file .env -f docker/docker-compose.yml up -d --no-deps brain-api
+docker compose --env-file .env -f docker/docker-compose.yml "${COMPOSE_OVERRIDE[@]}" up -d --no-deps --force-recreate brain-api
 
 # --- 3. celery worker ---------------------------------------------------------
 # Custom container: the compose service's URLs point at the wrong hosts for

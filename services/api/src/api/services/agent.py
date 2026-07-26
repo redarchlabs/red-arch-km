@@ -17,7 +17,6 @@ from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
 from fastapi import HTTPException
-from openai import AsyncOpenAI
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -42,6 +41,7 @@ from api.services.brain_client import BrainAPIClient
 from api.services.course_generation import CourseGenerationService
 from api.services.entity_service import EntityError, EntityService
 from api.services.llm_generate_course import generate_course_blueprint
+from api.services.openai_client import api_key_required, make_async_openai
 from api.services.workflow.service import WorkflowError, WorkflowService
 
 logger = logging.getLogger(__name__)
@@ -1653,7 +1653,11 @@ class AgentService:
         # tools) is treated as admin, preserving the prior admin-only behaviour.
         self._ctx = org_context
         key = org_openai_key or settings.openai_api_key.get_secret_value()
-        self._client = AsyncOpenAI(api_key=key) if key else None
+        # A self-hosted endpoint (OPENAI_BASE_URL) authenticates nothing, so a missing key
+        # is not a reason to go client-less there — see api/services/openai_client.py.
+        self._client = (
+            make_async_openai(settings, key) if key or not api_key_required(settings) else None
+        )
 
     @asynccontextmanager
     async def _tenant_session(self) -> AsyncGenerator[AsyncSession]:
