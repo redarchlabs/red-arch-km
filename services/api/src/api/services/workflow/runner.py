@@ -230,8 +230,13 @@ class ActionExecutor:
             instruction=opts.get("instruction"),
             # Only streams when the caller is watching this run; the returned
             # summary — and everything downstream of it — is identical either way.
-            on_delta=self._delta_sink.delta if self._delta_sink is not None else None,
+            on_delta=self._on_delta,
         )
+
+    @property
+    def _on_delta(self) -> Any:
+        """Live-token sink for a watched run, else None (generate normally)."""
+        return self._delta_sink.delta if self._delta_sink is not None else None
 
     async def _decide(self, org_id: uuid.UUID, opts: dict[str, Any]) -> dict[str, Any]:
         """Constrained-LLM steering for the llm_decide action. Uses the org's OpenAI key
@@ -254,6 +259,8 @@ class ActionExecutor:
             moods=list(opts.get("moods") or []),
             system=opts.get("system"),
             history=opts.get("history"),
+            # Streams the spoken 'say' line only — never the internal reason.
+            on_delta=self._on_delta,
         )
 
     async def _grade(self, org_id: uuid.UUID, opts: dict[str, Any]) -> dict[str, Any]:
@@ -300,6 +307,8 @@ class ActionExecutor:
             objective=str(opts.get("objective") or ""),
             grounding=str(opts.get("grounding") or ""),
             history=opts.get("history"),
+            # Streams the in-character 'reply' only — never the coaching tip.
+            on_delta=self._on_delta,
         )
 
     async def _org_openai_key(self, org_id: uuid.UUID) -> str | None:
