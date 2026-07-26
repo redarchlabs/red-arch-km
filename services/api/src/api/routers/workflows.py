@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import uuid
 from collections.abc import AsyncGenerator
 from typing import Annotated, Any, NoReturn
@@ -21,7 +22,7 @@ from api import db_scope
 from api.auth.dependencies import OrgContext, require_org_access, require_org_admin
 from api.config import Settings, get_settings
 from api.db import get_session_factory
-from api.dependencies import get_db
+from api.dependencies import get_db, get_redis_client
 from api.repositories.workflow import (
     WorkflowConnectionRepository,
     WorkflowInboundEndpointRepository,
@@ -60,8 +61,10 @@ from api.services.workflow.service import (
     WorkflowNotFoundError,
     WorkflowService,
 )
+from api.services.workflow.stream import channel_for, is_valid_token, sse_frames
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 # Keyed by the base Exception type — see the note in routers/entity_definitions.py.
 _ERROR_STATUS: dict[type[Exception], int] = {
@@ -586,6 +589,33 @@ async def _run_stream_snapshot(session: AsyncSession, org_id: uuid.UUID, run_id:
             if t.status in ("active", "running", "waiting")
         ],
     }
+
+
+@router.get("/runs/live/{stream_token}")
+async def stream_run_tokens(
+    stream_token: str,
+    ctx: Annotated[OrgContext, Depends(require_org_access)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> StreamingResponse:
+    """Server-Sent Events stream of an LLM step's tokens as a run generates them.
+
+    A workflow-driven chat mints a ``stream_token``, subscribes HERE, and only then
+    fires the run with the same token — so the answer paints while it is being
+    written instead of appearing whole when the run ends.
+
+    The channel embeds the caller's OWN org (``wf:stream:{org}:{token}``), so a
+    token belonging to another org resolves to a channel this caller never reads.
+    The stream is a preview: the run still writes its reply record, which stays the
+    source of truth, and a dropped stream degrades to the client's normal polling.
+    """
+    if not is_valid_token(stream_token):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="invalid stream token")
+
+    return StreamingResponse(
+        sse_frames(get_redis_client(settings), channel_for(ctx.org_id, stream_token)),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.get("/runs/{run_id}/stream")

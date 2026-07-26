@@ -26,6 +26,82 @@ export type RunStreamEvent =
   | { type: "done" }
   | { type: "error"; detail: string };
 
+/** One frame from a run's live ANSWER stream (an LLM step's tokens). */
+export type RunTokenEvent =
+  | { type: "delta"; text: string }
+  | { type: "done" }
+  | { type: "error"; detail: string };
+
+/**
+ * Consume an LLM step's tokens as a workflow run generates them
+ * (GET /workflows/runs/live/{streamToken}).
+ *
+ * Mint a token, START THIS FIRST, then pass the same token to `runWorkflow` as
+ * `stream_token`: the run publishes into a channel scoped to the caller's org,
+ * and pub/sub drops anything sent while nobody is listening.
+ *
+ * This is a preview of an answer the run will also save as a record — the record
+ * remains the source of truth, so a caller that never starts this (or whose
+ * stream drops) simply sees the answer when the run finishes.
+ */
+export async function* streamRunTokens(
+  streamToken: string,
+  options: { signal?: AbortSignal } = {},
+): AsyncGenerator<RunTokenEvent> {
+  const baseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
+  const orgId = typeof window !== "undefined" ? localStorage.getItem("redarch:currentOrgId") : null;
+  const token = await getToken();
+
+  const response = await fetch(`${baseUrl}/workflows/runs/live/${streamToken}`, {
+    method: "GET",
+    headers: {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(orgId ? { "X-Org-ID": orgId } : {}),
+    },
+    signal: options.signal,
+  });
+  if (!response.ok || !response.body) {
+    throw new Error(`Answer stream failed: ${response.status}`);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const frames = buffer.split("\n\n");
+      buffer = frames.pop() ?? "";
+      for (const raw of frames) {
+        const frame = parseSseFrame(raw); // null for keepalive comments
+        if (!frame) continue;
+        if (frame.event === "delta") {
+          try {
+            const text = String((JSON.parse(frame.data) as { text?: unknown }).text ?? "");
+            if (text) yield { type: "delta", text };
+          } catch {
+            // Skip a malformed frame rather than tearing down the stream.
+          }
+        } else if (frame.event === "done") {
+          yield { type: "done" };
+          return;
+        } else if (frame.event === "error") {
+          yield { type: "error", detail: frame.data };
+          return;
+        }
+      }
+    }
+  } finally {
+    try {
+      await reader.cancel();
+    } catch {
+      // Reader may already be released.
+    }
+  }
+}
+
 /**
  * Consume the run-state SSE stream (GET /workflows/runs/{runId}/stream). Yields a
  * `snapshot` per state change, then `done` when the run finishes. Mirrors the
