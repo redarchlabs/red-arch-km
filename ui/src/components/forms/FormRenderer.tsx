@@ -606,6 +606,9 @@ function ChatNode({ el, preview }: { el: ChatElement; preview: boolean }) {
   // truth, so if the stream fails the chat behaves exactly as it did before.
   const [liveAnswer, setLiveAnswer] = useState("");
   const streamAbortRef = useRef<AbortController | null>(null);
+  // The running poll's tick, so a finished answer can be fetched the instant the
+  // run says it's done instead of waiting out the rest of the interval.
+  const pollNowRef = useRef<(() => Promise<void>) | null>(null);
   // Always-on voice self-echo control: `speakingUntil` is a timestamp the mic
   // stays paused until (≈ how long the robot's reply takes to speak aloud), and
   // `lastRobotSpokenRef` holds the robot's last reply so a bleed-through can be
@@ -702,10 +705,12 @@ function ChatNode({ el, preview }: { el: ChatElement; preview: boolean }) {
         /* transient; keep the last good render */
       }
     };
+    pollNowRef.current = tick;
     void tick();
     const id = window.setInterval(tick, pollMs);
     return () => {
       alive = false;
+      pollNowRef.current = null;
       window.clearInterval(id);
     };
   }, [msgEntity, relSlug, roleField, textField, conversationId, pollMs, preview]);
@@ -800,6 +805,9 @@ function ChatNode({ el, preview }: { el: ChatElement; preview: boolean }) {
           if (event.type === "delta" && event.text) {
             setLiveAnswer((prev) => prev + event.text);
           } else if (event.type === "done" || event.type === "error") {
+            // The run has finished writing the reply — go get it now rather than
+            // leaving the answer on screen as a preview for another poll cycle.
+            void pollNowRef.current?.();
             return;
           }
         }
