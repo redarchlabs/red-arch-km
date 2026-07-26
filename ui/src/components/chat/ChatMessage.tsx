@@ -68,6 +68,15 @@ function dedupeSources(sources: ChatSource[]): ChatSource[] {
   return [...byKey.values()].map((s, i) => ({ ...s, number: s.number ?? i + 1 }));
 }
 
+/** Citation numbers (`[n]`) that appear in the answer text. */
+function citedNumbers(text: string): Set<number> {
+  const cited = new Set<number>();
+  for (const match of text.matchAll(/\[(\d+)\]/g)) {
+    cited.add(Number(match[1]));
+  }
+  return cited;
+}
+
 /**
  * Render answer text, turning inline `[n]` citation markers into links to the
  * matching source document. Segments between markers are plain (React-escaped)
@@ -115,6 +124,13 @@ function renderWithCitations(text: string, sources: ChatSource[]): React.ReactNo
 export function ChatMessage({ message }: ChatMessageProps) {
   const isUser = message.role === "user";
   const sources = !isUser && message.sources ? dedupeSources(message.sources) : [];
+  // The Sources footer lists only passages the answer actually cites. When the
+  // answer carries no usable [n] markers (older messages, or a model that
+  // answered without citing), fall back to listing everything retrieved rather
+  // than hiding provenance entirely.
+  const cited = citedNumbers(message.content);
+  const citedSources = sources.filter((s) => s.number != null && cited.has(s.number));
+  const listedSources = citedSources.length > 0 ? citedSources : sources;
 
   return (
     <div className={cn("flex", isUser ? "justify-end" : "justify-start")}>
@@ -145,11 +161,11 @@ export function ChatMessage({ message }: ChatMessageProps) {
           <AgentTrace steps={message.agentTrace} live={message.streaming} />
         ) : null}
 
-        {sources.length > 0 ? (
+        {listedSources.length > 0 ? (
           <div className="mt-3 border-t pt-2">
             <p className="mb-1 text-xs font-medium text-muted-foreground">Sources</p>
             <ol className="space-y-1.5">
-              {sources.map((src) => (
+              {listedSources.map((src) => (
                 <li
                   key={`${src.document_id || src.document_key}-${src.chunk_order ?? src.number}`}
                   className="text-xs"
