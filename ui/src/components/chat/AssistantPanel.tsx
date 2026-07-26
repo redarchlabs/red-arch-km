@@ -4,6 +4,7 @@ import { Bot, CheckCircle2, Send, Sparkles, Wrench, XCircle } from "lucide-react
 import { useEffect, useRef, useState } from "react";
 
 import { Markdown } from "@/components/common/Markdown";
+import { ThinkingIndicator } from "@/components/chat/ThinkingIndicator";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { ACTION_LABELS } from "@/components/workflows/actionTypes";
@@ -104,6 +105,14 @@ export function AssistantPanel() {
         ) : (
           blocks.map((block, i) => <BlockView key={i} block={block} />)
         )}
+        {/* The reply may open with a tool call rather than text — keep the wait
+            visible until something actually renders. */}
+        {streaming && !hasVisibleReply(blocks) ? (
+          <div className="flex gap-2">
+            <Bot className="mt-1 h-4 w-4 shrink-0 text-muted-foreground" />
+            <ThinkingIndicator label="Thinking…" />
+          </div>
+        ) : null}
       </div>
 
       {error ? (
@@ -183,6 +192,18 @@ function appendAssistant(blocks: Block[], text: string): Block[] {
   return [...blocks, { kind: "assistant", text }];
 }
 
+/**
+ * Whether anything from the current reply is already on screen — an assistant
+ * block with text, or any tool card. A trailing user block means the reply
+ * hasn't produced anything yet.
+ */
+function hasVisibleReply(blocks: Block[]): boolean {
+  const last = blocks[blocks.length - 1];
+  if (!last) return false;
+  if (last.kind === "tool") return true;
+  return last.kind === "assistant" && last.text.length > 0;
+}
+
 function BlockView({ block }: { block: Block }) {
   if (block.kind === "user") {
     return (
@@ -199,7 +220,7 @@ function BlockView({ block }: { block: Block }) {
       <div className="flex gap-2">
         <Bot className="mt-1 h-4 w-4 shrink-0 text-muted-foreground" />
         <div className="max-w-[80%] rounded-lg bg-background px-3 py-2 text-sm shadow-sm">
-          <Markdown content={block.text} />
+          <Markdown content={block.text} stripImages />
         </div>
       </div>
     );

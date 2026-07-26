@@ -8,6 +8,7 @@ import type { AgentTraceStep, ChatSource } from "@/lib/api/search";
 import { cn } from "@/lib/utils";
 
 import { AgentTrace } from "./AgentTrace";
+import { ThinkingIndicator } from "./ThinkingIndicator";
 
 export interface Message {
   /** Stable ID assigned when the message is appended; used as React key. */
@@ -126,6 +127,7 @@ export function ChatMessage({ message }: ChatMessageProps) {
   const cited = citedNumbers(message.content);
   const citedSources = sources.filter((s) => cited.has(s.number as number));
   const listedSources = message.streaming || citedSources.length === 0 ? sources : citedSources;
+  const awaitingFirstToken = !isUser && !!message.streaming && message.content.trim() === "";
 
   return (
     <div className={cn("flex", isUser ? "justify-end" : "justify-start")}>
@@ -139,15 +141,23 @@ export function ChatMessage({ message }: ChatMessageProps) {
           // User text is shown verbatim — a typed "#" or "*" is punctuation,
           // not formatting.
           <div className="whitespace-pre-wrap">{sanitize(message.content)}</div>
-        ) : (
-          <Markdown content={withCitationLinks(message.content, sources)} />
-        )}
-        {message.streaming ? (
-          <span
-            aria-label="streaming"
-            className="ml-1 inline-block h-2 w-2 animate-pulse rounded-full bg-current align-middle"
+        ) : awaitingFirstToken ? (
+          // Nothing to render yet: say what the answer is waiting on rather
+          // than leaving a bare blinking dot.
+          <ThinkingIndicator
+            label={sources.length > 0 ? "Writing the answer…" : "Searching your documents…"}
           />
-        ) : null}
+        ) : (
+          <>
+            <Markdown content={withCitationLinks(message.content, sources)} stripImages />
+            {message.streaming ? (
+              <span
+                aria-label="streaming"
+                className="ml-1 inline-block h-3.5 w-1.5 animate-pulse rounded-sm bg-current align-text-bottom"
+              />
+            ) : null}
+          </>
+        )}
 
         {message.unsupportedCitations && message.unsupportedCitations.length > 0 ? (
           <p className="mt-2 text-xs text-amber-600 dark:text-amber-500">
