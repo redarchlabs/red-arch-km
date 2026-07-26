@@ -16,6 +16,7 @@ import logging
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import httpx
 from sqlalchemy import select
@@ -50,11 +51,29 @@ class _TokenSlot:
     set_tokens: object  # callable(access_enc, refresh_enc, expires_at) -> None
 
 
-def _guard(settings: Settings, url: str | None) -> None:
+def _guard(settings: Settings, url: str | None) -> str:
+    """SSRF-check the server URL, returning it narrowed to ``str``.
+
+    ``McpServer.url`` is nullable — stdio servers have none — and OAuth is
+    meaningless without one. Rejecting it here gives a clear error instead of an
+    empty-host guard failure, and lets callers use the result directly.
+    """
     from urllib.parse import urlparse
 
-    parsed = urlparse(url or "")
+    if not url:
+        raise McpOAuthError("this MCP server has no URL, so it cannot use OAuth")
+    parsed = urlparse(url)
     assert_public_host(parsed.hostname or "", parsed.scheme, settings)
+    return url
+
+
+def _client_id(oc: dict[str, Any]) -> str:
+    """The registered OAuth client_id, or a clear error if the server was never
+    registered. Config is a free-form JSON blob, so the value is untyped here."""
+    value = oc.get("client_id")
+    if not isinstance(value, str) or not value:
+        raise McpOAuthError("this MCP server has no OAuth client_id; reconnect it to re-register")
+    return value
 
 
 def redirect_uri(settings: Settings) -> str:
@@ -83,14 +102,14 @@ class McpOAuthService:
 
     async def start(self, server: McpServer, user_profile_id: uuid.UUID | None) -> str:
         """Discover + register (if needed), then return the provider authorization URL."""
-        _guard(self._settings, server.url)
+        server_url = _guard(self._settings, server.url)
         cfg = dict(server.config or {})
         oc = dict(cfg.get("oauth") or {})
         uri = redirect_uri(self._settings)
 
         async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
             if not oc.get("authorization_endpoint") or not oc.get("token_endpoint"):
-                endpoints = await oauth.discover_endpoints(client, server.url)
+                endpoints = await oauth.discover_endpoints(client, server_url)
                 oc["authorization_endpoint"] = endpoints.authorization_endpoint
                 oc["token_endpoint"] = endpoints.token_endpoint
                 oc["registration_endpoint"] = endpoints.registration_endpoint
@@ -210,7 +229,7 @@ class McpOAuthService:
                     client,
                     oc["token_endpoint"],
                     refresh_token=decrypt_secret(slot.refresh_encrypted, self._key),
-                    client_id=oc.get("client_id"),
+                    client_id=_client_id(oc),
                     client_secret=client_secret,
                 )
             self._persist(slot, tokens)
@@ -260,7 +279,7 @@ async def complete_authorization(session: AsyncSession, settings: Settings, stat
             code=code,
             code_verifier=flow.code_verifier,
             redirect_uri=flow.redirect_uri,
-            client_id=oc.get("client_id"),
+            client_id=_client_id(oc),
             client_secret=client_secret,
         )
     service = McpOAuthService(session, flow.org_id, settings)

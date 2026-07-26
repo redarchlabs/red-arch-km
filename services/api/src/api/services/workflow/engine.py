@@ -188,7 +188,7 @@ class TokenEngine:
         # the reactivated tokens quiesce.
         run.status = "running"
         run.error = None
-        run.finished_at = None  # type: ignore[assignment]
+        run.finished_at = None
         await self._session.flush()
         totals = await self.drive_run(run)
         totals["reactivated"] = reactivated
@@ -276,7 +276,7 @@ class TokenEngine:
                         # Another worker owns this run right now — release the lease.
                         await self._release_token(row["id"], row["created_at"])
                     else:
-                        delta = await self._advance_claimed(org_id, row)
+                        delta = await self._advance_claimed(org_id, dict(row))
                         for key, value in delta.items():
                             counters[key] = counters.get(key, 0) + value
                 await self._exit_tenant()
@@ -539,8 +539,10 @@ class TokenEngine:
         policy = read_policy(node.data)
         attempt = attempts_so_far(token.data, node.id)  # failures so far (0-based)
         if attempt + 1 < policy.max_attempts:
-            delay = backoff(attempt, policy)
-            resume_at = datetime.now(UTC) + timedelta(seconds=delay)
+            # Distinct name from the int `delay_seconds` reads elsewhere in this
+            # method: backoff returns a float, so reusing `delay` retyped it.
+            retry_delay = backoff(attempt, policy)
+            resume_at = datetime.now(UTC) + timedelta(seconds=retry_delay)
             step.status = "retrying"
             step.error = result.error
             step.attempts = attempt + 1
@@ -554,7 +556,7 @@ class TokenEngine:
                 policy.max_attempts,
                 run.id,
                 node.id,
-                delay,
+                retry_delay,
                 result.error,
             )
             return NodeOutcome(
@@ -919,7 +921,7 @@ class TokenEngine:
         if outcome.kind == "park":
             token.status = "waiting"
             token.wait_kind = outcome.wait_kind
-            token.resume_at = outcome.resume_at  # type: ignore[assignment]
+            token.resume_at = outcome.resume_at
             token.correlation_key = outcome.correlation_key
             if outcome.token_data is not None:
                 token.data = outcome.token_data

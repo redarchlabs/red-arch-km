@@ -441,6 +441,9 @@ class PromotionService:
         target_label = target.name
 
         importer = None
+        # Nullable on the promotion row: a remote target has no local org id. Annotated
+        # so the branch below is not bound to the local branch's narrowed non-None type.
+        record_target_org: uuid.UUID | None
         if target.kind == PromotionTargetKind.LOCAL_ORG.value:
             if target.target_org_id is None:
                 raise PromotionError("local-org target is missing target_org_id")
@@ -494,7 +497,9 @@ class PromotionService:
         )
         self._session.add(promotion)
         await self._session.commit()
-        if importer is not None:
+        # `import_summary` is Optional on PromotionResult; with nothing imported there
+        # is nothing to enqueue, and dispatch_pending_ingests would deref None.
+        if importer is not None and result.import_summary is not None:
             # The commit cleared the transaction-scoped RLS GUCs; re-enter privileged
             # scope so the post-commit ingest enqueue (doc.celery_task_id writes) is
             # not blocked by RLS failing closed.
@@ -571,7 +576,7 @@ class PromotionService:
         )
         self._session.add(inverse)
         await self._session.commit()
-        if importer is not None:
+        if importer is not None and result.import_summary is not None:
             await db_scope.enter_bypass(self._session)
             await importer.dispatch_pending_ingests(result.import_summary)
         return promotion, result

@@ -91,8 +91,12 @@ async def _try_notify_workflow(
                 org_id,
                 wf,
                 version,
+                # `operation` describes an entity-bound run; a manual workflow ignores
+                # the record fields entirely, so it keeps its default. Passing
+                # "manual" here raised a Pydantic ValidationError — the field is
+                # Literal["create", "update", "delete"] — which broke every
+                # notification that drives a workflow.
                 request=ManualRunRequest(
-                    operation="manual",
                     record_id=None,
                     before=None,
                     after=None,

@@ -20,6 +20,7 @@ from api.repositories.api_key import ApiKeyRepository, lookup_by_key_hash
 from api.services.api_key_service import ApiKeyService, hash_key
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from .helpers import set_tenant
 
 pytestmark = pytest.mark.integration

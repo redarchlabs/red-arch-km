@@ -17,6 +17,7 @@ from api.services.agents.service import (
 )
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from .helpers import set_tenant
 
 pytestmark = pytest.mark.integration

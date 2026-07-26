@@ -63,7 +63,8 @@ from api.services.workflow.service import (
 
 router = APIRouter()
 
-_ERROR_STATUS = {
+# Keyed by the base Exception type — see the note in routers/entity_definitions.py.
+_ERROR_STATUS: dict[type[Exception], int] = {
     WorkflowNotFoundError: status.HTTP_404_NOT_FOUND,
     WorkflowConflictError: status.HTTP_409_CONFLICT,
 }

@@ -372,7 +372,8 @@ class UpdateRecordField:
         return {"record_id": str(ctx.record_id), "field": field, "value": value, "updated": updated is not None}
 
     def simulate(self, ctx: ActionContext) -> dict[str, Any]:
-        field = ctx.config.get("field")
+        # config is free-form JSON, so coerce to the str key `.get` requires.
+        field = str(ctx.config.get("field") or "")
         return {
             "record_id": str(ctx.record_id) if ctx.record_id else None,
             "field": field,
