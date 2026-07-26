@@ -171,6 +171,8 @@ export async function runWorkflow(
     after?: Record<string, unknown> | null;
     // Caller-supplied variables for a manual (on-demand) workflow.
     inputs?: Record<string, unknown>;
+    /** Channel to publish an LLM step's tokens on — see {@link streamRunTokens}. */
+    stream_token?: string;
   },
   timeoutMs?: number,
 ): Promise<ManualRunResult> {

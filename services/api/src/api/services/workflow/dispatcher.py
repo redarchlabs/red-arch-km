@@ -98,8 +98,11 @@ class WorkflowDispatchService:
         token_engine_enabled: bool = True,
         trusted_local_hosts: tuple[str, ...] = (),
         settings: Any = None,
+        delta_sink: Any = None,
     ) -> None:
         self._session = session
+        # Live-token publisher for a run the caller is watching (see stream.py).
+        self._delta_sink = delta_sink
         self._webhook_allowlist = webhook_allowlist
         self._trusted_local_hosts = trusted_local_hosts
         self._public_base_url = public_base_url
@@ -130,6 +133,7 @@ class WorkflowDispatchService:
             email_sender=self._email_sender,
             org_encryption_key=self._org_encryption_key,
             settings=self._settings,
+            delta_sink=self._delta_sink,
         )
 
     async def _run_token_engine(self, run: WorkflowRun, definition: dict[str, Any]) -> int:

@@ -16,6 +16,9 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from api.services.llm_stream import stream_json_content
+from api.services.spoken_summary import DeltaSink
+
 # Default rules of engagement. A workflow author overrides this per exhibit via the node's
 # ``system`` config so the conversation is grounded by policy, not by an open-ended prompt.
 DEFAULT_RULES = (
@@ -81,11 +84,14 @@ async def decide_action(
     moods: list[str] | None = None,
     system: str | None = None,
     history: list[dict[str, Any]] | None = None,
+    on_delta: DeltaSink | None = None,
 ) -> dict[str, Any]:
     """Return a structured ``{say, gesture, mood, done, reason}`` decision.
 
     ``client`` is an ``AsyncOpenAI`` instance (typed ``Any`` to keep this import-light and
     mockable). ``gesture``/``mood`` are constrained to ``gestures``/``moods`` (or null).
+    Pass ``on_delta`` to publish the spoken ``say`` line as it is written — only that
+    field, never the robot's internal ``reason``.
     Raises on a malformed model response — the caller records that on the step.
     """
     gestures = list(gestures or [])
@@ -102,13 +108,19 @@ async def decide_action(
     )
     user = "\n\n".join(parts)
 
-    response = await client.chat.completions.create(
-        model=model,
-        messages=[
+    request: dict[str, Any] = {
+        "model": model,
+        "messages": [
             {"role": "system", "content": system or DEFAULT_RULES},
             {"role": "user", "content": user},
         ],
-        response_format={"type": "json_schema", "json_schema": _decision_schema(gestures, moods)},
-    )
-    content = response.choices[0].message.content or "{}"
+        "response_format": {"type": "json_schema", "json_schema": _decision_schema(gestures, moods)},
+    }
+    if on_delta is not None:
+        # 'say' is declared first in the schema, so the spoken line streams
+        # before the gesture/mood/reason fields.
+        content = await stream_json_content(client, field="say", on_delta=on_delta, **request) or "{}"
+    else:
+        response = await client.chat.completions.create(**request)
+        content = response.choices[0].message.content or "{}"
     return json.loads(content)
