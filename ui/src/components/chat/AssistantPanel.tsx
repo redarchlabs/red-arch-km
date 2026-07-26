@@ -3,6 +3,7 @@
 import { Bot, CheckCircle2, Send, Sparkles, Wrench, XCircle } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
+import { Markdown } from "@/components/common/Markdown";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { ACTION_LABELS } from "@/components/workflows/actionTypes";
@@ -197,8 +198,8 @@ function BlockView({ block }: { block: Block }) {
     return (
       <div className="flex gap-2">
         <Bot className="mt-1 h-4 w-4 shrink-0 text-muted-foreground" />
-        <div className="max-w-[80%] whitespace-pre-wrap rounded-lg bg-background px-3 py-2 text-sm shadow-sm">
-          {block.text}
+        <div className="max-w-[80%] rounded-lg bg-background px-3 py-2 text-sm shadow-sm">
+          <Markdown content={block.text} />
         </div>
       </div>
     );

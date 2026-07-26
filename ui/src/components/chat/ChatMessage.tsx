@@ -2,8 +2,8 @@
 
 import DOMPurify from "dompurify";
 import Link from "next/link";
-import { Fragment } from "react";
 
+import { Markdown } from "@/components/common/Markdown";
 import type { AgentTraceStep, ChatSource } from "@/lib/api/search";
 import { cn } from "@/lib/utils";
 
@@ -77,60 +77,55 @@ function citedNumbers(text: string): Set<number> {
   return cited;
 }
 
-/**
- * Render answer text, turning inline `[n]` citation markers into links to the
- * matching source document. Segments between markers are plain (React-escaped)
- * text; an `[n]` with no matching source is left as literal text.
- */
-function renderWithCitations(text: string, sources: ChatSource[]): React.ReactNode[] {
-  const byNumber = new Map(sources.map((s) => [s.number, s]));
-  const nodes: React.ReactNode[] = [];
-  const regex = /\[(\d+)\]/g;
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
-  let k = 0;
+/** Escape a value destined for an HTML attribute in the generated citation anchor. */
+function escapeAttribute(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
 
-  while ((match = regex.exec(text)) !== null) {
-    if (match.index > lastIndex) {
-      nodes.push(
-        <Fragment key={`t${k}`}>{sanitize(text.slice(lastIndex, match.index))}</Fragment>,
-      );
-    }
-    const n = Number(match[1]);
-    const src = byNumber.get(n);
-    if (src?.document_id) {
-      nodes.push(
-        <Link
-          key={`c${k}`}
-          href={passageHref(src)}
-          title={src.snippet ? `${sourceLabel(src)} — "${src.snippet}"` : sourceLabel(src)}
-          className="mx-0.5 rounded bg-primary/10 px-1 text-xs font-medium text-primary no-underline hover:bg-primary/20"
-        >
-          [{n}]
-        </Link>,
-      );
-    } else {
-      nodes.push(<Fragment key={`c${k}`}>{match[0]}</Fragment>);
-    }
-    lastIndex = regex.lastIndex;
-    k += 1;
-  }
-  if (lastIndex < text.length) {
-    nodes.push(<Fragment key={`t${k}`}>{sanitize(text.slice(lastIndex))}</Fragment>);
-  }
-  return nodes;
+const CITATION_CLASS =
+  "mx-0.5 rounded bg-primary/10 px-1 text-xs font-medium text-primary no-underline hover:bg-primary/20";
+
+/**
+ * Rewrite inline `[n]` citation markers into anchors linking to the cited
+ * passage, leaving the rest of the answer untouched so Markdown still parses.
+ * Markers with no matching source stay literal — escaped so Markdown reads them
+ * as text rather than as link syntax.
+ *
+ * The result is Markdown-with-inline-HTML; `Markdown` sanitizes the rendered
+ * output, so these anchors (and anything the model itself emitted) go through
+ * DOMPurify before reaching the DOM.
+ */
+function withCitationLinks(text: string, sources: ChatSource[]): string {
+  const byNumber = new Map(sources.map((s) => [s.number, s]));
+  return text.replace(/\[(\d+)\]/g, (marker, digits: string) => {
+    const src = byNumber.get(Number(digits));
+    if (!src?.document_id) return `\\[${digits}\\]`;
+    const title = src.snippet ? `${sourceLabel(src)} — "${src.snippet}"` : sourceLabel(src);
+    return (
+      `<a href="${escapeAttribute(passageHref(src))}"` +
+      ` title="${escapeAttribute(title)}"` +
+      ` data-citation="${digits}"` +
+      ` class="${CITATION_CLASS}">${marker}</a>`
+    );
+  });
 }
 
 export function ChatMessage({ message }: ChatMessageProps) {
   const isUser = message.role === "user";
   const sources = !isUser && message.sources ? dedupeSources(message.sources) : [];
-  // The Sources footer lists only passages the answer actually cites. When the
-  // answer carries no usable [n] markers (older messages, or a model that
-  // answered without citing), fall back to listing everything retrieved rather
-  // than hiding provenance entirely.
+  // The Sources footer lists only passages the answer actually cites. While the
+  // answer is still streaming the markers have not all arrived, so the full list
+  // is shown until it settles — otherwise the footer would visibly churn. When a
+  // finished answer carries no usable [n] markers (older persisted messages, or
+  // a model that answered without citing), fall back to listing everything
+  // retrieved rather than hiding provenance entirely.
   const cited = citedNumbers(message.content);
-  const citedSources = sources.filter((s) => s.number != null && cited.has(s.number));
-  const listedSources = citedSources.length > 0 ? citedSources : sources;
+  const citedSources = sources.filter((s) => cited.has(s.number as number));
+  const listedSources = message.streaming || citedSources.length === 0 ? sources : citedSources;
 
   return (
     <div className={cn("flex", isUser ? "justify-end" : "justify-start")}>
@@ -140,9 +135,13 @@ export function ChatMessage({ message }: ChatMessageProps) {
           isUser ? "bg-primary text-primary-foreground" : "bg-muted",
         )}
       >
-        <div className="whitespace-pre-wrap">
-          {isUser ? sanitize(message.content) : renderWithCitations(message.content, sources)}
-        </div>
+        {isUser ? (
+          // User text is shown verbatim — a typed "#" or "*" is punctuation,
+          // not formatting.
+          <div className="whitespace-pre-wrap">{sanitize(message.content)}</div>
+        ) : (
+          <Markdown content={withCitationLinks(message.content, sources)} />
+        )}
         {message.streaming ? (
           <span
             aria-label="streaming"

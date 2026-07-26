@@ -62,11 +62,14 @@ export default function DocumentDetailPage() {
   const [highlightOrder, setHighlightOrder] = useState<number | null>(null);
   // Same deep-link target, for the full-screen reader (which auto-opens over
   // this page for finished documents and does its own scroll + highlight).
+  // Re-read per document: client-side navigation between two citations keeps
+  // this component mounted, so a one-shot read would aim the second document at
+  // the first one's chunk.
   const [citedOrder, setCitedOrder] = useState<number | null>(null);
   useEffect(() => {
     const match = window.location.hash.match(/^#chunk-(\d+)$/);
-    if (match) setCitedOrder(Number(match[1]));
-  }, []);
+    setCitedOrder(match ? Number(match[1]) : null);
+  }, [id]);
 
   // `silent` refreshes (polling while an ingest runs) skip the spinner so the
   // page doesn't blank out every few seconds.
