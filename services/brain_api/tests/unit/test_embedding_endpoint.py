@@ -14,7 +14,6 @@ environment variable can never silently reroute a call.
 from __future__ import annotations
 
 import pytest
-
 from brain_sdk.embedding.openai_provider import OPENAI_API_BASE, OpenAIEmbeddingProvider
 
 
@@ -38,9 +37,7 @@ class TestExplicitBaseUrl:
 
     def test_self_hosted_gets_placeholder_key(self) -> None:
         """Local servers authenticate nothing, but the SDK still requires a key."""
-        provider = OpenAIEmbeddingProvider(
-            api_key="", base_url="http://127.0.0.1:8098/v1", dimension=768
-        )
+        provider = OpenAIEmbeddingProvider(api_key="", base_url="http://127.0.0.1:8098/v1", dimension=768)
         assert provider._client.api_key == "not-needed"
 
 
@@ -50,9 +47,7 @@ class TestDimension:
         assert OpenAIEmbeddingProvider(api_key="k", model="text-embedding-3-large").dimension == 3072
 
     def test_explicit_dimension_wins(self) -> None:
-        provider = OpenAIEmbeddingProvider(
-            api_key="k", model="text-embedding-3-small", dimension=768
-        )
+        provider = OpenAIEmbeddingProvider(api_key="k", model="text-embedding-3-small", dimension=768)
         assert provider.dimension == 768
 
     def test_self_hosted_without_dimension_is_rejected(self) -> None:
@@ -61,13 +56,9 @@ class TestDimension:
         That corrupts retrieval instead of raising, so refuse at construction instead.
         """
         with pytest.raises(ValueError, match="dimension is required"):
-            OpenAIEmbeddingProvider(
-                api_key="", model="nomic-embed-text-v1.5", base_url="http://127.0.0.1:8098/v1"
-            )
+            OpenAIEmbeddingProvider(api_key="", model="nomic-embed-text-v1.5", base_url="http://127.0.0.1:8098/v1")
 
     def test_zero_dimension_is_treated_as_unset(self) -> None:
         # 0 is the settings default, meaning "not configured" — not a real width.
         with pytest.raises(ValueError, match="dimension is required"):
-            OpenAIEmbeddingProvider(
-                api_key="", model="custom", base_url="http://localhost:1/v1", dimension=0
-            )
+            OpenAIEmbeddingProvider(api_key="", model="custom", base_url="http://localhost:1/v1", dimension=0)
