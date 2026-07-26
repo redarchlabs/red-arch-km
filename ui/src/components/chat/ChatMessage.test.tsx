@@ -77,4 +77,75 @@ describe("ChatMessage sources", () => {
     expect(links.length).toBeGreaterThan(0);
     expect(links[0]).toHaveAttribute("href", "/documents/doc-key-2#chunk-2");
   });
+
+  it("lists all sources while the answer is still streaming", () => {
+    const sources = [1, 2, 3].map((n) => source(n));
+    render(
+      <ChatMessage
+        message={{ id: "m1", role: "assistant", content: "Partial answer [1]", sources, streaming: true }}
+      />,
+    );
+
+    expect(screen.getByText("Document 1")).toBeInTheDocument();
+    expect(screen.getByText("Document 2")).toBeInTheDocument();
+    expect(screen.getByText("Document 3")).toBeInTheDocument();
+  });
+});
+
+describe("ChatMessage markdown", () => {
+  it("renders assistant markdown as formatted HTML", () => {
+    render(
+      <ChatMessage
+        message={assistantMessage("### Key Passages\n\n- **Bold item**\n- Second item", [])}
+      />,
+    );
+
+    expect(screen.getByRole("heading", { name: "Key Passages" })).toBeInTheDocument();
+    expect(screen.getByRole("list")).toBeInTheDocument();
+    expect(screen.getByText("Bold item").tagName).toBe("STRONG");
+  });
+
+  it("keeps citation markers as links inside formatted markdown", () => {
+    render(<ChatMessage message={assistantMessage("## Title\n\nA cited claim [1].", [source(1)])} />);
+
+    expect(screen.getByRole("heading", { name: "Title" })).toBeInTheDocument();
+    const link = screen.getAllByRole("link", { name: "[1]" })[0];
+    expect(link).toHaveAttribute("href", "/documents/doc-key-1#chunk-1");
+    // Marks the chip so markdown link styling doesn't underline it.
+    expect(link).toHaveAttribute("data-citation", "1");
+  });
+
+  it("leaves an uncitable marker as literal text", () => {
+    render(<ChatMessage message={assistantMessage("No such source [9].", [source(1)])} />);
+
+    expect(screen.queryByRole("link", { name: "[9]" })).not.toBeInTheDocument();
+    expect(screen.getByText(/No such source \[9\]\./)).toBeInTheDocument();
+  });
+
+  it("strips dangerous markup from assistant content", () => {
+    render(
+      <ChatMessage
+        message={assistantMessage('Hello <img src=x onerror="alert(1)"> <script>alert(2)</script>', [])}
+      />,
+    );
+
+    expect(document.querySelector("script")).toBeNull();
+    expect(document.querySelector("img[onerror]")).toBeNull();
+  });
+
+  it("does not render markdown for user messages", () => {
+    render(<ChatMessage message={{ id: "u1", role: "user", content: "# not a heading" }} />);
+
+    expect(screen.queryByRole("heading")).not.toBeInTheDocument();
+    expect(screen.getByText("# not a heading")).toBeInTheDocument();
+  });
+
+  it("escapes snippet text used in the citation tooltip", () => {
+    const src = source(1, { snippet: '" onmouseover="alert(1)' });
+    render(<ChatMessage message={assistantMessage("Claim [1].", [src])} />);
+
+    const link = screen.getAllByRole("link", { name: "[1]" })[0];
+    expect(link).not.toHaveAttribute("onmouseover");
+    expect(link.getAttribute("title")).toContain('" onmouseover="alert(1)');
+  });
 });
