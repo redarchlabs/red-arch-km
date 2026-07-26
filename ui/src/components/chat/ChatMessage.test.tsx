@@ -60,20 +60,57 @@ describe("ChatMessage sources", () => {
     expect(screen.getByText("Document 2")).toBeInTheDocument();
   });
 
-  it("keeps the original citation numbers on the filtered list", () => {
+  it("renumbers the filtered list from 1", () => {
     const sources = [1, 2, 3, 4, 5].map((n) => source(n));
     render(<ChatMessage message={assistantMessage("Rescue mission [5].", sources)} />);
 
     const list = screen.getByRole("list");
-    expect(list).toHaveTextContent("[5]");
-    expect(list).not.toHaveTextContent("[1]");
+    expect(list).toHaveTextContent("[1]");
+    expect(list).not.toHaveTextContent("[5]");
+    // …and it is still the passage the answer cited.
+    expect(screen.getByText("Document 5")).toBeInTheDocument();
+  });
+
+  it("renumbers inline markers to match the footer", () => {
+    const sources = [1, 2, 3, 4].map((n) => source(n));
+    render(
+      <ChatMessage
+        message={assistantMessage("More meaningful experiences [4]. Part of the curriculum [3].", sources)}
+      />,
+    );
+
+    // Cited [4] then [3] → displayed [1] then [2], in reading order.
+    const first = screen.getAllByRole("link", { name: "[1]" })[0];
+    expect(first).toHaveAttribute("href", "/documents/doc-key-4#chunk-4");
+    const second = screen.getAllByRole("link", { name: "[2]" })[0];
+    expect(second).toHaveAttribute("href", "/documents/doc-key-3#chunk-3");
+    expect(screen.queryByRole("link", { name: "[3]" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "[4]" })).not.toBeInTheDocument();
+
+    const items = screen.getAllByRole("listitem");
+    expect(items[0]).toHaveTextContent("[1]");
+    expect(items[0]).toHaveTextContent("Document 4");
+    expect(items[1]).toHaveTextContent("[2]");
+    expect(items[1]).toHaveTextContent("Document 3");
+  });
+
+  it("leaves numbering alone while streaming", () => {
+    const sources = [1, 2, 3].map((n) => source(n));
+    render(
+      <ChatMessage
+        message={{ id: "m1", role: "assistant", content: "Cited [3]", sources, streaming: true }}
+      />,
+    );
+
+    expect(screen.getAllByRole("link", { name: "[3]" }).length).toBeGreaterThan(0);
   });
 
   it("still renders inline citation links for cited sources", () => {
     const sources = [1, 2].map((n) => source(n));
     render(<ChatMessage message={assistantMessage("See [2].", sources)} />);
 
-    const links = screen.getAllByRole("link", { name: "[2]" });
+    // The sole citation is relabelled [1]; it still points at passage 2.
+    const links = screen.getAllByRole("link", { name: "[1]" });
     expect(links.length).toBeGreaterThan(0);
     expect(links[0]).toHaveAttribute("href", "/documents/doc-key-2#chunk-2");
   });
