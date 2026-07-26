@@ -69,6 +69,8 @@ class Stores:
                     self._embedder = OpenAIEmbeddingProvider(
                         api_key=self._settings.openai_api_key,
                         model=self._settings.openai_embedding_model,
+                        base_url=self._settings.embedding_base_url,
+                        dimension=self._settings.embedding_dimension,
                     )
         return self._embedder
 
@@ -106,6 +108,7 @@ class Stores:
                     self._summarizer = ChunkSummarizer(
                         api_key=self._settings.openai_api_key,
                         model=self._settings.openai_chat_model,
+                        base_url=self._settings.openai_base_url,
                     )
         return self._summarizer
 
@@ -117,6 +120,7 @@ class Stores:
                     self._extractor = TripletExtractor(
                         api_key=self._settings.openai_api_key,
                         model=self._settings.openai_chat_model,
+                        base_url=self._settings.openai_base_url,
                     )
         return self._extractor
 
@@ -154,6 +158,8 @@ class Stores:
                         provider=self._settings.llm_provider,
                         model=self._settings.resolved_agent_model,
                         api_key=self._settings.resolved_agent_api_key,
+                        # Fact-engine reasoning is chat, so it follows the chat endpoint.
+                        base_url=self._settings.openai_base_url or None,
                     )
         return self._llm
 

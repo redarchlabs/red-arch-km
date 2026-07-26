@@ -8,6 +8,8 @@ import re
 
 from openai import OpenAI
 
+from brain_sdk.embedding.openai_provider import _clean_base_url
+
 logger = logging.getLogger(__name__)
 
 _EXTRACTION_PROMPT = """\
@@ -29,8 +31,9 @@ def _clean_json_response(text: str) -> str:
 class TripletExtractor:
     """Extract knowledge graph triplets from text via LLM."""
 
-    def __init__(self, api_key: str, model: str = "gpt-5-mini") -> None:
-        self._client = OpenAI(api_key=api_key)
+    def __init__(self, api_key: str, model: str = "gpt-5-mini", base_url: str | None = None) -> None:
+        # Explicit base_url — see ChunkSummarizer for why this is never left to default.
+        self._client = OpenAI(api_key=api_key, base_url=_clean_base_url(base_url))
         self._model = model
 
     def extract(self, text: str) -> list[tuple[str, str, str]]:

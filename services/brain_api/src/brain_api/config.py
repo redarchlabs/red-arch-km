@@ -37,16 +37,28 @@ class BrainAPISettings(BaseSettings):
     # instead of api.openai.com. Empty (the default) keeps the hosted behaviour, so
     # existing deployments are unaffected; a fully-local instance sets it.
     #
-    # Scope today: the **chat/RAG path only** (SearchService) — the robot's live path.
-    # Ingest-time chat (ChunkSummarizer, TripletExtractor) and, deliberately,
-    # **embeddings** still go to OpenAI. Embeddings are held back on purpose: changing
-    # the embedding model invalidates every stored vector, so switching means
-    # re-embedding the whole corpus and is a migration, not a config flip.
+    # Covers every **chat** call: SearchService (the robot's live path) plus ingest-time
+    # chat in ChunkSummarizer and TripletExtractor. Embeddings are NOT covered — they
+    # have their own setting below, because one llama.cpp server cannot serve both chat
+    # and embeddings, so the two genuinely need different endpoints.
+    #
+    # NB this name matches an environment variable the OpenAI SDK itself honours. Every
+    # client in this codebase now passes base_url explicitly so that collision cannot
+    # silently redirect a call we did not mean to redirect — which is exactly how
+    # embeddings once ended up at a chat-only server, failing every ingest with
+    # "501 This server does not support embeddings".
     openai_base_url: str = Field(default="", validation_alias="OPENAI_BASE_URL")
     openai_embedding_model: str = Field(
         default="text-embedding-3-small",
         validation_alias="OPENAI_EMBEDDING_MODEL",
     )
+    # Separate endpoint for embeddings. Empty => OpenAI.
+    embedding_base_url: str = Field(default="", validation_alias="EMBEDDING_BASE_URL")
+    # Vector width of the embedding model. Required when embedding_base_url is set,
+    # since dimensions are only known for OpenAI's own models. Changing this is a
+    # MIGRATION, not a config flip: the Qdrant collections and the Neo4j vector index
+    # are created at this width, so every stored vector must be re-embedded.
+    embedding_dimension: int = Field(default=0, validation_alias="EMBEDDING_DIMENSION")
 
     # Agentic fact engine (provider-agnostic; OpenAI is the default provider).
     # `use_fact_engine` gates the new reified-claim ingest + agentic query path;
