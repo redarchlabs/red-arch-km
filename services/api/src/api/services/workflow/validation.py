@@ -15,6 +15,7 @@ equivalents.
 from __future__ import annotations
 
 from collections import defaultdict, deque
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -85,7 +86,8 @@ def validate_definition(
 # --------------------------------------------------------------------------- #
 # helpers
 # --------------------------------------------------------------------------- #
-def _fmt_error(err: dict[str, Any]) -> str:
+def _fmt_error(err: Mapping[str, Any]) -> str:
+    """Pydantic v2 yields ErrorDetails (a TypedDict), so accept any read-only mapping."""
     loc = ".".join(str(p) for p in err.get("loc", ()))
     msg = err.get("msg", "invalid")
     return f"{loc}: {msg}" if loc else msg

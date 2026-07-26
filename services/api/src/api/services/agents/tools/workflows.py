@@ -9,7 +9,10 @@ run (the authority layer already gated whether it may use ``run_workflow`` at al
 from __future__ import annotations
 
 import uuid
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
+
+if TYPE_CHECKING:
+    from typing import Literal
 
 from fastapi import HTTPException
 
@@ -57,8 +60,16 @@ async def _run_workflow(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any
     except HTTPException as exc:
         return {"error": str(exc.detail)}
 
+    # `operation` comes from an LLM tool call, so it is untrusted, and the field is
+    # Literal["create", "update", "delete"] — anything else raises a Pydantic
+    # ValidationError. The old default of "manual" was itself invalid and broke every
+    # call that did not pass one explicitly. Manual workflows ignore the record
+    # fields anyway, so an unrecognized value falls back to the schema default.
+    requested_op = str(args.get("operation") or "").strip().lower()
+    operation = requested_op if requested_op in ("create", "update", "delete") else "update"
+
     request = ManualRunRequest(
-        operation=str(args.get("operation") or "manual"),
+        operation=cast('Literal["create", "update", "delete"]', operation),
         record_id=None,
         before=None,
         after=None,

@@ -19,7 +19,20 @@ from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any, NamedTuple
 
-from sqlalchemy import Column, MetaData, Table, and_, bindparam, distinct, false, func, or_, select, text
+from sqlalchemy import (
+    Column,
+    ColumnElement,
+    MetaData,
+    Table,
+    and_,
+    bindparam,
+    distinct,
+    false,
+    func,
+    or_,
+    select,
+    text,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -701,7 +714,9 @@ class DynamicEntityRepository:
             if g.bucket is not None:
                 if ftype not in _DATE_FIELD_TYPES:
                     raise EntityRecordError(f"{g.field!r} is not a date field; cannot bucket by {g.bucket!r}")
-                expr = func.date_trunc(g.bucket, col)
+                # Either a date_trunc Function or the bare Column below — annotated to
+                # their common base so the branches agree.
+                expr: ColumnElement[Any] = func.date_trunc(g.bucket, col)
                 default = f"{g.field}_{g.bucket}"
             else:
                 if ftype in _NON_GROUPABLE_FIELD_TYPES:
@@ -734,22 +749,22 @@ class DynamicEntityRepository:
             stmt = stmt.group_by(*group_exprs)
 
         for h in query.having:
-            expr = having_exprs.get(h.metric)
-            if expr is None:
+            having_expr = having_exprs.get(h.metric)
+            if having_expr is None:
                 raise EntityRecordError(f"having references unknown metric {h.metric!r}")
             # HavingSpec.value is numeric; a date-typed min/max metric would build
             # `min(date) > 5.0` which Postgres rejects at execute time (an unhandled
             # 500). Reject it as a clean 400 here instead.
             if having_ftypes.get(h.metric) in _DATE_FIELD_TYPES:
                 raise EntityRecordError(f"cannot apply a numeric HAVING to date metric {h.metric!r}")
-            stmt = stmt.having(_COMPARATORS[h.op](expr, h.value))
+            stmt = stmt.having(_COMPARATORS[h.op](having_expr, h.value))
 
         if query.order_by:
             for o in query.order_by:
-                expr = order_exprs.get(o.key)
-                if expr is None:
+                order_expr = order_exprs.get(o.key)
+                if order_expr is None:
                     raise EntityRecordError(f"order_by references unknown column {o.key!r}")
-                stmt = stmt.order_by((expr.desc() if o.dir == "desc" else expr.asc()).nullslast())
+                stmt = stmt.order_by((order_expr.desc() if o.dir == "desc" else order_expr.asc()).nullslast())
         elif group_exprs:
             # No explicit order: order by the group keys so a LIMIT truncates
             # deterministically instead of cutting an arbitrary set of groups.

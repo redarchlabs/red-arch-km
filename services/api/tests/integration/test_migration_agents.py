@@ -21,6 +21,7 @@ from api.services.crypto import encrypt_secret
 from api.services.migration import CollisionStrategy, MigrationExporter, MigrationImporter
 from api.services.workflow.service import WorkflowService
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from .helpers import set_tenant
 
 pytestmark = pytest.mark.integration

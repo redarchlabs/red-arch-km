@@ -266,7 +266,9 @@ class MigrationImporter:
                     self._ids.put("relationships", rel["id"], match.id)
                     continue
                 try:
-                    created = await service.create_relationship(
+                    # Distinct name from the EntityDefinition `created` above — same
+                    # scope, different model.
+                    created_rel = await service.create_relationship(
                         uuid.UUID(new_source_id),
                         EntityRelationshipCreate(
                             name=rel["name"],
@@ -278,7 +280,7 @@ class MigrationImporter:
                         ),
                     )
                     existing_rel_slugs.add(rel["slug"])
-                    self._ids.put("relationships", rel["id"], created.id)
+                    self._ids.put("relationships", rel["id"], created_rel.id)
                 except (EntityError, ValueError) as exc:
                     summary.warnings.append(f"relationship {rel['slug']!r} on {ent['slug']!r}: {exc}")
 

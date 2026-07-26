@@ -1679,8 +1679,8 @@ class AgentService:
             for _ in range(MAX_ITERATIONS):
                 response = await self._client.chat.completions.create(
                     model=self._settings.openai_model,
-                    messages=messages,  # type: ignore[arg-type]
-                    tools=TOOLS,  # type: ignore[arg-type]
+                    messages=messages,
+                    tools=TOOLS,
                     tool_choice="auto",
                 )
                 message = response.choices[0].message
@@ -1731,8 +1731,8 @@ class AgentService:
             try:
                 wrap_up = await self._client.chat.completions.create(
                     model=self._settings.openai_model,
-                    messages=messages,  # type: ignore[arg-type]
-                    tools=TOOLS,  # type: ignore[arg-type]
+                    messages=messages,
+                    tools=TOOLS,
                     tool_choice="none",
                 )
                 summary = wrap_up.choices[0].message.content
@@ -2087,7 +2087,13 @@ class AgentService:
             return {"error": "workflow not found"}
         versions = await WorkflowVersionRepository(session, self._org_id).list_for_workflow(wf.id)
         graph_version = _active_or_latest(versions, wf.active_version_id)
-        entity = await EntityDefinitionRepository(session, self._org_id).get(wf.entity_definition_id)
+        # Manual workflows carry no entity (migration 023 made the column nullable),
+        # so only look one up when there is an id to look up.
+        entity = (
+            await EntityDefinitionRepository(session, self._org_id).get(wf.entity_definition_id)
+            if wf.entity_definition_id is not None
+            else None
+        )
         return {
             "workflow": {
                 "id": str(wf.id),
@@ -2296,6 +2302,8 @@ class AgentService:
         after: dict[str, Any] | None
         record_id = _parse_uuid(args.get("record_id"))
         if record_id is not None:
+            if wf.entity_definition_id is None:
+                return {"error": "this workflow is not bound to an entity, so it cannot take a record_id"}
             record = await dispatcher.load_trigger_record(self._org_id, wf.entity_definition_id, record_id)
             if record is None:
                 return {"error": "record not found for this workflow's entity"}
@@ -3139,6 +3147,19 @@ class AgentService:
         # admin-only endpoint behaviour. Production always supplies OrgContext.
         return self._ctx.is_org_admin if self._ctx is not None else True
 
+    def _require_ctx(self) -> OrgContext:
+        """The caller's context, which the document/folder tools act on behalf of.
+
+        ``_dispatch`` refuses every tool in ``_USER_CONTEXT_TOOLS`` when ``_ctx``
+        is None, so these paths only run with a context — but that guard lives in
+        a different method, so the type checker cannot see the invariant. Asserting
+        it here states it once and fails loudly if the guard is ever bypassed,
+        instead of surfacing as an AttributeError deep inside a route handler.
+        """
+        if self._ctx is None:
+            raise RuntimeError("this tool requires an authenticated user context")
+        return self._ctx
+
     async def _visible_folder_ids(self, session: AsyncSession) -> set[uuid.UUID] | None:
         """Folder ids the caller may see, or None meaning 'all' (admin)."""
         if self._is_admin():
@@ -3149,7 +3170,9 @@ class AgentService:
 
         org = await session.get(Org, self._org_id)
         masks = (
-            calculate_user_masks_from_membership(self._ctx.membership, org.permission_number) if org is not None else []
+            calculate_user_masks_from_membership(self._require_ctx().membership, org.permission_number)
+            if org is not None
+            else []
         )
         folders, _ = await FolderRepository(session, self._org_id).list_visible_to_masks(user_masks=masks)
         return {f.id for f in folders}
@@ -3187,7 +3210,7 @@ class AgentService:
         from api.schemas.common import PaginationParams
 
         page = await folders_routes.list_folders(
-            ctx=self._ctx, session=session, pagination=PaginationParams(page=1, page_size=200)
+            ctx=self._require_ctx(), session=session, pagination=PaginationParams(page=1, page_size=200)
         )
         return {"folders": [{"id": str(f.id), "name": f.name, "path": f.dot_path} for f in page.items]}
 
@@ -3196,7 +3219,7 @@ class AgentService:
         from api.schemas.common import PaginationParams
 
         page = await documents_routes.list_documents(
-            ctx=self._ctx,
+            ctx=self._require_ctx(),
             session=session,
             pagination=PaginationParams(page=1, page_size=200),
             folder_id=_parse_uuid(args.get("folder_id")),
@@ -3216,9 +3239,9 @@ class AgentService:
             return {"error": "document_id is required"}
         if not await self._can_see_document(session, doc_id):
             return {"error": "Document not found or not visible to you."}
-        meta = await documents_routes.get_document(document_id=doc_id, ctx=self._ctx, session=session)
+        meta = await documents_routes.get_document(document_id=doc_id, ctx=self._require_ctx(), session=session)
         content = await documents_routes.get_document_content(
-            document_id=doc_id, ctx=self._ctx, session=session, settings=self._settings
+            document_id=doc_id, ctx=self._require_ctx(), session=session, settings=self._settings
         )
         return {
             "id": str(meta.id),
@@ -3253,7 +3276,7 @@ class AgentService:
         body = DocumentCreate(
             title=title, text=args.get("text"), description=args.get("description"), folder_id=folder_id
         )
-        result = await documents_routes.create_document(body=body, ctx=self._ctx, session=session)
+        result = await documents_routes.create_document(body=body, ctx=self._require_ctx(), session=session)
         return {"created_document": {"id": str(result.id), "title": result.title}}
 
     async def _tool_update_document(self, session: AsyncSession, args: dict[str, Any]) -> dict[str, Any]:
@@ -3277,7 +3300,9 @@ class AgentService:
                 return {"error": vis_err}
             provided["folder_id"] = target
         body = DocumentUpdate(**provided)
-        result = await documents_routes.update_document(document_id=doc_id, body=body, ctx=self._ctx, session=session)
+        result = await documents_routes.update_document(
+            document_id=doc_id, body=body, ctx=self._require_ctx(), session=session
+        )
         return {"updated_document": {"id": str(result.id), "title": result.title}}
 
     async def _tool_update_document_content(self, session: AsyncSession, args: dict[str, Any]) -> dict[str, Any]:
@@ -3293,7 +3318,7 @@ class AgentService:
             return {"error": "Document not found or not visible to you."}
         body = DocumentContentUpdate(text=args["text"] or "")
         result = await documents_routes.update_document_content(
-            document_id=doc_id, body=body, ctx=self._ctx, session=session, settings=self._settings
+            document_id=doc_id, body=body, ctx=self._require_ctx(), session=session, settings=self._settings
         )
         return {"updated_document": {"id": str(result.id), "title": result.title, "status": result.processing_status}}
 
@@ -3311,7 +3336,7 @@ class AgentService:
             viewer_permissions_config=args.get("viewer_permissions_config"),
             contributor_permissions_config=args.get("contributor_permissions_config"),
         )
-        result = await folders_routes.create_folder(body=body, ctx=self._ctx, session=session)
+        result = await folders_routes.create_folder(body=body, ctx=self._require_ctx(), session=session)
         return {"created_folder": {"id": str(result.id), "name": result.name, "path": result.dot_path}}
 
     async def _tool_update_folder(self, session: AsyncSession, args: dict[str, Any]) -> dict[str, Any]:
@@ -3329,5 +3354,7 @@ class AgentService:
         if "parent_id" in args:
             provided["parent_id"] = _parse_uuid(args.get("parent_id"))
         body = FolderUpdate(**provided)
-        result = await folders_routes.update_folder(folder_id=folder_id, body=body, ctx=self._ctx, session=session)
+        result = await folders_routes.update_folder(
+            folder_id=folder_id, body=body, ctx=self._require_ctx(), session=session
+        )
         return {"updated_folder": {"id": str(result.id), "name": result.name, "path": result.dot_path}}

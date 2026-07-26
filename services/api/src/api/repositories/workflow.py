@@ -11,9 +11,9 @@ from __future__ import annotations
 import json
 import uuid
 from datetime import date, datetime
-from typing import Any
+from typing import Any, cast
 
-from sqlalchemy import func, select, text
+from sqlalchemy import Table, func, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -252,7 +252,7 @@ class WorkflowRunRepository:
         ``parent_token_id`` link a child (call-activity) run back to the call token.
         """
         stmt = (
-            pg_insert(WorkflowRun.__table__)
+            pg_insert(cast("Table", WorkflowRun.__table__))
             .values(
                 id=uuid.uuid4(),
                 created_at=created_at,

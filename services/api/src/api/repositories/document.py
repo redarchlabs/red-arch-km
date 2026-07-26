@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import ColumnElement, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -61,7 +61,9 @@ class DocumentRepository:
         query = select(Document).where(Document.org_id == self._org_id).options(selectinload(Document.tags))
 
         if folder_ids is not None:
-            folder_filter = Document.folder_id.in_(folder_ids)
+            # or_() below widens this to ColumnElement, so it is annotated rather
+            # than inferred from the narrower in_() result.
+            folder_filter: ColumnElement[bool] = Document.folder_id.in_(folder_ids)
             if include_unfiled:
                 folder_filter = or_(folder_filter, Document.folder_id.is_(None))
             query = query.where(folder_filter)
