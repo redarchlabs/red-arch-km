@@ -193,15 +193,16 @@ function appendAssistant(blocks: Block[], text: string): Block[] {
 }
 
 /**
- * Whether anything from the current reply is already on screen — an assistant
- * block with text, or any tool card. A trailing user block means the reply
- * hasn't produced anything yet.
+ * Whether anything from the current reply is already on screen: a tool card, or
+ * assistant text. Everything after the last user block belongs to that reply —
+ * the trailing block is always the (initially empty) assistant placeholder, so
+ * tool cards land before it rather than at the end.
  */
 function hasVisibleReply(blocks: Block[]): boolean {
-  const last = blocks[blocks.length - 1];
-  if (!last) return false;
-  if (last.kind === "tool") return true;
-  return last.kind === "assistant" && last.text.length > 0;
+  const lastUser = blocks.map((b) => b.kind).lastIndexOf("user");
+  return blocks
+    .slice(lastUser + 1)
+    .some((b) => b.kind === "tool" || (b.kind === "assistant" && b.text.length > 0));
 }
 
 function BlockView({ block }: { block: Block }) {

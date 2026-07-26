@@ -78,41 +78,60 @@ function citedNumbers(text: string): Set<number> {
   return cited;
 }
 
-/** Escape a value destined for an HTML attribute in the generated citation anchor. */
-function escapeAttribute(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
-
 const CITATION_CLASS =
   "mx-0.5 rounded bg-primary/10 px-1 text-xs font-medium text-primary no-underline hover:bg-primary/20";
 
+/** Elements whose text is not prose — a `[1]` inside them is not a citation. */
+const NON_PROSE = "code, pre, a";
+
 /**
- * Rewrite inline `[n]` citation markers into anchors linking to the cited
- * passage, leaving the rest of the answer untouched so Markdown still parses.
- * Markers with no matching source stay literal — escaped so Markdown reads them
- * as text rather than as link syntax.
+ * Turn `[n]` citation markers into links to the cited passage.
  *
- * The result is Markdown-with-inline-HTML; `Markdown` sanitizes the rendered
- * output, so these anchors (and anything the model itself emitted) go through
- * DOMPurify before reaching the DOM.
+ * Works on the PARSED document rather than the Markdown source, so an array
+ * index in `arr[1]` or the label of a real `[1](https://…)` link is left alone —
+ * a string-level rewrite can't tell those from a citation. Markers with no
+ * matching source stay as plain text. Built with DOM APIs, so href/title values
+ * are escaped by the serializer; the result is sanitized by `Markdown`.
  */
-function withCitationLinks(text: string, sources: ChatSource[]): string {
+function linkifyCitations(html: string, sources: ChatSource[]): string {
+  if (typeof DOMParser === "undefined") return html; // no DOM (SSR): leave as-is
   const byNumber = new Map(sources.map((s) => [s.number, s]));
-  return text.replace(/\[(\d+)\]/g, (marker, digits: string) => {
-    const src = byNumber.get(Number(digits));
-    if (!src?.document_id) return `\\[${digits}\\]`;
-    const title = src.snippet ? `${sourceLabel(src)} — "${src.snippet}"` : sourceLabel(src);
-    return (
-      `<a href="${escapeAttribute(passageHref(src))}"` +
-      ` title="${escapeAttribute(title)}"` +
-      ` data-citation="${digits}"` +
-      ` class="${CITATION_CLASS}">${marker}</a>`
-    );
-  });
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+  const targets: Text[] = [];
+  while (walker.nextNode()) {
+    const node = walker.currentNode as Text;
+    if (/\[\d+\]/.test(node.data) && !node.parentElement?.closest(NON_PROSE)) targets.push(node);
+  }
+
+  for (const node of targets) {
+    const fragment = doc.createDocumentFragment();
+    let lastIndex = 0;
+    for (const match of node.data.matchAll(/\[(\d+)\]/g)) {
+      const src = byNumber.get(Number(match[1]));
+      if (!src?.document_id || match.index === undefined) continue;
+      if (match.index > lastIndex) {
+        fragment.append(doc.createTextNode(node.data.slice(lastIndex, match.index)));
+      }
+      const anchor = doc.createElement("a");
+      anchor.setAttribute("href", passageHref(src));
+      anchor.setAttribute(
+        "title",
+        src.snippet ? `${sourceLabel(src)} — "${src.snippet}"` : sourceLabel(src),
+      );
+      anchor.setAttribute("data-citation", match[1]);
+      anchor.setAttribute("class", CITATION_CLASS);
+      anchor.textContent = match[0];
+      fragment.append(anchor);
+      lastIndex = match.index + match[0].length;
+    }
+    if (lastIndex === 0) continue; // nothing matched a real source
+    if (lastIndex < node.data.length) {
+      fragment.append(doc.createTextNode(node.data.slice(lastIndex)));
+    }
+    node.replaceWith(fragment);
+  }
+  return doc.body.innerHTML;
 }
 
 export function ChatMessage({ message }: ChatMessageProps) {
@@ -149,7 +168,11 @@ export function ChatMessage({ message }: ChatMessageProps) {
           />
         ) : (
           <>
-            <Markdown content={withCitationLinks(message.content, sources)} stripImages />
+            <Markdown
+              content={message.content}
+              stripImages
+              transformHtml={(html) => linkifyCitations(html, sources)}
+            />
             {message.streaming ? (
               <span
                 aria-label="streaming"

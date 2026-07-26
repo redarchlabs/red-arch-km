@@ -182,6 +182,42 @@ describe("ChatMessage markdown", () => {
     expect(screen.getByText("# not a heading")).toBeInTheDocument();
   });
 
+  it("leaves bracketed numbers inside code untouched", () => {
+    render(
+      <ChatMessage
+        message={assistantMessage("Use `arr[1]` here.\n\n```js\nconsole.log(arr[1]);\n```", [
+          source(1),
+        ])}
+      />,
+    );
+
+    const code = document.querySelectorAll("code");
+    expect(code.length).toBeGreaterThan(0);
+    for (const el of code) {
+      expect(el.querySelector("a")).toBeNull();
+      expect(el.textContent).toContain("arr[1]");
+    }
+  });
+
+  it("does not rewrite a citation-shaped label on a real markdown link", () => {
+    render(
+      <ChatMessage message={assistantMessage("See [1](https://example.com) for details.", [source(1)])} />,
+    );
+
+    const link = screen.getByRole("link", { name: "1" });
+    expect(link).toHaveAttribute("href", "https://example.com");
+    expect(screen.queryByText(/\(https:\/\/example\.com\)/)).not.toBeInTheDocument();
+  });
+
+  it("links a citation that appears inside a list item or table cell", () => {
+    render(
+      <ChatMessage message={assistantMessage("- A cited bullet [1]\n- Another bullet", [source(1)])} />,
+    );
+
+    const link = screen.getAllByRole("link", { name: "[1]" })[0];
+    expect(link.closest("li")).not.toBeNull();
+  });
+
   it("drops images from assistant markdown", () => {
     render(
       <ChatMessage
