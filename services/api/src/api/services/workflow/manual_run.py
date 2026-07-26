@@ -16,18 +16,24 @@ Callers are responsible for loading + authorizing the workflow/version first
 
 from __future__ import annotations
 
+import logging
 import uuid
+from typing import Any
 
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.config import Settings
+from api.dependencies import get_redis_client
 from api.models.workflow import Workflow, WorkflowVersion
 from api.repositories.workflow import WorkflowVersionRepository
 from api.schemas.workflow import ManualRunRequest, ManualRunResult
 from api.services.workflow.actions import SIDE_EFFECTING_ACTIONS
 from api.services.workflow.factory import build_dispatch_service
 from api.services.workflow.manual_inputs import InputValidationError, coerce_inputs, is_manual_trigger
+from api.services.workflow.stream import RunStreamPublisher
+
+logger = logging.getLogger(__name__)
 
 
 async def resolve_published_version(session: AsyncSession, org_id: uuid.UUID, workflow: Workflow) -> WorkflowVersion:
@@ -57,8 +63,53 @@ async def execute_workflow_run(
 
     ``actor_user_id`` is the acting user's profile id for a browser session, or
     ``None`` for an API-key-driven run.
+
+    When ``request.stream_token`` is set, an LLM step's tokens are published live
+    to that caller's channel (see ``workflow/stream.py``) — a preview only; the
+    run itself is identical with or without a watcher.
     """
-    dispatcher = build_dispatch_service(session, settings)
+    publisher = _build_publisher(org_id, request, settings)
+    dispatcher = build_dispatch_service(session, settings, delta_sink=publisher)
+    try:
+        return await _execute(
+            session,
+            org_id,
+            workflow,
+            version,
+            request=request,
+            actor_user_id=actor_user_id,
+            dispatcher=dispatcher,
+        )
+    finally:
+        # Close the stream on EVERY exit — success, workflow failure, or an
+        # HTTPException from validation — so a watcher is never left hanging
+        # until its timeout.
+        if publisher is not None:
+            await publisher.done()
+
+
+def _build_publisher(org_id: uuid.UUID, request: ManualRunRequest, settings: Settings) -> RunStreamPublisher | None:
+    """Publisher for this run's live tokens, or None when nobody is watching."""
+    if request.stream_token is None:
+        return None
+    try:
+        return RunStreamPublisher(get_redis_client(settings), org_id, str(request.stream_token))
+    except Exception:  # noqa: BLE001 — no Redis just means no live preview
+        logger.debug("run stream unavailable", exc_info=True)
+        return None
+
+
+async def _execute(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    workflow: Workflow,
+    version: WorkflowVersion,
+    *,
+    request: ManualRunRequest,
+    actor_user_id: uuid.UUID | None,
+    dispatcher: Any,
+) -> ManualRunResult:
+    """The run itself: input validation, record-context guards, dispatch."""
 
     # A manual (BPMN "none" start) workflow runs with the caller-supplied input
     # variables the trigger declares; record fields are irrelevant and ignored.

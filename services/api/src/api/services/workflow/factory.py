@@ -10,6 +10,8 @@ argument list.
 
 from __future__ import annotations
 
+from typing import Any
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.config import Settings
@@ -17,8 +19,18 @@ from api.services.email import EmailSender
 from api.services.workflow.dispatcher import WorkflowDispatchService
 
 
-def build_dispatch_service(session: AsyncSession, settings: Settings) -> WorkflowDispatchService:
-    """Construct a :class:`WorkflowDispatchService` wired from ``settings``."""
+def build_dispatch_service(
+    session: AsyncSession,
+    settings: Settings,
+    *,
+    delta_sink: Any = None,
+) -> WorkflowDispatchService:
+    """Construct a :class:`WorkflowDispatchService` wired from ``settings``.
+
+    ``delta_sink`` is an optional per-run publisher for live LLM tokens, set only
+    when the caller is watching this run (see ``workflow/stream.py``). Dispatchers
+    are built per request, so it never leaks between runs.
+    """
     return WorkflowDispatchService(
         session,
         webhook_allowlist=tuple(settings.workflow_webhook_allowlist or ()),
@@ -27,4 +39,5 @@ def build_dispatch_service(session: AsyncSession, settings: Settings) -> Workflo
         email_sender=EmailSender(settings),
         org_encryption_key=settings.org_encryption_key.get_secret_value(),
         settings=settings,
+        delta_sink=delta_sink,
     )

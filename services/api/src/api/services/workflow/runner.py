@@ -82,8 +82,12 @@ class ActionExecutor:
         email_sender: Any = None,
         org_encryption_key: str = "",
         settings: Any = None,
+        delta_sink: Any = None,
     ) -> None:
         self._session = session
+        # Optional per-run publisher for live LLM tokens (see workflow/stream.py).
+        # Set only for a run the caller is watching; None = generate normally.
+        self._delta_sink = delta_sink
         self._webhook_allowlist = webhook_allowlist
         self._trusted_local_hosts = trusted_local_hosts
         self._public_base_url = public_base_url
@@ -224,6 +228,9 @@ class ActionExecutor:
             question=opts.get("question"),
             max_words=int(opts.get("max_words") or 30),
             instruction=opts.get("instruction"),
+            # Only streams when the caller is watching this run; the returned
+            # summary — and everything downstream of it — is identical either way.
+            on_delta=self._delta_sink.delta if self._delta_sink is not None else None,
         )
 
     async def _decide(self, org_id: uuid.UUID, opts: dict[str, Any]) -> dict[str, Any]:
