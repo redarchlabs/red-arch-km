@@ -100,9 +100,7 @@ async def _read_bundle(file: UploadFile) -> dict[str, Any]:
     try:
         bundle = json.loads(raw)
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=f"not a valid JSON bundle: {exc}"
-        ) from exc
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"not a valid JSON bundle: {exc}") from exc
     if not isinstance(bundle, dict) or bundle.get("kind") != BUNDLE_KIND:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -137,9 +135,7 @@ async def diff_org(
     # Config-only current-state export of the target: the diff correlates config
     # objects; data is count-only from the source side, so target rows/text aren't
     # needed (and skipping them keeps the preview cheap).
-    target = await MigrationExporter(session, ctx.org_id).export(
-        include_records=False, include_documents=False
-    )
+    target = await MigrationExporter(session, ctx.org_id).export(include_records=False, include_documents=False)
     return compute_diff(source_resources, target["resources"])
 
 
@@ -165,14 +161,10 @@ async def import_org(
     parsed_selection = _parse_selection(selection)
     importer = MigrationImporter(session, ctx.org_id, settings)
     try:
-        summary = await importer.import_bundle(
-            bundle, strategy, dry_run=dry_run, selection=parsed_selection
-        )
+        summary = await importer.import_bundle(bundle, strategy, dry_run=dry_run, selection=parsed_selection)
     except Exception as exc:  # noqa: BLE001 - surface a clean 400 instead of a 500
         await session.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=f"import failed: {exc}"
-        ) from exc
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"import failed: {exc}") from exc
 
     if dry_run:
         # Undo everything; get_db would otherwise commit on a clean return.

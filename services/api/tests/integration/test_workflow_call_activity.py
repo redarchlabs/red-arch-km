@@ -36,7 +36,8 @@ async def _org_and_entity(admin_session: AsyncSession) -> Org:
     await set_tenant(admin_session, str(org.id))
     await EntityService(admin_session, org.id).create_definition(
         EntityDefinitionCreate(
-            name="Thing", slug="thing",
+            name="Thing",
+            slug="thing",
             fields=[EntityFieldCreate(name="Title", slug="title", field_type="text")],
         )
     )
@@ -62,9 +63,15 @@ async def _new_run(admin_session: AsyncSession, org: Org, wf):
     await set_tenant(admin_session, str(org.id))
     version = await WorkflowVersionRepository(admin_session, org.id).get(wf.active_version_id)
     run = await WorkflowRunRepository(admin_session, org.id).create_run_if_absent(
-        workflow_id=wf.id, workflow_version_id=version.id, outbox_id=uuid.uuid4(), outbox_seq=None,
-        created_at=datetime.now(UTC), trigger_operation="update", record_id=None,
-        input_snapshot={"before": None, "after": {}}, depth=0,
+        workflow_id=wf.id,
+        workflow_version_id=version.id,
+        outbox_id=uuid.uuid4(),
+        outbox_seq=None,
+        created_at=datetime.now(UTC),
+        trigger_operation="update",
+        record_id=None,
+        input_snapshot={"before": None, "after": {}},
+        depth=0,
     )
     await admin_session.commit()
     return run, version.definition
@@ -82,26 +89,37 @@ async def _drive(admin_session: AsyncSession, run, definition):
 async def test_call_activity_runs_child_and_captures_result(admin_session: AsyncSession) -> None:
     org = await _org_and_entity(admin_session)
     # Child: derive a variable, then end.
-    child_wf = await _publish(admin_session, org, {
-        "schema_version": 2,
-        "nodes": [
-            {"id": "s", "type": "trigger", "data": {}},
-            {"id": "calc", "type": "task", "data": {"task_type": "script", "transform": {"answer": 42}}},
-            {"id": "e", "type": "event", "data": {"position": "end", "event_type": "none"}},
-        ],
-        "edges": [{"id": "e0", "source": "s", "target": "calc"}, {"id": "e1", "source": "calc", "target": "e"}],
-    })
+    child_wf = await _publish(
+        admin_session,
+        org,
+        {
+            "schema_version": 2,
+            "nodes": [
+                {"id": "s", "type": "trigger", "data": {}},
+                {"id": "calc", "type": "task", "data": {"task_type": "script", "transform": {"answer": 42}}},
+                {"id": "e", "type": "event", "data": {"position": "end", "event_type": "none"}},
+            ],
+            "edges": [{"id": "e0", "source": "s", "target": "calc"}, {"id": "e1", "source": "calc", "target": "e"}],
+        },
+    )
     # Parent: call the child, capture its variables, then end.
-    parent_wf = await _publish(admin_session, org, {
-        "schema_version": 2,
-        "nodes": [
-            {"id": "s", "type": "trigger", "data": {}},
-            {"id": "call", "type": "task",
-             "data": {"task_type": "call", "call_workflow_id": str(child_wf.id), "capture": "sub"}},
-            {"id": "e", "type": "event", "data": {"position": "end", "event_type": "none"}},
-        ],
-        "edges": [{"id": "e0", "source": "s", "target": "call"}, {"id": "e1", "source": "call", "target": "e"}],
-    })
+    parent_wf = await _publish(
+        admin_session,
+        org,
+        {
+            "schema_version": 2,
+            "nodes": [
+                {"id": "s", "type": "trigger", "data": {}},
+                {
+                    "id": "call",
+                    "type": "task",
+                    "data": {"task_type": "call", "call_workflow_id": str(child_wf.id), "capture": "sub"},
+                },
+                {"id": "e", "type": "event", "data": {"position": "end", "event_type": "none"}},
+            ],
+            "edges": [{"id": "e0", "source": "s", "target": "call"}, {"id": "e1", "source": "call", "target": "e"}],
+        },
+    )
 
     run, definition = await _new_run(admin_session, org, parent_wf)
     await _drive(admin_session, run, definition)
@@ -115,10 +133,14 @@ async def test_call_activity_runs_child_and_captures_result(admin_session: Async
     from api.models.workflow import WorkflowRun
 
     children = (
-        await admin_session.execute(
-            select(WorkflowRun).where(WorkflowRun.parent_run_id == run.id, WorkflowRun.org_id == org.id)
+        (
+            await admin_session.execute(
+                select(WorkflowRun).where(WorkflowRun.parent_run_id == run.id, WorkflowRun.org_id == org.id)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert len(children) == 1
     assert children[0].workflow_id == child_wf.id
     assert children[0].status == "succeeded"
@@ -128,25 +150,40 @@ async def test_call_activity_runs_child_and_captures_result(admin_session: Async
 async def test_call_activity_failed_child_fails_parent(admin_session: AsyncSession) -> None:
     org = await _org_and_entity(admin_session)
     # Child fails (webhook with empty allowlist).
-    child_wf = await _publish(admin_session, org, {
-        "schema_version": 2,
-        "nodes": [
-            {"id": "s", "type": "trigger", "data": {}},
-            {"id": "boom", "type": "task",
-             "data": {"task_type": "send", "action_type": "send_webhook", "config": {"url": "https://x.example/y"}}},
-            {"id": "e", "type": "event", "data": {"position": "end", "event_type": "none"}},
-        ],
-        "edges": [{"id": "e0", "source": "s", "target": "boom"}, {"id": "e1", "source": "boom", "target": "e"}],
-    })
-    parent_wf = await _publish(admin_session, org, {
-        "schema_version": 2,
-        "nodes": [
-            {"id": "s", "type": "trigger", "data": {}},
-            {"id": "call", "type": "task", "data": {"task_type": "call", "call_workflow_id": str(child_wf.id)}},
-            {"id": "e", "type": "event", "data": {"position": "end", "event_type": "none"}},
-        ],
-        "edges": [{"id": "e0", "source": "s", "target": "call"}, {"id": "e1", "source": "call", "target": "e"}],
-    })
+    child_wf = await _publish(
+        admin_session,
+        org,
+        {
+            "schema_version": 2,
+            "nodes": [
+                {"id": "s", "type": "trigger", "data": {}},
+                {
+                    "id": "boom",
+                    "type": "task",
+                    "data": {
+                        "task_type": "send",
+                        "action_type": "send_webhook",
+                        "config": {"url": "https://x.example/y"},
+                    },
+                },
+                {"id": "e", "type": "event", "data": {"position": "end", "event_type": "none"}},
+            ],
+            "edges": [{"id": "e0", "source": "s", "target": "boom"}, {"id": "e1", "source": "boom", "target": "e"}],
+        },
+    )
+    parent_wf = await _publish(
+        admin_session,
+        org,
+        {
+            "schema_version": 2,
+            "nodes": [
+                {"id": "s", "type": "trigger", "data": {}},
+                {"id": "call", "type": "task", "data": {"task_type": "call", "call_workflow_id": str(child_wf.id)}},
+                {"id": "e", "type": "event", "data": {"position": "end", "event_type": "none"}},
+            ],
+            "edges": [{"id": "e0", "source": "s", "target": "call"}, {"id": "e1", "source": "call", "target": "e"}],
+        },
+    )
     run, definition = await _new_run(admin_session, org, parent_wf)
     await _drive(admin_session, run, definition)
 
@@ -158,24 +195,35 @@ async def test_call_activity_resumes_after_child_human_task(admin_session: Async
     """A child with its own user task: the parent parks until the child completes,
     then _signal_parent resumes it."""
     org = await _org_and_entity(admin_session)
-    child_wf = await _publish(admin_session, org, {
-        "schema_version": 2,
-        "nodes": [
-            {"id": "s", "type": "trigger", "data": {}},
-            {"id": "approve", "type": "task", "data": {"task_type": "user"}},
-            {"id": "e", "type": "event", "data": {"position": "end", "event_type": "none"}},
-        ],
-        "edges": [{"id": "e0", "source": "s", "target": "approve"}, {"id": "e1", "source": "approve", "target": "e"}],
-    })
-    parent_wf = await _publish(admin_session, org, {
-        "schema_version": 2,
-        "nodes": [
-            {"id": "s", "type": "trigger", "data": {}},
-            {"id": "call", "type": "task", "data": {"task_type": "call", "call_workflow_id": str(child_wf.id)}},
-            {"id": "e", "type": "event", "data": {"position": "end", "event_type": "none"}},
-        ],
-        "edges": [{"id": "e0", "source": "s", "target": "call"}, {"id": "e1", "source": "call", "target": "e"}],
-    })
+    child_wf = await _publish(
+        admin_session,
+        org,
+        {
+            "schema_version": 2,
+            "nodes": [
+                {"id": "s", "type": "trigger", "data": {}},
+                {"id": "approve", "type": "task", "data": {"task_type": "user"}},
+                {"id": "e", "type": "event", "data": {"position": "end", "event_type": "none"}},
+            ],
+            "edges": [
+                {"id": "e0", "source": "s", "target": "approve"},
+                {"id": "e1", "source": "approve", "target": "e"},
+            ],
+        },
+    )
+    parent_wf = await _publish(
+        admin_session,
+        org,
+        {
+            "schema_version": 2,
+            "nodes": [
+                {"id": "s", "type": "trigger", "data": {}},
+                {"id": "call", "type": "task", "data": {"task_type": "call", "call_workflow_id": str(child_wf.id)}},
+                {"id": "e", "type": "event", "data": {"position": "end", "event_type": "none"}},
+            ],
+            "edges": [{"id": "e0", "source": "s", "target": "call"}, {"id": "e1", "source": "call", "target": "e"}],
+        },
+    )
     run, definition = await _new_run(admin_session, org, parent_wf)
     engine = await _drive(admin_session, run, definition)
 
@@ -185,10 +233,14 @@ async def test_call_activity_resumes_after_child_human_task(admin_session: Async
     from api.models.workflow import WorkflowRun
 
     child = (
-        await admin_session.execute(
-            select(WorkflowRun).where(WorkflowRun.parent_run_id == run.id, WorkflowRun.org_id == org.id)
+        (
+            await admin_session.execute(
+                select(WorkflowRun).where(WorkflowRun.parent_run_id == run.id, WorkflowRun.org_id == org.id)
+            )
         )
-    ).scalars().one()
+        .scalars()
+        .one()
+    )
     assert child.status == "waiting"
 
     # Complete the child's user task → child finishes → parent is signaled.

@@ -152,9 +152,7 @@ class EntityResolver:
             if _type_compatible(e.type, entity_type)
         )
 
-        decision = decide_resolution(
-            vector_candidates, thresholds=self._thresholds, extra_candidate_ids=lexical_extra
-        )
+        decision = decide_resolution(vector_candidates, thresholds=self._thresholds, extra_candidate_ids=lexical_extra)
 
         if decision.action is ResolutionAction.MERGE and decision.entity_id:
             self._record_alias(tenant_id, decision.entity_id, name)
@@ -183,9 +181,7 @@ class EntityResolver:
         if existing is not None and mention.casefold() != existing.canonical_name.casefold():
             self._store.add_aliases(tenant_id, entity_id, [mention])
 
-    def _adjudicate(
-        self, tenant_id: str, name: str, entity_type: str, candidate_ids: tuple[str, ...]
-    ) -> str | None:
+    def _adjudicate(self, tenant_id: str, name: str, entity_type: str, candidate_ids: tuple[str, ...]) -> str | None:
         if self._llm is None:
             return None
         candidates = [self._store.get_entity(tenant_id, cid) for cid in candidate_ids]

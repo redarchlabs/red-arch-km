@@ -106,9 +106,7 @@ async def _run_claude_code(ctx: ToolContext, args: dict[str, Any]) -> dict[str, 
         return {"error": f"failed to launch Claude Code CLI: {exc}"}
 
     try:
-        stdout, stderr = await asyncio.wait_for(
-            proc.communicate(), timeout=settings.claude_cli_timeout_seconds
-        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=settings.claude_cli_timeout_seconds)
     except TimeoutError:
         proc.kill()
         await proc.wait()

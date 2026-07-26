@@ -12,17 +12,17 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.repositories.agent import AgentRepository
 from api.repositories.custom_entity import (
     EntityDefinitionRepository,
     EntityFieldRepository,
     EntityRelationshipRepository,
 )
-from api.repositories.agent import AgentRepository
 from api.repositories.document import DocumentRepository
 from api.repositories.dynamic_entity import DynamicEntityRepository
 from api.repositories.folder import FolderRepository
-from api.repositories.mcp_server import McpServerRepository
 from api.repositories.form import FormRepository
+from api.repositories.mcp_server import McpServerRepository
 from api.repositories.report import ReportRepository
 from api.repositories.tag import TagRepository
 from api.repositories.view import ViewRepository
@@ -442,9 +442,7 @@ class MigrationExporter:
             out.append({"entity_slug": ent["slug"], "records": rows})
         return out
 
-    async def _export_documents(
-        self, warnings: list[str], only_ids: set[str] | None = None
-    ) -> list[dict[str, Any]]:
+    async def _export_documents(self, warnings: list[str], only_ids: set[str] | None = None) -> list[dict[str, Any]]:
         repo = DocumentRepository(self._session, self._org_id)
         out: list[dict[str, Any]] = []
         offset = 0

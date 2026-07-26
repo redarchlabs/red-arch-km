@@ -28,9 +28,7 @@ def upgrade() -> None:
         "CHECK (status IN ('pending','running','waiting','succeeded','failed','skipped'))"
     )
     # Partial index drives the run-timers sweep for due delayed runs.
-    op.execute(
-        "CREATE INDEX ix_wf_runs_waiting ON workflow_runs (resume_at) WHERE status = 'waiting'"
-    )
+    op.execute("CREATE INDEX ix_wf_runs_waiting ON workflow_runs (resume_at) WHERE status = 'waiting'")
 
 
 def downgrade() -> None:

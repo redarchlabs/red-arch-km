@@ -135,9 +135,7 @@ def _finalize_tool_calls(acc: dict[int, dict[str, Any]]) -> list[ToolCallRequest
             arguments = {}
         if not isinstance(arguments, dict):
             arguments = {}
-        calls.append(
-            ToolCallRequest(id=slot.get("id") or f"call_{idx}", name=name, arguments=arguments)
-        )
+        calls.append(ToolCallRequest(id=slot.get("id") or f"call_{idx}", name=name, arguments=arguments))
     return calls
 
 
@@ -218,9 +216,7 @@ async def _read_batch_result(client: Any, batch_id: str) -> dict[str, Any]:
         if result.type != "succeeded":
             return {"status": "error", "batch_id": batch_id, "error": f"batch entry {result.type}"}
         message = result.message
-        text = "".join(
-            getattr(b, "text", "") for b in (message.content or []) if getattr(b, "type", None) == "text"
-        )
+        text = "".join(getattr(b, "text", "") for b in (message.content or []) if getattr(b, "type", None) == "text")
         usage = getattr(message, "usage", None)
         return {
             "status": "done",
@@ -312,7 +308,9 @@ class LLMProvider:
         if usage and (usage.cache_read_tokens or usage.cache_write_tokens):
             logger.debug(
                 "prompt cache: read=%d write=%d (model=%s)",
-                usage.cache_read_tokens, usage.cache_write_tokens, model,
+                usage.cache_read_tokens,
+                usage.cache_write_tokens,
+                model,
             )
         yield Completion(
             content="".join(content_parts),
@@ -383,9 +381,7 @@ class LLMProvider:
             params["system"] = system
         client = _anthropic_client(self.api_key)
         try:
-            batch = await client.messages.batches.create(
-                requests=[{"custom_id": _BATCH_CUSTOM_ID, "params": params}]
-            )
+            batch = await client.messages.batches.create(requests=[{"custom_id": _BATCH_CUSTOM_ID, "params": params}])
             waited = 0.0
             status = batch.processing_status
             while status != "ended" and waited < max_wait:

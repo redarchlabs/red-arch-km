@@ -11,7 +11,8 @@ from api.repositories.mcp_server import McpServerRepository
 from api.services.crypto import decrypt_secret, encrypt_secret
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from tests.integration.helpers import set_tenant
+
+from .helpers import set_tenant
 
 pytestmark = pytest.mark.integration
 
@@ -29,8 +30,11 @@ async def _seed(admin_session: AsyncSession) -> tuple[Org, Org]:
 async def test_secret_encrypted_at_rest(admin_session: AsyncSession) -> None:
     org_a, _ = await _seed(admin_session)
     server = McpServer(
-        name="github", transport="http", url="https://mcp.example.com",
-        secret_encrypted=encrypt_secret("s3cret", _KEY), org_id=org_a.id,
+        name="github",
+        transport="http",
+        url="https://mcp.example.com",
+        secret_encrypted=encrypt_secret("s3cret", _KEY),
+        org_id=org_a.id,
     )
     admin_session.add(server)
     await admin_session.commit()

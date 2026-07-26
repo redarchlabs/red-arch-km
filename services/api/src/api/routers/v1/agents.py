@@ -51,8 +51,12 @@ async def trigger_agent_run(
     if agent is None or not agent.enabled:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "agent not found or disabled")
     run = await AgentRunRepository(session, principal.org_id).create_run(
-        agent_id=agent.id, provider=agent.provider, model=agent.model,
-        trigger="manual", input={"task": body.task}, status="queued",
+        agent_id=agent.id,
+        provider=agent.provider,
+        model=agent.model,
+        trigger="manual",
+        input={"task": body.task},
+        status="queued",
     )
     return AgentRunRead.model_validate(run)
 
@@ -85,7 +89,9 @@ async def create_work_order(
     session: Annotated[AsyncSession, Depends(get_apikey_tenant_db)],
 ) -> WorkOrderRead:
     wo = await WorkOrderService(session, principal.org_id).create_work_order(
-        title=body.title, body=body.body, priority=body.priority,
+        title=body.title,
+        body=body.body,
+        priority=body.priority,
         assigned_agent_id=body.assigned_agent_id,
     )
     return WorkOrderRead.model_validate(wo)

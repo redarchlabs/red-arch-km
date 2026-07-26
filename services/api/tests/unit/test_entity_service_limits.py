@@ -47,8 +47,7 @@ class TestDefinitionLimits:
         svc = _service()
         svc._defs.count.return_value = 0
         fields = [
-            EntityFieldCreate(name=f"F{i}", slug=f"f{i}", field_type="text")
-            for i in range(MAX_FIELDS_PER_ENTITY + 1)
+            EntityFieldCreate(name=f"F{i}", slug=f"f{i}", field_type="text") for i in range(MAX_FIELDS_PER_ENTITY + 1)
         ]
         with pytest.raises(EntityLimitError):
             await svc.create_definition(EntityDefinitionCreate(name="X", slug="x", fields=fields))
@@ -93,9 +92,7 @@ class TestRelationshipGuards:
         svc = _service()
         source, target = MagicMock(), MagicMock()
         svc._defs.get.side_effect = [source, target]
-        svc._rels.list_for_source.return_value = [
-            MagicMock() for _ in range(MAX_RELATIONSHIPS_PER_ENTITY)
-        ]
+        svc._rels.list_for_source.return_value = [MagicMock() for _ in range(MAX_RELATIONSHIPS_PER_ENTITY)]
         with pytest.raises(EntityLimitError):
             await svc.create_relationship(
                 uuid.uuid4(),

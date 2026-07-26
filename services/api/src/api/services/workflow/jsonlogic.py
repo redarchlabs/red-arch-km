@@ -120,7 +120,7 @@ def _cmp(a: Any, b: Any) -> int:
     if isinstance(a, (int, float)) or isinstance(b, (int, float)):
         na, nb = _num(a), _num(b)
     else:
-        na, nb = a, b  # type: ignore[assignment]
+        na, nb = a, b
     if na < nb:
         return -1
     if na > nb:

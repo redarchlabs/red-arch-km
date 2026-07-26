@@ -102,12 +102,8 @@ async def test_create_record_action_copies_field_from_trigger(
 
     wf_repo = WorkflowRepository(admin_session, org.id)
     ver_repo = WorkflowVersionRepository(admin_session, org.id)
-    workflow = await wf_repo.create(
-        name="Customer→Patient", entity_definition_id=customer.id, description=None
-    )
-    version = await ver_repo.create(
-        workflow_id=workflow.id, version_number=1, definition=_CREATE_WITH_REF_DEFINITION
-    )
+    workflow = await wf_repo.create(name="Customer→Patient", entity_definition_id=customer.id, description=None)
+    version = await ver_repo.create(workflow_id=workflow.id, version_number=1, definition=_CREATE_WITH_REF_DEFINITION)
     version.status = "published"
     version.published_at = func.now()
     await wf_repo.update(workflow, enabled=True, active_version_id=version.id)
@@ -139,9 +135,7 @@ async def test_create_record_action_copies_field_from_trigger(
     assert patients[0]["last_name"] == "Copied"
 
 
-async def test_workflow_fires_and_runs_action(
-    admin_session: AsyncSession, session: AsyncSession
-) -> None:
+async def test_workflow_fires_and_runs_action(admin_session: AsyncSession, session: AsyncSession) -> None:
     # --- org + entity ---
     await set_tenant(admin_session, None)
     org = Org(name=f"WFD-{uuid.uuid4().hex[:8]}")
@@ -164,9 +158,7 @@ async def test_workflow_fires_and_runs_action(
     # --- workflow + published version ---
     wf_repo = WorkflowRepository(admin_session, org.id)
     ver_repo = WorkflowVersionRepository(admin_session, org.id)
-    workflow = await wf_repo.create(
-        name="Close ticket", entity_definition_id=definition.id, description=None
-    )
+    workflow = await wf_repo.create(name="Close ticket", entity_definition_id=definition.id, description=None)
     version = await ver_repo.create(workflow_id=workflow.id, version_number=1, definition=_DEFINITION)
     version.status = "published"
     version.published_at = func.now()
@@ -176,9 +168,7 @@ async def test_workflow_fires_and_runs_action(
     # --- create + update a record (both capture outbox events) ---
     await set_tenant(admin_session, str(org.id))
     fields = await EntityFieldRepository(admin_session, org.id).list_for_definition(definition.id)
-    repo = DynamicEntityRepository(
-        admin_session, org.id, definition, fields, outbox=OutboxWriter(admin_session)
-    )
+    repo = DynamicEntityRepository(admin_session, org.id, definition, fields, outbox=OutboxWriter(admin_session))
     created = await repo.create({"title": "hello", "status": "open"})
     await repo.update(uuid.UUID(str(created["id"])), {"status": "closed"})
     await admin_session.commit()

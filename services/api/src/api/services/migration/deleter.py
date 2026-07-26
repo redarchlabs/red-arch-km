@@ -14,6 +14,7 @@ safe generic delete path here and are reported as skipped rather than guessed at
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -111,6 +112,9 @@ class MigrationDeleter:
         return {str(getattr(r, "lineage_id", None) or r.id): r for r in rows}
 
     async def _load_current(self, rtype: str) -> list[Any]:
+        # One name reused across branches that each return a different model, so it
+        # is annotated once rather than being bound to whichever branch comes first.
+        rows: Sequence[Any]
         if rtype == "tags":
             rows, _ = await TagRepository(self._session, self._org_id).list_all(limit=10_000)
             return list(rows)

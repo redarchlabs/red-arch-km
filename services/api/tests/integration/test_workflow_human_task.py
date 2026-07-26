@@ -35,7 +35,8 @@ async def _seed(admin_session: AsyncSession, definition: dict):
     await set_tenant(admin_session, str(org.id))
     entity = await EntityService(admin_session, org.id).create_definition(
         EntityDefinitionCreate(
-            name="Req", slug="req",
+            name="Req",
+            slug="req",
             fields=[EntityFieldCreate(name="Title", slug="title", field_type="text")],
         )
     )
@@ -64,8 +65,11 @@ async def _seed(admin_session: AsyncSession, definition: dict):
 
 
 def _log(node_id: str, message: str) -> dict:
-    return {"id": node_id, "type": "task",
-            "data": {"task_type": "service", "action_type": "log", "config": {"message": message}}}
+    return {
+        "id": node_id,
+        "type": "task",
+        "data": {"task_type": "service", "action_type": "log", "config": {"message": message}},
+    }
 
 
 def _approval_definition() -> dict:
@@ -74,8 +78,7 @@ def _approval_definition() -> dict:
         "nodes": [
             {"id": "start", "type": "trigger", "data": {}},
             {"id": "approve", "type": "task", "data": {"task_type": "user", "label": "Manager approval"}},
-            {"id": "gw", "type": "gateway",
-             "data": {"gateway_type": "exclusive", "expr": {"var": "vars.approved"}}},
+            {"id": "gw", "type": "gateway", "data": {"gateway_type": "exclusive", "expr": {"var": "vars.approved"}}},
             _log("do", "provisioned"),
             _log("deny", "rejected"),
             {"id": "end", "type": "event", "data": {"position": "end", "event_type": "none"}},
@@ -124,7 +127,7 @@ async def test_user_task_parks_then_completes_and_routes(admin_session: AsyncSes
     steps = {s.node_id: s for s in await _steps(admin_session, run)}
     assert steps["approve"].status == "succeeded"
     assert steps["approve"].output == {"decision": "approved"}
-    assert "do" in steps and "deny" not in steps       # routed to the approved path
+    assert "do" in steps and "deny" not in steps  # routed to the approved path
     final = await WorkflowRunRepository(admin_session, org.id).get(run.id, run.created_at)
     assert final.status == "succeeded"
 

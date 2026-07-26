@@ -131,9 +131,7 @@ def test_visible_when_accepted_and_round_trips(ids, fields_by_entity, rels):
 def test_visible_when_rejects_unknown_key_still(ids):
     """`extra="forbid"` is intact — visible_when didn't open the element to junk."""
     with pytest.raises(ValidationError):
-        FormConfig.model_validate(
-            {"version": 2, "elements": [{"type": "label", "text": "x", "bogus_attr": 1}]}
-        )
+        FormConfig.model_validate({"version": 2, "elements": [{"type": "label", "text": "x", "bogus_attr": 1}]})
 
 
 def test_visible_when_in_section_child_fetches_gate_field(ids, fields_by_entity, rels):
@@ -174,9 +172,7 @@ def test_table_anchor_must_target_root(ids, fields_by_entity, rels):
     cfg = FormConfig.model_validate(
         {
             "version": 2,
-            "elements": [
-                {"type": "table", "anchor_relationship_id": str(ids["rel_1to1"]), "columns": []}
-            ],
+            "elements": [{"type": "table", "anchor_relationship_id": str(ids["rel_1to1"]), "columns": []}],
         }
     )
     with pytest.raises(LayoutError):
@@ -385,8 +381,12 @@ def test_button_link_href_scheme_guarded():
         {
             "version": 2,
             "elements": [
-                {"type": "button", "label": "Quiz", "style": "primary",
-                 "action": {"kind": "link", "href": "/views/{quiz_view_slug}/view?record_id=me"}}
+                {
+                    "type": "button",
+                    "label": "Quiz",
+                    "style": "primary",
+                    "action": {"kind": "link", "href": "/views/{quiz_view_slug}/view?record_id=me"},
+                }
             ],
         }
     )
@@ -395,8 +395,12 @@ def test_button_link_href_scheme_guarded():
             {
                 "version": 2,
                 "elements": [
-                    {"type": "button", "label": "x", "style": "primary",
-                     "action": {"kind": "link", "href": "javascript:alert(1)"}}
+                    {
+                        "type": "button",
+                        "label": "x",
+                        "style": "primary",
+                        "action": {"kind": "link", "href": "javascript:alert(1)"},
+                    }
                 ],
             }
         )
@@ -450,9 +454,7 @@ def test_legacy_flat_config_upgrades_to_v2():
 
 
 def test_legacy_field_heading_becomes_label_element():
-    cfg = FormConfig.model_validate(
-        {"fields": [{"slug": "email", "heading": "Contact"}], "sections": []}
-    )
+    cfg = FormConfig.model_validate({"fields": [{"slug": "email", "heading": "Contact"}], "sections": []})
     assert [e.type for e in cfg.elements] == ["label", "field"]
     assert cfg.elements[0].text == "Contact"
 

@@ -46,11 +46,17 @@ async def _new_org(session: AsyncSession, prefix: str) -> Org:
 _DELAY_DEF = {
     "nodes": [
         {"id": "t", "type": "trigger", "data": {"operations": ["update"]}},
-        {"id": "a1", "type": "action",
-         "data": {"action_type": "update_record_field", "config": {"field": "title", "value": "STEP1"}}},
+        {
+            "id": "a1",
+            "type": "action",
+            "data": {"action_type": "update_record_field", "config": {"field": "title", "value": "STEP1"}},
+        },
         {"id": "d", "type": "delay", "data": {"delay_seconds": 3600}},
-        {"id": "a2", "type": "action",
-         "data": {"action_type": "update_record_field", "config": {"field": "title", "value": "STEP2"}}},
+        {
+            "id": "a2",
+            "type": "action",
+            "data": {"action_type": "update_record_field", "config": {"field": "title", "value": "STEP2"}},
+        },
     ],
     "edges": [
         {"id": "e0", "source": "t", "target": "a1"},
@@ -77,8 +83,13 @@ async def test_delay_suspends_then_resumes(admin_session: AsyncSession) -> None:
 
     dispatcher = WorkflowDispatchService(admin_session, public_base_url="http://x")
     run, executed = await dispatcher.run_version_manually(
-        org.id, wf, version,
-        operation="update", record_id=record_id, before={"title": "before"}, after={"title": "before"},
+        org.id,
+        wf,
+        version,
+        operation="update",
+        record_id=record_id,
+        before={"title": "before"},
+        after={"title": "before"},
     )
     await admin_session.commit()
 
@@ -111,8 +122,14 @@ async def test_scheduled_workflow_fires_when_due_and_not_before(admin_session: A
     sched_def = {
         "nodes": [
             {"id": "t", "type": "trigger", "data": {"operations": [], "schedule": {"every_minutes": 60}}},
-            {"id": "a", "type": "action",
-             "data": {"action_type": "create_record", "config": {"target_slug": slug, "values": {"title": "nightly"}}}},
+            {
+                "id": "a",
+                "type": "action",
+                "data": {
+                    "action_type": "create_record",
+                    "config": {"target_slug": slug, "values": {"title": "nightly"}},
+                },
+            },
         ],
         "edges": [{"id": "e0", "source": "t", "target": "a"}],
     }
@@ -151,8 +168,14 @@ async def test_cron_scheduled_workflow_fires_when_due(admin_session: AsyncSessio
     sched_def = {
         "nodes": [
             {"id": "t", "type": "trigger", "data": {"operations": [], "schedule": {"cron": "* * * * *"}}},
-            {"id": "a", "type": "action",
-             "data": {"action_type": "create_record", "config": {"target_slug": slug, "values": {"title": "cronjob"}}}},
+            {
+                "id": "a",
+                "type": "action",
+                "data": {
+                    "action_type": "create_record",
+                    "config": {"target_slug": slug, "values": {"title": "cronjob"}},
+                },
+            },
         ],
         "edges": [{"id": "e0", "source": "t", "target": "a"}],
     }

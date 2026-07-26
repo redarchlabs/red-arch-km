@@ -46,8 +46,18 @@ class FakeAgentStore:
         e = self._by_name.get((name or "").lower())
         return [(e, 1.0)] if e else []
 
-    def query_claims(self, tenant_id, *, subject_id=None, predicate=None, object_value=None,  # type: ignore[no-untyped-def]
-                     as_of=None, statuses=None, access_keys=None, limit=100):
+    def query_claims(
+        self,
+        tenant_id,
+        *,
+        subject_id=None,
+        predicate=None,
+        object_value=None,  # type: ignore[no-untyped-def]
+        as_of=None,
+        statuses=None,
+        access_keys=None,
+        limit=100,
+    ):
         self.tenants_seen.append(tenant_id)
         return self._claims.get(subject_id, [])
 
@@ -65,10 +75,15 @@ def _acme_store() -> tuple[FakeAgentStore, Entity]:
     store.add_entity(acme)
     store.set_claims(
         acme.entity_id,
-        [{
-            "subject": "Acme", "predicate": "headquartered_in", "object": "Paris",
-            "status": "active", "confidence": 1.0,
-        }],
+        [
+            {
+                "subject": "Acme",
+                "predicate": "headquartered_in",
+                "object": "Paris",
+                "status": "active",
+                "confidence": 1.0,
+            }
+        ],
     )
     return store, acme
 
@@ -79,8 +94,10 @@ class TestAgentLoop:
         llm = ScriptedLLM(
             [
                 json.dumps(
-                    {"thought": "look up HQ", "action": {"tool": "claim_query",
-                     "args": {"subject": "Acme", "predicate": "headquartered_in"}}}
+                    {
+                        "thought": "look up HQ",
+                        "action": {"tool": "claim_query", "args": {"subject": "Acme", "predicate": "headquartered_in"}},
+                    }
                 ),
                 json.dumps({"thought": "answer", "final": {"answer": "Acme is in Paris [E1].", "citations": ["E1"]}}),
             ]
@@ -98,9 +115,7 @@ class TestAgentLoop:
 
     def test_unsupported_citation_flagged(self) -> None:
         store, _ = _acme_store()
-        llm = ScriptedLLM(
-            [json.dumps({"thought": "guess", "final": {"answer": "Paris [E9].", "citations": ["E9"]}})]
-        )
+        llm = ScriptedLLM([json.dumps({"thought": "guess", "final": {"answer": "Paris [E9].", "citations": ["E9"]}})])
         agent = FactAgent(llm, store)  # type: ignore[arg-type]
         result = agent.run("Where is Acme HQ?", AgentContext(tenant_id="t1"))
         # E9 was never gathered → flagged as unsupported (grounding check).
@@ -121,9 +136,7 @@ class TestAgentLoop:
     def test_budget_exhaustion_forces_answer(self) -> None:
         store, _ = _acme_store()
         # Model never finishes — always asks for another tool call.
-        loop_action = json.dumps(
-            {"thought": "again", "action": {"tool": "claim_query", "args": {"subject": "Acme"}}}
-        )
+        loop_action = json.dumps({"thought": "again", "action": {"tool": "claim_query", "args": {"subject": "Acme"}}})
         llm = ScriptedLLM([loop_action])
         agent = FactAgent(llm, store, max_iterations=2)  # type: ignore[arg-type]
         result = agent.run("q", AgentContext(tenant_id="t1"))
@@ -187,7 +200,10 @@ class TestAgentLoop:
             [
                 json.dumps({"thought": "try facts", "action": {"tool": "claim_query", "args": {"subject": "CMO"}}}),
                 json.dumps(
-                    {"thought": "empty; search text", "action": {"tool": "search_passages", "args": {"query": "who is the CMO"}}}
+                    {
+                        "thought": "empty; search text",
+                        "action": {"tool": "search_passages", "args": {"query": "who is the CMO"}},
+                    }
                 ),
                 json.dumps({"thought": "found", "final": {"answer": "Shawn is the CMO [E2]", "citations": ["E2"]}}),
             ]

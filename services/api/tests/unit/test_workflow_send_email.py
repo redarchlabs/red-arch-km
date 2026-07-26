@@ -34,9 +34,10 @@ def _ctx(config, sent_box=None):
 
 class TestRenderTemplate:
     def test_substitutes_after_and_before(self) -> None:
-        out = _render_template("Hi {{after.name}} ({{before.status}} -> {{after.status}})", {
-            "before": {"status": "open"}, "after": {"name": "Jo", "status": "closed"}
-        })
+        out = _render_template(
+            "Hi {{after.name}} ({{before.status}} -> {{after.status}})",
+            {"before": {"status": "open"}, "after": {"name": "Jo", "status": "closed"}},
+        )
         assert out == "Hi Jo (open -> closed)"
 
     def test_missing_field_renders_empty(self) -> None:

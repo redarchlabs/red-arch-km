@@ -49,9 +49,7 @@ class TestParseFilters:
 
     def test_value_may_contain_colons(self) -> None:
         # a timestamp value keeps its colons (split has maxsplit=2)
-        assert _parse_filters(["created_at:gte:2026-01-01T00:00:00"]) == [
-            ("created_at", "gte", "2026-01-01T00:00:00")
-        ]
+        assert _parse_filters(["created_at:gte:2026-01-01T00:00:00"]) == [("created_at", "gte", "2026-01-01T00:00:00")]
 
     def test_unknown_operator_is_400(self) -> None:
         with pytest.raises(HTTPException) as exc:

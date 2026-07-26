@@ -11,9 +11,7 @@ pytestmark = pytest.mark.unit
 
 
 def _client(allow: tuple[str, ...] = (), trusted: tuple[str, ...] = ()) -> OutboundPushClient:
-    return OutboundPushClient(
-        SimpleNamespace(workflow_webhook_allowlist=allow, workflow_trusted_local_hosts=trusted)
-    )
+    return OutboundPushClient(SimpleNamespace(workflow_webhook_allowlist=allow, workflow_trusted_local_hosts=trusted))
 
 
 def test_rejects_non_allowlisted_host() -> None:

@@ -45,9 +45,7 @@ class TestRaiseHttpMapping:
 
 
 def _ctx() -> OrgContext:
-    return OrgContext(
-        user=MagicMock(), org_id=uuid.uuid4(), membership=MagicMock(), is_org_admin=True
-    )
+    return OrgContext(user=MagicMock(), org_id=uuid.uuid4(), membership=MagicMock(), is_org_admin=True)
 
 
 def _app() -> FastAPI:

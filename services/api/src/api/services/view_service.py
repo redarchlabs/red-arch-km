@@ -56,16 +56,12 @@ class ViewService:
             raise FormNotFoundError("view not found")
         return view
 
-    async def _validate_config(
-        self, entity_definition_id: uuid.UUID | None, config: FormConfig
-    ) -> None:
+    async def _validate_config(self, entity_definition_id: uuid.UUID | None, config: FormConfig) -> None:
         if entity_definition_id is None:
             # Standalone view: only presentational/action/layout elements allowed.
             for el, _depth in iter_elements(config.elements):
                 if getattr(el, "type", None) in _ENTITY_BOUND_TYPES:
-                    raise FormValidationError(
-                        f"{el.type!r} elements require an entity-bound view"
-                    )
+                    raise FormValidationError(f"{el.type!r} elements require an entity-bound view")
             return
         root = await self._defs.get(entity_definition_id)
         if root is None:
@@ -148,9 +144,7 @@ class ViewService:
             # caller's own record, matched by the root entity's ``email`` field. No
             # match / no such field falls back to an unbound render (record_id None).
             if current_user_email is not None:
-                record_id = await self._resolve_own_record_id(
-                    view.entity_definition_id, current_user_email
-                )
+                record_id = await self._resolve_own_record_id(view.entity_definition_id, current_user_email)
             # Entity-bound: render exactly like a form (reuse the shared core).
             renderer = FormRenderService(self._session, self._org_id)
             # Adapt: FormRenderService expects a Form-like object with name/description/

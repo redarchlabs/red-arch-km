@@ -21,18 +21,14 @@ class TestMarkdownTables:
         claims = extract_structured(_DIRECTORY, PROFILE_REGISTRY["directory"])
         # 2 people x 2 attribute columns = 4 claims.
         assert len(claims) == 4
-        shawn_title = next(
-            c for c in claims if c.subject.name == "Shawn" and c.predicate == "holds_title"
-        )
+        shawn_title = next(c for c in claims if c.subject.name == "Shawn" and c.predicate == "holds_title")
         assert shawn_title.object_value == "CMO"
         assert shawn_title.object_value_type is ObjectType.TEXT
         assert shawn_title.confidence == 0.9  # deterministic, high-confidence
         assert shawn_title.subject.type == "PERSON"  # from the directory profile
         assert "Shawn" in shawn_title.text_span
 
-        shawn_mgr = next(
-            c for c in claims if c.subject.name == "Shawn" and c.predicate == "reports_to"
-        )
+        shawn_mgr = next(c for c in claims if c.subject.name == "Shawn" and c.predicate == "reports_to")
         assert shawn_mgr.object_value == "Jane"
 
     def test_header_predicate_mapping(self) -> None:

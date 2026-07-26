@@ -88,9 +88,7 @@ class PromotionService:
 
     async def get_target(self, target_id: uuid.UUID) -> PromotionTarget | None:
         row = await self._session.execute(
-            select(PromotionTarget).where(
-                PromotionTarget.id == target_id, PromotionTarget.org_id == self._org_id
-            )
+            select(PromotionTarget).where(PromotionTarget.id == target_id, PromotionTarget.org_id == self._org_id)
         )
         return row.scalar_one_or_none()
 
@@ -239,9 +237,7 @@ class PromotionService:
 
     async def list_items(self, release_id: uuid.UUID) -> list[ReleaseItem]:
         rows = await self._session.execute(
-            select(ReleaseItem).where(
-                ReleaseItem.release_id == release_id, ReleaseItem.org_id == self._org_id
-            )
+            select(ReleaseItem).where(ReleaseItem.release_id == release_id, ReleaseItem.org_id == self._org_id)
         )
         return list(rows.scalars().all())
 
@@ -401,9 +397,14 @@ class PromotionService:
         base_url = target.base_url or ""
         api_key = self._remote_key(target)
         return await self._push_remote(
-            base_url=base_url, api_key=api_key, bundle=bundle,
-            strategy=strategy, apply_deletes=apply_deletes,
-            allow_data=False, override_inflight=False, dry_run=True,
+            base_url=base_url,
+            api_key=api_key,
+            bundle=bundle,
+            strategy=strategy,
+            apply_deletes=apply_deletes,
+            allow_data=False,
+            override_inflight=False,
+            dry_run=True,
         )
 
     async def promote_release(
@@ -440,6 +441,9 @@ class PromotionService:
         target_label = target.name
 
         importer = None
+        # Nullable on the promotion row: a remote target has no local org id. Annotated
+        # so the branch below is not bound to the local branch's narrowed non-None type.
+        record_target_org: uuid.UUID | None
         if target.kind == PromotionTargetKind.LOCAL_ORG.value:
             if target.target_org_id is None:
                 raise PromotionError("local-org target is missing target_org_id")
@@ -463,9 +467,14 @@ class PromotionService:
             # _push_remote releases the DB connection for the network leg; reopen a
             # privileged transaction afterwards to write the audit record.
             result = await self._push_remote(
-                base_url=base_url, api_key=api_key, bundle=bundle,
-                strategy=strategy, apply_deletes=apply_deletes,
-                allow_data=allow_data, override_inflight=override_inflight, dry_run=False,
+                base_url=base_url,
+                api_key=api_key,
+                bundle=bundle,
+                strategy=strategy,
+                apply_deletes=apply_deletes,
+                allow_data=allow_data,
+                override_inflight=override_inflight,
+                dry_run=False,
             )
             await db_scope.enter_bypass(self._session)
 
@@ -488,7 +497,9 @@ class PromotionService:
         )
         self._session.add(promotion)
         await self._session.commit()
-        if importer is not None:
+        # `import_summary` is Optional on PromotionResult; with nothing imported there
+        # is nothing to enqueue, and dispatch_pending_ingests would deref None.
+        if importer is not None and result.import_summary is not None:
             # The commit cleared the transaction-scoped RLS GUCs; re-enter privileged
             # scope so the post-commit ingest enqueue (doc.celery_task_id writes) is
             # not blocked by RLS failing closed.
@@ -528,9 +539,14 @@ class PromotionService:
             api_key = self._remote_key(target)
             snapshot = promotion.pre_state_bundle
             result = await self._push_remote(
-                base_url=base_url, api_key=api_key, bundle=snapshot,
-                strategy=CollisionStrategy.OVERWRITE, apply_deletes=True,
-                allow_data=False, override_inflight=True, dry_run=False,
+                base_url=base_url,
+                api_key=api_key,
+                bundle=snapshot,
+                strategy=CollisionStrategy.OVERWRITE,
+                apply_deletes=True,
+                allow_data=False,
+                override_inflight=True,
+                dry_run=False,
             )
             # The push released the session (and its row lock). Reopen and re-lock,
             # guarding against a concurrent rollback that completed while we pushed.
@@ -560,7 +576,7 @@ class PromotionService:
         )
         self._session.add(inverse)
         await self._session.commit()
-        if importer is not None:
+        if importer is not None and result.import_summary is not None:
             await db_scope.enter_bypass(self._session)
             await importer.dispatch_pending_ingests(result.import_summary)
         return promotion, result
@@ -570,9 +586,7 @@ class PromotionService:
     # ------------------------------------------------------------------ #
     async def _lock_release(self, release_id: uuid.UUID) -> Release:
         row = await self._session.execute(
-            select(Release)
-            .where(Release.id == release_id, Release.org_id == self._org_id)
-            .with_for_update()
+            select(Release).where(Release.id == release_id, Release.org_id == self._org_id).with_for_update()
         )
         release = row.scalar_one_or_none()
         if release is None:
@@ -589,9 +603,7 @@ class PromotionService:
 
     async def get_promotion(self, promotion_id: uuid.UUID) -> ReleasePromotion | None:
         row = await self._session.execute(
-            select(ReleasePromotion).where(
-                ReleasePromotion.id == promotion_id, ReleasePromotion.org_id == self._org_id
-            )
+            select(ReleasePromotion).where(ReleasePromotion.id == promotion_id, ReleasePromotion.org_id == self._org_id)
         )
         return row.scalar_one_or_none()
 

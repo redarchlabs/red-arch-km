@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-
 from api.services.workflow.webhook_signing import (
     DEFAULT_TOLERANCE_SECONDS,
     SignatureError,

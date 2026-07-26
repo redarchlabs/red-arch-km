@@ -5,19 +5,17 @@ from __future__ import annotations
 from uuid import uuid4
 
 import pytest
-from pydantic import SecretStr
-
 from api.config import Settings
 from api.models.agent import Agent
-from api.services.agents.mcp import client as mcp_client
 from api.services.agents.mcp.client import McpError, ResolvedMcpServer, build_headers
 from api.services.agents.mcp.registry import _sanitize, build_mcp_tool_specs
+from pydantic import SecretStr
 
 pytestmark = pytest.mark.unit
 
 
 def _settings(**over) -> Settings:
-    base = dict(secret_key=SecretStr("x"))
+    base = {"secret_key": SecretStr("x")}
     base.update(over)
     return Settings(**base)  # type: ignore[arg-type]
 
@@ -30,8 +28,13 @@ def test_build_headers_bearer_and_api_key():
     bearer = ResolvedMcpServer(id="1", name="s", transport="http", command=None, url="http://x", secret="tok")
     assert build_headers(bearer)["Authorization"] == "Bearer tok"
     apikey = ResolvedMcpServer(
-        id="1", name="s", transport="http", command=None, url="http://x",
-        config={"auth_type": "api_key", "header": "X-Key"}, secret="tok",
+        id="1",
+        name="s",
+        transport="http",
+        command=None,
+        url="http://x",
+        config={"auth_type": "api_key", "header": "X-Key"},
+        secret="tok",
     )
     assert build_headers(apikey)["X-Key"] == "tok"
 
@@ -111,7 +114,9 @@ class _Row:
 async def test_build_specs_namespaces_and_dispatches(monkeypatch):
     server_id = uuid4()
     agent = Agent(
-        name="a", provider="openai", model="gpt-5-mini",
+        name="a",
+        provider="openai",
+        model="gpt-5-mini",
         mcp_server_ids=[str(server_id)],
     )
     rows = [_Row(server_id, "github")]
@@ -121,9 +126,7 @@ async def test_build_specs_namespaces_and_dispatches(monkeypatch):
     monkeypatch.setattr(repo_mod, "McpServerRepository", _FakeRepo(rows))
     stub = _StubClient()
 
-    specs = await build_mcp_tool_specs(
-        session=None, org_id=uuid4(), agent=agent, settings=_settings(), client=stub
-    )
+    specs = await build_mcp_tool_specs(session=None, org_id=uuid4(), agent=agent, settings=_settings(), client=stub)
     assert [s.name for s in specs] == ["mcp__github__search"]
     assert specs[0].side_effecting is True
 

@@ -50,8 +50,7 @@ def build_quiz_view_config(
     workflow with the answers + ``assessment_id`` + ``learner_email``, and a live result
     board of the learner's own attempt for this assessment."""
     intro = (
-        f"Choose the best answer for each question, then submit. You need "
-        f"{passing_threshold}% or higher to pass."
+        f"Choose the best answer for each question, then submit. You need {passing_threshold}% or higher to pass."
         if passing_threshold
         else "Choose the best answer for each question, then submit."
     )
@@ -64,12 +63,8 @@ def build_quiz_view_config(
     for i, q in enumerate(questions, start=1):
         key = f"a{i}"
         options = [{"value": str(o), "label": None} for o in (q.get("options") or [])]
-        elements.append(
-            {"type": "label", "variant": "paragraph", "text": f"{i}. {q.get('prompt') or ''}"}
-        )
-        elements.append(
-            {"type": "input", "key": key, "control": "select", "label": "Your answer", "options": options}
-        )
+        elements.append({"type": "label", "variant": "paragraph", "text": f"{i}. {q.get('prompt') or ''}"})
+        elements.append({"type": "input", "key": key, "control": "select", "label": "Your answer", "options": options})
         inputs[key] = {"var": key}
     inputs["assessment_id"] = assessment_id
     inputs["learner_email"] = {"var": "email"}

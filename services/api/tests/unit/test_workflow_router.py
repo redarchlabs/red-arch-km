@@ -9,7 +9,7 @@ before/after so only author-defined config leaves the org).
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -73,7 +73,7 @@ def _published_version(nodes: list[dict]) -> MagicMock:
 
 
 def _activity_run() -> SimpleNamespace:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return SimpleNamespace(
         id=uuid.uuid4(),
         workflow_id=uuid.uuid4(),
@@ -124,7 +124,8 @@ async def test_run_404_when_workflow_missing() -> None:
 
 async def test_run_403_when_cannot_run() -> None:
     wf = SimpleNamespace(
-        active_version_id=uuid.uuid4(), run_permission={"mode": "org_admin"},
+        active_version_id=uuid.uuid4(),
+        run_permission={"mode": "org_admin"},
         entity_definition_id=uuid.uuid4(),
     )
     with (
@@ -138,7 +139,8 @@ async def test_run_403_when_cannot_run() -> None:
 
 async def test_run_409_when_no_published_version() -> None:
     wf = SimpleNamespace(
-        active_version_id=None, run_permission={"mode": "any_member"},
+        active_version_id=None,
+        run_permission={"mode": "any_member"},
         entity_definition_id=uuid.uuid4(),
     )
     with (
@@ -152,12 +154,11 @@ async def test_run_409_when_no_published_version() -> None:
 
 async def test_run_404_when_cross_entity_or_cross_org_record_id() -> None:
     wf = SimpleNamespace(
-        active_version_id=uuid.uuid4(), run_permission={"mode": "any_member"},
+        active_version_id=uuid.uuid4(),
+        run_permission={"mode": "any_member"},
         entity_definition_id=uuid.uuid4(),
     )
-    version = _published_version(
-        [{"id": "a", "type": "action", "data": {"action_type": "log", "config": {}}}]
-    )
+    version = _published_version([{"id": "a", "type": "action", "data": {"action_type": "log", "config": {}}}])
     disp = MagicMock()
     disp.load_trigger_record = AsyncMock(return_value=None)  # id not in this entity/org
     with (
@@ -168,9 +169,7 @@ async def test_run_404_when_cross_entity_or_cross_org_record_id() -> None:
         patch.object(manual_run, "build_dispatch_service", return_value=disp),
     ):
         async with _client(_app()) as client:
-            resp = await client.post(
-                f"/api/workflows/{uuid.uuid4()}/run", json={"record_id": str(uuid.uuid4())}
-            )
+            resp = await client.post(f"/api/workflows/{uuid.uuid4()}/run", json={"record_id": str(uuid.uuid4())})
     assert resp.status_code == 404
     disp.load_trigger_record.assert_awaited_once()
 
@@ -180,7 +179,8 @@ async def test_run_side_effecting_without_record_nulls_client_data() -> None:
     is ALLOWED, but the client's before/after are DROPPED — actions execute on
     their own author-defined config only, so no fabricated data leaves the org."""
     wf = SimpleNamespace(
-        active_version_id=uuid.uuid4(), run_permission={"mode": "any_member"},
+        active_version_id=uuid.uuid4(),
+        run_permission={"mode": "any_member"},
         entity_definition_id=uuid.uuid4(),
     )
     version = _published_version(
@@ -199,9 +199,7 @@ async def test_run_side_effecting_without_record_nulls_client_data() -> None:
         async with _client(_app()) as client:
             # No record_id + a send_webhook action + fabricated `after` → runs,
             # but the fabricated data is discarded.
-            resp = await client.post(
-                f"/api/workflows/{uuid.uuid4()}/run", json={"after": {"x": "FABRICATED"}}
-            )
+            resp = await client.post(f"/api/workflows/{uuid.uuid4()}/run", json={"after": {"x": "FABRICATED"}})
     assert resp.status_code == 200
     _args, kwargs = disp.run_version_manually.call_args
     assert kwargs["before"] is None and kwargs["after"] is None  # client data dropped
@@ -212,7 +210,8 @@ async def test_run_manual_trigger_uses_inputs_even_when_entity_bound() -> None:
     start runs with the caller's inputs — record fields are ignored, inputs coerced
     against the declared schema (undeclared keys dropped)."""
     wf = SimpleNamespace(
-        active_version_id=uuid.uuid4(), run_permission={"mode": "any_member"},
+        active_version_id=uuid.uuid4(),
+        run_permission={"mode": "any_member"},
         entity_definition_id=uuid.uuid4(),  # still bound to an entity...
     )
     version = _published_version(
@@ -249,12 +248,18 @@ async def test_run_manual_trigger_uses_inputs_even_when_entity_bound() -> None:
 
 async def test_run_manual_missing_required_input_422() -> None:
     wf = SimpleNamespace(
-        active_version_id=uuid.uuid4(), run_permission={"mode": "any_member"},
+        active_version_id=uuid.uuid4(),
+        run_permission={"mode": "any_member"},
         entity_definition_id=None,
     )
     version = _published_version(
-        [{"id": "t", "type": "trigger",
-          "data": {"source": "manual", "inputs": [{"key": "email", "type": "text", "required": True}]}}]
+        [
+            {
+                "id": "t",
+                "type": "trigger",
+                "data": {"source": "manual", "inputs": [{"key": "email", "type": "text", "required": True}]},
+            }
+        ]
     )
     disp = MagicMock()
     disp.run_version_manually = AsyncMock()
@@ -275,12 +280,18 @@ async def test_run_loads_record_server_side_and_ignores_client_data() -> None:
     """A member cannot mutate a record via fabricated ``after`` — the server
     loads the record and passes THAT as before/after, discarding client data."""
     wf = SimpleNamespace(
-        active_version_id=uuid.uuid4(), run_permission={"mode": "any_member"},
+        active_version_id=uuid.uuid4(),
+        run_permission={"mode": "any_member"},
         entity_definition_id=uuid.uuid4(),
     )
     version = _published_version(
-        [{"id": "a", "type": "action",
-          "data": {"action_type": "update_record_field", "config": {"field": "t", "value": "x"}}}]
+        [
+            {
+                "id": "a",
+                "type": "action",
+                "data": {"action_type": "update_record_field", "config": {"field": "t", "value": "x"}},
+            }
+        ]
     )
     loaded = {"id": str(uuid.uuid4()), "title": "REAL"}
     run = SimpleNamespace(id=uuid.uuid4(), status="succeeded", conditions_matched=True, error=None)

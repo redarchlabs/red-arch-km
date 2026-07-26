@@ -88,9 +88,7 @@ async def update_notification(
     if action not in status_map:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "action must be 'read' or 'resolve'")
     try:
-        notification = await NotificationService(session, ctx.org_id).set_status(
-            notification_id, status_map[action]
-        )
+        notification = await NotificationService(session, ctx.org_id).set_status(notification_id, status_map[action])
     except ApprovalNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
     return NotificationRead.model_validate(notification)

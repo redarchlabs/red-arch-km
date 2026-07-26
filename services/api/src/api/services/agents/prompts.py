@@ -13,9 +13,7 @@ _KIND_GUIDANCE = {
         "You are an ADVISORY agent: you research and recommend. You may read and "
         "consult peers, but you never take side-effecting actions."
     ),
-    "operator": (
-        "You are an OPERATOR: you carry out work using the tools you have been granted."
-    ),
+    "operator": ("You are an OPERATOR: you carry out work using the tools you have been granted."),
 }
 
 

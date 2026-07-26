@@ -52,9 +52,7 @@ def _is_fernet_token(value: str, secret: str) -> bool:
 def upgrade() -> None:
     secret = _secret()
     conn = op.get_bind()
-    rows = conn.execute(
-        text("SELECT id, openai_api_key FROM orgs WHERE openai_api_key IS NOT NULL")
-    ).fetchall()
+    rows = conn.execute(text("SELECT id, openai_api_key FROM orgs WHERE openai_api_key IS NOT NULL")).fetchall()
     for row_id, value in rows:
         if not value or _is_fernet_token(value, secret):
             # Empty, or already encrypted — skip (idempotent).
@@ -68,9 +66,7 @@ def upgrade() -> None:
 def downgrade() -> None:
     secret = _secret()
     conn = op.get_bind()
-    rows = conn.execute(
-        text("SELECT id, openai_api_key FROM orgs WHERE openai_api_key IS NOT NULL")
-    ).fetchall()
+    rows = conn.execute(text("SELECT id, openai_api_key FROM orgs WHERE openai_api_key IS NOT NULL")).fetchall()
     for row_id, value in rows:
         if not value:
             continue

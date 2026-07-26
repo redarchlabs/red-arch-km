@@ -258,9 +258,7 @@ class TestUpdateRecordTemplates:
     async def test_update_record_first_mode_orders_ascending(self) -> None:
         repo = FakeRepo([{"id": uuid.uuid4()}])
         handler = ACTION_REGISTRY["update_record"]
-        await handler.execute(
-            _ctx({"target_slug": "s", "mode": "first", "values": {"a": 1}}, repo=repo)
-        )
+        await handler.execute(_ctx({"target_slug": "s", "mode": "first", "values": {"a": 1}}, repo=repo))
         assert repo.list_calls[0]["order_dir"] == "asc"
 
     def test_update_record_simulate_does_not_write(self) -> None:
@@ -316,8 +314,11 @@ class TestGradeQuiz:
         repo = FakeRepo(questions)
         answers = {str(questions[0]["id"]): "B", str(questions[1]["id"]): "A", str(questions[2]["id"]): "X"}
         out = await handler.execute(
-            _ctx({"assessment_id": "a", "answers": {"$ref": "inputs.answers"}, "pass_threshold": 60},
-                 repo=repo, inputs={"answers": answers}),
+            _ctx(
+                {"assessment_id": "a", "answers": {"$ref": "inputs.answers"}, "pass_threshold": 60},
+                repo=repo,
+                inputs={"answers": answers},
+            ),
         )
         assert out == {"score": 67, "passed": True, "correct": 2, "total": 3, "answered": 3}
 
@@ -326,9 +327,7 @@ class TestGradeQuiz:
         # answered < total is the signal a miswired view under-supplied answers.
         handler = ACTION_REGISTRY["grade_quiz"]
         repo = FakeRepo(self._questions())
-        out = await handler.execute(
-            _ctx({"assessment_id": "a"}, repo=repo, inputs={"a1": "B", "a2": "", "a3": "D"})
-        )
+        out = await handler.execute(_ctx({"assessment_id": "a"}, repo=repo, inputs={"a1": "B", "a2": "", "a3": "D"}))
         assert out["answered"] == 2 and out["total"] == 3 and out["correct"] == 2
 
     @pytest.mark.asyncio
@@ -358,9 +357,7 @@ class TestGradeQuiz:
     async def test_answer_match_is_trimmed_exact(self) -> None:
         handler = ACTION_REGISTRY["grade_quiz"]
         repo = FakeRepo([{"id": uuid.uuid4(), "sort_order": 1, "correct_answer": " Yes "}])
-        out = await handler.execute(
-            _ctx({"assessment_id": "a", "pass_threshold": 1}, repo=repo, inputs={"a1": "Yes"})
-        )
+        out = await handler.execute(_ctx({"assessment_id": "a", "pass_threshold": 1}, repo=repo, inputs={"a1": "Yes"}))
         assert out["correct"] == 1
 
     @pytest.mark.asyncio

@@ -30,7 +30,8 @@ async def test_form_source_trigger_ignores_record_edits(admin_session: AsyncSess
 
     definition = await EntityService(admin_session, org.id).create_definition(
         EntityDefinitionCreate(
-            name="Lead", slug=f"lead_{uuid.uuid4().hex[:6]}",
+            name="Lead",
+            slug=f"lead_{uuid.uuid4().hex[:6]}",
             fields=[EntityFieldCreate(name="Title", slug="title", field_type="text")],
         )
     )
@@ -45,8 +46,11 @@ async def test_form_source_trigger_ignores_record_edits(admin_session: AsyncSess
     definition_graph = {
         "nodes": [
             {"id": "t", "type": "trigger", "data": {"operations": ["update"], "source": "form"}},
-            {"id": "a", "type": "action",
-             "data": {"action_type": "update_record_field", "config": {"field": "title", "value": "FORM_FIRED"}}},
+            {
+                "id": "a",
+                "type": "action",
+                "data": {"action_type": "update_record_field", "config": {"field": "title", "value": "FORM_FIRED"}},
+            },
         ],
         "edges": [{"id": "e", "source": "t", "target": "a"}],
     }
@@ -62,9 +66,14 @@ async def test_form_source_trigger_ignores_record_edits(admin_session: AsyncSess
 
     # A normal record edit (source="record") must NOT fire the form trigger.
     await outbox.write(
-        org_id=org.id, entity_definition_id=definition.id, entity_table=definition.physical_table,
-        operation="update", record_id=record_id,
-        before={"title": "before"}, after={"title": "edited"}, source="record",
+        org_id=org.id,
+        entity_definition_id=definition.id,
+        entity_table=definition.physical_table,
+        operation="update",
+        record_id=record_id,
+        before={"title": "before"},
+        after={"title": "edited"},
+        source="record",
     )
     await admin_session.commit()
     await dispatcher.process_pending()
@@ -73,9 +82,14 @@ async def test_form_source_trigger_ignores_record_edits(admin_session: AsyncSess
 
     # A form submission (source="form") fires it.
     await outbox.write(
-        org_id=org.id, entity_definition_id=definition.id, entity_table=definition.physical_table,
-        operation="update", record_id=record_id,
-        before={"title": "before"}, after={"title": "submitted"}, source="form",
+        org_id=org.id,
+        entity_definition_id=definition.id,
+        entity_table=definition.physical_table,
+        operation="update",
+        record_id=record_id,
+        before={"title": "before"},
+        after={"title": "submitted"},
+        source="form",
     )
     await admin_session.commit()
     await dispatcher.process_pending()

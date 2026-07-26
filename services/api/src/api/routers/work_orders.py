@@ -14,7 +14,6 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth.dependencies import OrgContext, require_org_access, require_org_admin
-from api.config import Settings, get_settings
 from api.dependencies import get_tenant_db
 from api.models.work_order import WorkOrder
 from api.schemas.work_order import (
@@ -65,8 +64,11 @@ async def create_work_order(
     session: Annotated[AsyncSession, Depends(get_tenant_db)],
 ) -> WorkOrderRead:
     wo = await WorkOrderService(session, ctx.org_id).create_work_order(
-        title=body.title, body=body.body, priority=body.priority,
-        assigned_agent_id=body.assigned_agent_id, created_by_profile_id=ctx.user.profile_id,
+        title=body.title,
+        body=body.body,
+        priority=body.priority,
+        assigned_agent_id=body.assigned_agent_id,
+        created_by_profile_id=ctx.user.profile_id,
     )
     return _to_read(wo)
 
@@ -127,9 +129,7 @@ async def set_tasks(
     session: Annotated[AsyncSession, Depends(get_tenant_db)],
 ) -> list[TaskRead]:
     try:
-        tasks = await WorkOrderService(session, ctx.org_id).set_tasks(
-            wo_id, [t.model_dump() for t in body.tasks]
-        )
+        tasks = await WorkOrderService(session, ctx.org_id).set_tasks(wo_id, [t.model_dump() for t in body.tasks])
     except WorkOrderError as exc:
         _raise_http(exc)
     return [TaskRead.model_validate(t) for t in tasks]

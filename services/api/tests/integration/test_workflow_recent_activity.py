@@ -36,7 +36,8 @@ async def _make_org(admin_session: AsyncSession):
     await set_tenant(admin_session, str(org.id))
     entity = await EntityService(admin_session, org.id).create_definition(
         EntityDefinitionCreate(
-            name="Thing", slug="thing",
+            name="Thing",
+            slug="thing",
             fields=[EntityFieldCreate(name="Title", slug="title", field_type="text")],
         )
     )
@@ -51,9 +52,15 @@ async def _make_workflow_run(admin_session: AsyncSession, org, entity, *, name: 
     await admin_session.commit()
     await set_tenant(admin_session, str(org.id))
     run = await WorkflowRunRepository(admin_session, org.id).create_run_if_absent(
-        workflow_id=wf.id, workflow_version_id=version.id, outbox_id=uuid.uuid4(), outbox_seq=None,
-        created_at=created_at, trigger_operation="update", record_id=None,
-        input_snapshot=None, depth=0,
+        workflow_id=wf.id,
+        workflow_version_id=version.id,
+        outbox_id=uuid.uuid4(),
+        outbox_seq=None,
+        created_at=created_at,
+        trigger_operation="update",
+        record_id=None,
+        input_snapshot=None,
+        depth=0,
     )
     await admin_session.commit()
     return wf, run

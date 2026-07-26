@@ -5,10 +5,9 @@ from __future__ import annotations
 from uuid import uuid4
 
 import pytest
-from pydantic import SecretStr
-
 from api.config import Settings
 from api.services.agents import notify
+from pydantic import SecretStr
 
 pytestmark = pytest.mark.unit
 
@@ -33,7 +32,7 @@ class _FakeSession:
 
 
 def _settings(**over) -> Settings:
-    base = dict(secret_key=SecretStr("x"))
+    base = {"secret_key": SecretStr("x")}
     base.update(over)
     return Settings(**base)  # type: ignore[arg-type]
 
@@ -50,9 +49,7 @@ async def test_in_app_only_when_no_settings():
 async def test_no_email_when_smtp_unconfigured():
     session = _FakeSession()
     # SMTP not configured -> EmailSender.is_configured() is False -> in_app only.
-    n = await notify.create_notification(
-        session, uuid4(), kind="escalation", title="Blocked", settings=_settings()
-    )
+    n = await notify.create_notification(session, uuid4(), kind="escalation", title="Blocked", settings=_settings())
     assert n.delivered_channels == ["in_app"]
 
 
@@ -76,7 +73,10 @@ async def test_emails_when_configured(monkeypatch):
     monkeypatch.setattr(email_mod, "EmailSender", _Sender)
     session = _FakeSession()
     n = await notify.create_notification(
-        session, uuid4(), kind="approval", title="Approve me",
+        session,
+        uuid4(),
+        kind="approval",
+        title="Approve me",
         settings=_settings(smtp_host="smtp.local", smtp_from="a@b.c", agent_notify_email="ops@b.c"),
     )
     assert "email" in n.delivered_channels

@@ -127,9 +127,7 @@ class EntityService:
         await self._schema.add_field_column(definition, field)
         return field
 
-    async def update_field(
-        self, definition_id: uuid.UUID, field_id: uuid.UUID, body: EntityFieldUpdate
-    ) -> EntityField:
+    async def update_field(self, definition_id: uuid.UUID, field_id: uuid.UUID, body: EntityFieldUpdate) -> EntityField:
         """Update a field's catalog-only attributes (name, picklist options, order,
         and ``read_access``). Changing ``is_required`` needs a physical migration
         (NOT NULL + backfill) and is rejected here to keep catalog and column in sync."""
@@ -137,9 +135,7 @@ class EntityService:
         if field is None or field.entity_definition_id != definition_id:
             raise EntityNotFoundError("field not found")
         if body.is_required is not None and body.is_required != field.is_required:
-            raise EntityValidationError(
-                "changing 'is_required' needs a migration; not editable in place"
-            )
+            raise EntityValidationError("changing 'is_required' needs a migration; not editable in place")
         if body.picklist_options is not None and field.field_type != "picklist":
             raise EntityValidationError("picklist_options is only valid for picklist fields")
         return await self._fields.update(
@@ -209,9 +205,7 @@ class EntityService:
     # ------------------------------------------------------------------ #
     # Relationships
     # ------------------------------------------------------------------ #
-    async def create_relationship(
-        self, source_id: uuid.UUID, body: EntityRelationshipCreate
-    ) -> EntityRelationship:
+    async def create_relationship(self, source_id: uuid.UUID, body: EntityRelationshipCreate) -> EntityRelationship:
         source = await self._defs.get(source_id)
         if source is None:
             raise EntityNotFoundError("source entity not found")

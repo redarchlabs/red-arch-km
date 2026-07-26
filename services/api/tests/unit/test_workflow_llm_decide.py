@@ -61,7 +61,13 @@ class TestLlmDecideAction:
         assert seen[0]["system"] == "Be kind and stay on space."
         assert seen[0]["gestures"] == GESTURES
         # The structured decision flows straight through (a later /say uses vars.decision.say).
-        assert out == {"say": "It's huge!", "gesture": "celebrate", "mood": "excited", "done": False, "reason": "engage"}
+        assert out == {
+            "say": "It's huge!",
+            "gesture": "celebrate",
+            "mood": "excited",
+            "done": False,
+            "reason": "engage",
+        }
 
     @pytest.mark.asyncio
     async def test_enforces_the_vocabulary(self) -> None:
@@ -132,7 +138,9 @@ class TestDecideAction:
     async def test_builds_constrained_schema_and_parses_json(self) -> None:
         from api.services.llm_decide import decide_action
 
-        reply = json.dumps({"say": "The Sun is a star.", "gesture": "nod", "mood": "curious", "done": False, "reason": "ok"})
+        reply = json.dumps(
+            {"say": "The Sun is a star.", "gesture": "nod", "mood": "curious", "done": False, "reason": "ok"}
+        )
         calls: list[dict] = []
         client = _FakeClient(reply, calls)
         out = await decide_action(

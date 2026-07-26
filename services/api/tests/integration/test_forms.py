@@ -84,9 +84,7 @@ async def _make_customer(admin_session: AsyncSession, org: Org) -> uuid.UUID:
     return definition.id
 
 
-async def _create_record(
-    session: AsyncSession, org: Org, def_id: uuid.UUID, values: dict
-) -> uuid.UUID:
+async def _create_record(session: AsyncSession, org: Org, def_id: uuid.UUID, values: dict) -> uuid.UUID:
     await set_tenant(session, str(org.id))
     definition = await EntityDefinitionRepository(session, org.id).get(def_id)
     assert definition is not None
@@ -96,9 +94,7 @@ async def _create_record(
     return uuid.UUID(str(rec["id"]))
 
 
-async def _read_record(
-    session: AsyncSession, org: Org, def_id: uuid.UUID, record_id: uuid.UUID
-) -> dict:
+async def _read_record(session: AsyncSession, org: Org, def_id: uuid.UUID, record_id: uuid.UUID) -> dict:
     await set_tenant(session, str(org.id))
     definition = await EntityDefinitionRepository(session, org.id).get(def_id)
     assert definition is not None
@@ -109,9 +105,7 @@ async def _read_record(
     return record
 
 
-async def _make_form(
-    session: AsyncSession, org: Org, def_id: uuid.UUID, elements: list[dict], slug: str
-) -> uuid.UUID:
+async def _make_form(session: AsyncSession, org: Org, def_id: uuid.UUID, elements: list[dict], slug: str) -> uuid.UUID:
     await set_tenant(session, str(org.id))
     fsvc = FormService(session, org.id, public_base_url="http://app.test")
     form = await fsvc.create_form(
@@ -129,9 +123,7 @@ async def _make_form(
 async def _mint(session: AsyncSession, org: Org, form_id: uuid.UUID, record_id: uuid.UUID) -> str:
     await set_tenant(session, str(org.id))
     fsvc = FormService(session, org.id, public_base_url="http://app.test")
-    _link, token, _url, _sent = await fsvc.generate_link(
-        form_id, GenerateLinkRequest(target_record_id=record_id)
-    )
+    _link, token, _url, _sent = await fsvc.generate_link(form_id, GenerateLinkRequest(target_record_id=record_id))
     await session.commit()
     return token
 
@@ -166,7 +158,9 @@ class TestPublicFormFlow:
         def_id = await _make_customer(admin_session, org)
         rec = await _create_record(session, org, def_id, {"name": "John Doe"})
         form_id = await _make_form(
-            session, org, def_id,
+            session,
+            org,
+            def_id,
             [{"type": "field", "slug": "name"}, {"type": "field", "slug": "phone"}],
             "intake",
         )
@@ -211,7 +205,9 @@ class TestPublicFormFlow:
         def_id = await _make_customer(admin_session, org)
         rec = await _create_record(session, org, def_id, {"name": "Locked", "phone": "111"})
         form_id = await _make_form(
-            session, org, def_id,
+            session,
+            org,
+            def_id,
             [{"type": "field", "slug": "name"}, {"type": "field", "slug": "phone", "read_only": True}],
             "readonly",
         )
@@ -261,7 +257,8 @@ class TestCalculatedServerAuthoritative:
         await set_tenant(admin_session, str(org.id))
         definition = await EntityService(admin_session, org.id).create_definition(
             EntityDefinitionCreate(
-                name="Order", slug="order",
+                name="Order",
+                slug="order",
                 fields=[
                     EntityFieldCreate(name="Qty", slug="qty", field_type="integer"),
                     EntityFieldCreate(name="Unit price", slug="unit_price", field_type="numeric"),
@@ -280,7 +277,9 @@ class TestCalculatedServerAuthoritative:
         # Server truth: unit_price = 10.
         rec = await _create_record(session, org, def_id, {"qty": 1, "unit_price": 10, "total": 0})
         form_id = await _make_form(
-            session, org, def_id,
+            session,
+            org,
+            def_id,
             [
                 {"type": "field", "slug": "qty"},
                 {"type": "field", "slug": "unit_price", "read_only": True},
@@ -317,19 +316,22 @@ class TestSectionsAndTables:
         svc = EntityService(admin_session, org.id)
         company = await svc.create_definition(
             EntityDefinitionCreate(
-                name="Company", slug="company",
+                name="Company",
+                slug="company",
                 fields=[EntityFieldCreate(name="Name", slug="name", field_type="text")],
             )
         )
         address = await svc.create_definition(
             EntityDefinitionCreate(
-                name="Address", slug="address",
+                name="Address",
+                slug="address",
                 fields=[EntityFieldCreate(name="City", slug="city", field_type="text")],
             )
         )
         contact = await svc.create_definition(
             EntityDefinitionCreate(
-                name="Contact", slug="contact",
+                name="Contact",
+                slug="contact",
                 fields=[EntityFieldCreate(name="Full name", slug="full_name", field_type="text")],
             )
         )
@@ -337,30 +339,41 @@ class TestSectionsAndTables:
         addr_rel = await svc.create_relationship(
             company.id,
             EntityRelationshipCreate(
-                name="Address", slug="address", cardinality="one_to_one",
-                target_definition_id=address.id, on_delete="SET NULL",
+                name="Address",
+                slug="address",
+                cardinality="one_to_one",
+                target_definition_id=address.id,
+                on_delete="SET NULL",
             ),
         )
         contact_rel = await svc.create_relationship(
             contact.id,
             EntityRelationshipCreate(
-                name="Company", slug="company", cardinality="many_to_one",
-                target_definition_id=company.id, on_delete="CASCADE",
+                name="Company",
+                slug="company",
+                cardinality="many_to_one",
+                target_definition_id=company.id,
+                on_delete="CASCADE",
             ),
         )
         await admin_session.commit()
 
         company_id = await _create_record(session, org, company.id, {"name": "Acme"})
         form_id = await _make_form(
-            session, org, company.id,
+            session,
+            org,
+            company.id,
             [
                 {"type": "field", "slug": "name"},
                 {
-                    "type": "section", "relationship_id": str(addr_rel.id), "mode": "inline",
+                    "type": "section",
+                    "relationship_id": str(addr_rel.id),
+                    "mode": "inline",
                     "elements": [{"type": "field", "slug": "city"}],
                 },
                 {
-                    "type": "table", "anchor_relationship_id": str(contact_rel.id),
+                    "type": "table",
+                    "anchor_relationship_id": str(contact_rel.id),
                     "columns": [{"kind": "field", "slug": "full_name"}],
                 },
             ],
@@ -373,15 +386,18 @@ class TestSectionsAndTables:
         assert {"section", "table"} <= kinds
 
         await _public_submit(
-            engine, token,
+            engine,
+            token,
             FormSubmit(
                 values={"name": "Acme Inc"},
                 related={
                     str(addr_rel.id): {"values": {"city": "New York"}},
-                    str(contact_rel.id): {"rows": [
-                        {"values": {"full_name": "Alice"}},
-                        {"values": {"full_name": "Bob"}},
-                    ]},
+                    str(contact_rel.id): {
+                        "rows": [
+                            {"values": {"full_name": "Alice"}},
+                            {"values": {"full_name": "Bob"}},
+                        ]
+                    },
                 },
             ),
         )
@@ -396,9 +412,9 @@ class TestSectionsAndTables:
         await set_tenant(session, str(org.id))
         contact_fields = await EntityFieldRepository(session, org.id).list_for_definition(contact.id)
         contact_rels = await EntityRelationshipRepository(session, org.id).list_for_source(contact.id)
-        contacts, _ = await DynamicEntityRepository(
-            session, org.id, contact, contact_fields, contact_rels
-        ).list(filters={contact_rel.slug: company_id}, limit=50)
+        contacts, _ = await DynamicEntityRepository(session, org.id, contact, contact_fields, contact_rels).list(
+            filters={contact_rel.slug: company_id}, limit=50
+        )
         assert {c["full_name"] for c in contacts} == {"Alice", "Bob"}
 
     async def test_related_column_cannot_hijack_unrelated_record(
@@ -411,19 +427,22 @@ class TestSectionsAndTables:
         svc = EntityService(admin_session, org.id)
         order = await svc.create_definition(
             EntityDefinitionCreate(
-                name="Order", slug="order",
+                name="Order",
+                slug="order",
                 fields=[EntityFieldCreate(name="Ref", slug="ref", field_type="text")],
             )
         )
         line = await svc.create_definition(
             EntityDefinitionCreate(
-                name="Line", slug="line",
+                name="Line",
+                slug="line",
                 fields=[EntityFieldCreate(name="Qty", slug="qty", field_type="integer")],
             )
         )
         product = await svc.create_definition(
             EntityDefinitionCreate(
-                name="Product", slug="product",
+                name="Product",
+                slug="product",
                 fields=[EntityFieldCreate(name="Name", slug="pname", field_type="text")],
             )
         )
@@ -432,15 +451,21 @@ class TestSectionsAndTables:
         line_order_rel = await svc.create_relationship(
             line.id,
             EntityRelationshipCreate(
-                name="Order", slug="order", cardinality="many_to_one",
-                target_definition_id=order.id, on_delete="CASCADE",
+                name="Order",
+                slug="order",
+                cardinality="many_to_one",
+                target_definition_id=order.id,
+                on_delete="CASCADE",
             ),
         )
         line_product_rel = await svc.create_relationship(
             line.id,
             EntityRelationshipCreate(
-                name="Product", slug="product", cardinality="many_to_one",
-                target_definition_id=product.id, on_delete="SET NULL",
+                name="Product",
+                slug="product",
+                cardinality="many_to_one",
+                target_definition_id=product.id,
+                on_delete="SET NULL",
             ),
         )
         await admin_session.commit()
@@ -450,15 +475,24 @@ class TestSectionsAndTables:
         victim_id = await _create_record(session, org, product.id, {"pname": "VICTIM"})
 
         form_id = await _make_form(
-            session, org, order.id,
-            [{
-                "type": "table", "anchor_relationship_id": str(line_order_rel.id),
-                "columns": [
-                    {"kind": "field", "slug": "qty"},
-                    {"kind": "related", "relationship_id": str(line_product_rel.id),
-                     "slug": "pname", "editable": True},
-                ],
-            }],
+            session,
+            org,
+            order.id,
+            [
+                {
+                    "type": "table",
+                    "anchor_relationship_id": str(line_order_rel.id),
+                    "columns": [
+                        {"kind": "field", "slug": "qty"},
+                        {
+                            "kind": "related",
+                            "relationship_id": str(line_product_rel.id),
+                            "slug": "pname",
+                            "editable": True,
+                        },
+                    ],
+                }
+            ],
             "idor",
         )
         token = await _mint(session, org, form_id, order_id)
@@ -466,15 +500,22 @@ class TestSectionsAndTables:
         # Malicious submission: a new line row whose related column supplies the
         # VICTIM product id and tries to rename it.
         await _public_submit(
-            engine, token,
+            engine,
+            token,
             FormSubmit(
                 values={},
-                related={str(line_order_rel.id): {"rows": [{
-                    "values": {"qty": 1},
-                    "related": {str(line_product_rel.id): {
-                        "id": str(victim_id), "values": {"pname": "PWNED"}
-                    }},
-                }]}},
+                related={
+                    str(line_order_rel.id): {
+                        "rows": [
+                            {
+                                "values": {"qty": 1},
+                                "related": {
+                                    str(line_product_rel.id): {"id": str(victim_id), "values": {"pname": "PWNED"}}
+                                },
+                            }
+                        ]
+                    }
+                },
             ),
         )
 

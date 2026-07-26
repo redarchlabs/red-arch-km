@@ -93,8 +93,13 @@ async def _delegate_task(ctx: ToolContext, args: dict[str, Any]) -> dict[str, An
         return {"error": "Both 'agent' and 'task' are required"}
     try:
         run = await delegate(
-            ctx.session, ctx.org_id, ctx.agent, target, task,
-            run_id=ctx.run_id, work_order_id=ctx.work_order_id,
+            ctx.session,
+            ctx.org_id,
+            ctx.agent,
+            target,
+            task,
+            run_id=ctx.run_id,
+            work_order_id=ctx.work_order_id,
         )
     except DelegationError as exc:
         return {"error": str(exc)}
@@ -114,9 +119,13 @@ async def _escalate(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
         return {"error": "'reason' is required"}
     supervisor = await _supervisor(ctx)
     await create_notification(
-        ctx.session, ctx.org_id, kind="escalation",
-        title=f"Escalation from {ctx.agent.name}", body=reason,
-        run_id=ctx.run_id, work_order_id=ctx.work_order_id,
+        ctx.session,
+        ctx.org_id,
+        kind="escalation",
+        title=f"Escalation from {ctx.agent.name}",
+        body=reason,
+        run_id=ctx.run_id,
+        work_order_id=ctx.work_order_id,
         recipient_role=None if supervisor else "org_admin",
         settings=ctx.settings,
     )
@@ -135,9 +144,13 @@ async def _consult_peer(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any
     if peer.kind != "advisory":
         return {"error": "You may only consult advisory agents"}
     await create_notification(
-        ctx.session, ctx.org_id, kind="review",
-        title=f"{ctx.agent.name} consulted {peer.name}", body=question,
-        run_id=ctx.run_id, work_order_id=ctx.work_order_id,
+        ctx.session,
+        ctx.org_id,
+        kind="review",
+        title=f"{ctx.agent.name} consulted {peer.name}",
+        body=question,
+        run_id=ctx.run_id,
+        work_order_id=ctx.work_order_id,
     )
     return {"consulted": peer.name, "status": "sent"}
 
@@ -148,9 +161,13 @@ async def _request_review(ctx: ToolContext, args: dict[str, Any]) -> dict[str, A
         return {"error": "'summary' is required"}
     supervisor = await _supervisor(ctx)
     await create_notification(
-        ctx.session, ctx.org_id, kind="review",
-        title=f"Review requested by {ctx.agent.name}", body=summary,
-        run_id=ctx.run_id, work_order_id=ctx.work_order_id,
+        ctx.session,
+        ctx.org_id,
+        kind="review",
+        title=f"Review requested by {ctx.agent.name}",
+        body=summary,
+        run_id=ctx.run_id,
+        work_order_id=ctx.work_order_id,
         recipient_role=None if supervisor else "org_admin",
         settings=ctx.settings,
     )

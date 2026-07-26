@@ -51,7 +51,9 @@ def _settings(tmp_path, *, allowed=("Read", "Grep"), timeout=300, path="/usr/bin
 
 def _ctx(settings) -> ToolContext:
     return ToolContext(
-        session=None, org_id=uuid.uuid4(), settings=settings,
+        session=None,
+        org_id=uuid.uuid4(),
+        settings=settings,
         agent=_agent("operator", tools=["run_claude_code"]),
     )
 
@@ -161,12 +163,8 @@ async def test_working_dir_escape_refused_without_launching(tmp_path):
 
 def test_registered_only_when_enabled():
     assert "run_claude_code" not in {s.name for s in base_tool_specs()}
-    assert "run_claude_code" not in {
-        s.name for s in base_tool_specs(SimpleNamespace(enable_claude_cli_tool=False))
-    }
-    assert "run_claude_code" in {
-        s.name for s in base_tool_specs(SimpleNamespace(enable_claude_cli_tool=True))
-    }
+    assert "run_claude_code" not in {s.name for s in base_tool_specs(SimpleNamespace(enable_claude_cli_tool=False))}
+    assert "run_claude_code" in {s.name for s in base_tool_specs(SimpleNamespace(enable_claude_cli_tool=True))}
 
 
 def test_tool_is_execute_and_side_effecting():

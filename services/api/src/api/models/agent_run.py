@@ -78,9 +78,7 @@ class AgentRun(Base, UUIDMixin, TimestampMixin):
     # Drives the supervisor-idle escalation backstop.
     last_activity_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
-    org_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True
-    )
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True)
 
 
 class AgentRunStep(Base, UUIDMixin, TimestampMixin):
@@ -95,9 +93,7 @@ class AgentRunStep(Base, UUIDMixin, TimestampMixin):
     content: Mapped[dict] = mapped_column(JSONB, default=dict)
     tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
-    org_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True
-    )
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True)
 
 
 class AgentApproval(Base, UUIDMixin, TimestampMixin):
@@ -117,9 +113,7 @@ class AgentApproval(Base, UUIDMixin, TimestampMixin):
     )
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
-    org_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True
-    )
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True)
 
 
 class AgentNotification(Base, UUIDMixin, TimestampMixin):
@@ -142,9 +136,7 @@ class AgentNotification(Base, UUIDMixin, TimestampMixin):
     # Which channels actually delivered: ["in_app", "email", "workflow"].
     delivered_channels: Mapped[list] = mapped_column(JSONB, default=list)
 
-    org_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True
-    )
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True)
 
 
 class AgentSchedule(Base, UUIDMixin, TimestampMixin):
@@ -159,6 +151,4 @@ class AgentSchedule(Base, UUIDMixin, TimestampMixin):
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
-    org_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True
-    )
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True)

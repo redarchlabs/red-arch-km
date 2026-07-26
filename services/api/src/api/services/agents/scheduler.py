@@ -19,7 +19,6 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import UTC, datetime
-from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -45,9 +44,7 @@ def _next_cron(cron_expr: str, base: datetime) -> datetime | None:
         return None
 
 
-async def run_due_schedules(
-    session: AsyncSession, *, limit: int = 200, now: datetime | None = None
-) -> dict[str, int]:
+async def run_due_schedules(session: AsyncSession, *, limit: int = 200, now: datetime | None = None) -> dict[str, int]:
     """Enqueue a run for every enabled agent schedule that is due.
 
     Returns ``{"considered": n, "fired": m}``. The caller commits.
@@ -57,10 +54,10 @@ async def run_due_schedules(
     # is written scoped by the schedule's own org_id.
     await db_scope.enter_bypass(session)
     schedules = (
-        await session.execute(
-            select(AgentSchedule).where(AgentSchedule.enabled.is_(True)).limit(limit)
-        )
-    ).scalars().all()
+        (await session.execute(select(AgentSchedule).where(AgentSchedule.enabled.is_(True)).limit(limit)))
+        .scalars()
+        .all()
+    )
 
     fired = 0
     for sched in schedules:
@@ -93,16 +90,14 @@ async def run_due_schedules(
     return {"considered": len(schedules), "fired": fired}
 
 
-async def upcoming_for_agent(
-    session: AsyncSession, org_id: uuid.UUID, agent_id: uuid.UUID
-) -> list[AgentSchedule]:
+async def upcoming_for_agent(session: AsyncSession, org_id: uuid.UUID, agent_id: uuid.UUID) -> list[AgentSchedule]:
     """List an agent's schedules (org-scoped)."""
     return list(
         (
             await session.execute(
-                select(AgentSchedule).where(
-                    AgentSchedule.org_id == org_id, AgentSchedule.agent_id == agent_id
-                )
+                select(AgentSchedule).where(AgentSchedule.org_id == org_id, AgentSchedule.agent_id == agent_id)
             )
-        ).scalars().all()
+        )
+        .scalars()
+        .all()
     )

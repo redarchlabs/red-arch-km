@@ -162,17 +162,16 @@ class McpClient:
             if transport == "http":
                 from mcp.client.streamable_http import streamablehttp_client  # noqa: PLC0415
 
-                async with streamablehttp_client(url, headers=headers) as (read, write, _), ClientSession(
-                    read, write
-                ) as session:
+                async with (
+                    streamablehttp_client(url, headers=headers) as (read, write, _),
+                    ClientSession(read, write) as session,
+                ):
                     await session.initialize()
                     yield session
             else:
                 from mcp.client.sse import sse_client  # noqa: PLC0415
 
-                async with sse_client(url, headers=headers) as (read, write), ClientSession(
-                    read, write
-                ) as session:
+                async with sse_client(url, headers=headers) as (read, write), ClientSession(read, write) as session:
                     await session.initialize()
                     yield session
         else:

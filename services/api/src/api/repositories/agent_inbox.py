@@ -25,9 +25,7 @@ class AgentApprovalRepository:
 
     async def get(self, approval_id: uuid.UUID) -> AgentApproval | None:
         result = await self._session.execute(
-            select(AgentApproval).where(
-                AgentApproval.id == approval_id, AgentApproval.org_id == self._org_id
-            )
+            select(AgentApproval).where(AgentApproval.id == approval_id, AgentApproval.org_id == self._org_id)
         )
         return result.scalar_one_or_none()
 

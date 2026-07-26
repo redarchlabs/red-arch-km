@@ -61,9 +61,7 @@ async def agent_chat_stream(
         if stored:
             org_key = decrypt_secret(stored, settings.org_encryption_key.get_secret_value())
 
-    agent = AgentService(
-        ctx.org_id, settings, session_factory=factory, org_openai_key=org_key, org_context=ctx
-    )
+    agent = AgentService(ctx.org_id, settings, session_factory=factory, org_openai_key=org_key, org_context=ctx)
     history = [{"role": m.role, "content": m.content} for m in body.messages]
 
     async def iterator() -> AsyncGenerator[bytes]:

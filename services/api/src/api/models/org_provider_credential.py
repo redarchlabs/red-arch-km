@@ -30,7 +30,5 @@ class OrgProviderCredential(Base, UUIDMixin, TimestampMixin):
     # Fernet ciphertext of the provider API key (services/crypto.py). Never plaintext.
     secret_encrypted: Mapped[str] = mapped_column(Text)
 
-    org_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True
-    )
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True)
     org: Mapped[Org] = relationship()

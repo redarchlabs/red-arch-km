@@ -181,7 +181,7 @@ async def _probe_celery_queue(redis: Redis) -> ComponentStatus:
     worker consuming it is the operator's cue that document processing is down."""
     try:
         # redis-py types llen as `Awaitable[int] | int` (sync/async union).
-        depth = await redis.llen(_CELERY_QUEUE_NAME)  # type: ignore[misc]
+        depth = await redis.llen(_CELERY_QUEUE_NAME)
     except Exception as e:  # noqa: BLE001
         return ComponentStatus(status="error", detail=str(e))
     return ComponentStatus(status="ok", detail=f"depth={depth}")
@@ -352,8 +352,8 @@ async def celery_status(
     waiting.
     """
     try:
-        depth = int(await redis.llen(_CELERY_QUEUE_NAME))  # type: ignore[arg-type]  # sync/async union
-        raw_items = list(await redis.lrange(_CELERY_QUEUE_NAME, 0, _QUEUE_PEEK_LIMIT - 1))  # type: ignore[misc]
+        depth = int(await redis.llen(_CELERY_QUEUE_NAME))  # sync/async union
+        raw_items = list(await redis.lrange(_CELERY_QUEUE_NAME, 0, _QUEUE_PEEK_LIMIT - 1))
     except Exception:  # noqa: BLE001 — a broker hiccup must not 500 the console
         depth, raw_items = 0, []
     items = [_parse_celery_message(r) for r in raw_items]
@@ -389,10 +389,7 @@ async def cancel_job(
     """
     row = (
         await session.execute(
-            text(
-                "SELECT org_id, document_key, celery_task_id, processing_status "
-                "FROM documents WHERE id = :id"
-            ),
+            text("SELECT org_id, document_key, celery_task_id, processing_status FROM documents WHERE id = :id"),
             {"id": document_id},
         )
     ).first()
@@ -416,7 +413,7 @@ async def cancel_job(
     await session.execute(
         text(
             "UPDATE documents SET processing_status = 'CANCELLED', "
-            "processing_details = '{\"stage\": \"cancelled\"}'::jsonb WHERE id = :id"
+            'processing_details = \'{"stage": "cancelled"}\'::jsonb WHERE id = :id'
         ),
         {"id": document_id},
     )
@@ -442,7 +439,7 @@ async def job_logs(
     tenant-scoped ``/documents/{id}/logs`` endpoint.
     """
     try:
-        raw = list(await redis.lrange(_JOB_LOG_KEY.format(document_id=document_id), 0, -1))  # type: ignore[misc]
+        raw = list(await redis.lrange(_JOB_LOG_KEY.format(document_id=document_id), 0, -1))
     except Exception:  # noqa: BLE001 — a broker hiccup must not 500 the console
         raw = []
     events: list[JobLogEntry] = []

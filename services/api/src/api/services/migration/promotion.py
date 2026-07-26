@@ -44,9 +44,7 @@ def _managed_delete_types(source_resources: dict[str, Any]) -> frozenset[str]:
     release actually contains. A forms-only release must never mark the target's
     workflows or entities (absent from the release) as deletions."""
     return frozenset(
-        rtype
-        for rtype in RESOURCE_ORDER
-        if rtype not in DATA_RESOURCE_TYPES and source_resources.get(rtype)
+        rtype for rtype in RESOURCE_ORDER if rtype not in DATA_RESOURCE_TYPES and source_resources.get(rtype)
     )
 
 
@@ -112,9 +110,7 @@ class PromotionExecutor:
         blockers: list[InFlightBlocker] = []
         if apply_deletes and diff.has_deletes:
             blockers = await InFlightGuard(self._session, self._org_id).check(deletion_set(diff))
-        return PromotionResult(
-            diff=diff, import_summary=summary, blockers=blockers, dry_run=True
-        )
+        return PromotionResult(diff=diff, import_summary=summary, blockers=blockers, dry_run=True)
 
     async def promote(
         self,
@@ -176,9 +172,7 @@ class PromotionExecutor:
         )
         return result, importer
 
-    async def rollback(
-        self, reverse_snapshot: dict[str, Any]
-    ) -> tuple[PromotionResult, MigrationImporter]:
+    async def rollback(self, reverse_snapshot: dict[str, Any]) -> tuple[PromotionResult, MigrationImporter]:
         """Undo a promotion by re-applying its reverse snapshot with deletes on:
         OVERWRITE restores changed objects, and objects created since (absent from
         the snapshot) are removed across every config type.

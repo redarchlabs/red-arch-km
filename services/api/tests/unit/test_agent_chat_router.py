@@ -27,9 +27,7 @@ def settings() -> Settings:
 @pytest.fixture
 def admin_ctx() -> OrgContext:
     # Admin → _get_user_access_keys short-circuits to None (no DB access needed).
-    user = CurrentUser(
-        sub="s", username="admin", email="a@example.com", profile_id=uuid.uuid4(), is_site_admin=False
-    )
+    user = CurrentUser(sub="s", username="admin", email="a@example.com", profile_id=uuid.uuid4(), is_site_admin=False)
     return OrgContext(user=user, org_id=uuid.uuid4(), membership=MagicMock(spec=UserOrgMembership), is_org_admin=True)
 
 
@@ -79,9 +77,7 @@ async def test_agent_chat_passes_tenant_and_admin_access(
             return await super().agent_ask(**kwargs)
 
     monkeypatch.setattr(search_router, "BrainAPIClient", Capturing)
-    await search_router.agent_chat(
-        AgentChatRequest(query="q"), ctx=admin_ctx, session=MagicMock(), settings=settings
-    )
+    await search_router.agent_chat(AgentChatRequest(query="q"), ctx=admin_ctx, session=MagicMock(), settings=settings)
     assert captured["tenant_id"] == str(admin_ctx.org_id)
     assert captured["access_keys"] is None  # admin → unrestricted
 

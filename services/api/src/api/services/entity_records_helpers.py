@@ -253,9 +253,7 @@ async def dispatch_inline_workflows(
             # Bounded so a slow inline workflow can't pin the request's connection.
             # The timeout almost always lands during an external LLM/HTTP await (the
             # long pole), leaving the DB idle so the savepoint rolls back cleanly.
-            await asyncio.wait_for(
-                dispatcher.run_inline_for_change(event), timeout=_INLINE_DISPATCH_BUDGET_SECONDS
-            )
+            await asyncio.wait_for(dispatcher.run_inline_for_change(event), timeout=_INLINE_DISPATCH_BUDGET_SECONDS)
     except Exception:  # noqa: BLE001 — inline reaction failure must not fail the record write
         # Swallow (this also catches asyncio.wait_for's TimeoutError): the record
         # write must still commit. A timeout/failure leaves the outbox row pending,

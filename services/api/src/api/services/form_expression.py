@@ -168,8 +168,11 @@ def _arith(op: str, ev: list[Any]) -> Any:
     nums = [_num(v) for v in ev]
     if any(n is None for n in nums) or not nums:
         return None
-    acc = nums[0]
-    for n in nums[1:]:
+    # The guard above rules out None, but `any(...)` cannot narrow a list's element
+    # type — rebuild it so the arithmetic below is checkable.
+    values: list[Decimal] = [n for n in nums if n is not None]
+    acc = values[0]
+    for n in values[1:]:
         if op == "+":
             acc += n
         elif op == "-":
