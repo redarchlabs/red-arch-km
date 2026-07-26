@@ -7,16 +7,20 @@ import { DocumentRow } from "@/components/documents/DocumentRow";
 import { DocumentUpload } from "@/components/documents/DocumentUpload";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Pagination } from "@/components/ui/pagination";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useOrg } from "@/context/OrgContext";
 import { listDocuments } from "@/lib/api/documents";
 import { listFolders } from "@/lib/api/folders";
 import type { Document, Folder, PaginatedResponse } from "@/types";
 
+const PAGE_SIZE = 20;
+
 export default function DocumentsPage() {
   const { currentOrgId, isLoading: orgLoading } = useOrg();
   const [data, setData] = useState<PaginatedResponse<Document> | null>(null);
   const [folders, setFolders] = useState<Folder[]>([]);
+  const [page, setPage] = useState(1);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [uploadOpen, setUploadOpen] = useState(false);
@@ -28,7 +32,10 @@ export default function DocumentsPage() {
     try {
       // Folders power the Properties dialog's folder picker; a folder-list
       // failure shouldn't block the document list.
-      const [docs, folderList] = await Promise.allSettled([listDocuments(), listFolders()]);
+      const [docs, folderList] = await Promise.allSettled([
+        listDocuments(page, PAGE_SIZE),
+        listFolders(),
+      ]);
       if (docs.status === "fulfilled") setData(docs.value);
       else throw docs.reason;
       if (folderList.status === "fulfilled") setFolders(folderList.value);
@@ -37,11 +44,31 @@ export default function DocumentsPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [currentOrgId]);
+  }, [currentOrgId, page]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Switching orgs re-scopes the list, so the old page number is meaningless.
+  useEffect(() => {
+    setPage(1);
+  }, [currentOrgId]);
+
+  // Deleting the last document on the final page (or a shrinking list) can
+  // strand the user past the end — step back so they never see a blank page.
+  const pageCount = Math.max(1, data?.pages ?? 1);
+  useEffect(() => {
+    if (page > pageCount) setPage(pageCount);
+  }, [page, pageCount]);
+
+  // The list is newest-first, so a new upload always lands on page 1 — jump
+  // there rather than silently reloading whatever page the user was on (which
+  // would hide the new document *and* its ingest progress).
+  const handleCreated = useCallback(() => {
+    if (page === 1) void load();
+    else setPage(1);
+  }, [page, load]);
 
   // Ingestion is async (worker → status callback). Poll while any document is
   // still PENDING/PROCESSING so the status badge flips to SUCCESS/FAILED
@@ -98,6 +125,14 @@ export default function DocumentsPage() {
           {data.items.map((doc) => (
             <DocumentRow key={doc.id} doc={doc} folders={folders} onChanged={load} />
           ))}
+          <Pagination
+            page={data.page}
+            pageCount={pageCount}
+            total={data.total}
+            onPageChange={setPage}
+            itemLabel="document"
+            className="pt-2"
+          />
         </div>
       ) : (
         <Card>
@@ -110,7 +145,7 @@ export default function DocumentsPage() {
       <DocumentUpload
         open={uploadOpen}
         onClose={() => setUploadOpen(false)}
-        onCreated={load}
+        onCreated={handleCreated}
       />
     </div>
   );
