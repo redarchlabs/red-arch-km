@@ -53,7 +53,12 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"**/tests/**" = ["S101", "S106"]
+# S105/S106 flag hardcoded credentials. Tests assign dummy tokens by design
+# ("at", "refresh-1"); real secrets are caught by gitleaks, which scans every
+# file regardless of these ignores.
+"**/tests/**" = ["S101", "S105", "S106"]
+# Standalone CLI tools — stdout is their interface, not a stray debug print.
+"scripts/**" = ["T201"]
 
 [tool.mypy]
 python_version = "3.12"

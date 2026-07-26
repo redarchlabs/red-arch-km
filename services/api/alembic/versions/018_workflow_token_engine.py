@@ -74,7 +74,9 @@ def upgrade() -> None:
         sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.Column("seq", sa.BigInteger, sa.Identity(always=False), nullable=False),
-        sa.Column("org_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("orgs.id", ondelete="CASCADE"), nullable=False),
+        sa.Column(
+            "org_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("orgs.id", ondelete="CASCADE"), nullable=False
+        ),
         sa.Column("run_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("run_created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("node_id", sa.String(64), nullable=False),
@@ -115,8 +117,7 @@ def upgrade() -> None:
     # Outbox source vocabulary gains 'webhook' (inbound endpoints, later phase).
     op.execute("ALTER TABLE workflow_outbox DROP CONSTRAINT IF EXISTS ck_wf_outbox_source")
     op.execute(
-        "ALTER TABLE workflow_outbox ADD CONSTRAINT ck_wf_outbox_source "
-        "CHECK (source IN ('record','form','webhook'))"
+        "ALTER TABLE workflow_outbox ADD CONSTRAINT ck_wf_outbox_source CHECK (source IN ('record','form','webhook'))"
     )
 
     # Fold the new partitioned table into the maintenance helper.
@@ -130,7 +131,9 @@ def upgrade() -> None:
             end_date date;
             part_name text;
         BEGIN
-            FOREACH tbl IN ARRAY ARRAY['workflow_outbox','workflow_runs','workflow_run_steps','workflow_run_tokens'] LOOP
+            FOREACH tbl IN ARRAY ARRAY[
+                'workflow_outbox','workflow_runs','workflow_run_steps','workflow_run_tokens'
+            ] LOOP
                 FOR m IN 0..months_ahead LOOP
                     start_date := date_trunc('month', (now() AT TIME ZONE 'UTC' + (m || ' month')::interval))::date;
                     end_date := (start_date + interval '1 month')::date;
