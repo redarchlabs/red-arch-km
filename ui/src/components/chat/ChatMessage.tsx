@@ -2,12 +2,13 @@
 
 import DOMPurify from "dompurify";
 import Link from "next/link";
-import { Fragment } from "react";
 
+import { Markdown } from "@/components/common/Markdown";
 import type { AgentTraceStep, ChatSource } from "@/lib/api/search";
 import { cn } from "@/lib/utils";
 
 import { AgentTrace } from "./AgentTrace";
+import { ThinkingIndicator } from "./ThinkingIndicator";
 
 export interface Message {
   /** Stable ID assigned when the message is appended; used as React key. */
@@ -68,53 +69,84 @@ function dedupeSources(sources: ChatSource[]): ChatSource[] {
   return [...byKey.values()].map((s, i) => ({ ...s, number: s.number ?? i + 1 }));
 }
 
-/**
- * Render answer text, turning inline `[n]` citation markers into links to the
- * matching source document. Segments between markers are plain (React-escaped)
- * text; an `[n]` with no matching source is left as literal text.
- */
-function renderWithCitations(text: string, sources: ChatSource[]): React.ReactNode[] {
-  const byNumber = new Map(sources.map((s) => [s.number, s]));
-  const nodes: React.ReactNode[] = [];
-  const regex = /\[(\d+)\]/g;
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
-  let k = 0;
+/** Citation numbers (`[n]`) that appear in the answer text. */
+function citedNumbers(text: string): Set<number> {
+  const cited = new Set<number>();
+  for (const match of text.matchAll(/\[(\d+)\]/g)) {
+    cited.add(Number(match[1]));
+  }
+  return cited;
+}
 
-  while ((match = regex.exec(text)) !== null) {
-    if (match.index > lastIndex) {
-      nodes.push(
-        <Fragment key={`t${k}`}>{sanitize(text.slice(lastIndex, match.index))}</Fragment>,
-      );
-    }
-    const n = Number(match[1]);
-    const src = byNumber.get(n);
-    if (src?.document_id) {
-      nodes.push(
-        <Link
-          key={`c${k}`}
-          href={passageHref(src)}
-          title={src.snippet ? `${sourceLabel(src)} — "${src.snippet}"` : sourceLabel(src)}
-          className="mx-0.5 rounded bg-primary/10 px-1 text-xs font-medium text-primary no-underline hover:bg-primary/20"
-        >
-          [{n}]
-        </Link>,
-      );
-    } else {
-      nodes.push(<Fragment key={`c${k}`}>{match[0]}</Fragment>);
-    }
-    lastIndex = regex.lastIndex;
-    k += 1;
+const CITATION_CLASS =
+  "mx-0.5 rounded bg-primary/10 px-1 text-xs font-medium text-primary no-underline hover:bg-primary/20";
+
+/** Elements whose text is not prose — a `[1]` inside them is not a citation. */
+const NON_PROSE = "code, pre, a";
+
+/**
+ * Turn `[n]` citation markers into links to the cited passage.
+ *
+ * Works on the PARSED document rather than the Markdown source, so an array
+ * index in `arr[1]` or the label of a real `[1](https://…)` link is left alone —
+ * a string-level rewrite can't tell those from a citation. Markers with no
+ * matching source stay as plain text. Built with DOM APIs, so href/title values
+ * are escaped by the serializer; the result is sanitized by `Markdown`.
+ */
+function linkifyCitations(html: string, sources: ChatSource[]): string {
+  if (typeof DOMParser === "undefined") return html; // no DOM (SSR): leave as-is
+  const byNumber = new Map(sources.map((s) => [s.number, s]));
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+  const targets: Text[] = [];
+  while (walker.nextNode()) {
+    const node = walker.currentNode as Text;
+    if (/\[\d+\]/.test(node.data) && !node.parentElement?.closest(NON_PROSE)) targets.push(node);
   }
-  if (lastIndex < text.length) {
-    nodes.push(<Fragment key={`t${k}`}>{sanitize(text.slice(lastIndex))}</Fragment>);
+
+  for (const node of targets) {
+    const fragment = doc.createDocumentFragment();
+    let lastIndex = 0;
+    for (const match of node.data.matchAll(/\[(\d+)\]/g)) {
+      const src = byNumber.get(Number(match[1]));
+      if (!src?.document_id || match.index === undefined) continue;
+      if (match.index > lastIndex) {
+        fragment.append(doc.createTextNode(node.data.slice(lastIndex, match.index)));
+      }
+      const anchor = doc.createElement("a");
+      anchor.setAttribute("href", passageHref(src));
+      anchor.setAttribute(
+        "title",
+        src.snippet ? `${sourceLabel(src)} — "${src.snippet}"` : sourceLabel(src),
+      );
+      anchor.setAttribute("data-citation", match[1]);
+      anchor.setAttribute("class", CITATION_CLASS);
+      anchor.textContent = match[0];
+      fragment.append(anchor);
+      lastIndex = match.index + match[0].length;
+    }
+    if (lastIndex === 0) continue; // nothing matched a real source
+    if (lastIndex < node.data.length) {
+      fragment.append(doc.createTextNode(node.data.slice(lastIndex)));
+    }
+    node.replaceWith(fragment);
   }
-  return nodes;
+  return doc.body.innerHTML;
 }
 
 export function ChatMessage({ message }: ChatMessageProps) {
   const isUser = message.role === "user";
   const sources = !isUser && message.sources ? dedupeSources(message.sources) : [];
+  // The Sources footer lists only passages the answer actually cites. While the
+  // answer is still streaming the markers have not all arrived, so the full list
+  // is shown until it settles — otherwise the footer would visibly churn. When a
+  // finished answer carries no usable [n] markers (older persisted messages, or
+  // a model that answered without citing), fall back to listing everything
+  // retrieved rather than hiding provenance entirely.
+  const cited = citedNumbers(message.content);
+  const citedSources = sources.filter((s) => cited.has(s.number as number));
+  const listedSources = message.streaming || citedSources.length === 0 ? sources : citedSources;
+  const awaitingFirstToken = !isUser && !!message.streaming && message.content.trim() === "";
 
   return (
     <div className={cn("flex", isUser ? "justify-end" : "justify-start")}>
@@ -124,15 +156,31 @@ export function ChatMessage({ message }: ChatMessageProps) {
           isUser ? "bg-primary text-primary-foreground" : "bg-muted",
         )}
       >
-        <div className="whitespace-pre-wrap">
-          {isUser ? sanitize(message.content) : renderWithCitations(message.content, sources)}
-        </div>
-        {message.streaming ? (
-          <span
-            aria-label="streaming"
-            className="ml-1 inline-block h-2 w-2 animate-pulse rounded-full bg-current align-middle"
+        {isUser ? (
+          // User text is shown verbatim — a typed "#" or "*" is punctuation,
+          // not formatting.
+          <div className="whitespace-pre-wrap">{sanitize(message.content)}</div>
+        ) : awaitingFirstToken ? (
+          // Nothing to render yet: say what the answer is waiting on rather
+          // than leaving a bare blinking dot.
+          <ThinkingIndicator
+            label={sources.length > 0 ? "Writing the answer…" : "Searching your documents…"}
           />
-        ) : null}
+        ) : (
+          <>
+            <Markdown
+              content={message.content}
+              stripImages
+              transformHtml={(html) => linkifyCitations(html, sources)}
+            />
+            {message.streaming ? (
+              <span
+                aria-label="streaming"
+                className="ml-1 inline-block h-3.5 w-1.5 animate-pulse rounded-sm bg-current align-text-bottom"
+              />
+            ) : null}
+          </>
+        )}
 
         {message.unsupportedCitations && message.unsupportedCitations.length > 0 ? (
           <p className="mt-2 text-xs text-amber-600 dark:text-amber-500">
@@ -145,11 +193,11 @@ export function ChatMessage({ message }: ChatMessageProps) {
           <AgentTrace steps={message.agentTrace} live={message.streaming} />
         ) : null}
 
-        {sources.length > 0 ? (
+        {listedSources.length > 0 ? (
           <div className="mt-3 border-t pt-2">
             <p className="mb-1 text-xs font-medium text-muted-foreground">Sources</p>
             <ol className="space-y-1.5">
-              {sources.map((src) => (
+              {listedSources.map((src) => (
                 <li
                   key={`${src.document_id || src.document_key}-${src.chunk_order ?? src.number}`}
                   className="text-xs"

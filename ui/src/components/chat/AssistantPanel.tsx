@@ -3,6 +3,8 @@
 import { Bot, CheckCircle2, Send, Sparkles, Wrench, XCircle } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
+import { Markdown } from "@/components/common/Markdown";
+import { ThinkingIndicator } from "@/components/chat/ThinkingIndicator";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { ACTION_LABELS } from "@/components/workflows/actionTypes";
@@ -103,6 +105,14 @@ export function AssistantPanel() {
         ) : (
           blocks.map((block, i) => <BlockView key={i} block={block} />)
         )}
+        {/* The reply may open with a tool call rather than text — keep the wait
+            visible until something actually renders. */}
+        {streaming && !hasVisibleReply(blocks) ? (
+          <div className="flex gap-2">
+            <Bot className="mt-1 h-4 w-4 shrink-0 text-muted-foreground" />
+            <ThinkingIndicator label="Thinking…" />
+          </div>
+        ) : null}
       </div>
 
       {error ? (
@@ -182,6 +192,19 @@ function appendAssistant(blocks: Block[], text: string): Block[] {
   return [...blocks, { kind: "assistant", text }];
 }
 
+/**
+ * Whether anything from the current reply is already on screen: a tool card, or
+ * assistant text. Everything after the last user block belongs to that reply —
+ * the trailing block is always the (initially empty) assistant placeholder, so
+ * tool cards land before it rather than at the end.
+ */
+function hasVisibleReply(blocks: Block[]): boolean {
+  const lastUser = blocks.map((b) => b.kind).lastIndexOf("user");
+  return blocks
+    .slice(lastUser + 1)
+    .some((b) => b.kind === "tool" || (b.kind === "assistant" && b.text.length > 0));
+}
+
 function BlockView({ block }: { block: Block }) {
   if (block.kind === "user") {
     return (
@@ -197,8 +220,8 @@ function BlockView({ block }: { block: Block }) {
     return (
       <div className="flex gap-2">
         <Bot className="mt-1 h-4 w-4 shrink-0 text-muted-foreground" />
-        <div className="max-w-[80%] whitespace-pre-wrap rounded-lg bg-background px-3 py-2 text-sm shadow-sm">
-          {block.text}
+        <div className="max-w-[80%] rounded-lg bg-background px-3 py-2 text-sm shadow-sm">
+          <Markdown content={block.text} stripImages />
         </div>
       </div>
     );
