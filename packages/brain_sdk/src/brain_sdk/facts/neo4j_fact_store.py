@@ -467,7 +467,7 @@ class Neo4jFactStore:
         return self._run(
             f"""
             MATCH (s:Entity:{label})-[:SUBJECT]->(c:Claim:{label})
-            WHERE {' AND '.join(conds)}
+            WHERE {" AND ".join(conds)}
             OPTIONAL MATCH (c)-[:OBJECT]->(o:Entity)
             RETURN s.canonical_name AS subject,
                    c.predicate AS predicate,
@@ -673,9 +673,7 @@ class Neo4jFactStore:
         )
         return [self._row_gap(r["g"]) for r in rows]
 
-    def set_gap_status(
-        self, tenant_id: str, gap_id: str, status: GapStatus, *, resolved_at: str | None = None
-    ) -> bool:
+    def set_gap_status(self, tenant_id: str, gap_id: str, status: GapStatus, *, resolved_at: str | None = None) -> bool:
         label = self._tenant_label(tenant_id)
         rows = self._run(
             f"""
@@ -691,9 +689,7 @@ class Neo4jFactStore:
 
     def get_gap(self, tenant_id: str, gap_id: str) -> KnowledgeGap | None:
         label = self._tenant_label(tenant_id)
-        rows = self._run(
-            f"MATCH (g:KnowledgeGap:{label} {{gap_id: $gap_id}}) RETURN g LIMIT 1", gap_id=gap_id
-        )
+        rows = self._run(f"MATCH (g:KnowledgeGap:{label} {{gap_id: $gap_id}}) RETURN g LIMIT 1", gap_id=gap_id)
         return self._row_gap(rows[0]["g"]) if rows else None
 
     @staticmethod

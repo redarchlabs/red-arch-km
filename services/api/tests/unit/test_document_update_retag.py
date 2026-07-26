@@ -29,9 +29,7 @@ DOC_KEY = "doc-key-1"
 
 
 def _ctx() -> OrgContext:
-    user = CurrentUser(
-        sub="u", username="u", email="u@x.com", profile_id=uuid.uuid4(), is_site_admin=False
-    )
+    user = CurrentUser(sub="u", username="u", email="u@x.com", profile_id=uuid.uuid4(), is_site_admin=False)
     return OrgContext(user=user, org_id=ORG_ID, membership=MagicMock(), is_org_admin=True)
 
 
@@ -106,9 +104,7 @@ def _client(app: FastAPI) -> httpx.AsyncClient:
 
 async def test_folder_move_dispatches_retag_with_new_tag_and_masks(wiring: dict[str, Any]) -> None:
     async with _client(_app()) as client:
-        resp = await client.patch(
-            f"/api/documents/{uuid.uuid4()}", json={"folder_id": str(NEW_FOLDER_ID)}
-        )
+        resp = await client.patch(f"/api/documents/{uuid.uuid4()}", json={"folder_id": str(NEW_FOLDER_ID)})
     assert resp.status_code == 200
 
     dispatched = wiring["dispatched"]
@@ -147,18 +143,14 @@ async def test_doc_with_own_perms_retags_with_doc_masks(
     monkeypatch.setattr(documents_module, "DocumentRepository", _OwnPermsDocRepo)
 
     async with _client(_app()) as client:
-        resp = await client.patch(
-            f"/api/documents/{uuid.uuid4()}", json={"folder_id": str(NEW_FOLDER_ID)}
-        )
+        resp = await client.patch(f"/api/documents/{uuid.uuid4()}", json={"folder_id": str(NEW_FOLDER_ID)})
     assert resp.status_code == 200
     assert wiring["dispatched"]["new_access_keys"] == [42]
 
 
 async def test_description_only_change_does_not_retag(wiring: dict[str, Any]) -> None:
     async with _client(_app()) as client:
-        resp = await client.patch(
-            f"/api/documents/{uuid.uuid4()}", json={"description": "just a note"}
-        )
+        resp = await client.patch(f"/api/documents/{uuid.uuid4()}", json={"description": "just a note"})
     assert resp.status_code == 200
     # A pure description edit touches no vector-store metadata → no dispatch.
     assert wiring["dispatched"] is None

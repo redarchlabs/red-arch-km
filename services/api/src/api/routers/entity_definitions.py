@@ -8,7 +8,10 @@ admin. Record CRUD lives in ``entity_records.py`` and runs under RLS.
 from __future__ import annotations
 
 import uuid
-from typing import Annotated, NoReturn
+from typing import TYPE_CHECKING, Annotated, NoReturn, cast
+
+if TYPE_CHECKING:
+    from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -42,7 +45,9 @@ from api.services.entity_service import (
 
 router = APIRouter()
 
-_ERROR_STATUS = {
+# Keyed by the base Exception type: the lookup takes `type(exc)` from a plain
+# `Exception` parameter, which a narrower key type would reject.
+_ERROR_STATUS: dict[type[Exception], int] = {
     EntityConflictError: status.HTTP_409_CONFLICT,
     EntityLimitError: status.HTTP_409_CONFLICT,
     EntityNotFoundError: status.HTTP_404_NOT_FOUND,
@@ -55,9 +60,7 @@ def _raise_http(exc: Exception) -> NoReturn:
     raise HTTPException(status_code=code, detail=str(exc)) from exc
 
 
-async def _read_with_fields(
-    session: AsyncSession, org_id: uuid.UUID, definition_id: uuid.UUID
-) -> EntityDefinitionRead:
+async def _read_with_fields(session: AsyncSession, org_id: uuid.UUID, definition_id: uuid.UUID) -> EntityDefinitionRead:
     defs = EntityDefinitionRepository(session, org_id)
     definition = await defs.get(definition_id)
     if definition is None:
@@ -69,7 +72,9 @@ async def _read_with_fields(
         slug=definition.slug,
         description=definition.description,
         is_active=definition.is_active,
-        write_access=definition.write_access,
+        # The column is a plain str; EntityDefinitionRead constrains it to a Literal.
+        # Pydantic still validates at construction, so this only satisfies the checker.
+        write_access=cast('Literal["member", "workflow_only"]', definition.write_access),
         fields=[EntityFieldRead.model_validate(f) for f in fields],
     )
 
@@ -232,5 +237,3 @@ async def create_relationship(
     except EntityError as exc:
         _raise_http(exc)
     return EntityRelationshipRead.model_validate(rel)
-
-

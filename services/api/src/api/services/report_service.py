@@ -150,9 +150,7 @@ class ReportService:
             refs[f"series[{i}]"] = series
         for name, ref in refs.items():
             if ref is not None and ref not in labels:
-                raise FormValidationError(
-                    f"visualization {name}={ref!r} is not a query column ({sorted(labels)})"
-                )
+                raise FormValidationError(f"visualization {name}={ref!r} is not a query column ({sorted(labels)})")
 
     async def _run(self, entity_definition_id: uuid.UUID, query: AggregateQuery) -> AggregateResult:
         repo = await self._entity_repo(entity_definition_id)

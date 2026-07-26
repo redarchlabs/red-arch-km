@@ -29,8 +29,11 @@ pytestmark = pytest.mark.integration
 
 
 def _log(node_id: str, message: str) -> dict:
-    return {"id": node_id, "type": "task",
-            "data": {"task_type": "service", "action_type": "log", "config": {"message": message}}}
+    return {
+        "id": node_id,
+        "type": "task",
+        "data": {"task_type": "service", "action_type": "log", "config": {"message": message}},
+    }
 
 
 def _definition(delay: int = 0) -> dict:
@@ -39,8 +42,16 @@ def _definition(delay: int = 0) -> dict:
         "nodes": [
             {"id": "start", "type": "trigger", "data": {}},
             {"id": "approve", "type": "task", "data": {"task_type": "user"}},
-            {"id": "sla", "type": "event",
-             "data": {"position": "boundary", "event_type": "timer", "attached_to": "approve", "delay_seconds": delay}},
+            {
+                "id": "sla",
+                "type": "event",
+                "data": {
+                    "position": "boundary",
+                    "event_type": "timer",
+                    "attached_to": "approve",
+                    "delay_seconds": delay,
+                },
+            },
             _log("done", "approved"),
             _log("escalated", "escalated"),
             {"id": "e1", "type": "event", "data": {"position": "end", "event_type": "none"}},
@@ -48,8 +59,8 @@ def _definition(delay: int = 0) -> dict:
         ],
         "edges": [
             {"id": "x0", "source": "start", "target": "approve"},
-            {"id": "x1", "source": "approve", "target": "done"},       # completion path
-            {"id": "x2", "source": "sla", "target": "escalated"},       # timer/escalation path
+            {"id": "x1", "source": "approve", "target": "done"},  # completion path
+            {"id": "x2", "source": "sla", "target": "escalated"},  # timer/escalation path
             {"id": "x3", "source": "done", "target": "e1"},
             {"id": "x4", "source": "escalated", "target": "e2"},
         ],
@@ -64,7 +75,8 @@ async def _seed(admin_session: AsyncSession, definition: dict):
     await set_tenant(admin_session, str(org.id))
     entity = await EntityService(admin_session, org.id).create_definition(
         EntityDefinitionCreate(
-            name="Thing", slug="thing",
+            name="Thing",
+            slug="thing",
             fields=[EntityFieldCreate(name="Title", slug="title", field_type="text")],
         )
     )
@@ -78,9 +90,15 @@ async def _seed(admin_session: AsyncSession, definition: dict):
     await admin_session.commit()
     await set_tenant(admin_session, str(org.id))
     run = await WorkflowRunRepository(admin_session, org.id).create_run_if_absent(
-        workflow_id=wf.id, workflow_version_id=version.id, outbox_id=uuid.uuid4(), outbox_seq=None,
-        created_at=datetime.now(UTC), trigger_operation="update", record_id=None,
-        input_snapshot={"before": None, "after": {}}, depth=0,
+        workflow_id=wf.id,
+        workflow_version_id=version.id,
+        outbox_id=uuid.uuid4(),
+        outbox_seq=None,
+        created_at=datetime.now(UTC),
+        trigger_operation="update",
+        record_id=None,
+        input_snapshot={"before": None, "after": {}},
+        depth=0,
     )
     await admin_session.commit()
     return org, run

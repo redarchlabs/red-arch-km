@@ -129,9 +129,7 @@ async def _new_ticket(agent: AgentService, *, title: str = "hello") -> str:
 
 async def _author_published_workflow(agent: AgentService, *, value: str = "DONE") -> str:
     """create_workflow -> save v2 graph -> publish; returns the workflow id."""
-    created = await agent._dispatch(
-        "create_workflow", {"name": f"WF {value}", "entity_slug": "ticket"}
-    )
+    created = await agent._dispatch("create_workflow", {"name": f"WF {value}", "entity_slug": "ticket"})
     wf_id = created["created_workflow"]["id"]
     saved = await agent._dispatch(
         "save_workflow_definition", {"workflow_id": wf_id, "definition": _v2_update_graph(value)}
@@ -154,9 +152,7 @@ async def test_agent_workflow_authoring_lifecycle(engine: AsyncEngine, admin_ses
     wf_id = created["created_workflow"]["id"]
 
     # save_workflow_definition validates then stores a v2 draft.
-    saved = await agent._dispatch(
-        "save_workflow_definition", {"workflow_id": wf_id, "definition": _v2_update_graph()}
-    )
+    saved = await agent._dispatch("save_workflow_definition", {"workflow_id": wf_id, "definition": _v2_update_graph()})
     assert saved["saved_draft"]["workflow_id"] == wf_id
     draft_version_id = saved["saved_draft"]["version_id"]
 
@@ -345,9 +341,7 @@ async def test_agent_monitor_and_inspect_run(engine: AsyncEngine, admin_session:
     await _seed_ticket_entity(agent)
     wf_id = await _author_published_workflow(agent)
     record_id = await _new_ticket(agent, title="x")
-    run = await agent._dispatch(
-        "run_workflow", {"workflow_id": wf_id, "record_id": record_id, "operation": "update"}
-    )
+    run = await agent._dispatch("run_workflow", {"workflow_id": wf_id, "record_id": record_id, "operation": "update"})
     run_id = run["run"]["id"]
 
     # list_workflow_runs shows the run.
@@ -374,9 +368,7 @@ async def test_agent_retry_rejects_non_failed_run(engine: AsyncEngine, admin_ses
     await _seed_ticket_entity(agent)
     wf_id = await _author_published_workflow(agent)
     record_id = await _new_ticket(agent, title="x")
-    run = await agent._dispatch(
-        "run_workflow", {"workflow_id": wf_id, "record_id": record_id, "operation": "update"}
-    )
+    run = await agent._dispatch("run_workflow", {"workflow_id": wf_id, "record_id": record_id, "operation": "update"})
     # Succeeded run can't be retried.
     result = await agent._dispatch("retry_workflow_run", {"run_id": run["run"]["id"]})
     assert "error" in result
@@ -472,9 +464,7 @@ async def test_run_workflow_honors_run_permission_not_admin(engine: AsyncEngine,
     # Widen run_permission to any_member → the same member may now run it.
     await admin._dispatch("update_workflow", {"workflow_id": wf_id, "run_permission": {"mode": "any_member"}})
     record_id = await _new_ticket(admin)
-    ok = await member._dispatch(
-        "run_workflow", {"workflow_id": wf_id, "record_id": record_id, "operation": "update"}
-    )
+    ok = await member._dispatch("run_workflow", {"workflow_id": wf_id, "record_id": record_id, "operation": "update"})
     assert ok["run"]["status"] == "succeeded", ok
 
 
@@ -483,12 +473,17 @@ _APPROVAL_GRAPH = {
     "nodes": [
         {"id": "start", "type": "trigger", "data": {"operations": ["update"]}},
         {"id": "approve", "type": "task", "data": {"task_type": "user", "label": "Approve"}},
-        {"id": "gw", "type": "gateway",
-         "data": {"gateway_type": "exclusive", "expr": {"var": "vars.approved"}}},
-        {"id": "yes", "type": "task",
-         "data": {"task_type": "service", "action_type": "log", "config": {"message": "approved"}}},
-        {"id": "no", "type": "task",
-         "data": {"task_type": "service", "action_type": "log", "config": {"message": "rejected"}}},
+        {"id": "gw", "type": "gateway", "data": {"gateway_type": "exclusive", "expr": {"var": "vars.approved"}}},
+        {
+            "id": "yes",
+            "type": "task",
+            "data": {"task_type": "service", "action_type": "log", "config": {"message": "approved"}},
+        },
+        {
+            "id": "no",
+            "type": "task",
+            "data": {"task_type": "service", "action_type": "log", "config": {"message": "rejected"}},
+        },
         {"id": "end", "type": "event", "data": {"position": "end", "event_type": "none"}},
     ],
     "edges": [
@@ -568,7 +563,9 @@ async def test_agent_create_workflow_with_send_webhook(engine: AsyncEngine, admi
     assert action_nodes[0]["data"]["config"]["url"] == "https://robot.example.com/say"
 
 
-async def test_agent_create_workflow_send_webhook_requires_url(engine: AsyncEngine, admin_session: AsyncSession) -> None:
+async def test_agent_create_workflow_send_webhook_requires_url(
+    engine: AsyncEngine, admin_session: AsyncSession
+) -> None:
     org = await _org(admin_session)
     agent = _agent(engine, org.id)
     await _seed_ticket_entity(agent)

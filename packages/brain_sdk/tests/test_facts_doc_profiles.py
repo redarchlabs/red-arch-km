@@ -87,11 +87,7 @@ class TestProfilerHybrid:
         assert llm.calls == 1  # brief ran
 
     def test_llm_classifies_when_heuristic_inconclusive(self) -> None:
-        llm = FakeLLM(
-            json.dumps(
-                {"doc_type": "meeting_notes", "central_entities": ["Team"], "key_points": []}
-            )
-        )
+        llm = FakeLLM(json.dumps({"doc_type": "meeting_notes", "central_entities": ["Team"], "key_points": []}))
         profiler = DocumentProfiler(llm=llm)  # type: ignore[arg-type]
         profile = profiler.profile(title="Sync", sample_text="We decided to ship Friday.")
         assert profile.doc_type == "meeting_notes"

@@ -16,6 +16,7 @@ import logging
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import httpx
 from sqlalchemy import select
@@ -50,11 +51,29 @@ class _TokenSlot:
     set_tokens: object  # callable(access_enc, refresh_enc, expires_at) -> None
 
 
-def _guard(settings: Settings, url: str | None) -> None:
+def _guard(settings: Settings, url: str | None) -> str:
+    """SSRF-check the server URL, returning it narrowed to ``str``.
+
+    ``McpServer.url`` is nullable — stdio servers have none — and OAuth is
+    meaningless without one. Rejecting it here gives a clear error instead of an
+    empty-host guard failure, and lets callers use the result directly.
+    """
     from urllib.parse import urlparse
 
-    parsed = urlparse(url or "")
+    if not url:
+        raise McpOAuthError("this MCP server has no URL, so it cannot use OAuth")
+    parsed = urlparse(url)
     assert_public_host(parsed.hostname or "", parsed.scheme, settings)
+    return url
+
+
+def _client_id(oc: dict[str, Any]) -> str:
+    """The registered OAuth client_id, or a clear error if the server was never
+    registered. Config is a free-form JSON blob, so the value is untyped here."""
+    value = oc.get("client_id")
+    if not isinstance(value, str) or not value:
+        raise McpOAuthError("this MCP server has no OAuth client_id; reconnect it to re-register")
+    return value
 
 
 def redirect_uri(settings: Settings) -> str:
@@ -83,14 +102,14 @@ class McpOAuthService:
 
     async def start(self, server: McpServer, user_profile_id: uuid.UUID | None) -> str:
         """Discover + register (if needed), then return the provider authorization URL."""
-        _guard(self._settings, server.url)
+        server_url = _guard(self._settings, server.url)
         cfg = dict(server.config or {})
         oc = dict(cfg.get("oauth") or {})
         uri = redirect_uri(self._settings)
 
         async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
             if not oc.get("authorization_endpoint") or not oc.get("token_endpoint"):
-                endpoints = await oauth.discover_endpoints(client, server.url)
+                endpoints = await oauth.discover_endpoints(client, server_url)
                 oc["authorization_endpoint"] = endpoints.authorization_endpoint
                 oc["token_endpoint"] = endpoints.token_endpoint
                 oc["registration_endpoint"] = endpoints.registration_endpoint
@@ -115,16 +134,25 @@ class McpOAuthService:
         state = oauth.random_state()
         self._session.add(
             McpOAuthFlow(
-                mcp_server_id=server.id, user_profile_id=user_profile_id, state=state,
-                code_verifier=verifier, redirect_uri=uri, org_id=self._org_id,
+                mcp_server_id=server.id,
+                user_profile_id=user_profile_id,
+                state=state,
+                code_verifier=verifier,
+                redirect_uri=uri,
+                org_id=self._org_id,
             )
         )
         cfg["oauth"] = oc
         server.config = cfg
         await self._session.flush()
         return oauth.build_authorization_url(
-            endpoints, client_id=oc["client_id"], redirect_uri=uri, state=state,
-            code_challenge=challenge, scope=oc.get("scopes"), resource=server.url,
+            endpoints,
+            client_id=oc["client_id"],
+            redirect_uri=uri,
+            state=state,
+            code_challenge=challenge,
+            scope=oc.get("scopes"),
+            resource=server.url,
         )
 
     async def _slot(self, server: McpServer, user_profile_id: uuid.UUID | None) -> _TokenSlot:
@@ -141,9 +169,7 @@ class McpOAuthService:
                 )
             ).scalar_one_or_none()
             if row is None:
-                row = McpServerUserToken(
-                    mcp_server_id=server.id, user_profile_id=user_profile_id, org_id=self._org_id
-                )
+                row = McpServerUserToken(mcp_server_id=server.id, user_profile_id=user_profile_id, org_id=self._org_id)
                 self._session.add(row)
 
             def _set(a, r, e):
@@ -159,8 +185,10 @@ class McpOAuthService:
             server.oauth_token_expires_at = e
 
         return _TokenSlot(
-            server.oauth_access_token_encrypted, server.oauth_refresh_token_encrypted,
-            server.oauth_token_expires_at, _set_org,
+            server.oauth_access_token_encrypted,
+            server.oauth_refresh_token_encrypted,
+            server.oauth_token_expires_at,
+            _set_org,
         )
 
     def _persist(self, slot: _TokenSlot, tokens: oauth.OAuthTokens) -> None:
@@ -178,9 +206,7 @@ class McpOAuthService:
         self._persist(slot, tokens)
         await self._session.flush()
 
-    async def ensure_access_token(
-        self, server: McpServer, user_profile_id: uuid.UUID | None
-    ) -> str | None:
+    async def ensure_access_token(self, server: McpServer, user_profile_id: uuid.UUID | None) -> str | None:
         """A valid access token for this identity, refreshing if near expiry; None if
         the identity has not connected (or can't be refreshed)."""
         try:
@@ -194,14 +220,17 @@ class McpOAuthService:
         oc = (server.config or {}).get("oauth") or {}
         client_secret = (
             decrypt_secret(server.oauth_client_secret_encrypted, self._key)
-            if server.oauth_client_secret_encrypted else None
+            if server.oauth_client_secret_encrypted
+            else None
         )
         try:
             async with httpx.AsyncClient(timeout=20) as client:
                 tokens = await oauth.refresh_tokens(
-                    client, oc["token_endpoint"],
+                    client,
+                    oc["token_endpoint"],
                     refresh_token=decrypt_secret(slot.refresh_encrypted, self._key),
-                    client_id=oc.get("client_id"), client_secret=client_secret,
+                    client_id=_client_id(oc),
+                    client_secret=client_secret,
                 )
             self._persist(slot, tokens)
             await self._session.flush()
@@ -229,9 +258,7 @@ class McpOAuthService:
         await self._session.flush()
 
 
-async def complete_authorization(
-    session: AsyncSession, settings: Settings, state: str, code: str
-) -> McpServer:
+async def complete_authorization(session: AsyncSession, settings: Settings, state: str, code: str) -> McpServer:
     """Exchange the callback code for tokens. Runs on a PRIVILEGED cross-org session
     (the callback is unauthenticated; the random ``state`` is the capability)."""
     flow = (await session.execute(select(McpOAuthFlow).where(McpOAuthFlow.state == state))).scalar_one_or_none()
@@ -242,11 +269,18 @@ async def complete_authorization(
         raise McpOAuthError("MCP server no longer exists")
     oc = (server.config or {}).get("oauth") or {}
     key = settings.org_encryption_key.get_secret_value()
-    client_secret = decrypt_secret(server.oauth_client_secret_encrypted, key) if server.oauth_client_secret_encrypted else None
+    client_secret = (
+        decrypt_secret(server.oauth_client_secret_encrypted, key) if server.oauth_client_secret_encrypted else None
+    )
     async with httpx.AsyncClient(timeout=20) as client:
         tokens = await oauth.exchange_code(
-            client, oc["token_endpoint"], code=code, code_verifier=flow.code_verifier,
-            redirect_uri=flow.redirect_uri, client_id=oc.get("client_id"), client_secret=client_secret,
+            client,
+            oc["token_endpoint"],
+            code=code,
+            code_verifier=flow.code_verifier,
+            redirect_uri=flow.redirect_uri,
+            client_id=_client_id(oc),
+            client_secret=client_secret,
         )
     service = McpOAuthService(session, flow.org_id, settings)
     await service.store_exchanged(server, flow.user_profile_id, tokens)

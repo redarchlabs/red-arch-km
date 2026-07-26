@@ -63,9 +63,7 @@ class _FakeOrgRepo:
 
 
 @pytest.mark.asyncio
-async def test_update_org_stores_ciphertext(
-    monkeypatch: pytest.MonkeyPatch, settings: Settings
-) -> None:
+async def test_update_org_stores_ciphertext(monkeypatch: pytest.MonkeyPatch, settings: Settings) -> None:
     monkeypatch.setattr(orgs_module, "OrgRepository", _FakeOrgRepo)
     plaintext = "sk-plaintext-key-value"
 
@@ -85,9 +83,7 @@ async def test_update_org_stores_ciphertext(
 
 
 @pytest.mark.asyncio
-async def test_update_org_empty_string_clears_key(
-    monkeypatch: pytest.MonkeyPatch, settings: Settings
-) -> None:
+async def test_update_org_empty_string_clears_key(monkeypatch: pytest.MonkeyPatch, settings: Settings) -> None:
     monkeypatch.setattr(orgs_module, "OrgRepository", _FakeOrgRepo)
     _FakeOrgRepo.instance = None
 
@@ -102,9 +98,7 @@ async def test_update_org_empty_string_clears_key(
 
 
 @pytest.mark.asyncio
-async def test_update_org_none_leaves_key_untouched(
-    monkeypatch: pytest.MonkeyPatch, settings: Settings
-) -> None:
+async def test_update_org_none_leaves_key_untouched(monkeypatch: pytest.MonkeyPatch, settings: Settings) -> None:
     monkeypatch.setattr(orgs_module, "OrgRepository", _FakeOrgRepo)
     _FakeOrgRepo.instance = None
 
@@ -147,7 +141,7 @@ async def test_get_org_openai_key_returns_decrypted_plaintext(
 ) -> None:
     plaintext = "sk-worker-key"
     org = _FakeOrg(id=ORG_ID, openai_api_key=encrypt_secret(plaintext, ENCRYPTION_SECRET))
-    monkeypatch.setattr(internal_module, "get_session_factory", lambda _s: (lambda: _FakeSession(org)))
+    monkeypatch.setattr(internal_module, "get_session_factory", lambda _s: lambda: _FakeSession(org))
 
     result = await internal_module.get_org_openai_key(ORG_ID, settings=settings)
     assert result.openai_api_key == plaintext
@@ -159,18 +153,16 @@ async def test_get_org_openai_key_tolerates_legacy_plaintext(
 ) -> None:
     # A row still holding plaintext (pre-migration) must not 500.
     org = _FakeOrg(id=ORG_ID, openai_api_key="sk-legacy-plaintext")
-    monkeypatch.setattr(internal_module, "get_session_factory", lambda _s: (lambda: _FakeSession(org)))
+    monkeypatch.setattr(internal_module, "get_session_factory", lambda _s: lambda: _FakeSession(org))
 
     result = await internal_module.get_org_openai_key(ORG_ID, settings=settings)
     assert result.openai_api_key == "sk-legacy-plaintext"
 
 
 @pytest.mark.asyncio
-async def test_get_org_openai_key_null_stays_null(
-    monkeypatch: pytest.MonkeyPatch, settings: Settings
-) -> None:
+async def test_get_org_openai_key_null_stays_null(monkeypatch: pytest.MonkeyPatch, settings: Settings) -> None:
     org = _FakeOrg(id=ORG_ID, openai_api_key=None)
-    monkeypatch.setattr(internal_module, "get_session_factory", lambda _s: (lambda: _FakeSession(org)))
+    monkeypatch.setattr(internal_module, "get_session_factory", lambda _s: lambda: _FakeSession(org))
 
     result = await internal_module.get_org_openai_key(ORG_ID, settings=settings)
     assert result.openai_api_key is None

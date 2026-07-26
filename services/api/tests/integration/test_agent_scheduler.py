@@ -11,13 +11,12 @@ from __future__ import annotations
 import uuid
 
 import pytest
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from api.models.agent import Agent
 from api.models.agent_run import AgentRun, AgentSchedule
 from api.models.org import Org
 from api.services.agents.scheduler import run_due_schedules
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from .helpers import set_tenant
 
@@ -61,10 +60,14 @@ async def test_due_schedule_enqueues_a_queued_run(admin_session: AsyncSession) -
     assert result["fired"] >= 1
 
     runs = (
-        await admin_session.execute(
-            select(AgentRun).where(AgentRun.agent_id == agent.id, AgentRun.trigger == "schedule")
+        (
+            await admin_session.execute(
+                select(AgentRun).where(AgentRun.agent_id == agent.id, AgentRun.trigger == "schedule")
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert len(runs) == 1
     assert runs[0].status == "queued"
     assert runs[0].input.get("task") == "Assemble and deliver the daily briefing"
@@ -75,13 +78,18 @@ async def test_due_schedule_enqueues_a_queued_run(admin_session: AsyncSession) -
     second = await run_due_schedules(admin_session)
     await admin_session.commit()
     again = (
-        await admin_session.execute(
-            select(AgentRun).where(AgentRun.agent_id == agent.id, AgentRun.trigger == "schedule")
+        (
+            await admin_session.execute(
+                select(AgentRun).where(AgentRun.agent_id == agent.id, AgentRun.trigger == "schedule")
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert len(again) == 1  # not re-fired
     assert second["fired"] == 0 or all(
-        r.agent_id != agent.id for r in []  # defensive: our agent didn't fire again
+        r.agent_id != agent.id
+        for r in []  # defensive: our agent didn't fire again
     )
 
 
@@ -100,8 +108,11 @@ async def test_scheduler_fires_across_orgs_on_non_superuser_session(
         await set_tenant(admin_session, str(org.id))
         admin_session.add(
             AgentSchedule(
-                agent_id=agent.id, org_id=org.id, cron="0 7 * * *",
-                task=f"briefing {org.id}", enabled=True,
+                agent_id=agent.id,
+                org_id=org.id,
+                cron="0 7 * * *",
+                task=f"briefing {org.id}",
+                enabled=True,
             )
         )
         await admin_session.commit()
@@ -116,10 +127,14 @@ async def test_scheduler_fires_across_orgs_on_non_superuser_session(
     # Each org got exactly its own queued run, scoped correctly.
     for org, agent in seeded:
         runs = (
-            await admin_session.execute(
-                select(AgentRun).where(AgentRun.agent_id == agent.id, AgentRun.trigger == "schedule")
+            (
+                await admin_session.execute(
+                    select(AgentRun).where(AgentRun.agent_id == agent.id, AgentRun.trigger == "schedule")
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         assert len(runs) == 1
         assert runs[0].org_id == org.id
         assert runs[0].status == "queued"
@@ -127,17 +142,11 @@ async def test_scheduler_fires_across_orgs_on_non_superuser_session(
 
 async def test_disabled_schedule_never_fires(admin_session: AsyncSession) -> None:
     org, agent = await _org_and_agent(admin_session)
-    admin_session.add(
-        AgentSchedule(
-            agent_id=agent.id, org_id=org.id, cron="0 7 * * *", task="noop", enabled=False
-        )
-    )
+    admin_session.add(AgentSchedule(agent_id=agent.id, org_id=org.id, cron="0 7 * * *", task="noop", enabled=False))
     await admin_session.commit()
 
     await run_due_schedules(admin_session)
     await admin_session.commit()
 
-    runs = (
-        await admin_session.execute(select(AgentRun).where(AgentRun.agent_id == agent.id))
-    ).scalars().all()
+    runs = (await admin_session.execute(select(AgentRun).where(AgentRun.agent_id == agent.id))).scalars().all()
     assert runs == []

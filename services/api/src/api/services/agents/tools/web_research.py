@@ -68,9 +68,7 @@ WEB_RESEARCH = ToolSpec(
     ),
     parameters={
         "type": "object",
-        "properties": {
-            "query": {"type": "string", "description": "The research question or search query."}
-        },
+        "properties": {"query": {"type": "string", "description": "The research question or search query."}},
         "required": ["query"],
     },
     category=Category.EXECUTE,

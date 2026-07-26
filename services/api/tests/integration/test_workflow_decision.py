@@ -32,7 +32,8 @@ async def _seed(admin_session: AsyncSession, definition: dict, snapshot: dict):
     await set_tenant(admin_session, str(org.id))
     entity = await EntityService(admin_session, org.id).create_definition(
         EntityDefinitionCreate(
-            name="Order", slug="order",
+            name="Order",
+            slug="order",
             fields=[EntityFieldCreate(name="Amount", slug="amount", field_type="integer")],
         )
     )
@@ -84,10 +85,16 @@ def _definition() -> dict:
                 "type": "gateway",
                 "data": {"gateway_type": "exclusive", "expr": {"==": [{"var": "vars.tier"}, "gold"]}},
             },
-            {"id": "gold", "type": "task",
-             "data": {"task_type": "service", "action_type": "log", "config": {"message": "vip"}}},
-            {"id": "std", "type": "task",
-             "data": {"task_type": "service", "action_type": "log", "config": {"message": "normal"}}},
+            {
+                "id": "gold",
+                "type": "task",
+                "data": {"task_type": "service", "action_type": "log", "config": {"message": "vip"}},
+            },
+            {
+                "id": "std",
+                "type": "task",
+                "data": {"task_type": "service", "action_type": "log", "config": {"message": "normal"}},
+            },
             {"id": "end", "type": "event", "data": {"position": "end", "event_type": "none"}},
         ],
         "edges": [
@@ -119,12 +126,12 @@ async def test_decision_table_derives_variable_and_gateway_routes_gold(admin_ses
     await _drive(admin_session, run, definition)
 
     steps = {s.node_id: s for s in await _steps(admin_session, run)}
-    assert steps["decide"].output == {"tier": "gold"}      # table derived the tier
+    assert steps["decide"].output == {"tier": "gold"}  # table derived the tier
     assert "gold" in steps and steps["gold"].status == "succeeded"  # routed to the VIP path
-    assert "std" not in steps                               # the other branch did not run
+    assert "std" not in steps  # the other branch did not run
     fresh = await WorkflowRunRepository(admin_session, org.id).get(run.id, run.created_at)
     assert fresh.status == "succeeded"
-    assert (fresh.variables or {}).get("tier") == "gold"    # published as a run variable
+    assert (fresh.variables or {}).get("tier") == "gold"  # published as a run variable
 
 
 async def test_decision_table_default_row_routes_standard(admin_session: AsyncSession) -> None:

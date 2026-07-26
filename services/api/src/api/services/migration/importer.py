@@ -33,9 +33,9 @@ from api.repositories.custom_entity import (
     EntityRelationshipRepository,
 )
 from api.repositories.document import DocumentRepository
-from api.repositories.mcp_server import McpServerRepository
 from api.repositories.dynamic_entity import DynamicEntityRepository, EntityRecordError
 from api.repositories.folder import FolderRepository
+from api.repositories.mcp_server import McpServerRepository
 from api.repositories.tag import TagRepository
 from api.repositories.workflow import (
     WorkflowConnectionRepository,
@@ -191,9 +191,7 @@ class MigrationImporter:
     # ------------------------------------------------------------------ #
     # Entities (two passes: definitions+fields, then relationships)
     # ------------------------------------------------------------------ #
-    async def _import_entities(
-        self, entities: list[dict], strategy: CollisionStrategy, summary: ImportSummary
-    ) -> None:
+    async def _import_entities(self, entities: list[dict], strategy: CollisionStrategy, summary: ImportSummary) -> None:
         defs_repo = EntityDefinitionRepository(self._session, self._org_id)
         fields_repo = EntityFieldRepository(self._session, self._org_id)
         rels_repo = EntityRelationshipRepository(self._session, self._org_id)
@@ -252,9 +250,7 @@ class MigrationImporter:
             new_source_id = self._ids.get("entities", ent["id"])
             if new_source_id is None:
                 continue
-            existing_rel_slugs = {
-                r.slug for r in await rels_repo.list_for_source(uuid.UUID(new_source_id))
-            }
+            existing_rel_slugs = {r.slug for r in await rels_repo.list_for_source(uuid.UUID(new_source_id))}
             for rel in ent.get("relationships") or []:
                 new_target_id = self._ids.get("entities", rel["target_definition_id"])
                 if new_target_id is None:
@@ -265,13 +261,14 @@ class MigrationImporter:
                 # Existing relationship with the same slug → map onto it, don't recreate.
                 if rel["slug"] in existing_rel_slugs:
                     match = next(
-                        r for r in await rels_repo.list_for_source(uuid.UUID(new_source_id))
-                        if r.slug == rel["slug"]
+                        r for r in await rels_repo.list_for_source(uuid.UUID(new_source_id)) if r.slug == rel["slug"]
                     )
                     self._ids.put("relationships", rel["id"], match.id)
                     continue
                 try:
-                    created = await service.create_relationship(
+                    # Distinct name from the EntityDefinition `created` above — same
+                    # scope, different model.
+                    created_rel = await service.create_relationship(
                         uuid.UUID(new_source_id),
                         EntityRelationshipCreate(
                             name=rel["name"],
@@ -283,7 +280,7 @@ class MigrationImporter:
                         ),
                     )
                     existing_rel_slugs.add(rel["slug"])
-                    self._ids.put("relationships", rel["id"], created.id)
+                    self._ids.put("relationships", rel["id"], created_rel.id)
                 except (EntityError, ValueError) as exc:
                     summary.warnings.append(f"relationship {rel['slug']!r} on {ent['slug']!r}: {exc}")
 
@@ -301,9 +298,7 @@ class MigrationImporter:
                 continue
             body = self._field_create(f)
             if body.is_required:
-                summary.warnings.append(
-                    f"field {f['slug']!r} added to existing entity as OPTIONAL (was required)"
-                )
+                summary.warnings.append(f"field {f['slug']!r} added to existing entity as OPTIONAL (was required)")
                 body = body.model_copy(update={"is_required": False})
             try:
                 await service.add_field(definition_id, body)
@@ -383,9 +378,7 @@ class MigrationImporter:
     # ------------------------------------------------------------------ #
     # Folders (parents before children — bundle is dot_path ordered)
     # ------------------------------------------------------------------ #
-    async def _import_folders(
-        self, folders: list[dict], strategy: CollisionStrategy, summary: ImportSummary
-    ) -> None:
+    async def _import_folders(self, folders: list[dict], strategy: CollisionStrategy, summary: ImportSummary) -> None:
         repo = FolderRepository(self._session, self._org_id)
         out = summary.outcome("folders")
         # Lineage index over ALL existing folders (matching is normally by
@@ -586,9 +579,7 @@ class MigrationImporter:
     # ------------------------------------------------------------------ #
     # Forms
     # ------------------------------------------------------------------ #
-    async def _import_forms(
-        self, forms: list[dict], strategy: CollisionStrategy, summary: ImportSummary
-    ) -> None:
+    async def _import_forms(self, forms: list[dict], strategy: CollisionStrategy, summary: ImportSummary) -> None:
         service = FormService(self._session, self._org_id)
         existing_forms = await service.list_forms()
         existing = {f.slug: f for f in existing_forms}
@@ -640,9 +631,7 @@ class MigrationImporter:
     # ------------------------------------------------------------------ #
     # Reports
     # ------------------------------------------------------------------ #
-    async def _import_reports(
-        self, reports: list[dict], strategy: CollisionStrategy, summary: ImportSummary
-    ) -> None:
+    async def _import_reports(self, reports: list[dict], strategy: CollisionStrategy, summary: ImportSummary) -> None:
         service = ReportService(self._session, self._org_id)
         existing_reports = await service.list_reports()
         existing = {r.slug: r for r in existing_reports}
@@ -718,9 +707,7 @@ class MigrationImporter:
     # ------------------------------------------------------------------ #
     # Views
     # ------------------------------------------------------------------ #
-    async def _import_views(
-        self, views: list[dict], strategy: CollisionStrategy, summary: ImportSummary
-    ) -> None:
+    async def _import_views(self, views: list[dict], strategy: CollisionStrategy, summary: ImportSummary) -> None:
         service = ViewService(self._session, self._org_id)
         existing_views = await service.list_views()
         existing = {v.slug: v for v in existing_views}
@@ -734,9 +721,7 @@ class MigrationImporter:
                 out.record("skipped")
                 continue
             entity_new = (
-                self._ids.get("entities", view["entity_definition_id"])
-                if view.get("entity_definition_id")
-                else None
+                self._ids.get("entities", view["entity_definition_id"]) if view.get("entity_definition_id") else None
             )
             if view.get("entity_definition_id") and entity_new is None:
                 out.record("failed")
@@ -838,9 +823,7 @@ class MigrationImporter:
     # ------------------------------------------------------------------ #
     # Agents (two passes: create + remap tool/mcp/workflow refs, then supervisors)
     # ------------------------------------------------------------------ #
-    async def _import_agents(
-        self, agents: list[dict], strategy: CollisionStrategy, summary: ImportSummary
-    ) -> None:
+    async def _import_agents(self, agents: list[dict], strategy: CollisionStrategy, summary: ImportSummary) -> None:
         repo = AgentRepository(self._session, self._org_id)
         existing_agents = await repo.list_all()
         existing = {a.name: a for a in existing_agents}
@@ -922,9 +905,7 @@ class MigrationImporter:
     # ------------------------------------------------------------------ #
     # Records (best-effort: dependency order + deferred FK second pass)
     # ------------------------------------------------------------------ #
-    async def _import_records(
-        self, entities: list[dict], record_sets: list[dict], summary: ImportSummary
-    ) -> None:
+    async def _import_records(self, entities: list[dict], record_sets: list[dict], summary: ImportSummary) -> None:
         if not record_sets:
             return
         defs_repo = EntityDefinitionRepository(self._session, self._org_id)
@@ -1078,9 +1059,7 @@ class MigrationImporter:
             if not dry_run and created.text:
                 self._pending_ingests.append(created)
 
-    async def _resolve_tag_ids(
-        self, names: list[str], existing: dict, tag_repo: TagRepository
-    ) -> list[uuid.UUID]:
+    async def _resolve_tag_ids(self, names: list[str], existing: dict, tag_repo: TagRepository) -> list[uuid.UUID]:
         ids: list[uuid.UUID] = []
         for name in names:
             tag = existing.get(name)

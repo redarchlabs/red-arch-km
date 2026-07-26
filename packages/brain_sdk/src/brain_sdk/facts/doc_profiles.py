@@ -43,9 +43,7 @@ class DocumentProfile:
     central_entities: tuple[str, ...] = ()
     key_points: tuple[str, ...] = ()
 
-    def with_brief(
-        self, *, central_entities: tuple[str, ...], key_points: tuple[str, ...]
-    ) -> DocumentProfile:
+    def with_brief(self, *, central_entities: tuple[str, ...], key_points: tuple[str, ...]) -> DocumentProfile:
         """Return a copy carrying the per-document brief."""
         return replace(self, central_entities=central_entities, key_points=key_points)
 
@@ -127,9 +125,7 @@ _HEURISTIC_KEYWORDS: tuple[tuple[str, str], ...] = (
 _KNOWN_TYPES = frozenset(PROFILE_REGISTRY)
 
 
-def classify_by_metadata(
-    *, title: str = "", folder_path: str = "", tags: tuple[str, ...] = ()
-) -> str | None:
+def classify_by_metadata(*, title: str = "", folder_path: str = "", tags: tuple[str, ...] = ()) -> str | None:
     """Cheap heuristic doc-type from metadata. ``None`` when inconclusive.
 
     A ``None`` here is the signal to fall back to the LLM classifier (hybrid).
@@ -202,9 +198,7 @@ class DocumentProfiler:
         base = PROFILE_REGISTRY[doc_type]
         if brief is None:
             return base
-        return base.with_brief(
-            central_entities=brief.central_entities, key_points=brief.key_points
-        )
+        return base.with_brief(central_entities=brief.central_entities, key_points=brief.key_points)
 
     def _brief(self, title: str, sample_text: str) -> _Brief | None:
         assert self._llm is not None

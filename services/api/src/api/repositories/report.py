@@ -16,9 +16,7 @@ class ReportRepository:
         self._org_id = org_id
 
     async def list_all(self) -> list[Report]:
-        result = await self._session.execute(
-            select(Report).where(Report.org_id == self._org_id).order_by(Report.name)
-        )
+        result = await self._session.execute(select(Report).where(Report.org_id == self._org_id).order_by(Report.name))
         return list(result.scalars().all())
 
     async def count(self) -> int:
@@ -34,9 +32,7 @@ class ReportRepository:
         return result.scalar_one_or_none()
 
     async def get_by_slug(self, slug: str) -> Report | None:
-        result = await self._session.execute(
-            select(Report).where(Report.slug == slug, Report.org_id == self._org_id)
-        )
+        result = await self._session.execute(select(Report).where(Report.slug == slug, Report.org_id == self._org_id))
         return result.scalar_one_or_none()
 
     async def create(self, report: Report) -> Report:

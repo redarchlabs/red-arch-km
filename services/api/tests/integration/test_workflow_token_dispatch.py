@@ -36,8 +36,20 @@ _V2_DEFINITION = {
     "schema_version": 2,
     "nodes": [
         {"id": "start", "type": "trigger", "data": {"operations": ["update"], "field_filter": ["status"]}},
-        {"id": "gw", "type": "gateway", "data": {"gateway_type": "exclusive", "expr": {"==": [{"var": "after.status"}, "closed"]}}},
-        {"id": "t", "type": "task", "data": {"task_type": "service", "action_type": "update_record_field", "config": {"field": "title", "value": "DONE-V2"}}},
+        {
+            "id": "gw",
+            "type": "gateway",
+            "data": {"gateway_type": "exclusive", "expr": {"==": [{"var": "after.status"}, "closed"]}},
+        },
+        {
+            "id": "t",
+            "type": "task",
+            "data": {
+                "task_type": "service",
+                "action_type": "update_record_field",
+                "config": {"field": "title", "value": "DONE-V2"},
+            },
+        },
         {"id": "end", "type": "event", "data": {"position": "end", "event_type": "none"}},
     ],
     "edges": [
@@ -48,9 +60,7 @@ _V2_DEFINITION = {
 }
 
 
-async def test_v2_workflow_runs_via_outbox_dispatch(
-    admin_session: AsyncSession, session: AsyncSession
-) -> None:
+async def test_v2_workflow_runs_via_outbox_dispatch(admin_session: AsyncSession, session: AsyncSession) -> None:
     await set_tenant(admin_session, None)
     org = Org(name=f"WV2-{uuid.uuid4().hex[:8]}")
     admin_session.add(org)
@@ -132,7 +142,8 @@ async def test_walker_and_token_engine_parity_on_legacy_graph(
     await set_tenant(admin_session, str(org.id))
     entity = await EntityService(admin_session, org.id).create_definition(
         EntityDefinitionCreate(
-            name="Thing", slug="thing",
+            name="Thing",
+            slug="thing",
             fields=[EntityFieldCreate(name="X", slug="x", field_type="integer")],
         )
     )

@@ -56,7 +56,10 @@ async def _org(admin_session: AsyncSession) -> Org:
 async def _seed_customer_entity(agent: AgentService) -> None:
     await agent._dispatch(
         "create_entity",
-        {"name": "Customer", "fields": [{"name": "Email", "field_type": "text"}, {"name": "Name", "field_type": "text"}]},
+        {
+            "name": "Customer",
+            "fields": [{"name": "Email", "field_type": "text"}, {"name": "Name", "field_type": "text"}],
+        },
     )
 
 

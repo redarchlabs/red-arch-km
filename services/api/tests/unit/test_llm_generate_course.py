@@ -33,9 +33,7 @@ class _FakeClient:
 def _module(i: int) -> dict[str, Any]:
     return {
         "title": f"Module {i}",
-        "slides": [
-            {"title": f"Slide {i}.{j}", "body": f"**Point {j}** of module {i}."} for j in range(1, 4)
-        ],
+        "slides": [{"title": f"Slide {i}.{j}", "body": f"**Point {j}** of module {i}."} for j in range(1, 4)],
     }
 
 
@@ -74,9 +72,7 @@ class TestGenerateCourseBlueprint:
     @pytest.mark.asyncio
     async def test_returns_cleaned_blueprint_and_binds_the_schema(self) -> None:
         client = _FakeClient(_blueprint())
-        out = await generate_course_blueprint(
-            client, "gpt-test", topic="phishing", category="security", num_modules=3
-        )
+        out = await generate_course_blueprint(client, "gpt-test", topic="phishing", category="security", num_modules=3)
 
         assert out["title"] == "Phishing Defense Basics"
         assert out["estimated_minutes"] == 45
@@ -96,9 +92,7 @@ class TestGenerateCourseBlueprint:
     @pytest.mark.asyncio
     async def test_slices_extra_modules_to_num_modules(self) -> None:
         client = _FakeClient(_blueprint(modules=[_module(i) for i in range(1, 6)]))
-        out = await generate_course_blueprint(
-            client, "gpt-test", topic="t", category="security", num_modules=3
-        )
+        out = await generate_course_blueprint(client, "gpt-test", topic="t", category="security", num_modules=3)
         assert len(out["modules"]) == 3
         assert [m["title"] for m in out["modules"]] == ["Module 1", "Module 2", "Module 3"]
 

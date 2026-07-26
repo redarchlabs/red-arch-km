@@ -46,9 +46,7 @@ class WorkOrder(Base, UUIDMixin, TimestampMixin):
         UUID(as_uuid=True), ForeignKey("work_orders.id", ondelete="SET NULL"), nullable=True
     )
 
-    org_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True
-    )
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True)
 
 
 class WorkOrderTask(Base, UUIDMixin, TimestampMixin):
@@ -65,9 +63,7 @@ class WorkOrderTask(Base, UUIDMixin, TimestampMixin):
         UUID(as_uuid=True), ForeignKey("agents.id", ondelete="SET NULL"), nullable=True
     )
 
-    org_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True
-    )
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True)
 
 
 class WorkOrderEntry(Base, UUIDMixin, TimestampMixin):
@@ -87,9 +83,7 @@ class WorkOrderEntry(Base, UUIDMixin, TimestampMixin):
     role: Mapped[str | None] = mapped_column(String(120), nullable=True)  # agent name at write time
     text: Mapped[str] = mapped_column(Text)
 
-    org_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True
-    )
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True)
 
 
 class WorkOrderArtifact(Base, UUIDMixin, TimestampMixin):
@@ -107,6 +101,4 @@ class WorkOrderArtifact(Base, UUIDMixin, TimestampMixin):
     mime: Mapped[str | None] = mapped_column(String(200), nullable=True)
     size: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
-    org_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True
-    )
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True)

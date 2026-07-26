@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-
 from api.services import form_expression as fx
 
 

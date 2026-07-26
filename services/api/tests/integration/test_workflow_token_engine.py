@@ -73,7 +73,11 @@ async def _seed(
 
 
 def _task(node_id: str, message: str) -> dict:
-    return {"id": node_id, "type": "task", "data": {"task_type": "service", "action_type": "log", "config": {"message": message}}}
+    return {
+        "id": node_id,
+        "type": "task",
+        "data": {"task_type": "service", "action_type": "log", "config": {"message": message}},
+    }
 
 
 async def _drive(admin_session: AsyncSession, run) -> TokenEngine:
@@ -120,14 +124,16 @@ async def test_linear_v2_flow_succeeds(admin_session: AsyncSession, session: Asy
     assert steps[0].token_id is not None  # step is attributed to its token
 
 
-async def test_exclusive_gateway_routes_true_branch(
-    admin_session: AsyncSession, session: AsyncSession
-) -> None:
+async def test_exclusive_gateway_routes_true_branch(admin_session: AsyncSession, session: AsyncSession) -> None:
     definition = {
         "schema_version": 2,
         "nodes": [
             {"id": "start", "type": "trigger", "data": {}},
-            {"id": "gw", "type": "gateway", "data": {"gateway_type": "exclusive", "expr": {"==": [{"var": "after.x"}, "yes"]}}},
+            {
+                "id": "gw",
+                "type": "gateway",
+                "data": {"gateway_type": "exclusive", "expr": {"==": [{"var": "after.x"}, "yes"]}},
+            },
             _task("yes", "YES"),
             _task("no", "NO"),
             {"id": "end", "type": "event", "data": {"position": "end", "event_type": "none"}},
@@ -176,10 +182,7 @@ async def test_parallel_fork_and_join(admin_session: AsyncSession, session: Asyn
 
     fresh = await _reload_run(admin_session, run)
     assert fresh.status == "succeeded"
-    logs = {
-        s.output.get("logged")
-        for s in await WorkflowRunRepository(admin_session, org.id).steps_for_run(run.id)
-    }
+    logs = {s.output.get("logged") for s in await WorkflowRunRepository(admin_session, org.id).steps_for_run(run.id)}
     # Both parallel branches ran, and the post-join task ran exactly once.
     assert logs == {"A", "B", "AFTER"}
     # The join fired exactly once → exactly one token reached 'after'/'end'.
@@ -187,14 +190,16 @@ async def test_parallel_fork_and_join(admin_session: AsyncSession, session: Asyn
     assert all(t.status in ("completed", "dead") for t in tokens)
 
 
-async def test_timer_event_parks_then_resumes(
-    admin_session: AsyncSession, session: AsyncSession
-) -> None:
+async def test_timer_event_parks_then_resumes(admin_session: AsyncSession, session: AsyncSession) -> None:
     definition = {
         "schema_version": 2,
         "nodes": [
             {"id": "start", "type": "trigger", "data": {}},
-            {"id": "wait", "type": "event", "data": {"position": "intermediate", "event_type": "timer", "throw_catch": "catch", "delay_seconds": 0}},
+            {
+                "id": "wait",
+                "type": "event",
+                "data": {"position": "intermediate", "event_type": "timer", "throw_catch": "catch", "delay_seconds": 0},
+            },
             _task("t1", "done-waiting"),
             {"id": "end", "type": "event", "data": {"position": "end", "event_type": "none"}},
         ],
@@ -230,9 +235,7 @@ async def test_timer_event_parks_then_resumes(
     assert [s.output.get("logged") for s in steps] == ["done-waiting"]
 
 
-async def test_gateway_routes_on_run_variables(
-    admin_session: AsyncSession, session: AsyncSession
-) -> None:
+async def test_gateway_routes_on_run_variables(admin_session: AsyncSession, session: AsyncSession) -> None:
     definition = {
         "schema_version": 2,
         "nodes": [
@@ -264,9 +267,7 @@ async def test_gateway_routes_on_run_variables(
     assert [s.output.get("logged") for s in steps] == ["APPROVED"]
 
 
-async def test_infinite_loop_is_bounded_and_fails(
-    admin_session: AsyncSession, session: AsyncSession
-) -> None:
+async def test_infinite_loop_is_bounded_and_fails(admin_session: AsyncSession, session: AsyncSession) -> None:
     """A conditionless self-loop must terminate (as failed) via the step budget,
     never hang."""
     definition = {

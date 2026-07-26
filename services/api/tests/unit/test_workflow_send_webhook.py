@@ -10,9 +10,7 @@ from api.services.workflow.actions import ACTION_REGISTRY, ActionContext, Action
 pytestmark = pytest.mark.unit
 
 
-def _ctx(
-    config: dict, *, allowlist: tuple[str, ...] = (), trusted: tuple[str, ...] = ()
-) -> ActionContext:
+def _ctx(config: dict, *, allowlist: tuple[str, ...] = (), trusted: tuple[str, ...] = ()) -> ActionContext:
     return ActionContext(
         org_id=uuid.uuid4(),
         record_id=None,
@@ -44,7 +42,7 @@ class _StubClient:
     def __init__(self, *_a, **_k) -> None:  # noqa: ANN002
         pass
 
-    async def __aenter__(self) -> "_StubClient":
+    async def __aenter__(self) -> _StubClient:
         return self
 
     async def __aexit__(self, *_a) -> None:  # noqa: ANN002
@@ -107,7 +105,8 @@ class TestSendWebhookGuards:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "host", ["127.0.0.1", "10.0.0.5", "169.254.169.254", "0.0.0.0"]  # noqa: S104 - test literal, not a bind
+        "host",
+        ["127.0.0.1", "10.0.0.5", "169.254.169.254", "0.0.0.0"],  # noqa: S104 - test literal, not a bind
     )
     async def test_private_or_loopback_literal_ip_rejected(self, host: str) -> None:
         handler = ACTION_REGISTRY["send_webhook"]
@@ -134,9 +133,7 @@ class TestTrustedLocalHosts:
     (e.g. a robot-control server) while every other private host stays blocked."""
 
     @pytest.mark.asyncio
-    async def test_trusted_loopback_ip_bypasses_private_guard(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_trusted_loopback_ip_bypasses_private_guard(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import httpx
 
         monkeypatch.setattr(httpx, "AsyncClient", _StubClient)
@@ -171,14 +168,10 @@ class TestTrustedLocalHosts:
         handler = ACTION_REGISTRY["send_webhook"]
         # Trusting 127.0.0.1 must not open up a different private host (10.0.0.5).
         with pytest.raises(ActionError, match="private address"):
-            await handler.execute(
-                _ctx({"url": "http://10.0.0.5/x"}, allowlist=("10.0.0.5",), trusted=("127.0.0.1",))
-            )
+            await handler.execute(_ctx({"url": "http://10.0.0.5/x"}, allowlist=("10.0.0.5",), trusted=("127.0.0.1",)))
 
     @pytest.mark.asyncio
-    async def test_http_request_action_honors_trusted_hosts(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_http_request_action_honors_trusted_hosts(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import httpx
 
         monkeypatch.setattr(httpx, "AsyncClient", _StubClient)

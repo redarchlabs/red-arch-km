@@ -59,10 +59,7 @@ def _is_under_boundary(folder: Folder, boundaries: list[Folder]) -> bool:
     A boundary is a descendant that defines its OWN viewer config, so it (and
     everything beneath it) inherits itself rather than the folder that changed.
     """
-    return any(
-        folder.dot_path == b.dot_path or folder.dot_path.startswith(f"{b.dot_path}.")
-        for b in boundaries
-    )
+    return any(folder.dot_path == b.dot_path or folder.dot_path.startswith(f"{b.dot_path}.") for b in boundaries)
 
 
 async def _collect_subtree_propagation(
@@ -83,9 +80,7 @@ async def _collect_subtree_propagation(
 
     subtree = await folder_repo.descendants(changed)  # includes `changed` itself
     new_masks = await folder_repo.effective_view_masks(changed)
-    boundaries = [
-        f for f in subtree if f.id != changed.id and f.viewer_permissions_config is not None
-    ]
+    boundaries = [f for f in subtree if f.id != changed.id and f.viewer_permissions_config is not None]
 
     payloads: list[dict[str, Any]] = []
     for folder in subtree:

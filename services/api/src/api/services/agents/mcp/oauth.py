@@ -33,7 +33,7 @@ class OAuthTokens:
     access_token: str
     refresh_token: str | None = None
     expires_in: int | None = None
-    token_type: str = "Bearer"
+    token_type: str = "Bearer"  # noqa: S105 - the RFC 6750 token *type*, not a credential
 
 
 class OAuthError(RuntimeError):
@@ -191,8 +191,14 @@ async def exchange_code(
     client_secret: str | None,
 ) -> OAuthTokens:
     auth, body = _auth_and_body(
-        client_id, client_secret,
-        {"grant_type": "authorization_code", "code": code, "redirect_uri": redirect_uri, "code_verifier": code_verifier},
+        client_id,
+        client_secret,
+        {
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": redirect_uri,
+            "code_verifier": code_verifier,
+        },
     )
     resp = await client.post(token_endpoint, data=body, auth=auth)
     if resp.status_code != 200:
@@ -209,7 +215,8 @@ async def refresh_tokens(
     client_secret: str | None,
 ) -> OAuthTokens:
     auth, body = _auth_and_body(
-        client_id, client_secret,
+        client_id,
+        client_secret,
         {"grant_type": "refresh_token", "refresh_token": refresh_token},
     )
     resp = await client.post(token_endpoint, data=body, auth=auth)

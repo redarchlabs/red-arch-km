@@ -34,14 +34,12 @@ import asyncio
 import os
 import uuid
 
-from sqlalchemy import select, text
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-
-from api.models.agent import Agent
 from api.models.agent_run import AgentSchedule
 from api.schemas.agent import AgentCreate, AgentGrants, AgentUpdate
 from api.services.agents.llm.catalog import provider_for_model
 from api.services.agents.service import AgentConflictError, AgentService
+from sqlalchemy import select, text
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 DEFAULT_ORG_ID = "b09440d5-3dd6-4bb6-8609-25de6a4fd74e"  # "CEO Demo"
 
@@ -95,13 +93,38 @@ BLUEPRINT: list[Row] = [
     # Marketing
     ("marketing-head", "Marketing — Head", "coordinator", STD, "chief-of-staff", [], []),
     ("content-writer", "Content Writer", "operator", HAIKU, "marketing-head", ["google"], []),
-    ("market-research-analyst", "Market Research Analyst", "operator", HAIKU, "marketing-head", ["perplexity"],
-     [("0 8 * * 1", "Weekly market digest: research market trends and capture findings to the KB per the research SOP.")]),
-    ("campaign-social-manager", "Campaign & Social Manager", "operator", HAIKU, "marketing-head",
-     ["slack", "google"], []),
-    ("competitive-intel-analyst", "Competitive Intelligence Analyst", "operator", HAIKU, "marketing-head",
-     ["perplexity"],
-     [("0 8 * * 1", "Weekly competitor scan: update competitor intel and capture a report to the KB.")]),
+    (
+        "market-research-analyst",
+        "Market Research Analyst",
+        "operator",
+        HAIKU,
+        "marketing-head",
+        ["perplexity"],
+        [
+            (
+                "0 8 * * 1",
+                "Weekly market digest: research market trends and capture findings to the KB per the research SOP.",
+            )
+        ],
+    ),
+    (
+        "campaign-social-manager",
+        "Campaign & Social Manager",
+        "operator",
+        HAIKU,
+        "marketing-head",
+        ["slack", "google"],
+        [],
+    ),
+    (
+        "competitive-intel-analyst",
+        "Competitive Intelligence Analyst",
+        "operator",
+        HAIKU,
+        "marketing-head",
+        ["perplexity"],
+        [("0 8 * * 1", "Weekly competitor scan: update competitor intel and capture a report to the KB.")],
+    ),
     ("brand-design", "Brand & Design", "operator", HAIKU, "marketing-head", [], []),
     # Sales
     ("sales-head", "Sales — Head", "coordinator", STD, "chief-of-staff", [], []),
@@ -120,8 +143,15 @@ BLUEPRINT: list[Row] = [
     # Customer Support
     ("customer-support-head", "Customer Support — Head", "coordinator", STD, "chief-of-staff", [], []),
     ("support-agent", "Support Agent", "operator", HAIKU, "customer-support-head", ["google"], []),
-    ("customer-success-manager", "Customer Success Manager", "operator", HAIKU, "customer-support-head",
-     ["google"], []),
+    (
+        "customer-success-manager",
+        "Customer Success Manager",
+        "operator",
+        HAIKU,
+        "customer-support-head",
+        ["google"],
+        [],
+    ),
     # Finance & Accounting
     ("finance-head", "Finance & Accounting — Head", "coordinator", STD, "chief-of-staff", [], []),
     ("bookkeeper-accountant", "Bookkeeper / Accountant", "operator", HAIKU, "finance-head", [], []),
@@ -211,10 +241,9 @@ async def _ensure_schedule(session, org_id: uuid.UUID, agent_id: uuid.UUID, cron
 async def provision(org_id: uuid.UUID, *, dry_run: bool) -> None:
     if dry_run:
         print(f"[dry-run] {len(BLUEPRINT)} agents for org {org_id}:")
-        for name, display, kind, model, sup, mcp, sched in BLUEPRINT:
+        for name, _display, kind, model, sup, mcp, sched in BLUEPRINT:
             g = _grants(name, kind, mcp)
-            print(f"  {name:26s} {kind:11s} {model:26s} sup={sup or '-':22s} "
-                  f"tools={g.tools} schedules={len(sched)}")
+            print(f"  {name:26s} {kind:11s} {model:26s} sup={sup or '-':22s} tools={g.tools} schedules={len(sched)}")
         return
 
     database_url = os.environ["DATABASE_URL"]
@@ -224,9 +253,7 @@ async def provision(org_id: uuid.UUID, *, dry_run: bool) -> None:
     try:
         async with factory() as session:
             # Scope RLS to the target org for the whole unit of work.
-            await session.execute(
-                text("select set_config('app.current_tenant_id', :tid, false)"), {"tid": str(org_id)}
-            )
+            await session.execute(text("select set_config('app.current_tenant_id', :tid, false)"), {"tid": str(org_id)})
             svc = AgentService(session, org_id)
             existing = {a.name: a for a in await svc.list_agents()}
 
@@ -238,8 +265,12 @@ async def provision(org_id: uuid.UUID, *, dry_run: bool) -> None:
                     await svc.update_agent(
                         existing[name].id,
                         AgentUpdate(
-                            display_name=data.display_name, kind=data.kind, persona=data.persona,
-                            provider=data.provider, model=data.model, grants=data.grants,
+                            display_name=data.display_name,
+                            kind=data.kind,
+                            persona=data.persona,
+                            provider=data.provider,
+                            model=data.model,
+                            grants=data.grants,
                         ),
                     )
                     updated += 1
@@ -267,8 +298,9 @@ async def provision(org_id: uuid.UUID, *, dry_run: bool) -> None:
     finally:
         await engine.dispose()
 
-    print(f"Provisioned org {org_id}: created={created} updated={updated} "
-          f"skipped={skipped} schedules_added={sched_added}")
+    print(
+        f"Provisioned org {org_id}: created={created} updated={updated} skipped={skipped} schedules_added={sched_added}"
+    )
 
 
 def main() -> None:

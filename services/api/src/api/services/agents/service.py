@@ -125,9 +125,7 @@ class AgentService:
         if provider not in VALID_PROVIDERS:
             raise AgentValidationError(f"Unknown provider: {provider}")
         if provider_for_model(model) != provider:
-            raise AgentValidationError(
-                f"Model '{model}' does not belong to provider '{provider}'"
-            )
+            raise AgentValidationError(f"Model '{model}' does not belong to provider '{provider}'")
 
     async def _require_agent(self, agent_id: uuid.UUID, *, role: str) -> Agent:
         agent = await self._repo.get(agent_id)

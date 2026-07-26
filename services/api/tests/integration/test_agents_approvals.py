@@ -22,11 +22,18 @@ async def _seed_waiting_run(admin_session: AsyncSession) -> tuple[Org, AgentRun,
     admin_session.add(agent)
     await admin_session.flush()
     run = AgentRun(
-        agent_id=agent.id, provider="openai", model="gpt-5-mini", status="waiting",
+        agent_id=agent.id,
+        provider="openai",
+        model="gpt-5-mini",
+        status="waiting",
         wait_kind="approval",
-        input={"resume": {"messages": [{"role": "user", "content": "go"}],
-                          "pending": [{"id": "c1", "name": "run_workflow", "arguments": {}}],
-                          "approved": []}},
+        input={
+            "resume": {
+                "messages": [{"role": "user", "content": "go"}],
+                "pending": [{"id": "c1", "name": "run_workflow", "arguments": {}}],
+                "approved": [],
+            }
+        },
         org_id=org.id,
     )
     admin_session.add(run)

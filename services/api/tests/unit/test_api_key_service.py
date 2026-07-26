@@ -70,9 +70,7 @@ class TestCreateValidation:
     async def test_rejects_empty_scopes(self) -> None:
         repo = MagicMock(count=AsyncMock(return_value=0), create=AsyncMock())
         with pytest.raises(ApiKeyValidationError, match="scope"):
-            await _service_with_repo(repo).create_key(
-                name="k", scopes=[], expires_at=None, created_by_profile_id=None
-            )
+            await _service_with_repo(repo).create_key(name="k", scopes=[], expires_at=None, created_by_profile_id=None)
 
     async def test_rejects_unknown_scope(self) -> None:
         repo = MagicMock(count=AsyncMock(return_value=0), create=AsyncMock())

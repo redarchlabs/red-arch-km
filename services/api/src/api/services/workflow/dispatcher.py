@@ -426,7 +426,7 @@ class WorkflowDispatchService:
         run.status = "waiting"
         run.conditions_matched = True
         run.resume_node_id = resume_node_id
-        run.resume_at = datetime.now(UTC) + timedelta(seconds=max(0, delay_seconds))  # type: ignore[assignment]
+        run.resume_at = datetime.now(UTC) + timedelta(seconds=max(0, delay_seconds))
         await self._session.flush()
 
     async def run_version_manually(
@@ -601,7 +601,7 @@ class WorkflowDispatchService:
         self, run: WorkflowRun, *, status: str, error: str | None = None, matched: bool | None = None
     ) -> None:
         run.status = status
-        run.finished_at = func.now()  # type: ignore[assignment]
+        run.finished_at = func.now()
         if error is not None:
             run.error = error
         if matched is not None:
@@ -743,7 +743,7 @@ class WorkflowDispatchService:
         }
         # Clear the parked state so a re-suspend (another delay) can set it afresh.
         run.status = "running"
-        run.resume_at = None  # type: ignore[assignment]
+        run.resume_at = None
         run.resume_node_id = None
         await self._session.flush()
         executed, ok = await self._run_actions(org_id, run, event, result.actions, step_offset=offset)

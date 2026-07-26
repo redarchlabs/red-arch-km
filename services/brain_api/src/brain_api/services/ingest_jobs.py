@@ -86,9 +86,7 @@ class IngestJobRegistry:
 
     def mark_done(self, tenant_id: str, document_key: str, *, chunks: int, triplets: int) -> None:
         with self._lock:
-            self._jobs[self._key(tenant_id, document_key)] = IngestJob(
-                state="done", chunks=chunks, triplets=triplets
-            )
+            self._jobs[self._key(tenant_id, document_key)] = IngestJob(state="done", chunks=chunks, triplets=triplets)
 
     def mark_failed(self, tenant_id: str, document_key: str, error: str) -> None:
         with self._lock:

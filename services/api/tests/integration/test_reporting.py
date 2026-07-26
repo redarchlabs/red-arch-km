@@ -200,7 +200,9 @@ class TestCrossOrgIsolation:
         deal_a, _repo = await _seed_deals(admin_session, org_a)
         report = await ReportService(admin_session, org_a.id).create_report(
             ReportCreate(
-                name="A", slug="a", entity_definition_id=deal_a.id,
+                name="A",
+                slug="a",
+                entity_definition_id=deal_a.id,
                 query=AggregateQuery(metrics=[Metric(op="count", alias="c")]),
                 viz=Visualization(type="metric", series=["c"]),
             )
@@ -218,7 +220,9 @@ class TestRunOverrides:
         svc = ReportService(admin_session, org.id)
         report = await svc.create_report(
             ReportCreate(
-                name="Pipeline", slug="pipeline", entity_definition_id=deal.id,
+                name="Pipeline",
+                slug="pipeline",
+                entity_definition_id=deal.id,
                 query=AggregateQuery(group_by=[GroupBy(field="stage")], metrics=[Metric(op="count", alias="c")]),
                 viz=Visualization(type="bar", x="stage", series=["c"]),
             )

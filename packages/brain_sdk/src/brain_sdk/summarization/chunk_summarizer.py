@@ -34,6 +34,7 @@ class SummaryNode(TypedDict):
     summary: str
     children: list[Any]
 
+
 _SUMMARIZE_PROMPT = (
     "Summarize the following text concisely, preserving key facts and entities. Output only the summary, no preamble."
 )

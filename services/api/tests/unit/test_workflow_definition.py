@@ -8,9 +8,8 @@ reference real nodes) and the legacy-vs-token engine selection (``is_v2``).
 from __future__ import annotations
 
 import pytest
-from pydantic import ValidationError
-
 from api.schemas.workflow_definition import WorkflowDefinitionModel
+from pydantic import ValidationError
 
 
 def _legacy_v1() -> dict:
@@ -119,16 +118,12 @@ def test_unknown_node_type_rejected() -> None:
 
 def test_unknown_task_type_rejected() -> None:
     with pytest.raises(ValidationError):
-        WorkflowDefinitionModel.parse(
-            {"nodes": [{"id": "n1", "type": "task", "data": {"task_type": "telepathy"}}]}
-        )
+        WorkflowDefinitionModel.parse({"nodes": [{"id": "n1", "type": "task", "data": {"task_type": "telepathy"}}]})
 
 
 def test_unknown_gateway_type_rejected() -> None:
     with pytest.raises(ValidationError):
-        WorkflowDefinitionModel.parse(
-            {"nodes": [{"id": "n1", "type": "gateway", "data": {"gateway_type": "quantum"}}]}
-        )
+        WorkflowDefinitionModel.parse({"nodes": [{"id": "n1", "type": "gateway", "data": {"gateway_type": "quantum"}}]})
 
 
 def test_unknown_event_type_rejected() -> None:
@@ -140,9 +135,7 @@ def test_unknown_event_type_rejected() -> None:
 
 def test_duplicate_node_ids_rejected() -> None:
     with pytest.raises(ValidationError):
-        WorkflowDefinitionModel.parse(
-            {"nodes": [{"id": "dup", "type": "task"}, {"id": "dup", "type": "gateway"}]}
-        )
+        WorkflowDefinitionModel.parse({"nodes": [{"id": "dup", "type": "task"}, {"id": "dup", "type": "gateway"}]})
 
 
 def test_edge_to_missing_node_rejected() -> None:
@@ -158,9 +151,7 @@ def test_edge_to_missing_node_rejected() -> None:
 def test_missing_discriminator_allowed() -> None:
     """A task/gateway/event without its subtype key still parses (defaults are
     applied by the UI/engine); only an *unknown* subtype is rejected."""
-    model = WorkflowDefinitionModel.parse(
-        {"schema_version": 2, "nodes": [{"id": "n1", "type": "task", "data": {}}]}
-    )
+    model = WorkflowDefinitionModel.parse({"schema_version": 2, "nodes": [{"id": "n1", "type": "task", "data": {}}]})
     assert model.node_by_id("n1").task_type is None
 
 
@@ -168,9 +159,7 @@ def test_extra_react_flow_fields_ignored() -> None:
     """React Flow may attach layout/selection fields; they must not break parse."""
     model = WorkflowDefinitionModel.parse(
         {
-            "nodes": [
-                {"id": "n1", "type": "task", "position": {"x": 1, "y": 2, "z": 3}, "selected": True}
-            ],
+            "nodes": [{"id": "n1", "type": "task", "position": {"x": 1, "y": 2, "z": 3}, "selected": True}],
             "edges": [{"id": "e", "source": "n1", "target": "n1", "animated": True}],
         }
     )

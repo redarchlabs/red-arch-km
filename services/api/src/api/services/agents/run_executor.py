@@ -27,10 +27,9 @@ from api.repositories.agent import AgentRepository
 from api.repositories.agent_run import AgentRunRepository
 from api.services.agents.authority import available_tools
 from api.services.agents.llm.keys import resolve_provider_key
-from api.services.agents.llm.provider import LLMProvider
+from api.services.agents.llm.provider import LLMProvider, ToolCallRequest
 from api.services.agents.notify import create_notification
 from api.services.agents.prompts import build_system_prompt
-from api.services.agents.llm.provider import ToolCallRequest
 from api.services.agents.runtime import RunParked, run_agent_loop
 from api.services.agents.tools.loader import load_agent_tools
 from api.services.agents.tools.spec import ToolContext, ToolSpec
@@ -80,19 +79,27 @@ class AgentRunExecutor:
         timeout window rather than every sweep."""
         cutoff = datetime.now(UTC) - timedelta(seconds=self._settings.agent_escalation_timeout_seconds)
         rows = (
-            await session.execute(
-                select(AgentRun)
-                .where(AgentRun.status == "waiting", AgentRun.last_activity_at < cutoff)
-                .order_by(AgentRun.last_activity_at)
-                .limit(limit)
+            (
+                await session.execute(
+                    select(AgentRun)
+                    .where(AgentRun.status == "waiting", AgentRun.last_activity_at < cutoff)
+                    .order_by(AgentRun.last_activity_at)
+                    .limit(limit)
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         for run in rows:
             await create_notification(
-                session, run.org_id, kind="escalation",
+                session,
+                run.org_id,
+                kind="escalation",
                 title="Reminder: an agent run is still waiting for you",
                 body=f"Run {run.id} has been waiting ({run.wait_kind}) past the timeout.",
-                run_id=run.id, work_order_id=run.work_order_id, recipient_role="org_admin",
+                run_id=run.id,
+                work_order_id=run.work_order_id,
+                recipient_role="org_admin",
                 settings=self._settings,
             )
             run.last_activity_at = datetime.now(UTC)
@@ -137,8 +144,13 @@ class AgentRunExecutor:
             return
 
         ctx = ToolContext(
-            session=session, org_id=org_id, settings=self._settings, agent=agent,
-            actor_user_id=run.actor_user_id, run_id=run.id, work_order_id=run.work_order_id,
+            session=session,
+            org_id=org_id,
+            settings=self._settings,
+            agent=agent,
+            actor_user_id=run.actor_user_id,
+            run_id=run.id,
+            work_order_id=run.work_order_id,
         )
         specs = available_tools(
             agent,
@@ -172,8 +184,14 @@ class AgentRunExecutor:
 
         try:
             result = await run_agent_loop(
-                provider=LLMProvider(api_key=key), agent=agent, model=agent.model, messages=messages,
-                specs=specs, ctx=ctx, emit=emit, max_iterations=self._settings.agent_max_iterations,
+                provider=LLMProvider(api_key=key),
+                agent=agent,
+                model=agent.model,
+                messages=messages,
+                specs=specs,
+                ctx=ctx,
+                emit=emit,
+                max_iterations=self._settings.agent_max_iterations,
                 temperature=(agent.params or {}).get("temperature"),
                 max_tokens=(agent.params or {}).get("max_tokens"),
                 approval_strategy=self._make_strategy(session, org_id, run, approved_names),
@@ -191,9 +209,14 @@ class AgentRunExecutor:
             }
             await run_repo.mark_waiting(run, parked.wait_kind)
             await create_notification(
-                session, org_id, kind="approval",
-                title=f"{agent.name} needs approval", body=str(parked.payload.get("tool")),
-                run_id=run.id, work_order_id=run.work_order_id, recipient_role="org_admin",
+                session,
+                org_id,
+                kind="approval",
+                title=f"{agent.name} needs approval",
+                body=str(parked.payload.get("tool")),
+                run_id=run.id,
+                work_order_id=run.work_order_id,
+                recipient_role="org_admin",
                 settings=self._settings,
             )
             return
@@ -203,14 +226,15 @@ class AgentRunExecutor:
             run.input = {k: v for k, v in run.input.items() if k != "resume"}
         await run_repo.add_step(run.id, kind="assistant", content={"content": result.final_content})
         await run_repo.finalize_run(
-            run, status="done", prompt_tokens=result.prompt_tokens,
-            completion_tokens=result.completion_tokens, total_tokens=result.total_tokens,
+            run,
+            status="done",
+            prompt_tokens=result.prompt_tokens,
+            completion_tokens=result.completion_tokens,
+            total_tokens=result.total_tokens,
         )
         await self._signal_parent(session, org_id, run, agent.name, result.final_content)
 
-    def _make_strategy(
-        self, session: AsyncSession, org_id: uuid.UUID, run: AgentRun, approved_names: set[str]
-    ):
+    def _make_strategy(self, session: AsyncSession, org_id: uuid.UUID, run: AgentRun, approved_names: set[str]):
         """Approval strategy: auto-approve already-approved tools; otherwise record an
         approval and park the run for a human."""
 
@@ -244,9 +268,15 @@ class AgentRunExecutor:
     async def _persist_event(self, run_repo: AgentRunRepository, run_id: uuid.UUID, event: dict) -> None:
         kind = event.get("type")
         if kind == "tool_call":
-            await run_repo.add_step(run_id, kind="tool_call", name=event.get("name"), content={"arguments": event.get("arguments")})
+            await run_repo.add_step(
+                run_id, kind="tool_call", name=event.get("name"), content={"arguments": event.get("arguments")}
+            )
         elif kind == "tool_result":
-            await run_repo.add_step(run_id, kind="tool_result", name=event.get("name"), content={"result": event.get("result")})
+            await run_repo.add_step(
+                run_id, kind="tool_result", name=event.get("name"), content={"result": event.get("result")}
+            )
         elif kind == "approval_required":
-            await run_repo.add_step(run_id, kind="approval_required", name=event.get("name"), content={"arguments": event.get("arguments")})
+            await run_repo.add_step(
+                run_id, kind="approval_required", name=event.get("name"), content={"arguments": event.get("arguments")}
+            )
         # delta/usage/done are not persisted as steps on the worker path

@@ -8,7 +8,10 @@ before reading/writing records (see ``records.py``).
 from __future__ import annotations
 
 import uuid
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated, cast
+
+if TYPE_CHECKING:
+    from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -34,7 +37,9 @@ async def _read_with_fields(
         slug=definition.slug,
         description=definition.description,
         is_active=definition.is_active,
-        write_access=definition.write_access,
+        # The column is a plain str; EntityDefinitionRead constrains it to a Literal.
+        # Pydantic still validates at construction, so this only satisfies the checker.
+        write_access=cast('Literal["member", "workflow_only"]', definition.write_access),
         fields=[EntityFieldRead.model_validate(f) for f in fields],
     )
 

@@ -6,10 +6,9 @@ from collections.abc import AsyncIterator
 from uuid import uuid4
 
 import pytest
-
 from api.models.agent import Agent
-from api.services.agents.runtime import RunParked, run_agent_loop
 from api.services.agents.llm.provider import Completion, ToolCallRequest, Usage
+from api.services.agents.runtime import RunParked, run_agent_loop
 from api.services.agents.tools.spec import Category, ToolContext, ToolSpec
 
 pytestmark = pytest.mark.unit
@@ -135,8 +134,14 @@ async def test_denied_tool_returns_error_without_calling_handler():
     )
     events, emit = await _collect_emit()
     await run_agent_loop(
-        provider=provider, agent=agent, model="m", messages=[{"role": "user", "content": "go"}],
-        specs=[exec_spec], ctx=_ctx(agent), emit=emit, max_iterations=4,
+        provider=provider,
+        agent=agent,
+        model="m",
+        messages=[{"role": "user", "content": "go"}],
+        specs=[exec_spec],
+        ctx=_ctx(agent),
+        emit=emit,
+        max_iterations=4,
     )
     assert handler_calls == []  # never executed
     tool_results = [e for e in events if e["type"] == "tool_result"]
@@ -155,18 +160,31 @@ async def test_parks_before_executing_any_tool_in_the_turn():
             ran.append(name)
             return {"ok": name}
 
-        return ToolSpec(name=name, description=name, parameters={"type": "object", "properties": {}},
-                        category=category, handler=handler, always_allowed=(category == Category.READ),
-                        side_effecting=(category != Category.READ))
+        return ToolSpec(
+            name=name,
+            description=name,
+            parameters={"type": "object", "properties": {}},
+            category=category,
+            handler=handler,
+            always_allowed=(category == Category.READ),
+            side_effecting=(category != Category.READ),
+        )
 
-    provider = _FakeProvider([([], Completion(
-        content="",
-        tool_calls=(
-            ToolCallRequest(id="c1", name="echo_read", arguments={}),
-            ToolCallRequest(id="c2", name="run_workflow", arguments={}),
-        ),
-        finish_reason="tool_calls",
-    ))])
+    provider = _FakeProvider(
+        [
+            (
+                [],
+                Completion(
+                    content="",
+                    tool_calls=(
+                        ToolCallRequest(id="c1", name="echo_read", arguments={}),
+                        ToolCallRequest(id="c2", name="run_workflow", arguments={}),
+                    ),
+                    finish_reason="tool_calls",
+                ),
+            )
+        ]
+    )
     _events, emit = await _collect_emit()
 
     async def park(_spec, _args):
@@ -174,9 +192,15 @@ async def test_parks_before_executing_any_tool_in_the_turn():
 
     with pytest.raises(RunParked):
         await run_agent_loop(
-            provider=provider, agent=agent, model="m", messages=[{"role": "user", "content": "go"}],
+            provider=provider,
+            agent=agent,
+            model="m",
+            messages=[{"role": "user", "content": "go"}],
             specs=[_tool("echo_read", Category.READ), _tool("run_workflow", Category.EXECUTE)],
-            ctx=_ctx(agent), emit=emit, max_iterations=4, approval_strategy=park,
+            ctx=_ctx(agent),
+            emit=emit,
+            max_iterations=4,
+            approval_strategy=park,
         )
     assert ran == []  # neither tool executed before the park
 
@@ -185,11 +209,24 @@ async def test_parks_before_executing_any_tool_in_the_turn():
 async def test_ask_strategy_can_park_the_run():
     agent = _agent(tools=["run_workflow"], approval_required=["run_workflow"])
     spec = ToolSpec(
-        name="run_workflow", description="run", parameters={"type": "object", "properties": {}},
-        category=Category.EXECUTE, handler=lambda c, a: None, side_effecting=True,
+        name="run_workflow",
+        description="run",
+        parameters={"type": "object", "properties": {}},
+        category=Category.EXECUTE,
+        handler=lambda c, a: None,
+        side_effecting=True,
     )
     provider = _FakeProvider(
-        [([], Completion(content="", tool_calls=(ToolCallRequest(id="c1", name="run_workflow", arguments={}),), finish_reason="tool_calls"))]
+        [
+            (
+                [],
+                Completion(
+                    content="",
+                    tool_calls=(ToolCallRequest(id="c1", name="run_workflow", arguments={}),),
+                    finish_reason="tool_calls",
+                ),
+            )
+        ]
     )
     _events, emit = await _collect_emit()
 
@@ -198,8 +235,14 @@ async def test_ask_strategy_can_park_the_run():
 
     with pytest.raises(RunParked) as exc:
         await run_agent_loop(
-            provider=provider, agent=agent, model="m", messages=[{"role": "user", "content": "go"}],
-            specs=[spec], ctx=_ctx(agent), emit=emit, max_iterations=4,
+            provider=provider,
+            agent=agent,
+            model="m",
+            messages=[{"role": "user", "content": "go"}],
+            specs=[spec],
+            ctx=_ctx(agent),
+            emit=emit,
+            max_iterations=4,
             approval_strategy=park_strategy,
         )
     assert exc.value.wait_kind == "approval"

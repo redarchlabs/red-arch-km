@@ -108,11 +108,7 @@ class TestSectionedChunks:
         assert "Chapter One › Section B" in sections
 
     def test_deeper_then_shallower_heading_resets_path(self) -> None:
-        text = (
-            "# A\nAlpha text here.\n"
-            "## B\nBravo text here.\n"
-            "# C\nCharlie text here."
-        )
+        text = "# A\nAlpha text here.\n## B\nBravo text here.\n# C\nCharlie text here."
         chunks = create_sectioned_chunks(text, 1000, 10)
         by_body = {c.section for c in chunks if "Charlie" in c.text}
         # The second H1 must not nest under the earlier H2.

@@ -23,28 +23,20 @@ class FormRepository:
         self._org_id = org_id
 
     async def list_all(self) -> list[Form]:
-        result = await self._session.execute(
-            select(Form).where(Form.org_id == self._org_id).order_by(Form.name)
-        )
+        result = await self._session.execute(select(Form).where(Form.org_id == self._org_id).order_by(Form.name))
         return list(result.scalars().all())
 
     async def count(self) -> int:
         """Number of forms in this org (cheaper than materialising list_all)."""
-        result = await self._session.execute(
-            select(func.count()).select_from(Form).where(Form.org_id == self._org_id)
-        )
+        result = await self._session.execute(select(func.count()).select_from(Form).where(Form.org_id == self._org_id))
         return int(result.scalar_one())
 
     async def get(self, form_id: uuid.UUID) -> Form | None:
-        result = await self._session.execute(
-            select(Form).where(Form.id == form_id, Form.org_id == self._org_id)
-        )
+        result = await self._session.execute(select(Form).where(Form.id == form_id, Form.org_id == self._org_id))
         return result.scalar_one_or_none()
 
     async def get_by_slug(self, slug: str) -> Form | None:
-        result = await self._session.execute(
-            select(Form).where(Form.slug == slug, Form.org_id == self._org_id)
-        )
+        result = await self._session.execute(select(Form).where(Form.slug == slug, Form.org_id == self._org_id))
         return result.scalar_one_or_none()
 
     async def create(self, form: Form) -> Form:

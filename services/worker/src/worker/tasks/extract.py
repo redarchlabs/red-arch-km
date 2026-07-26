@@ -84,9 +84,7 @@ def task_extract_and_ingest(self: Any, data: dict[str, Any]) -> dict[str, Any]:
     task_id = self.request.id or ""
 
     logger.info("Extracting %s (method=%s) for tenant %s", filename, method, tenant_id)
-    report_progress(
-        settings, document_id, tenant_id, STAGE_QUEUED, message=f"queued: {filename} (method={method})"
-    )
+    report_progress(settings, document_id, tenant_id, STAGE_QUEUED, message=f"queued: {filename} (method={method})")
 
     # --- Extraction (runs exactly once; failures are terminal, not retried) ---
     try:
@@ -133,9 +131,7 @@ def task_extract_and_ingest(self: Any, data: dict[str, Any]) -> dict[str, Any]:
     # in the worker), so persist the extracted text as a sidecar for the reader.
     if filename.lower().endswith(".doc"):
         try:
-            StorageClient(settings).put_object(
-                f"{object_key}.extracted.txt", text.encode("utf-8"), "text/plain"
-            )
+            StorageClient(settings).put_object(f"{object_key}.extracted.txt", text.encode("utf-8"), "text/plain")
         except Exception:
             logger.warning("Failed to store .doc text sidecar for %s", document_key)
 

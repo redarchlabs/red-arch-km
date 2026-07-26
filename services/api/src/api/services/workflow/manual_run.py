@@ -30,9 +30,7 @@ from api.services.workflow.factory import build_dispatch_service
 from api.services.workflow.manual_inputs import InputValidationError, coerce_inputs, is_manual_trigger
 
 
-async def resolve_published_version(
-    session: AsyncSession, org_id: uuid.UUID, workflow: Workflow
-) -> WorkflowVersion:
+async def resolve_published_version(session: AsyncSession, org_id: uuid.UUID, workflow: Workflow) -> WorkflowVersion:
     """Return the workflow's active PUBLISHED version, or raise 409.
 
     Shared by the internal workflows router and the ``/api/v1`` workflow surface so

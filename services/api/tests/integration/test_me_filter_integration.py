@@ -44,9 +44,7 @@ async def _make_org(admin_session: AsyncSession, name: str) -> Org:
     return org
 
 
-async def _load_repo(
-    session: AsyncSession, org_id: uuid.UUID, definition_id: uuid.UUID
-) -> DynamicEntityRepository:
+async def _load_repo(session: AsyncSession, org_id: uuid.UUID, definition_id: uuid.UUID) -> DynamicEntityRepository:
     definition = await EntityDefinitionRepository(session, org_id).get(definition_id)
     assert definition is not None
     fields = await EntityFieldRepository(session, org_id).list_for_definition(definition_id)
@@ -55,9 +53,7 @@ async def _load_repo(
 
 
 class TestMeFilterIntegration:
-    async def test_me_scopes_rows_to_the_caller(
-        self, admin_session: AsyncSession, session: AsyncSession
-    ) -> None:
+    async def test_me_scopes_rows_to_the_caller(self, admin_session: AsyncSession, session: AsyncSession) -> None:
         org = await _make_org(admin_session, "ME-FILTER")
         await set_tenant(admin_session, str(org.id))
         svc = EntityService(admin_session, org.id)
@@ -138,7 +134,5 @@ class TestMeFilterIntegration:
         person_def = await EntityDefinitionRepository(session, org.id).get(person.id)
         assert person_def is not None
         with pytest.raises(HTTPException) as exc:
-            await resolve_me_filters(
-                session, org.id, person_def, [("email", "eq", ME_FILTER_SENTINEL)], "a@b.com"
-            )
+            await resolve_me_filters(session, org.id, person_def, [("email", "eq", ME_FILTER_SENTINEL)], "a@b.com")
         assert exc.value.status_code == 400

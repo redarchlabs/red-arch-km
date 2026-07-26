@@ -47,7 +47,9 @@ from api.services.crypto import encrypt_secret
 router = APIRouter()
 
 
-async def _read(session: AsyncSession, org_id: uuid.UUID, server: McpServer, user_profile_id: uuid.UUID | None) -> McpServerRead:
+async def _read(
+    session: AsyncSession, org_id: uuid.UUID, server: McpServer, user_profile_id: uuid.UUID | None
+) -> McpServerRead:
     user_token = None
     cfg = server.config or {}
     if cfg.get("auth_type") == "oauth" and server.oauth_identity == "user" and user_profile_id is not None:
@@ -61,10 +63,18 @@ async def _read(session: AsyncSession, org_id: uuid.UUID, server: McpServer, use
             )
         ).scalar_one_or_none()
     return McpServerRead(
-        id=server.id, name=server.name, description=server.description, transport=server.transport,
-        command=server.command, url=server.url, config=cfg, enabled=server.enabled,
-        auth_type=cfg.get("auth_type", "none"), has_secret=server.secret_encrypted is not None,
-        oauth_identity=server.oauth_identity, oauth_status=McpOAuthStatus(**oauth_status(server, user_token)),
+        id=server.id,
+        name=server.name,
+        description=server.description,
+        transport=server.transport,
+        command=server.command,
+        url=server.url,
+        config=cfg,
+        enabled=server.enabled,
+        auth_type=cfg.get("auth_type", "none"),
+        has_secret=server.secret_encrypted is not None,
+        oauth_identity=server.oauth_identity,
+        oauth_status=McpOAuthStatus(**oauth_status(server, user_token)),
         created_at=server.created_at,
     )
 
@@ -151,8 +161,13 @@ async def create_mcp_server(
     _validate_transport(body.transport)
     key = settings.org_encryption_key.get_secret_value()
     server = McpServer(
-        name=body.name, description=body.description, transport=body.transport,
-        command=body.command, url=body.url, config=dict(body.config or {}), enabled=body.enabled,
+        name=body.name,
+        description=body.description,
+        transport=body.transport,
+        command=body.command,
+        url=body.url,
+        config=dict(body.config or {}),
+        enabled=body.enabled,
     )
     _apply_auth(server, body, key)
     try:
@@ -250,7 +265,9 @@ async def test_mcp_server(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "MCP server not found")
     resolved = await resolve_for_call(session, ctx.org_id, server, settings, ctx.user.profile_id)
     if resolved is None:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Not connected — click Connect to authorize this server first.")
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "Not connected — click Connect to authorize this server first."
+        )
     try:
         tools = await McpClient(settings).list_tools(resolved)
     except McpError as exc:

@@ -48,9 +48,7 @@ class TestDeclaredInputs:
         ]
 
     def test_skips_keyless_and_dedupes(self) -> None:
-        specs = declared_inputs(
-            _def([{"label": "no key"}, {"key": "a"}, {"key": "a", "label": "dup"}, "junk"])
-        )
+        specs = declared_inputs(_def([{"label": "no key"}, {"key": "a"}, {"key": "a", "label": "dup"}, "junk"]))
         assert [s.key for s in specs] == ["a"]
 
     def test_unknown_type_falls_back_to_text(self) -> None:

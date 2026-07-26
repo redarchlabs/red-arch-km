@@ -104,10 +104,7 @@ def _profile_suffix(profile: DocumentProfile) -> str:
     if profile.guidance:
         parts.append(profile.guidance)
     if profile.priority_predicates:
-        parts.append(
-            "Strongly prefer these predicates when they apply: "
-            f"[{', '.join(profile.priority_predicates)}]."
-        )
+        parts.append(f"Strongly prefer these predicates when they apply: [{', '.join(profile.priority_predicates)}].")
     if profile.entity_types:
         parts.append(f"Entities here are usually of type: [{', '.join(profile.entity_types)}].")
     if profile.central_entities:

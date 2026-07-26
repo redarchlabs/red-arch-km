@@ -9,7 +9,6 @@ bitmap in memory at once.
 from __future__ import annotations
 
 import pytest
-
 from worker.extract import _pdf
 
 

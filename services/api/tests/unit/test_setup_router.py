@@ -128,9 +128,7 @@ async def test_claim_when_admin_exists_409(redis: Any, profile: UserProfile, mon
     assert await redis.get(TOKEN_KEY) is None
 
 
-async def test_claim_restores_token_when_promotion_fails(
-    redis: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_claim_restores_token_when_promotion_fails(redis: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """A DB failure after the token is consumed must put the token back —
     otherwise setup is bricked until the next restart with no explanation."""
     _force_admin_exists(monkeypatch, False)

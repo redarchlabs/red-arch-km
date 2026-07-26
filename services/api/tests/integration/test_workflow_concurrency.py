@@ -53,11 +53,17 @@ async def _ticket_entity(session: AsyncSession, org_id: uuid.UUID):
 _DELAY_DEF = {
     "nodes": [
         {"id": "t", "type": "trigger", "data": {"operations": ["update"]}},
-        {"id": "a1", "type": "action",
-         "data": {"action_type": "update_record_field", "config": {"field": "title", "value": "STEP1"}}},
+        {
+            "id": "a1",
+            "type": "action",
+            "data": {"action_type": "update_record_field", "config": {"field": "title", "value": "STEP1"}},
+        },
         {"id": "d", "type": "delay", "data": {"delay_seconds": 3600}},
-        {"id": "a2", "type": "action",
-         "data": {"action_type": "update_record_field", "config": {"field": "title", "value": "STEP2"}}},
+        {
+            "id": "a2",
+            "type": "action",
+            "data": {"action_type": "update_record_field", "config": {"field": "title", "value": "STEP2"}},
+        },
     ],
     "edges": [
         {"id": "e0", "source": "t", "target": "a1"},
@@ -85,8 +91,13 @@ async def test_resume_is_exactly_once_across_concurrent_sweeps(
 
     disp = WorkflowDispatchService(admin_session, public_base_url="http://x")
     run, _ = await disp.run_version_manually(
-        org.id, wf, version,
-        operation="update", record_id=record_id, before={"title": "before"}, after={"title": "before"},
+        org.id,
+        wf,
+        version,
+        operation="update",
+        record_id=record_id,
+        before={"title": "before"},
+        after={"title": "before"},
     )
     run.resume_at = datetime.now(UTC) - timedelta(minutes=1)  # type: ignore[assignment]
     await admin_session.commit()
@@ -121,9 +132,14 @@ async def test_scheduled_fire_is_exactly_once_across_concurrent_sweeps(
     sched_def = {
         "nodes": [
             {"id": "t", "type": "trigger", "data": {"operations": [], "schedule": {"every_minutes": 60}}},
-            {"id": "a", "type": "action",
-             "data": {"action_type": "create_record",
-                      "config": {"target_slug": slug, "values": {"title": "nightly"}}}},
+            {
+                "id": "a",
+                "type": "action",
+                "data": {
+                    "action_type": "create_record",
+                    "config": {"target_slug": slug, "values": {"title": "nightly"}},
+                },
+            },
         ],
         "edges": [{"id": "e0", "source": "t", "target": "a"}],
     }
@@ -160,11 +176,9 @@ async def test_scheduled_fire_is_exactly_once_across_concurrent_sweeps(
 _CYCLE_DEF = {
     "nodes": [
         {"id": "t", "type": "trigger", "data": {"operations": ["update"]}},
-        {"id": "a1", "type": "action",
-         "data": {"action_type": "log", "config": {"message": "a1"}}},
+        {"id": "a1", "type": "action", "data": {"action_type": "log", "config": {"message": "a1"}}},
         {"id": "d", "type": "delay", "data": {"delay_seconds": 0}},
-        {"id": "a2", "type": "action",
-         "data": {"action_type": "log", "config": {"message": "a2"}}},
+        {"id": "a2", "type": "action", "data": {"action_type": "log", "config": {"message": "a2"}}},
     ],
     "edges": [
         {"id": "e0", "source": "t", "target": "a1"},
@@ -191,8 +205,13 @@ async def test_delay_cycle_terminates_as_failed(admin_session: AsyncSession) -> 
 
     disp = WorkflowDispatchService(admin_session, public_base_url="http://x")
     run, _ = await disp.run_version_manually(
-        org.id, wf, version,
-        operation="update", record_id=record_id, before={"title": "x"}, after={"title": "x"},
+        org.id,
+        wf,
+        version,
+        operation="update",
+        record_id=record_id,
+        before={"title": "x"},
+        after={"title": "x"},
     )
     await admin_session.commit()
 

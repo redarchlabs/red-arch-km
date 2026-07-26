@@ -124,9 +124,7 @@ class TestWarmUp:
         # A minimal chat completion primes the OpenAI connection pool.
         fake_openai.return_value.chat.completions.create.assert_called_once()
 
-    def test_one_failing_path_does_not_stop_the_others(
-        self, mock_stores: MagicMock, fake_settings: MagicMock
-    ) -> None:
+    def test_one_failing_path_does_not_stop_the_others(self, mock_stores: MagicMock, fake_settings: MagicMock) -> None:
         """Each probe is isolated: a cold path that errors must not prevent the
         remaining paths from warming, and warm_up must never raise."""
         mock_stores.vector.search.side_effect = RuntimeError("qdrant not ready")

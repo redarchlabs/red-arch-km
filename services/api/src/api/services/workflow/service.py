@@ -82,7 +82,7 @@ class WorkflowService:
         if version is None or version.workflow_id != workflow_id:
             raise WorkflowNotFoundError("version not found")
         version.status = "published"
-        version.published_at = func.now()  # type: ignore[assignment]
+        version.published_at = func.now()
         # Archive the previously-active version and point the workflow at this one.
         if wf.active_version_id and wf.active_version_id != version_id:
             prior = await self._versions.get(wf.active_version_id)

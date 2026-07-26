@@ -60,15 +60,17 @@ async def test_concurrent_double_submit_only_one_commits(
             slug="intake",
             entity_definition_id=definition.id,
             config=FormConfig.model_validate(
-                {"version": 2, "elements": [
-                    {"type": "field", "slug": "name"}, {"type": "field", "slug": "phone"},
-                ]}
+                {
+                    "version": 2,
+                    "elements": [
+                        {"type": "field", "slug": "name"},
+                        {"type": "field", "slug": "phone"},
+                    ],
+                }
             ),
         )
     )
-    _link, token, _url, _sent = await fsvc.generate_link(
-        form.id, GenerateLinkRequest(target_record_id=record_id)
-    )
+    _link, token, _url, _sent = await fsvc.generate_link(form.id, GenerateLinkRequest(target_record_id=record_id))
     await session.commit()
 
     factory = async_sessionmaker(engine, expire_on_commit=False)

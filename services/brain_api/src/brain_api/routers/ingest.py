@@ -236,9 +236,7 @@ async def get_document_chunks(
     offset = max(0, offset)
     try:
         chunks, total = await asyncio.gather(
-            asyncio.to_thread(
-                stores.vector.get_document_chunks, tenant_id, document_key, offset=offset, limit=limit
-            ),
+            asyncio.to_thread(stores.vector.get_document_chunks, tenant_id, document_key, offset=offset, limit=limit),
             asyncio.to_thread(stores.vector.count_document_chunks, tenant_id, document_key),
         )
     except Exception:

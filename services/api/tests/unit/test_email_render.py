@@ -15,7 +15,7 @@ pytestmark = pytest.mark.unit
 class TestRenderIntakeEmail:
     def test_escapes_html_in_form_name(self) -> None:
         subject, text, html = render_intake_email(
-            form_name='<img src=x onerror=alert(1)>',
+            form_name="<img src=x onerror=alert(1)>",
             url="https://app.example/intake/tok",
         )
         # The raw payload must NOT appear as live markup in the HTML body.
@@ -28,7 +28,7 @@ class TestRenderIntakeEmail:
         _s, _t, html = render_intake_email(
             form_name="Onboarding",
             url="https://app.example/intake/tok",
-            org_name='<script>evil()</script>',
+            org_name="<script>evil()</script>",
         )
         assert "<script>evil()</script>" not in html
         assert "&lt;script&gt;" in html

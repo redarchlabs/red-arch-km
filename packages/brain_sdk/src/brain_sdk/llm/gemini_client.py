@@ -14,7 +14,7 @@ class GeminiLLMClient:
 
     def __init__(self, api_key: str, model: str = "gemini-2.5-flash") -> None:
         try:
-            import google.generativeai as genai  # type: ignore[import-untyped]
+            import google.generativeai as genai
         except ImportError as exc:  # pragma: no cover - exercised only without the extra
             msg = "google-generativeai SDK not installed; add it to use a Gemini LLM client"
             raise RuntimeError(msg) from exc

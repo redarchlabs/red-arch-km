@@ -6,22 +6,21 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-from pydantic import SecretStr
-
 from api.config import Settings
 from api.services.agents.llm import keys
 from api.services.crypto import encrypt_secret
+from pydantic import SecretStr
 
 pytestmark = pytest.mark.unit
 
 
 def _settings(**overrides) -> Settings:
-    base = dict(
-        secret_key=SecretStr("test-jwt-secret"),
-        openai_api_key=SecretStr(""),
-        anthropic_api_key=SecretStr(""),
-        gemini_api_key=SecretStr(""),
-    )
+    base = {
+        "secret_key": SecretStr("test-jwt-secret"),
+        "openai_api_key": SecretStr(""),
+        "anthropic_api_key": SecretStr(""),
+        "gemini_api_key": SecretStr(""),
+    }
     base.update(overrides)
     return Settings(**base)  # type: ignore[arg-type]
 

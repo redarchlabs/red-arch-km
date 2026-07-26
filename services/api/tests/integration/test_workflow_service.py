@@ -43,7 +43,8 @@ async def _setup(admin_session: AsyncSession) -> tuple[Org, uuid.UUID]:
     await set_tenant(admin_session, str(org.id))
     definition = await EntityService(admin_session, org.id).create_definition(
         EntityDefinitionCreate(
-            name="Ticket", slug="ticket",
+            name="Ticket",
+            slug="ticket",
             fields=[EntityFieldCreate(name="Title", slug="title", field_type="text")],
         )
     )
@@ -71,9 +72,7 @@ async def test_draft_publish_and_dry_run(admin_session: AsyncSession) -> None:
     assert result["condition_trace"][0]["result"] is True
 
     runs = (
-        await admin_session.execute(
-            select(func.count()).select_from(WorkflowRun).where(WorkflowRun.org_id == org.id)
-        )
+        await admin_session.execute(select(func.count()).select_from(WorkflowRun).where(WorkflowRun.org_id == org.id))
     ).scalar_one()
     events = (
         await admin_session.execute(
