@@ -1,0 +1,31 @@
+# Compose override: point brain-api at locally hosted models instead of OpenAI.
+#
+# Layered on top of docker-compose.yml by `./run-local.sh`, which also starts the two
+# llama.cpp servers and puts the host API on the local chat endpoint. Not used by a plain
+# `./run-stack.sh` — that intentionally stays on hosted OpenAI.
+#
+# Two endpoints because ONE llama.cpp process cannot serve both: a server started for
+# chat answers /v1/embeddings with "501 This server does not support embeddings", and
+# --embeddings mode does not serve chat.
+#
+# 172.22.0.1 is the km2_network gateway = the docker host, where the model servers run.
+# Confirm with:  docker network inspect km2_network -f '{{(index .IPAM.Config 0).Gateway}}'
+# The servers must bind 0.0.0.0 (not 127.0.0.1) to be reachable from inside a container.
+#
+# ⚠ EMBEDDING_DIMENSION is the width of the Qdrant collections and the Neo4j
+# entity_embedding index. nomic-embed-text-v1.5 is 768; OpenAI text-embedding-3-small is
+# 1536. Vectors written at one width are unusable at the other, so changing this means
+# dropping both stores and re-ingesting every document. A migration, not a toggle.
+#
+# NOT covered here: the worker's vision OCR (`ai` extraction method) still calls OpenAI,
+# because the local chat model is text-only. Tesseract (`ocr`) is the fully-local path.
+services:
+  brain-api:
+    environment:
+      LOCAL_LLM_GATEWAY: ${LOCAL_LLM_GATEWAY:-172.22.0.1}
+      # chat: Qwen3-30B-A3B — RAG answers, chunk summaries, fact extraction
+      OPENAI_BASE_URL: http://${LOCAL_LLM_GATEWAY:-172.22.0.1}:${LOCAL_CHAT_PORT:-8099}/v1
+      # embeddings: nomic-embed-text-v1.5 — retrieval, ingest, entity vectors
+      EMBEDDING_BASE_URL: http://${LOCAL_LLM_GATEWAY:-172.22.0.1}:${LOCAL_EMBED_PORT:-8098}/v1
+      OPENAI_EMBEDDING_MODEL: ${LOCAL_EMBED_MODEL:-nomic-embed-text-v1.5}
+      EMBEDDING_DIMENSION: ${LOCAL_EMBED_DIM:-768}

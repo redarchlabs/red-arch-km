@@ -226,6 +226,25 @@ export interface ChatFiller {
   speak_field?: string;
 }
 
+/** Voice input for the chat: the browser microphone drives speech-to-text
+ * (Web Speech API) so a person can talk to the robot instead of typing. When
+ * `show` is set, the composer renders a mic control with two modes the viewer
+ * can switch between at runtime:
+ *  - "push_to_talk" — hold the mic button to speak, release to send.
+ *  - "always_on"    — the mic stays open and each spoken utterance auto-sends.
+ * `mode` is only the initial default. Recognized speech flows through the exact
+ * same send path as typed text, so the robot answers (and speaks) identically. */
+export interface ChatVoice {
+  show?: boolean;
+  /** Initial input mode the viewer sees (they can flip it live). Default "push_to_talk". */
+  mode?: "push_to_talk" | "always_on";
+  /** BCP-47 recognition language (default "en-US"). */
+  lang?: string;
+  /** Always-on: pause listening while the robot answers so it doesn't hear
+   * itself / the tail of the prior turn, then resume (turn-taking). Default true. */
+  pause_while_thinking?: boolean;
+}
+
 /** A conversation panel over two entities (a conversation session + its messages).
  * Lists the active conversation's messages as bubbles (polling) and, on send, creates
  * a `person` message then runs `answer_workflow_id` so the robot answers + speaks. */
@@ -241,6 +260,7 @@ export interface ChatElement extends ElementBase {
   answer_workflow_id?: string | null;
   answer_controls?: ChatAnswerControls | null;
   filler?: ChatFiller | null;
+  voice?: ChatVoice | null;
   poll_ms?: number;
   placeholder?: string;
   width?: FieldWidth | null;

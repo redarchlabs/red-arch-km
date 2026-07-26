@@ -33,10 +33,32 @@ class BrainAPISettings(BaseSettings):
 
     openai_api_key: str = Field(default="", validation_alias="OPENAI_API_KEY")
     openai_chat_model: str = Field(default="gpt-5-mini", validation_alias="OPENAI_CHAT_MODEL")
+    # Point the OpenAI SDK at an OpenAI-compatible server (Ollama, vLLM, llama.cpp)
+    # instead of api.openai.com. Empty (the default) keeps the hosted behaviour, so
+    # existing deployments are unaffected; a fully-local instance sets it.
+    #
+    # Covers every **chat** call: SearchService (the robot's live path) plus ingest-time
+    # chat in ChunkSummarizer and TripletExtractor. Embeddings are NOT covered — they
+    # have their own setting below, because one llama.cpp server cannot serve both chat
+    # and embeddings, so the two genuinely need different endpoints.
+    #
+    # NB this name matches an environment variable the OpenAI SDK itself honours. Every
+    # client in this codebase now passes base_url explicitly so that collision cannot
+    # silently redirect a call we did not mean to redirect — which is exactly how
+    # embeddings once ended up at a chat-only server, failing every ingest with
+    # "501 This server does not support embeddings".
+    openai_base_url: str = Field(default="", validation_alias="OPENAI_BASE_URL")
     openai_embedding_model: str = Field(
         default="text-embedding-3-small",
         validation_alias="OPENAI_EMBEDDING_MODEL",
     )
+    # Separate endpoint for embeddings. Empty => OpenAI.
+    embedding_base_url: str = Field(default="", validation_alias="EMBEDDING_BASE_URL")
+    # Vector width of the embedding model. Required when embedding_base_url is set,
+    # since dimensions are only known for OpenAI's own models. Changing this is a
+    # MIGRATION, not a config flip: the Qdrant collections and the Neo4j vector index
+    # are created at this width, so every stored vector must be re-embedded.
+    embedding_dimension: int = Field(default=0, validation_alias="EMBEDDING_DIMENSION")
 
     # Agentic fact engine (provider-agnostic; OpenAI is the default provider).
     # `use_fact_engine` gates the new reified-claim ingest + agentic query path;

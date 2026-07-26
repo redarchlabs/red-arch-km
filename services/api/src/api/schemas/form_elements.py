@@ -601,6 +601,22 @@ class ChatFiller(BaseModel):
     speak_field: str = "text"  # request-body field carrying the phrase
 
 
+class ChatVoice(BaseModel):
+    """Voice input for the chat: the browser microphone drives speech-to-text (Web
+    Speech API) so a person can TALK to the robot instead of typing. Recognized
+    speech is sent through the same path as a typed turn, so the robot answers +
+    speaks identically. ``mode`` is only the initial default — the viewer can flip
+    between hold-to-talk and always-on at runtime. In always-on, ``pause_while_thinking``
+    pauses the mic while the robot answers (turn-taking) so it doesn't hear itself."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    show: bool = False
+    mode: Literal["push_to_talk", "always_on"] = "push_to_talk"
+    lang: str = "en-US"  # BCP-47 recognition language
+    pause_while_thinking: bool = True
+
+
 class ChatElement(_Element):
     """A conversation panel backed by two entities: a ``conversation_entity`` (a
     session) and a ``message_entity`` (its turns, linked back via
@@ -621,6 +637,7 @@ class ChatElement(_Element):
     answer_workflow_id: uuid.UUID | None = None  # run on send (e.g. "Robot: Chat Answer")
     answer_controls: ChatAnswerControls | None = None  # optional live answer-speed toggle row
     filler: ChatFiller | None = None  # optional "one moment…" chatter while the robot works
+    voice: ChatVoice | None = None  # optional mic input (talk to the robot)
     poll_ms: int = 1500
     placeholder: str = "Message the robot…"
     width: FieldWidth | None = None

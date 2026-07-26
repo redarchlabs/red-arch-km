@@ -911,7 +911,61 @@ function ChatEditor({ el, onChange }: { el: ChatEl; onChange: (el: FormElement) 
         />
       </Row>
       <ChatAnswerControlsEditor el={el} onChange={onChange} />
+      <ChatVoiceEditor el={el} onChange={onChange} />
       <ChatFillerEditor el={el} onChange={onChange} />
+    </div>
+  );
+}
+
+/** Builder controls for voice input — the browser mic drives speech-to-text so a
+ * person can talk to the robot. `mode` is only the initial default; viewers can
+ * flip between hold-to-talk and always-on at runtime. */
+function ChatVoiceEditor({ el, onChange }: { el: ChatEl; onChange: (el: FormElement) => void }) {
+  const v = el.voice ?? {};
+  const patch = (next: Partial<NonNullable<ChatEl["voice"]>>) =>
+    onChange({ ...el, voice: { ...v, ...next } });
+  return (
+    <div className="mt-1.5 space-y-1.5 rounded-md border border-dashed p-2">
+      <label className="flex items-center gap-2 text-xs font-medium">
+        <input type="checkbox" checked={v.show ?? false} onChange={(e) => patch({ show: e.target.checked })} />
+        <span>Enable voice input (talk to the robot)</span>
+      </label>
+      {v.show ? (
+        <>
+          <p className="text-[11px] text-muted-foreground">
+            Adds a microphone to the composer. Speech is transcribed in the browser (Web Speech API — Chrome/Edge)
+            and sent just like a typed message, so the robot answers &amp; speaks the same way.
+          </p>
+          <Row label="Default mode">
+            <select
+              className={input}
+              value={v.mode ?? "push_to_talk"}
+              onChange={(e) => patch({ mode: e.target.value as "push_to_talk" | "always_on" })}
+            >
+              <option value="push_to_talk">Hold to talk</option>
+              <option value="always_on">Always on</option>
+            </select>
+          </Row>
+          <Row label="Language">
+            <input
+              className={input}
+              placeholder="en-US"
+              value={v.lang ?? "en-US"}
+              onChange={(e) => patch({ lang: e.target.value || "en-US" })}
+            />
+          </Row>
+          <Row label="Pause while answering">
+            <input
+              type="checkbox"
+              checked={v.pause_while_thinking ?? true}
+              onChange={(e) => patch({ pause_while_thinking: e.target.checked })}
+            />
+          </Row>
+          <p className="text-[11px] text-muted-foreground">
+            Always-on: pause the mic while the robot answers so it doesn&apos;t hear itself, then resume (turn-taking).
+          </p>
+        </>
+      ) : null}
     </div>
   );
 }

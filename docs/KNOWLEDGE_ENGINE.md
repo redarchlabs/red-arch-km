@@ -64,6 +64,18 @@ The engine uses three stores; **no fact data lives in PostgreSQL**:
 | **Neo4j** | the fact store — canonical `:Entity`, reified `:Claim`, `:Chunk`/`:Document` provenance, `:Community` digests, `:Gap` records; plus the legacy flat triplet graph | `brain_sdk.facts.neo4j_fact_store.Neo4jFactStore` and `brain_sdk.graph_store.neo4j_store.Neo4jGraphStore` |
 | **OpenAI (or configured provider)** | embeddings, chunk/doc summaries, claim extraction, agent LLM | `brain_sdk.embedding`, `brain_sdk.summarization`, `brain_sdk.llm` |
 
+> **Provider is configurable, dimension is not (cheaply).** Chat and embeddings
+> have independent endpoints (`OPENAI_BASE_URL`, `EMBEDDING_BASE_URL`), so this
+> layer can run entirely self-hosted — see
+> [ARCHITECTURE.md §9](ARCHITECTURE.md#9-inference-hosted-or-self-hosted). But the
+> Qdrant collections and the Neo4j `entity_embedding` index are created at a fixed
+> vector width (OpenAI `text-embedding-3-small` = 1536, `nomic-embed-text-v1.5` =
+> 768) and are per-org. Changing the embedding model requires dropping both stores
+> and re-ingesting. A width mismatch does **not** raise where you can see it: Neo4j
+> fails entity resolution with `Index query vector has N dimensions, but indexed
+> vectors have M`, which surfaces only as `claims_extracted: 0` on an otherwise
+> SUCCESS ingest.
+
 Every connected client is a lazily-initialized, lock-guarded singleton on the
 `Stores` container (`services/brain_api/src/brain_api/stores.py`). PostgreSQL is
 the system of record for documents, orgs, membership, and processing status —

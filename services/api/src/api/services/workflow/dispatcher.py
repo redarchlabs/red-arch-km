@@ -194,17 +194,17 @@ class WorkflowDispatchService:
         if self._settings is None:
             raise ActionError("summarization requires Settings (not wired in this context)")
         key = await self._org_openai_key(org_id) or self._settings.openai_api_key.get_secret_value()
-        if not key:
-            raise ActionError("summarization requires an OpenAI API key (org or central)")
-        from openai import AsyncOpenAI
+        from api.services.openai_client import api_key_required, make_async_openai
 
+        if not key and api_key_required(self._settings):
+            raise ActionError("summarization requires an OpenAI API key (org or central)")
         from api.services.spoken_summary import summarize_for_speech
 
         # Explicit timeout: the SDK default is 600s, which — on the inline
         # (run_inline_on_change) path — would hold the request's pooled DB
         # connection for minutes. The inline dispatch also has an overall budget
         # (see entity_records._dispatch_inline_workflows), this bounds a single call.
-        client = AsyncOpenAI(api_key=key, timeout=30.0)
+        client = make_async_openai(self._settings, key, timeout=30.0)
         model = opts.get("model") or self._settings.openai_summary_model
         return await summarize_for_speech(
             client,

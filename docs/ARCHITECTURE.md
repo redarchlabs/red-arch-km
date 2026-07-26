@@ -14,7 +14,7 @@ that own each subsystem in depth.
 > `run-stack.sh`, `make dev`, and `docker/docker-compose.prod.yml` run. A parallel
 > **Go** rewrite (`services/api-go`, `services/brain-api-go`, `services/worker-go`)
 > is an in-progress port wired only into `docker/docker-compose.go.yml` — see
-> [§10 Go Migration Status](#10-go-migration-status). This document describes the
+> [§11 Go Migration Status](#11-go-migration-status). This document describes the
 > Python stack unless stated otherwise.
 
 ## Table of Contents
@@ -27,10 +27,11 @@ that own each subsystem in depth.
 6. [Multi-Tenancy & Isolation](#6-multi-tenancy--isolation)
 7. [Security Boundaries](#7-security-boundaries)
 8. [Platform Surfaces](#8-platform-surfaces)
-9. [Infrastructure & Deployment](#9-infrastructure--deployment)
-10. [Go Migration Status](#10-go-migration-status)
-11. [Observability](#11-observability)
-12. [Known gaps / TODO](#12-known-gaps--todo)
+9. [Inference: hosted or self-hosted](#9-inference-hosted-or-self-hosted)
+10. [Infrastructure & Deployment](#10-infrastructure--deployment)
+11. [Go Migration Status](#11-go-migration-status)
+12. [Observability](#12-observability)
+13. [Known gaps / TODO](#13-known-gaps--todo)
 
 ---
 
@@ -214,7 +215,7 @@ agents reach external tools over **MCP** (`mcp/`) via a per-org/per-user OAuth
 
 ### 2.6 Go rewrite — `services/{api-go,brain-api-go,worker-go}`
 
-In-progress port; not authoritative. See [§10](#10-go-migration-status).
+In-progress port; not authoritative. See [§11](#11-go-migration-status).
 
 ---
 
@@ -489,7 +490,81 @@ a sibling doc; this section is the map.
 
 ---
 
-## 9. Infrastructure & Deployment
+## 9. Inference: hosted or self-hosted
+
+Every model call goes through the OpenAI SDK, but **not necessarily to OpenAI**.
+Two settings redirect them at any OpenAI-compatible server (llama.cpp, vLLM,
+Ollama), which makes "run with no third-party calls" a deployment choice rather
+than a code change. Both default to empty = hosted OpenAI, so existing
+deployments are unaffected.
+
+| Setting | Covers | Default |
+|---------|--------|---------|
+| `OPENAI_BASE_URL` | **chat**: RAG answers (`SearchService`), workflow `summarize`/`llm_decide`/`llm_grade`/`llm_respond`, the assistant + agent org, ingest-time `ChunkSummarizer` and claim extraction | OpenAI |
+| `EMBEDDING_BASE_URL` | **embeddings**: retrieval, ingest, fact-store entity vectors | OpenAI |
+| `EMBEDDING_DIMENSION` | vector width of the embedding model — **required** when `EMBEDDING_BASE_URL` is set | derived from the OpenAI model name |
+
+### Why chat and embeddings are separate settings
+
+One llama.cpp process cannot serve both. A server started for chat answers
+`POST /v1/embeddings` with `501 This server does not support embeddings`, and
+`--embeddings` mode does not serve chat. A self-hosted deployment therefore runs
+**two** model servers and points the two settings at different ports.
+
+### base_url is always passed explicitly
+
+Every `OpenAI(...)`/`AsyncOpenAI(...)` construction passes `base_url`, never
+leaving it to default. The SDK falls back to the `OPENAI_BASE_URL` *environment
+variable* when the argument is omitted — so a variable meant to redirect chat
+silently captured embeddings too, sending them to a chat-only server and breaking
+every document ingest. The explicit argument makes "where does this call go?" a
+property of configuration we can read rather than of process environment.
+Regression test: `services/brain_api/tests/unit/test_embedding_endpoint.py`.
+
+Helpers: `api/services/openai_client.py`, `brain_api/openai_client.py`, and
+`brain_sdk/embedding/openai_provider.py`. When a base URL is set, a missing API
+key is not an error — a self-hosted endpoint authenticates nothing — so
+`api_key_required()` gates the "no key configured" failure.
+
+### Changing the embedding model is a migration, not a config flip
+
+Qdrant collections (`{tenant_id}-chunks`, `{tenant_id}-documents`) and the Neo4j
+`entity_embedding` vector index are created at a **fixed width**. Vectors written
+at one width are unusable at another, and collections are **per-org**, so an org
+is pinned to whichever model first populated it.
+
+- OpenAI `text-embedding-3-small` = 1536; `nomic-embed-text-v1.5` = 768.
+- Switching means dropping both stores for the affected orgs and **re-ingesting
+  every document**. Mixing widths does not degrade gracefully: Qdrant rejects the
+  upsert, and Neo4j fails entity resolution with `Index query vector has N
+  dimensions, but indexed vectors have M`, which surfaces as `claims_extracted: 0`
+  rather than as an error the caller sees.
+- The Neo4j index is created with `CREATE VECTOR INDEX … IF NOT EXISTS`, so it is
+  **not** re-dimensioned by a config change. It must be dropped explicitly, and
+  its log line reports intent, not the resulting width — verify with
+  `SHOW INDEXES`.
+- `EMBEDDING_DIMENSION` must match the served model. It is not validated against
+  the server, and a wrong value corrupts retrieval silently instead of raising;
+  `./run-local-llm-stack.sh test` reads the true width off a live response.
+
+### What still leaves the building
+
+Running self-hosted models does **not** make a deployment fully offline:
+
+- **Clerk** — authentication has no local substitute here.
+- **OpenAI vision OCR** — the `ai` extraction method for scanned PDFs/images.
+  Local chat models are text-only; Tesseract (`ocr`) is the fully-local path.
+
+Operational tooling: `./run-local-llm-stack.sh` (runs the two model servers) and
+`./run-local.sh` (the whole stack wired local, with a `verify` subcommand that
+reports where each service currently sends its calls and flags collections whose
+stored width no longer matches the active model). See
+[DEPLOYMENT.md](DEPLOYMENT.md#self-hosted-models) and
+[DEVELOPMENT.md](DEVELOPMENT.md#running-with-local-models).
+
+---
+
+## 10. Infrastructure & Deployment
 
 Compose files live in `docker/`; `docker-compose.infra.yml` is the shared base
 `include`d by the others.
@@ -538,7 +613,7 @@ port — `make go-migrate` (`services/api-go/migrations/`). See
 
 ---
 
-## 10. Go Migration Status
+## 11. Go Migration Status
 
 A parallel Go rewrite (`go.work`, Go 1.25) is a partial, well-tested port of the
 CRUD/ingest core, **not yet authoritative**:
@@ -565,7 +640,7 @@ cutover.
 
 ---
 
-## 11. Observability
+## 12. Observability
 
 All services emit single-line **JSON logs** with `trace_id`/`span_id` injected
 from the active OpenTelemetry span, and expose **`/healthz`**. When
@@ -580,7 +655,7 @@ heartbeat means Beat is down. Flower (5555) monitors Celery; pgAdmin (81,
 
 ---
 
-## 12. Known gaps / TODO
+## 13. Known gaps / TODO
 
 - Object storage is not bundled in `docker-compose.prod.yml`; production relies on
   an externally provided S3-compatible endpoint (or a compose override). Confirm

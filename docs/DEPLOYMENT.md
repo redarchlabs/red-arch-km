@@ -16,6 +16,7 @@ root `.env.example`.
 - [Environment variable reference](#environment-variable-reference)
 - [Database: roles, migrations, RLS](#database-roles-migrations-rls)
 - [Clerk configuration (production)](#clerk-configuration-production)
+- [Self-hosted models](#self-hosted-models)
 - [Object storage (MinIO / S3)](#object-storage-minio--s3)
 - [First-run setup (site admin)](#first-run-setup-site-admin)
 - [Celery workers and Beat](#celery-workers-and-beat)
@@ -240,7 +241,10 @@ Central keys are fallbacks; per-org keys (encrypted at rest — migration 029
 
 | Variable | Purpose | Required |
 |----------|---------|----------|
-| `OPENAI_API_KEY` | OpenAI key (agent loop, embeddings, chat). Central fallback | **Yes** |
+| `OPENAI_API_KEY` | OpenAI key (agent loop, embeddings, chat). Central fallback | **Yes**, unless self-hosting both endpoints below |
+| `OPENAI_BASE_URL` | Send **chat** to an OpenAI-compatible server instead of OpenAI. Empty = hosted | No (default) |
+| `EMBEDDING_BASE_URL` | Send **embeddings** to a different server. Empty = hosted. Separate because one llama.cpp process cannot serve both chat and embeddings | No (default) |
+| `EMBEDDING_DIMENSION` | Vector width of the embedding model. **Required** when `EMBEDDING_BASE_URL` is set; changing it is a migration — see [Self-hosted models](#self-hosted-models) | No (default) |
 | `OPENAI_CHAT_MODEL` | Default `gpt-5-mini` | No (default) |
 | `OPENAI_EMBEDDING_MODEL` | Default `text-embedding-3-small` | No (default) |
 | `OPENAI_OCR_MODEL` | Vision model for the `ai` upload extraction. Default `gpt-4.1-mini` | No (default) |
@@ -381,6 +385,68 @@ deploy-critical steps:
    your Clerk Frontend API URL.
 
 On first API login, user profiles are auto-provisioned from the JWT.
+
+## Self-hosted models
+
+KM2 can run its inference on hardware you control. Every model call goes through
+the OpenAI SDK, so pointing it at an OpenAI-compatible server (llama.cpp, vLLM,
+Ollama) is configuration, not code.
+
+**Two endpoints, because one llama.cpp process cannot serve both.** A server
+started for chat answers `POST /v1/embeddings` with
+`501 This server does not support embeddings`; `--embeddings` mode does not serve
+chat.
+
+```bash
+OPENAI_BASE_URL=http://<host>:8099/v1        # chat
+EMBEDDING_BASE_URL=http://<host>:8098/v1     # embeddings
+OPENAI_EMBEDDING_MODEL=nomic-embed-text-v1.5
+EMBEDDING_DIMENSION=768
+```
+
+From inside a container, `<host>` is the docker bridge **gateway**, not
+`127.0.0.1`, and the model servers must bind `0.0.0.0`. Read the gateway rather
+than hardcoding it — compose recreates networks on different subnets:
+
+```bash
+docker network inspect km2_network -f '{{(index .IPAM.Config 0).Gateway}}'
+```
+
+### The embedding dimension is a migration, not a toggle
+
+Qdrant collections and the Neo4j `entity_embedding` index are created at a fixed
+width and are **per-org**. OpenAI `text-embedding-3-small` is 1536;
+`nomic-embed-text-v1.5` is 768. Switching requires dropping both stores for the
+affected orgs and re-ingesting every document. Failure modes are quiet, not loud:
+
+- Qdrant **rejects** an upsert of the wrong width — ingest fails.
+- Neo4j fails entity resolution with `Index query vector has N dimensions, but
+  indexed vectors have M`, which surfaces only as `claims_extracted: 0`.
+- The Neo4j index uses `CREATE VECTOR INDEX … IF NOT EXISTS`, so it is **not**
+  re-dimensioned by a config change — drop it explicitly and confirm with
+  `SHOW INDEXES`. Its startup log line reports intent, not the resulting width.
+- `EMBEDDING_DIMENSION` is not validated against the server. A wrong value
+  corrupts retrieval silently.
+
+Because collections are per-org, an org already populated at 1536 cannot accept
+768-dim vectors: either give the new corpus its own org, or drop and re-ingest.
+
+### Still external
+
+Self-hosting the models does not make a deployment fully offline:
+
+- **Clerk** — authentication.
+- **OpenAI vision OCR** — the `ai` extraction method for scanned PDFs/images.
+  Local chat models are text-only; Tesseract (`ocr`) is the local path.
+
+### Tooling
+
+`./run-local-llm-stack.sh` runs the two model servers (`start`/`stop`/`status`/
+`test`/`env`/`setup`); `./run-local.sh` brings up the whole stack wired local.
+`./run-local.sh verify` reports where each service is currently sending calls,
+warns if anything reached `api.openai.com`, and lists stored vector widths per
+collection with mismatches flagged. Architecture rationale:
+[ARCHITECTURE.md §9](ARCHITECTURE.md#9-inference-hosted-or-self-hosted).
 
 ## Object storage (MinIO / S3)
 

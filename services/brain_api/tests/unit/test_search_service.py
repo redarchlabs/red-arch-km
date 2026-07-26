@@ -41,7 +41,7 @@ class TestSnippet:
 
 class TestPassageSources:
     def test_one_source_per_passage_numbered_in_order(self, mock_stores: MagicMock, fake_settings: MagicMock) -> None:
-        with patch("brain_api.services.search_service.OpenAI"):
+        with patch("brain_api.openai_client.OpenAI"):
             service = SearchService(mock_stores, fake_settings)
         hits = [
             _hit(1, doc_key="nt", section="Matthew 4", chunk_order=7, text="Feeding the five thousand."),
@@ -56,7 +56,7 @@ class TestPassageSources:
         assert sources[0]["snippet"] == "Feeding the five thousand."
 
     def test_section_absent_is_none(self, mock_stores: MagicMock, fake_settings: MagicMock) -> None:
-        with patch("brain_api.services.search_service.OpenAI"):
+        with patch("brain_api.openai_client.OpenAI"):
             service = SearchService(mock_stores, fake_settings)
         hits = [{"id": "c", "score": 0.5, "payload": {"text": "t", "document_key": "d"}}]
         sources = service._passage_sources(hits)
@@ -66,7 +66,7 @@ class TestPassageSources:
 
 class TestFormatContext:
     def test_numbers_per_passage_with_section_label(self, mock_stores: MagicMock, fake_settings: MagicMock) -> None:
-        with patch("brain_api.services.search_service.OpenAI"):
+        with patch("brain_api.openai_client.OpenAI"):
             service = SearchService(mock_stores, fake_settings)
         hits = [
             _hit(1, doc_key="nt", section="Matthew 4", chunk_order=7, text="alpha"),
@@ -114,7 +114,7 @@ class TestWarmUp:
     def test_exercises_every_read_path(self, mock_stores: MagicMock, fake_settings: MagicMock) -> None:
         """warm_up touches embedding + Qdrant + Neo4j + a tiny chat completion so
         the first real user query doesn't pay cold connection/TLS setup."""
-        with patch("brain_api.services.search_service.OpenAI") as fake_openai:
+        with patch("brain_api.openai_client.OpenAI") as fake_openai:
             service = SearchService(mock_stores, fake_settings)
             service.warm_up()
 
@@ -130,7 +130,7 @@ class TestWarmUp:
         """Each probe is isolated: a cold path that errors must not prevent the
         remaining paths from warming, and warm_up must never raise."""
         mock_stores.vector.search.side_effect = RuntimeError("qdrant not ready")
-        with patch("brain_api.services.search_service.OpenAI") as fake_openai:
+        with patch("brain_api.openai_client.OpenAI") as fake_openai:
             service = SearchService(mock_stores, fake_settings)
             service.warm_up()  # must not raise
 
@@ -141,7 +141,7 @@ class TestWarmUp:
 
 class TestVectorSearch:
     def test_returns_hits(self, mock_stores: MagicMock, fake_settings: MagicMock) -> None:
-        with patch("brain_api.services.search_service.OpenAI"):
+        with patch("brain_api.openai_client.OpenAI"):
             service = SearchService(mock_stores, fake_settings)
 
         result = service.vector_search(tenant_id="t1", query="hello", limit=5, access_keys=[1, 2], tags=["tag"])
@@ -158,7 +158,7 @@ class TestVectorSearch:
 
 class TestVectorChatStream:
     def test_emits_sources_then_graph_then_done(self, mock_stores: MagicMock, fake_settings: MagicMock) -> None:
-        with patch("brain_api.services.search_service.OpenAI") as mock_openai:
+        with patch("brain_api.openai_client.OpenAI") as mock_openai:
             fake_client = MagicMock()
             mock_openai.return_value = fake_client
 
@@ -179,7 +179,7 @@ class TestVectorChatStream:
         assert event_types[-1] == "done"
 
     def test_graph_disabled(self, mock_stores: MagicMock, fake_settings: MagicMock) -> None:
-        with patch("brain_api.services.search_service.OpenAI") as mock_openai:
+        with patch("brain_api.openai_client.OpenAI") as mock_openai:
             fake_client = MagicMock()
             mock_openai.return_value = fake_client
             fake_client.chat.completions.create.return_value = iter([])
@@ -195,7 +195,7 @@ class TestVectorChatStream:
 
     def test_retrieval_error_emits_error_event(self, mock_stores: MagicMock, fake_settings: MagicMock) -> None:
         mock_stores.embedder.embed.side_effect = RuntimeError("embedding failed")
-        with patch("brain_api.services.search_service.OpenAI"):
+        with patch("brain_api.openai_client.OpenAI"):
             service = SearchService(mock_stores, fake_settings)
             events = list(service.vector_chat_stream(tenant_id="t1", query="hi"))
 
