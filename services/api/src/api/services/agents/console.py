@@ -10,6 +10,7 @@ scoping inside ``execute_workflow_run``).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import uuid
 from collections.abc import AsyncGenerator
@@ -47,9 +48,7 @@ class AgentConsoleService:
         self._factory = session_factory
         self._actor_user_id = actor_user_id
 
-    async def run_stream(
-        self, agent_id: uuid.UUID, history: list[dict[str, Any]]
-    ) -> AsyncGenerator[dict[str, Any]]:
+    async def run_stream(self, agent_id: uuid.UUID, history: list[dict[str, Any]]) -> AsyncGenerator[dict[str, Any]]:
         queue: asyncio.Queue = asyncio.Queue()
 
         async def emit(event: dict[str, Any]) -> None:
@@ -65,10 +64,8 @@ class AgentConsoleService:
         finally:
             if not task.done():
                 task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await task
-            except asyncio.CancelledError:
-                pass
 
     async def _drive(self, agent_id, history, emit, queue) -> None:
         try:
@@ -92,8 +89,12 @@ class AgentConsoleService:
 
                 run_repo = AgentRunRepository(session, self._org_id)
                 run = await run_repo.create_run(
-                    agent_id=agent.id, provider=agent.provider, model=agent.model,
-                    trigger="manual", input={"messages": len(history)}, actor_user_id=self._actor_user_id,
+                    agent_id=agent.id,
+                    provider=agent.provider,
+                    model=agent.model,
+                    trigger="manual",
+                    input={"messages": len(history)},
+                    actor_user_id=self._actor_user_id,
                 )
                 await session.commit()
                 await db_scope.enter_tenant(session, self._org_id)  # re-scope: commit reset SET LOCAL
@@ -105,22 +106,35 @@ class AgentConsoleService:
                 )
                 specs = available_tools(agent, all_specs)
                 ctx = ToolContext(
-                    session=session, org_id=self._org_id, settings=self._settings,
-                    agent=agent, actor_user_id=self._actor_user_id, run_id=run.id,
+                    session=session,
+                    org_id=self._org_id,
+                    settings=self._settings,
+                    agent=agent,
+                    actor_user_id=self._actor_user_id,
+                    run_id=run.id,
                 )
                 params = agent.params or {}
                 messages = [{"role": "system", "content": build_system_prompt(agent)}, *history]
                 try:
                     result = await run_agent_loop(
-                        provider=provider, agent=agent, model=agent.model, messages=messages,
-                        specs=specs, ctx=ctx, emit=emit,
+                        provider=provider,
+                        agent=agent,
+                        model=agent.model,
+                        messages=messages,
+                        specs=specs,
+                        ctx=ctx,
+                        emit=emit,
                         max_iterations=self._settings.agent_max_iterations,
-                        temperature=params.get("temperature"), max_tokens=params.get("max_tokens"),
+                        temperature=params.get("temperature"),
+                        max_tokens=params.get("max_tokens"),
                     )
                     await run_repo.add_step(run.id, kind="assistant", content={"content": result.final_content})
                     await run_repo.finalize_run(
-                        run, status="done", prompt_tokens=result.prompt_tokens,
-                        completion_tokens=result.completion_tokens, total_tokens=result.total_tokens,
+                        run,
+                        status="done",
+                        prompt_tokens=result.prompt_tokens,
+                        completion_tokens=result.completion_tokens,
+                        total_tokens=result.total_tokens,
                     )
                     await session.commit()
                 except Exception as exc:  # noqa: BLE001 - report + persist error state
