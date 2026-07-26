@@ -11,7 +11,7 @@ from api.models.org import Org
 from api.repositories.agent_run import AgentRunRepository
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from tests.integration.helpers import set_tenant
+from .helpers import set_tenant
 
 pytestmark = pytest.mark.integration
 
@@ -48,9 +48,7 @@ class TestAgentRunRepository:
 
 
 class TestAgentRunRLS:
-    async def test_rls_hides_other_orgs_runs(
-        self, session: AsyncSession, admin_session: AsyncSession
-    ) -> None:
+    async def test_rls_hides_other_orgs_runs(self, session: AsyncSession, admin_session: AsyncSession) -> None:
         org_a, org_b, agent = await _seed(admin_session)
         admin_session.add_all(
             [

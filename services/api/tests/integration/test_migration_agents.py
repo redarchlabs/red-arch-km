@@ -21,7 +21,7 @@ from api.services.crypto import encrypt_secret
 from api.services.migration import CollisionStrategy, MigrationExporter, MigrationImporter
 from api.services.workflow.service import WorkflowService
 from sqlalchemy.ext.asyncio import AsyncSession
-from tests.integration.helpers import set_tenant
+from .helpers import set_tenant
 
 pytestmark = pytest.mark.integration
 
@@ -52,8 +52,11 @@ async def test_agents_and_mcp_roundtrip_remaps_refs(admin_session: AsyncSession)
     )
     key = _settings().org_encryption_key.get_secret_value()
     mcp = McpServer(
-        name="github", transport="http", url="https://mcp.example.com",
-        secret_encrypted=encrypt_secret("s3cret", key), org_id=source.id,
+        name="github",
+        transport="http",
+        url="https://mcp.example.com",
+        secret_encrypted=encrypt_secret("s3cret", key),
+        org_id=source.id,
     )
     admin_session.add(mcp)
     await admin_session.flush()
@@ -61,9 +64,14 @@ async def test_agents_and_mcp_roundtrip_remaps_refs(admin_session: AsyncSession)
     admin_session.add(boss)
     await admin_session.flush()
     worker = Agent(
-        name="worker", provider="openai", model="gpt-5-mini", supervisor_id=boss.id,
-        mcp_server_ids=[str(mcp.id)], workflow_allowlist=[str(wf.id)],
-        grants={"tools": ["run_workflow"]}, org_id=source.id,
+        name="worker",
+        provider="openai",
+        model="gpt-5-mini",
+        supervisor_id=boss.id,
+        mcp_server_ids=[str(mcp.id)],
+        workflow_allowlist=[str(wf.id)],
+        grants={"tools": ["run_workflow"]},
+        org_id=source.id,
     )
     admin_session.add(worker)
     await admin_session.commit()

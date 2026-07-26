@@ -20,7 +20,7 @@ from api.repositories.api_key import ApiKeyRepository, lookup_by_key_hash
 from api.services.api_key_service import ApiKeyService, hash_key
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from tests.integration.helpers import set_tenant
+from .helpers import set_tenant
 
 pytestmark = pytest.mark.integration
 
@@ -72,16 +72,26 @@ class TestApiKeyRepositoryScoping:
 
 
 class TestApiKeyRLS:
-    async def test_rls_hides_other_orgs_keys(
-        self, session: AsyncSession, admin_session: AsyncSession
-    ) -> None:
+    async def test_rls_hides_other_orgs_keys(self, session: AsyncSession, admin_session: AsyncSession) -> None:
         org_a, org_b, user = await _seed_two_orgs(admin_session)
         admin_session.add_all(
             [
-                ApiKey(name="A", key_prefix="km2_a", key_hash=hash_key(f"km2_{uuid.uuid4()}"),
-                       scopes=["reports:run"], org_id=org_a.id, created_by_profile_id=user.id),
-                ApiKey(name="B", key_prefix="km2_b", key_hash=hash_key(f"km2_{uuid.uuid4()}"),
-                       scopes=["records:read"], org_id=org_b.id, created_by_profile_id=user.id),
+                ApiKey(
+                    name="A",
+                    key_prefix="km2_a",
+                    key_hash=hash_key(f"km2_{uuid.uuid4()}"),
+                    scopes=["reports:run"],
+                    org_id=org_a.id,
+                    created_by_profile_id=user.id,
+                ),
+                ApiKey(
+                    name="B",
+                    key_prefix="km2_b",
+                    key_hash=hash_key(f"km2_{uuid.uuid4()}"),
+                    scopes=["records:read"],
+                    org_id=org_b.id,
+                    created_by_profile_id=user.id,
+                ),
             ]
         )
         await admin_session.commit()
