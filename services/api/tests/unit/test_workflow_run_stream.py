@@ -200,6 +200,18 @@ class TestSseFrames:
         assert frames == [b'event: error\ndata: {"detail": "stream failed"}\n\n']
 
 
+class _StubSettings:
+    """Just enough Settings for the executor's LLM collaborators."""
+
+    openai_summary_model = "gpt-5-nano"
+    openai_model = "gpt-5-nano"
+
+    class openai_api_key:  # noqa: N801 - mimics SecretStr on Settings
+        @staticmethod
+        def get_secret_value() -> str:
+            return "sk-test"
+
+
 class TestRunnerWiring:
     """The summarize action streams only when the run has a watcher."""
 
@@ -212,6 +224,38 @@ class TestRunnerWiring:
     async def test_summarize_passes_the_publisher_delta_when_watched(self, monkeypatch) -> None:
         publisher = RunStreamPublisher(_FakeRedis(), uuid.uuid4(), str(uuid.uuid4()))
         captured = await self._summarize_with(monkeypatch, delta_sink=publisher)
+        assert captured["on_delta"] == publisher.delta
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("method", "module", "function", "watched_field"),
+        [
+            ("_decide", "api.services.llm_decide", "decide_action", "say"),
+            ("_respond", "api.services.llm_respond", "respond_action", "reply"),
+        ],
+    )
+    async def test_structured_actions_stream_their_spoken_field(
+        self, monkeypatch, method, module, function, watched_field
+    ) -> None:
+        """llm_decide/llm_respond return strict JSON; only the spoken field streams."""
+        import importlib
+
+        from api.services.workflow.runner import ActionExecutor
+
+        captured: dict = {}
+
+        async def fake_action(client, model, **kwargs):
+            captured.update(kwargs)
+            return {watched_field: "x"}
+
+        monkeypatch.setattr(importlib.import_module(module), function, fake_action)
+        monkeypatch.setattr("api.services.workflow.runner.make_async_openai", lambda s, k: object())
+
+        publisher = RunStreamPublisher(_FakeRedis(), uuid.uuid4(), str(uuid.uuid4()))
+        executor = ActionExecutor(None, settings=_StubSettings(), delta_sink=publisher)  # type: ignore[arg-type]
+        monkeypatch.setattr(executor, "_org_openai_key", lambda org_id: _none())
+
+        await getattr(executor, method)(uuid.uuid4(), {})
         assert captured["on_delta"] == publisher.delta
 
     async def _summarize_with(self, monkeypatch, *, delta_sink) -> dict:
@@ -229,15 +273,7 @@ class TestRunnerWiring:
             "api.services.workflow.runner.make_async_openai", lambda settings, key: object()
         )
 
-        class _Settings:
-            openai_summary_model = "gpt-5-nano"
-
-            class openai_api_key:  # noqa: N801 - mimics SecretStr on Settings
-                @staticmethod
-                def get_secret_value() -> str:
-                    return "sk-test"
-
-        executor = ActionExecutor(None, settings=_Settings(), delta_sink=delta_sink)  # type: ignore[arg-type]
+        executor = ActionExecutor(None, settings=_StubSettings(), delta_sink=delta_sink)  # type: ignore[arg-type]
         monkeypatch.setattr(executor, "_org_openai_key", lambda org_id: _none())
         await executor._summarize(uuid.uuid4(), {"text": "some text"})
         return captured

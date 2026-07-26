@@ -16,6 +16,9 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from api.services.llm_stream import stream_json_content
+from api.services.spoken_summary import DeltaSink
+
 # Default rules for the simulator. A workflow author overrides the behaviour per scenario
 # via the node's ``persona``/``scenario``/``objective`` config, keeping the two voices
 # (in-character persona vs. out-of-character coach) cleanly separated.
@@ -76,6 +79,7 @@ async def respond_action(
     grounding: str = "",
     history: list[dict[str, Any]] | None = None,
     system: str | None = None,
+    on_delta: DeltaSink | None = None,
 ) -> dict[str, Any]:
     """Return a structured ``{reply, coach, done}`` simulator turn.
 
@@ -83,6 +87,9 @@ async def respond_action(
     mockable). ``scenario``/``objective``/``grounding``/``history`` are optional context. On a
     malformed model response, falls back to empty ``reply``/``coach`` + ``done=False`` so a
     driving workflow never crashes mid-scenario.
+
+    Pass ``on_delta`` to publish the persona's ``reply`` as it is written — only that
+    field, never the out-of-character coaching. The returned turn is unchanged.
     """
     parts: list[str] = [f"Persona to play:\n{persona}"]
     if scenario:
@@ -100,15 +107,21 @@ async def respond_action(
     )
     user = "\n\n".join(parts)
 
-    response = await client.chat.completions.create(
-        model=model,
-        messages=[
+    request: dict[str, Any] = {
+        "model": model,
+        "messages": [
             {"role": "system", "content": system or DEFAULT_SIMULATION_RULES},
             {"role": "user", "content": user},
         ],
-        response_format={"type": "json_schema", "json_schema": _respond_schema()},
-    )
-    content = response.choices[0].message.content or "{}"
+        "response_format": {"type": "json_schema", "json_schema": _respond_schema()},
+    }
+    if on_delta is not None:
+        # 'reply' is declared first in the schema, so it streams before the
+        # coach tip and the done flag.
+        content = await stream_json_content(client, field="reply", on_delta=on_delta, **request) or "{}"
+    else:
+        response = await client.chat.completions.create(**request)
+        content = response.choices[0].message.content or "{}"
     try:
         parsed = json.loads(content)
     except (TypeError, ValueError):
