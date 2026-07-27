@@ -526,6 +526,33 @@ Helpers: `api/services/openai_client.py`, `brain_api/openai_client.py`, and
 key is not an error — a self-hosted endpoint authenticates nothing — so
 `api_key_required()` gates the "no key configured" failure.
 
+### Self-hosted chat latency is a prompt-cache property
+
+Hosted and self-hosted inference have different cost shapes, and code written for
+the first performs badly on the second. A hosted provider charges per token and
+caches prefixes server-side; a local server charges *time* for every token it
+reads. Chat prompts are append-only — turn N+1 is turn N's conversation plus the
+new exchange — so a local server without a prompt cache re-reads the whole
+conversation each turn. Prompt evaluation, not generation, then dominates: at ~190
+tok/s a long conversation spent ~16s before producing its first token, while the
+retrieval step it was blocking took 4ms.
+
+The consequence for design: **anything that grows a prompt monotonically is a
+latency leak on self-hosted inference**, even where it is nearly free hosted. Two
+rules follow, and both are implemented rather than aspirational:
+
+- The chat server runs with `--cache-reuse` so the unchanged prefix comes from the
+  KV cache (`run-local-llm-stack.sh`; verified by `prompt eval time = 35.96 ms /
+  1 tokens` at `n_past = 1233`). Turn cost is then flat as a conversation grows.
+- Callers send conversation history in a **stable order** and bounded to the
+  server's per-slot context window (`MAX_HISTORY_TURNS` in the chat element). An
+  unstable prefix defeats the cache as surely as having none.
+
+Prompts that are *not* prefix-stable — a step whose input is freshly retrieved
+passages — get no reuse by construction. Making those faster means retrieving
+fewer passages or removing the step, not tuning the cache. Operational detail:
+[DEPLOYMENT.md](DEPLOYMENT.md#prompt-cache-the-single-biggest-chat-latency-setting).
+
 ### Changing the embedding model is a migration, not a config flip
 
 Qdrant collections (`{tenant_id}-chunks`, `{tenant_id}-documents`) and the Neo4j
