@@ -498,6 +498,10 @@ function formatDuration(ms: number): string {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
+/** How many prior turns ride along as conversation memory (see the note at the
+ * call site: this is a prompt-size, and therefore latency, control). */
+const MAX_HISTORY_TURNS = 6;
+
 /** Mint a token naming this turn's live answer stream, or "" where the browser
  * can't (non-secure origins have no `crypto.randomUUID`) — the caller then just
  * runs the workflow without a stream, as it always did. */
@@ -848,11 +852,19 @@ function ChatNode({ el, preview }: { el: ChatElement; preview: boolean }) {
         // loop, so we show a "thinking" indicator and let the user keep typing.
         // The generous timeout is just a backstop against a hung request.
         const inputs: Record<string, unknown> = { text, conversation_id: convId };
-        // Whole-conversation memory: pass every prior turn so the workflow can
+        // Recent-conversation memory: enough prior turns for the workflow to
         // condense a follow-up ("tell me more") into a standalone, context-aware
         // search query. `messages` holds the turns before this one (the just-sent
-        // person message hasn't been polled back yet), which is exactly the history.
+        // person message hasn't been polled back yet).
+        //
+        // CAPPED, and that cap is a latency control, not tidiness: this history is
+        // re-sent on EVERY turn and lands in an LLM prompt, so an uncapped
+        // conversation grows the prompt without bound. A local model evaluates a
+        // prompt at a few hundred tokens/sec, which turned a long chat's answer
+        // into a ~16s wait before the model produced its first token. Resolving
+        // "it"/"that"/"tell me more" only ever needs the last few exchanges.
         const history = messages
+          .slice(-MAX_HISTORY_TURNS)
           .map((m) => {
             const who = String(m[roleField] ?? "") === "person" ? "User" : "Robot";
             const line = String(m[textField] ?? "").trim();
