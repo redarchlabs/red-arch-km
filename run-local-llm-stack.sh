@@ -87,7 +87,13 @@ flags_of() {
     # fails at startup with "failed to allocate compute pp buffers".
     # -np 2 rather than the default 4: fewer slots means a larger KV budget each and a
     # better chance the previous turn's prefix is still cached.
+    # --cache-reuse makes that cached prefix actually pay off. A chat turn's prompt is
+    # append-only — turn N+1 is turn N's history plus the new exchange — so without it
+    # every turn re-evaluates the WHOLE conversation. Prompt eval runs at a few hundred
+    # tok/s here, which is what put ~16s in front of the first generated token on a long
+    # chat; with reuse only the new tail is evaluated.
     chat)  printf '%s\n' -c 16384 -np 2 -ngl 99 -ncmoe "${CHAT_NCMOE:-44}" --jinja \
+             --cache-reuse "${CHAT_CACHE_REUSE:-256}" \
              --chat-template-kwargs '{"enable_thinking":false}' ;;
     embed) printf '%s\n' --embeddings -ngl 99 ;;
   esac
