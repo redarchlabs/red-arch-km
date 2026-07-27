@@ -8,6 +8,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Live answer streaming for workflow-driven chat
+
+- **An LLM step's tokens now reach the browser while the run is still executing.** A chat
+  built on a workflow previously showed nothing until the run finished and its reply record
+  was written. A run may now carry a caller-minted `stream_token`; the step publishes deltas
+  to a Redis channel **namespaced by org** (`wf:stream:{org}:{token}`), and
+  `GET /workflows/runs/live/{token}` relays it as SSE. A subscriber derives the channel from
+  its own request context, so a token known to another org resolves to a channel it can never
+  read.
+- **Opt-in per node** (`"stream": true` in the node config). A chat answer workflow runs
+  several small-LLM steps — condensing a follow-up into a search query, a not-found line, the
+  answer — and streaming all of them painted an internal step's output into the chat: asking
+  "tell me more about space" showed the condense step's restatement of the question as if it
+  were the reply.
+- **Structured actions stream only their spoken field.** `llm_respond`/`llm_decide` return
+  strict JSON, so raw deltas would show `{"reply":"Hel` and leak the fields that are not
+  speech (the out-of-character coach tip, the robot's internal reason). Tokens are assembled
+  and one named field's value-so-far is re-read from the partial document
+  (`api/services/llm_stream.py`); the raw content is still returned intact for parsing.
+- The stream is strictly a **preview** — the run still writes its reply record, which remains
+  the source of truth. No Redis, an older API, or a dropped connection degrades to the
+  previous poll-and-wait behaviour.
+
+### Changed — Self-hosted chat latency: prompt cache, not generation
+
+- **The chat server now runs with `--cache-reuse` (`run-local-llm-stack.sh`, override with
+  `CHAT_CACHE_REUSE`).** A chat turn's prompt is append-only, so without a cache the server
+  re-evaluated the entire conversation every turn — at ~190 tok/s that put ~16s in front of
+  the first generated token, while the retrieval step it blocked took 4ms. With reuse:
+  `prompt eval time = 35.96 ms / 1 tokens` at `n_past = 1233` (1232 reused). Turn cost is now
+  **flat as a conversation grows** — ~3–5s at both 0 and 10 messages of history, against 28s.
+- **The chat element bounds the history it sends** (`MAX_HISTORY_TURNS`). With the cache in
+  place this is a *context-window* budget, not a latency control — the prompt must still fit
+  the server's per-slot window (`-c 16384 -np 2` = 8k per slot).
+- **The saved reply is fetched the moment the run finishes** instead of waiting out the
+  chat element's poll interval, which could leave a finished answer unclaimed for ~1.5s.
+- Documented in [DEPLOYMENT.md](docs/DEPLOYMENT.md#prompt-cache-the-single-biggest-chat-latency-setting),
+  [DEVELOPMENT.md](docs/DEVELOPMENT.md), and [ARCHITECTURE.md §9](docs/ARCHITECTURE.md).
+
 ### Added — Self-hosted inference: chat and embeddings on your own hardware
 
 - **`OPENAI_BASE_URL` / `EMBEDDING_BASE_URL` / `EMBEDDING_DIMENSION`** — point KM2 at any

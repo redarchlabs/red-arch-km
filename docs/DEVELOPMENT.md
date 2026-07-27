@@ -185,7 +185,39 @@ until re-ingested. Switching embedding models is a migration — see
 
 Local inference is markedly slower for bulk work: ingest costs ~5.5 LLM calls per
 chunk (chunk summary + claim extraction), so a large corpus is hours, not minutes.
-Chat/RAG latency is dominated by prompt processing, not generation.
+
+### Chat latency is prompt processing, so the prompt cache matters most
+
+Generation is rarely the problem; **re-reading the prompt** is. A chat turn's prompt
+is append-only (turn N+1 = turn N's conversation + the new exchange), so without a
+cache the server re-evaluates the whole conversation every turn — measured at ~190
+tok/s here, which put ~16s in front of the first generated token on a long chat.
+
+`run-local-llm-stack.sh` therefore starts the chat server with `--cache-reuse 256`:
+the unchanged prefix comes from the KV cache and only the new tail is evaluated.
+Confirm it is working by watching the server log — a reusing turn evaluates almost
+nothing:
+
+```
+prompt eval time = 35.96 ms / 1 tokens     (n_past = 1233)
+```
+
+Turn cost is then flat as the conversation grows (~3–5s at 0 and at 10 messages of
+history, against 28s before). Override with `CHAT_CACHE_REUSE`; see
+[DEPLOYMENT.md](DEPLOYMENT.md#prompt-cache-the-single-biggest-chat-latency-setting)
+for the slot/context trade-offs and what is *not* reusable.
+
+When a chat still feels slow, measure before tuning — attribute the time first:
+
+```bash
+# where did a run's seconds actually go? the API access log has per-request duration
+grep '"path": "/api/workflows' /tmp/km2_api_dev.log | tail -3
+# ...and brain-api's log timestamps show when retrieval actually started
+docker logs km2_brain_api --since <local-time> | grep vector-search
+```
+
+A run whose retrieval starts 15s in is paying prompt eval, not retrieval: the fix is
+cache reuse or a smaller prompt, not a faster vector store.
 
 ## Service ports
 

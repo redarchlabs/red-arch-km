@@ -185,15 +185,34 @@ gates the manual-run trust check (see [Security](#security-invariants)).
 | `send_webhook` | POST `{before, after, ...body}` to a URL (SSRF-guarded) | `url`, `body` |
 | `http_request` | Authenticated HTTP call via a reusable connection (SSRF-guarded) | `connection`, `method`, `path`/`url`, `headers`, `body`, `capture` |
 | `knowledge_search` | Answer from the org knowledge base (hybrid RAG); read-only | `query`, `synthesize` (default true), `use_knowledge_graph`, `folder_tags`/`tags`/`access_keys` scope, `capture` |
-| `summarize` | Compress text to one short spoken line via a small LLM | `text`, `question`, `max_words`, `instruction`, `model` |
-| `llm_decide` | Constrained-LLM step: pick the robot's next move from an enum vocabulary; returns `{say, gesture, mood, done, reason}` | `question`, `context`, `system`, `gestures`, `moods`, `history`, `model`, `capture` |
+| `summarize` | Compress text to one short spoken line via a small LLM | `text`, `question`, `max_words`, `instruction`, `model`, `stream` |
+| `llm_decide` | Constrained-LLM step: pick the robot's next move from an enum vocabulary; returns `{say, gesture, mood, done, reason}` | `question`, `context`, `system`, `gestures`, `moods`, `history`, `model`, `capture`, `stream` |
 | `llm_grade` | Score a free-text answer 0–100 vs a rubric; returns `{score, passed, feedback}` | `answer`, `question`, `rubric`, `pass_threshold` (default 70), `model`, `capture` |
 | `grade_quiz` | Deterministically grade an MCQ assessment server-side; returns `{score, passed, correct, total, answered}` | `assessment_id`, `answers` (`{question_id: choice}` preferred, else positional `a1..aN` inputs), `pass_threshold`, `question_slug`/`assessment_ref`/`order_field`, `capture` |
-| `llm_respond` | Role-play a persona + coach a learner (training simulator); returns `{reply, coach, done}` | `persona`, `scenario`, `objective`, `grounding`, `history`, `user_message`, `model`, `capture` |
+| `llm_respond` | Role-play a persona + coach a learner (training simulator); returns `{reply, coach, done}` | `persona`, `scenario`, `objective`, `grounding`, `history`, `user_message`, `model`, `capture`, `stream` |
 | `log` | No-side-effect breadcrumb (testing/audit) | `message` |
 
 Every handler has a matching `simulate()` that dry-runs without side effects or
 network/DB access, powering the test endpoint (`POST /api/workflows/{id}/versions/{version_id}/test`).
+
+### `stream`: showing an answer while it is still being written
+
+The three LLM actions accept `"stream": true`, which publishes their tokens as they
+are generated so a waiting UI can paint the answer instead of a spinner. The caller
+mints a `stream_token`, subscribes to `GET /workflows/runs/live/{token}`, and passes
+the same token when running the workflow; the channel is namespaced by org, so a
+token known to another org resolves to a channel it can never read.
+
+**It is off by default and must be set on ONE node — the answer.** A chat workflow
+typically runs several LLM steps (condense a follow-up into a search query, produce a
+not-found line, write the answer), and streaming an internal one shows the viewer
+something that was never meant for them: a workflow that streamed its condense step
+echoed the user's own question back as if it were the reply.
+
+For the structured actions only the spoken field is published — `reply` for
+`llm_respond`, `say` for `llm_decide` — never the coach tip or the internal reason.
+Streaming is a preview: the run still records its output as usual, and a caller that
+never subscribes sees no behavioural difference.
 
 The LMS course experience (`grade_quiz`, `llm_grade`, `llm_respond`,
 `knowledge_search`) is documented end-to-end in [LMS.md](LMS.md). `grade_quiz`

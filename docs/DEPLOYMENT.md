@@ -431,6 +431,47 @@ affected orgs and re-ingesting every document. Failure modes are quiet, not loud
 Because collections are per-org, an org already populated at 1536 cannot accept
 768-dim vectors: either give the new corpus its own org, or drop and re-ingest.
 
+### Prompt cache: the single biggest chat-latency setting
+
+Self-hosted chat latency is dominated by **prompt evaluation**, not generation. A
+chat turn's prompt is append-only — turn N+1 is turn N's conversation plus the new
+exchange — so without a prompt cache the server re-reads the entire conversation on
+every turn, and a long chat spends tens of seconds before it emits its first token.
+
+Run the chat server with `--cache-reuse`, which serves the unchanged prefix from the
+KV cache and evaluates only the new tail:
+
+```bash
+llama-server -c 16384 -np 2 --cache-reuse 256 …   # set by run-local-llm-stack.sh
+```
+
+Measured on this stack (Qwen3-30B-A3B, 6 GB card), repeating a 48-message history:
+
+```
+prompt eval time = 35.96 ms / 1 tokens     (n_past = 1233)
+```
+
+1232 tokens reused, one evaluated. In practice this makes turn cost **flat as a
+conversation grows** — ~3–5s at both 0 and 10 messages of history, against 28s for a
+long conversation without it. Tune via `CHAT_CACHE_REUSE` (the minimum reusable chunk
+size; lower reuses more aggressively).
+
+Two things bound how much it can help:
+
+- **Slot count vs. window.** `-np N` divides the context between slots, so `-c 16384
+  -np 2` gives each slot 8k. Slots are matched to requests by prefix, so more slots
+  hold more distinct conversations but each holds less. Two workflow steps with
+  different prompt shapes (a query-condense step and an answer step) will evict each
+  other if there are fewer slots than shapes.
+- **Only stable prefixes are reusable.** A step whose prompt is freshly retrieved
+  passages changes completely each turn and gets no benefit — expect reuse to help
+  conversation-shaped prompts, not RAG-context-shaped ones.
+
+The client side must cooperate: whatever sends the conversation has to send it in a
+**stable order with a stable prefix**, or every turn looks like a new prompt. KM2's
+chat element caps what it sends (`MAX_HISTORY_TURNS`) to keep the prompt inside the
+per-slot window — that cap is a context budget, not a latency control.
+
 ### Still external
 
 Self-hosting the models does not make a deployment fully offline:
