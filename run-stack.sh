@@ -137,12 +137,20 @@ if ! docker ps --format '{{.Names}}' | grep -q '^km2_worker_fixed$'; then
   say "worker…"
   docker start km2_worker_fixed 2>/dev/null || {
     GATEWAY=$(docker network inspect km2_network -f '{{(index .IPAM.Config 0).Gateway}}')
+    # Local-inference mode (./run-local.sh) exports OPENAI_BASE_URL for the HOST api as
+    # 127.0.0.1, which inside a container means the container itself — rewrite it onto the
+    # docker gateway so the worker's LLM actions reach the same llama.cpp chat server as
+    # brain-api. Unset (a plain ./run-stack.sh) ⇒ hosted OpenAI, exactly as before.
+    LLM_ENV=()
+    [ -n "${OPENAI_BASE_URL:-}" ] &&
+      LLM_ENV=(-e "OPENAI_BASE_URL=http://${GATEWAY}:${LOCAL_CHAT_PORT:-8099}/v1")
     docker run -d --name km2_worker_fixed --network km2_network --env-file .env \
       -e CELERY_BROKER_URL=redis://redis:6379/0 \
       -e CELERY_RESULT_BACKEND=redis://redis:6379/1 \
       -e DATABASE_URL="postgresql+asyncpg://redarch:redarch123@postgres:5432/redarch_km" \
       -e BRAIN_API_URL=http://brain-api:8020 \
       -e API_URL="http://${GATEWAY}:8000" \
+      ${LLM_ENV[@]+"${LLM_ENV[@]}"} \
       docker-worker celery -A worker.celery_app worker --loglevel=info --concurrency=4
   }
 fi
