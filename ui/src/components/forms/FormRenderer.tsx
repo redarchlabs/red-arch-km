@@ -498,9 +498,16 @@ function formatDuration(ms: number): string {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
-/** How many prior turns ride along as conversation memory (see the note at the
- * call site: this is a prompt-size, and therefore latency, control). */
-const MAX_HISTORY_TURNS = 6;
+/** How many prior turns ride along as conversation memory.
+ *
+ * Generous, because the model server reuses the KV cache for the unchanged
+ * prefix (`--cache-reuse`, see run-local-llm-stack.sh): a turn only pays to
+ * evaluate the NEW text, so a long history costs roughly what a short one does.
+ * The cap that remains is a CONTEXT budget, not a latency one — the prompt still
+ * has to fit the server's per-slot window (16k context / 2 slots here), and a
+ * conversation that outgrows it would be truncated by the server rather than by
+ * us. ~40 turns of chat sits comfortably inside that. */
+const MAX_HISTORY_TURNS = 40;
 
 /** Mint a token naming this turn's live answer stream, or "" where the browser
  * can't (non-secure origins have no `crypto.randomUUID`) — the caller then just
@@ -857,12 +864,9 @@ function ChatNode({ el, preview }: { el: ChatElement; preview: boolean }) {
         // search query. `messages` holds the turns before this one (the just-sent
         // person message hasn't been polled back yet).
         //
-        // CAPPED, and that cap is a latency control, not tidiness: this history is
-        // re-sent on EVERY turn and lands in an LLM prompt, so an uncapped
-        // conversation grows the prompt without bound. A local model evaluates a
-        // prompt at a few hundred tokens/sec, which turned a long chat's answer
-        // into a ~16s wait before the model produced its first token. Resolving
-        // "it"/"that"/"tell me more" only ever needs the last few exchanges.
+        // Capped to keep the prompt inside the model server's per-slot context —
+        // see MAX_HISTORY_TURNS. Turn cost stays flat as the chat grows because
+        // the server re-uses the cached prefix and only evaluates the new tail.
         const history = messages
           .slice(-MAX_HISTORY_TURNS)
           .map((m) => {
