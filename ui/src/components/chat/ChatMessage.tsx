@@ -69,11 +69,18 @@ function dedupeSources(sources: ChatSource[]): ChatSource[] {
   return [...byKey.values()].map((s, i) => ({ ...s, number: s.number ?? i + 1 }));
 }
 
-/** Citation numbers (`[n]`) in the answer, in the order they first appear. */
-function citedNumbers(text: string): number[] {
+/**
+ * Citation numbers (`[n]`) in the answer, in the order they first appear.
+ *
+ * While the answer is still streaming, a marker that ends at the end of the
+ * text is skipped: `[12]` arrives as `[1` → `[1]` → `[12]`, so trusting it
+ * immediately would flash the wrong source. It is picked up on the next token.
+ */
+function citedNumbers(text: string, streaming = false): number[] {
   const seen = new Set<number>();
   const order: number[] = [];
   for (const match of text.matchAll(/\[(\d+)\]/g)) {
+    if (streaming && match.index + match[0].length === text.length) continue;
     const n = Number(match[1]);
     if (seen.has(n)) continue;
     seen.add(n);
@@ -148,22 +155,22 @@ function linkifyCitations(
 export function ChatMessage({ message }: ChatMessageProps) {
   const isUser = message.role === "user";
   const sources = !isUser && message.sources ? dedupeSources(message.sources) : [];
-  // The Sources footer lists only passages the answer actually cites. While the
-  // answer is still streaming the markers have not all arrived, so the full list
-  // is shown until it settles — otherwise the footer would visibly churn. When a
-  // finished answer carries no usable [n] markers (older persisted messages, or
-  // a model that answered without citing), fall back to listing everything
-  // retrieved rather than hiding provenance entirely.
-  // Sources the answer actually cites, in the order it cites them.
-  const citedSources = citedNumbers(message.content)
+  // The Sources footer lists only passages the answer actually cites, in the
+  // order it cites them — including mid-stream, where the list grows as markers
+  // arrive rather than dumping everything retrieved before a word is written.
+  const citedSources = citedNumbers(message.content, message.streaming)
     .map((n) => sources.find((s) => s.number === n))
     .filter((s): s is ChatSource => s !== undefined);
-  const showCitedOnly = !message.streaming && citedSources.length > 0;
+  // A finished answer with no usable [n] markers (older persisted messages, or
+  // a model that answered without citing) falls back to listing everything
+  // retrieved rather than hiding provenance entirely. A still-streaming answer
+  // gets no fallback: its citations simply have not arrived yet.
+  const showCitedOnly = citedSources.length > 0 || !!message.streaming;
   const listedSources = showCitedOnly ? citedSources : sources;
   // Renumber the kept passages from 1: the backend numbers everything it
   // retrieved, so an answer citing retrieved passages 3 and 4 would otherwise
   // list "[3], [4]" against two sources. Inline markers are relabelled to match.
-  // Numbering is left alone mid-stream, where the set is still changing.
+  // Stable mid-stream because citations are appended in first-appearance order.
   const displayNumbers = new Map(
     listedSources.map((s, i) => [s.number as number, showCitedOnly ? i + 1 : (s.number as number)]),
   );

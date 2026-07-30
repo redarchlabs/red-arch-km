@@ -94,15 +94,17 @@ describe("ChatMessage sources", () => {
     expect(items[1]).toHaveTextContent("Document 3");
   });
 
-  it("leaves numbering alone while streaming", () => {
+  it("renumbers from 1 while streaming too", () => {
     const sources = [1, 2, 3].map((n) => source(n));
     render(
       <ChatMessage
-        message={{ id: "m1", role: "assistant", content: "Cited [3]", sources, streaming: true }}
+        message={{ id: "m1", role: "assistant", content: "Cited [3] already", sources, streaming: true }}
       />,
     );
 
-    expect(screen.getAllByRole("link", { name: "[3]" }).length).toBeGreaterThan(0);
+    const links = screen.getAllByRole("link", { name: "[1]" });
+    expect(links[0]).toHaveAttribute("href", "/documents/doc-key-3#chunk-3");
+    expect(screen.queryByRole("link", { name: "[3]" })).not.toBeInTheDocument();
   });
 
   it("still renders inline citation links for cited sources", () => {
@@ -115,17 +117,50 @@ describe("ChatMessage sources", () => {
     expect(links[0]).toHaveAttribute("href", "/documents/doc-key-2#chunk-2");
   });
 
-  it("lists all sources while the answer is still streaming", () => {
+  it("lists only the cited sources while the answer is still streaming", () => {
     const sources = [1, 2, 3].map((n) => source(n));
     render(
       <ChatMessage
-        message={{ id: "m1", role: "assistant", content: "Partial answer [1]", sources, streaming: true }}
+        message={{
+          id: "m1",
+          role: "assistant",
+          content: "Partial answer [2] so far",
+          sources,
+          streaming: true,
+        }}
       />,
     );
 
-    expect(screen.getByText("Document 1")).toBeInTheDocument();
     expect(screen.getByText("Document 2")).toBeInTheDocument();
-    expect(screen.getByText("Document 3")).toBeInTheDocument();
+    expect(screen.queryByText("Document 1")).not.toBeInTheDocument();
+    expect(screen.queryByText("Document 3")).not.toBeInTheDocument();
+  });
+
+  it("lists no sources before the streaming answer has cited anything", () => {
+    const sources = [1, 2, 3].map((n) => source(n));
+    render(
+      <ChatMessage
+        message={{ id: "m1", role: "assistant", content: "Partial answer", sources, streaming: true }}
+      />,
+    );
+
+    expect(screen.queryByText("Sources")).not.toBeInTheDocument();
+    for (const n of [1, 2, 3]) {
+      expect(screen.queryByText(`Document ${n}`)).not.toBeInTheDocument();
+    }
+  });
+
+  it("waits for a half-streamed marker to finish before listing its source", () => {
+    const sources = [1, 12].map((n) => source(n));
+    // "[12]" arrives as "[1]" first; trusting it would flash the wrong source.
+    render(
+      <ChatMessage
+        message={{ id: "m1", role: "assistant", content: "Answer [1]", sources, streaming: true }}
+      />,
+    );
+
+    expect(screen.queryByText("Document 1")).not.toBeInTheDocument();
+    expect(screen.queryByText("Document 12")).not.toBeInTheDocument();
   });
 });
 
