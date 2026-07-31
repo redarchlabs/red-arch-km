@@ -2,10 +2,19 @@
 #
 # run-local-llm-stack.sh — run KM2's inference stack locally, with no third-party calls.
 #
-# Serves two llama.cpp servers behind OpenAI-compatible APIs:
+# Serves four llama.cpp servers behind OpenAI-compatible APIs:
 #
 #   chat   :8099   Qwen3-30B-A3B      chat completions + tool calling
 #   embed  :8098   nomic-embed-text   embeddings (retrieval, ingest, fact store)
+#   fast   :8097   Qwen3-4B-Instruct  short generation-bound calls (spoken answers)
+#   rerank :8096   bge-reranker-v2-m3 cross-encoder re-scoring of retrieved passages
+#
+# The `fast` server exists because latency on the big model is GENERATION-bound, not
+# prompt-bound: measured ~8.5 tok/s on Qwen3-30B here, so a detailed 70-word spoken
+# answer costs ~13s no matter how well the prompt caches. Condensing already-retrieved
+# passages into one spoken reply does not need a 30B model, and a 4B one generates it
+# several times faster. KM2 picks per call via OPENAI_MODEL_ROUTES (model id → endpoint),
+# surfaced as the chat element's answer-model dropdown.
 #
 # TWO servers because one llama.cpp process cannot do both: a server started for chat
 # answers /v1/embeddings with "501 This server does not support embeddings", and
@@ -14,15 +23,15 @@
 # explicitly so the SDK's own OPENAI_BASE_URL env-var fallback can never silently
 # redirect a call to the wrong server.
 #
-#   ./run-local-llm-stack.sh start           # both servers
-#   ./run-local-llm-stack.sh start chat      # just one
+#   ./run-local-llm-stack.sh start           # all servers
+#   ./run-local-llm-stack.sh start chat      # just one (chat|embed|fast|rerank)
 #   ./run-local-llm-stack.sh status          # health, model, VRAM, requests served
 #   ./run-local-llm-stack.sh test            # real round-trip against both
 #   ./run-local-llm-stack.sh env             # the settings to hand KM2
 #   ./run-local-llm-stack.sh logs chat       # follow a log
 #   ./run-local-llm-stack.sh models          # list .gguf files
 #   ./run-local-llm-stack.sh setup           # print one-time build/download commands
-#   ./run-local-llm-stack.sh stop | restart [chat|embed]
+#   ./run-local-llm-stack.sh stop | restart [chat|embed|fast|rerank]
 #
 # This script is versioned here, but what it drives is NOT: the llama.cpp build and the
 # .gguf weights are tens of gigabytes and live outside the repo in $LLM_LAB
@@ -43,6 +52,11 @@
 #                    model fit a 6 GB card (~2.8 GB VRAM, leaving room for the embedder)
 #   -c 16384         KM2 sends 50 tool schemas ≈ 8.7k tokens; at -c 8192 every agent request 400s
 #   --jinja          REQUIRED for tool calling — without it the model never emits tool_calls
+#   --spec-type      speculative decoding, OFF by default — measured slower here in all three
+#                    modes (see SPEC_TYPE below). Warm generation is ~23 tok/s, so a 70-word
+#                    spoken answer is ~4s of generation; the latency that remains is the COLD
+#                    prefill of a new context (~220 tok/s), which prompt-prefix caching, not
+#                    speculation, is what fixes
 #   enable_thinking  off: Qwen3 otherwise emits reasoning blocks that KM2 renders as speech
 
 set -euo pipefail
@@ -55,8 +69,55 @@ START_TIMEOUT="${START_TIMEOUT:-300}"
 
 CHAT_PORT="${CHAT_PORT:-8099}"
 EMBED_PORT="${EMBED_PORT:-8098}"
+FAST_PORT="${FAST_PORT:-8097}"
+RERANK_PORT="${RERANK_PORT:-8096}"
 CHAT_MODEL="${CHAT_MODEL:-Qwen3-30B-A3B-Q4_K_M.gguf}"
+# --- speculative decoding (chat server) ---------------------------------------------------
+# GENERATION is the wall on this box: ~8.5 tok/s, so a detailed 70-word spoken answer spends
+# ~11s producing tokens. Speculation proposes several tokens at once and lets the 30B verify
+# them in ONE forward pass. Output is bit-identical to running the 30B alone — a throughput
+# trick, not a quality trade.
+#
+# MEASURED HERE (30 Jul 2026, warm KV prefix, 121 generated tokens over 3 questions), and the
+# answer was NO — every mode is slower than plain decoding on this box:
+#
+#   none          5.26s   23.0 tok/s     <-- default
+#   ngram-mod     5.91s   20.5 tok/s
+#   ngram-simple  6.85s   17.7 tok/s
+#   draft-simple 12.75s    9.5 tok/s     (0.6B draft, q4 KV, -ngld 99)
+#
+# The premise of speculation is that verifying k proposed tokens costs about what generating one
+# does. That holds when the weights are on the GPU. It does NOT hold for a MoE whose experts sit
+# in system RAM (-ncmoe 44): verifying a batch touches those CPU-side experts for every proposed
+# position, so a rejected run costs real time and even an accepted one saves little — and the
+# draft model competes for the same CPU and the same 6 GB card. Left wired, defaulting to off:
+# on a machine that fits the whole model in VRAM this is one env var away.
+#
+# SPEC_TYPE picks the source of the proposals:
+#   ngram-mod / ngram-simple  proposals are looked up in the PROMPT — no draft model, no extra
+#                             VRAM, which is what makes it viable on a 6 GB card that already
+#                             holds the 30B. Suited to this workload: a grounded answer quotes
+#                             names, numbers and registries straight out of the passages.
+#   draft-simple              a small model drafts. Needs its weights AND its KV cache in VRAM
+#                             (the draft inherits -c 16384; at f16 that KV alone asked for
+#                             1.8 GB and failed to allocate here — hence the q4 draft KV below).
+#   none                      plain decoding.
+SPEC_TYPE="${SPEC_TYPE:-none}"
+# Draft model, used only by the draft-* types. Must share the target's tokenizer — both Qwen3,
+# so the vocabularies match.
+DRAFT_MODEL="${DRAFT_MODEL-Qwen3-0.6B-Q4_K_M.gguf}"
+DRAFT_NGL="${DRAFT_NGL:-99}"
+# Quantised draft KV: the difference between the draft fitting the leftover VRAM and not.
+DRAFT_KV="${DRAFT_KV:-q4_0}"
+# Tokens proposed per step. Higher wins more on predictable text and wastes more when the
+# proposal is wrong.
+DRAFT_N_MAX="${DRAFT_N_MAX:-5}"
 EMBED_MODEL="${EMBED_MODEL:-nomic-embed-text-v1.5.Q8_0.gguf}"
+FAST_MODEL="${FAST_MODEL:-Qwen3-4B-Instruct-2507-Q4_K_M.gguf}"
+# The model id KM2 asks for when it wants the fast server. llama.cpp ignores the
+# requested name (it serves what it loaded), so this is purely the routing key that
+# must match OPENAI_MODEL_ROUTES and the chat element's answer-model list.
+FAST_MODEL_NAME="${FAST_MODEL_NAME:-qwen3-4b-fast}"
 # Reported to KM2 as OPENAI_EMBEDDING_MODEL. llama.cpp ignores the requested model name
 # (it serves whatever was loaded), but KM2 records it, so keep it human-readable rather
 # than deriving it from the quantised filename.
@@ -65,15 +126,36 @@ EMBED_MODEL_NAME="${EMBED_MODEL_NAME:-nomic-embed-text-v1.5}"
 # width off a real response rather than trusting this number.
 EMBED_DIM="${EMBED_DIM:-768}"
 
-ALL_SERVERS=(chat embed)
+# --- reranking ------------------------------------------------------------------------
+# A cross-encoder that scores (query, passage) PAIRS, which is the thing dense retrieval
+# structurally cannot do: the embedder encodes query and passage separately, so it ranks
+# on topical similarity and misses paraphrase. Measured on this box's Robots org — asked
+# "how many people can each ship handle", dense top-5 returned a booking FAQ about crew
+# limits and the fleet document's INTRO, while the per-ship sections holding the actual
+# answer ("**Standard Crew Complement:** 5,500 officers and crew") ranked nowhere in the
+# top 10. Reranking re-scores a wider shortlist (RERANK_CANDIDATES, default 30) so those
+# passages can be promoted into the prompt.
+#
+# bge-reranker-v2-m3 is 568M params — small next to the 30B, and it runs once per query
+# over ~30 short passages. Q8_0 (~640 MB) rather than a smaller quant: ranking quality is
+# the entire product here, and the file is small enough that the saving is not worth it.
+#
+# ⚠ VRAM on a 6 GB card is already tight (chat ~4.5 GB at -ncmoe 44, plus the embedder).
+# RERANK_NGL=0 moves the reranker to CPU if it fails to allocate; raising CHAT_NCMOE or
+# shrinking the chat model frees room to keep it on the GPU.
+RERANK_MODEL="${RERANK_MODEL:-bge-reranker-v2-m3-Q8_0.gguf}"
+RERANK_MODEL_NAME="${RERANK_MODEL_NAME:-bge-reranker-v2-m3}"
+RERANK_NGL="${RERANK_NGL:-99}"
+
+ALL_SERVERS=(chat embed fast rerank)
 
 red()  { printf '\033[31m%s\033[0m\n' "$*"; }
 grn()  { printf '\033[32m%s\033[0m\n' "$*"; }
 dim()  { printf '\033[2m%s\033[0m\n' "$*"; }
 die()  { red "error: $*" >&2; exit 1; }
 
-port_of()    { case "$1" in chat) echo "$CHAT_PORT";; embed) echo "$EMBED_PORT";; esac; }
-model_of()   { case "$1" in chat) echo "$CHAT_MODEL";; embed) echo "$EMBED_MODEL";; esac; }
+port_of()    { case "$1" in chat) echo "$CHAT_PORT";; embed) echo "$EMBED_PORT";; fast) echo "$FAST_PORT";; rerank) echo "$RERANK_PORT";; esac; }
+model_of()   { case "$1" in chat) echo "$CHAT_MODEL";; embed) echo "$EMBED_MODEL";; fast) echo "$FAST_MODEL";; rerank) echo "$RERANK_MODEL";; esac; }
 logfile_of() { echo "$LAB/llama-$1.log"; }
 pidfile_of() { echo "$LAB/llama-$1.pid"; }
 
@@ -92,10 +174,70 @@ flags_of() {
     # every turn re-evaluates the WHOLE conversation. Prompt eval runs at a few hundred
     # tok/s here, which is what put ~16s in front of the first generated token on a long
     # chat; with reuse only the new tail is evaluated.
+    # -ub sizes the PREFILL batch — how many prompt tokens are evaluated per pass.
+    # llama.cpp defaults to 512, which badly under-uses the card on a RAG prompt.
+    # MEASURED here (31 Jul 2026, 2.5k-token RAG prompt, 3 cold runs each — every run
+    # led with a unique nonce so --cache-reuse could not serve the prefix and flatter
+    # the number):
+    #
+    #   -ub 512   300 tok/s   8.53s prefill      <- llama.cpp default
+    #   -ub 1024  458 tok/s   5.64s
+    #   -ub 2048  641 tok/s   4.01s              <- 2.1x, and what KM2 now runs
+    #
+    # Generation was FLAT across all three (25.8 / 26.8 / 28.5 tok/s), which is the
+    # expected result and worth stating: prefill evaluates many tokens in one batch and
+    # is compute-bound, decode produces one token at a time and is memory-bandwidth-
+    # bound. -b/-ub cannot touch decode. Only -ncmoe — expert weights on the card
+    # instead of in system RAM — moves that number.
+    #
+    # And the two COMPETE for the same 6 GB: -ub 2048's compute buffers are what make
+    # -ncmoe 43 fail with "CUDA error: out of memory" (44 is already the floor at
+    # -ub 512). The batch wins that trade by a wide margin — 4.5s of prefill against
+    # the ~2% one more expert layer would give decode.
     chat)  printf '%s\n' -c 16384 -np 2 -ngl 99 -ncmoe "${CHAT_NCMOE:-44}" --jinja \
+             -b "${CHAT_BATCH:-2048}" -ub "${CHAT_UBATCH:-2048}" \
+             --cache-reuse "${CHAT_CACHE_REUSE:-256}" \
+             --chat-template-kwargs '{"enable_thinking":false}'
+           # Appended separately so that SPEC_TYPE=none emits nothing at all: llama-server
+           # rejects an empty --spec-type/-md rather than ignoring it.
+           if [[ "$SPEC_TYPE" != "none" ]]; then
+             printf '%s\n' --spec-type "$SPEC_TYPE" --spec-draft-n-max "$DRAFT_N_MAX"
+             # Only the draft-* types need a model; the ngram ones read the prompt.
+             if [[ "$SPEC_TYPE" == draft-* && -n "$DRAFT_MODEL" && -f "$MODEL_DIR/$DRAFT_MODEL" ]]; then
+               printf '%s\n' -md "$MODEL_DIR/$DRAFT_MODEL" -ngld "$DRAFT_NGL" \
+                 -ctkd "$DRAFT_KV" -ctvd "$DRAFT_KV"
+             fi
+           fi
+           : ;;
+    # -ub/-b sized to the model's context, NOT left at the default. In embeddings mode
+    # llama.cpp clamps n_batch down to n_ubatch (512 by default) and then REJECTS any single
+    # input longer than that with a 500: "input (557 tokens) is too large to process. increase
+    # the physical batch size". A non-causal embedder has to see the whole sequence in one
+    # ubatch, so this is a hard floor, not a throughput knob. It bit 3 of the Robots org's 49
+    # documents — chunks are cut to 500 *tiktoken* tokens, and nomic's tokenizer makes more of
+    # them from the same text, so anything near the limit failed and those documents were
+    # silently absent from retrieval (status FAILED, no vectors).
+    embed) printf '%s\n' --embeddings -ngl 99 -b "${EMBED_BATCH:-2048}" -ub "${EMBED_BATCH:-2048}" ;;
+    # A dense 4B at Q4 is ~2.5 GB of weights, which does NOT fit beside the 30B's 4.3 GB
+    # on a 6 GB card, so FAST_NGL defaults to 0 (CPU).
+    #
+    # MEASURED, and counter-intuitive: CPU-only, this 4B is SLOWER than the 30B MoE on the
+    # GPU (28.4s vs 6.1s on the same 8.4 KB spoken-answer prompt) — the MoE activates only
+    # ~3B params per token and has its attention layers on the card, which beats a dense 4B
+    # on CPU. Partial offload needs KV room too: FAST_NGL=11 with the default -c 8192 dies
+    # in "failed to allocate buffer for kv cache", hence FAST_CTX. Only worth enabling if
+    # you free real VRAM (a smaller chat model, --cpu-moe, or a second card).
+    # Same --cache-reuse rationale as chat: retrieved passages lead the prompt and repeat.
+    fast)  printf '%s\n' -c "${FAST_CTX:-8192}" -np 2 -ngl "${FAST_NGL:-0}" --jinja \
              --cache-reuse "${CHAT_CACHE_REUSE:-256}" \
              --chat-template-kwargs '{"enable_thinking":false}' ;;
-    embed) printf '%s\n' --embeddings -ngl 99 ;;
+    # --reranking turns on the /v1/rerank endpoint and puts the model in RANK pooling.
+    # -b/-ub sized up for the SAME reason as the embedder, and it is the same class of
+    # bug: a reranker is a non-causal BERT that has to see each (query, passage) pair in
+    # one ubatch, so at the 512 default any pair longer than that comes back a 500 —
+    # which would look like "reranking randomly drops passages" rather than an error.
+    rerank) printf '%s\n' --reranking -ngl "$RERANK_NGL" -c "${RERANK_CTX:-8192}" \
+              -b "${RERANK_BATCH:-4096}" -ub "${RERANK_BATCH:-4096}" ;;
   esac
 }
 
@@ -103,8 +245,8 @@ resolve_targets() {
   local t="${1:-all}"
   case "$t" in
     all|"") printf '%s\n' "${ALL_SERVERS[@]}" ;;
-    chat|embed) echo "$t" ;;
-    *) die "unknown server '$t' (expected: chat, embed, all)" ;;
+    chat|embed|fast|rerank) echo "$t" ;;
+    *) die "unknown server '$t' (expected: chat, embed, fast, rerank, all)" ;;
   esac
 }
 
@@ -228,6 +370,7 @@ cmd_env() {
   echo
   echo "  host processes (uvicorn):"
   echo "    OPENAI_BASE_URL=http://127.0.0.1:$CHAT_PORT/v1"
+  echo "    OPENAI_MODEL_ROUTES=$FAST_MODEL_NAME=http://127.0.0.1:$FAST_PORT/v1"
   echo
   if [[ -n "$gw" ]]; then
     echo "  docker containers (brain-api):"
@@ -235,6 +378,8 @@ cmd_env() {
     echo "    EMBEDDING_BASE_URL=http://$gw:$EMBED_PORT/v1"
     echo "    OPENAI_EMBEDDING_MODEL=$EMBED_MODEL_NAME"
     echo "    EMBEDDING_DIMENSION=$EMBED_DIM"
+    echo "    RERANK_BASE_URL=http://$gw:$RERANK_PORT/v1"
+    echo "    RERANK_MODEL=$RERANK_MODEL_NAME"
   else
     dim "  (docker network '$DOCKER_NET' not found — start the KM2 stack for container URLs)"
   fi
@@ -272,7 +417,29 @@ cmd_test() {
     fi
   } || { red "embed: not responding on :$EMBED_PORT"; ok=1; }
 
-  [[ $ok -eq 0 ]] && grn "both servers OK"
+  healthy rerank && {
+    dim "rerank: scoring two passages..."
+    # A real relevance judgement, not just a 200: the crew-complement passage must beat
+    # the unrelated one. This is the exact failure the reranker was added to fix, so the
+    # test asserts the ORDER rather than trusting that the endpoint responded.
+    local winner
+    winner=$(curl -sf -m 60 "http://127.0.0.1:$RERANK_PORT/v1/rerank" \
+      -H 'Content-Type: application/json' \
+      -d '{"model":"local","query":"how many people can each ship handle","documents":[
+           "The gift shop opens at 9am and sells uniforms, patches and freeze-dried ice cream.",
+           "USS Magellan — Atlas Class Carrier. Standard Crew Complement: 5,500 officers and crew."]}' \
+      | python3 -c 'import json,sys; r=json.load(sys.stdin)["results"]; print(max(r, key=lambda x: x.get("relevance_score", x.get("score", 0)))["index"])') \
+      || { red "  rerank request FAILED"; ok=1; }
+    if [[ -n "${winner:-}" ]]; then
+      if [[ "$winner" == "1" ]]; then
+        grn "  ranked the crew-complement passage first"
+      else
+        red "  WRONG passage ranked first (index $winner) — check the model is a reranker"; ok=1
+      fi
+    fi
+  } || { red "rerank: not responding on :$RERANK_PORT"; ok=1; }
+
+  [[ $ok -eq 0 ]] && grn "all servers OK"
   return $ok
 }
 
@@ -305,7 +472,14 @@ One-time setup of \$LLM_LAB ($LAB). Requires cmake, a CUDA toolkit, and ~25 GB f
   # 3. embeddings — nomic-embed-text-v1.5, 768-dim. ~140 MB.
   curl -L -O https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF/resolve/main/$EMBED_MODEL
 
-  # 4. verify
+  # 4. fast — Qwen3-4B-Instruct for short spoken answers. ~2.5 GB. (Qwen's own GGUF repo
+  #    for this one 401s; the unsloth mirror carries the identical Q4_K_M file.)
+  curl -L -O https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF/resolve/main/$FAST_MODEL
+
+  # 5. rerank — bge-reranker-v2-m3, a 568M cross-encoder. ~640 MB.
+  curl -L -O https://huggingface.co/gpustack/bge-reranker-v2-m3-GGUF/resolve/main/$RERANK_MODEL
+
+  # 6. verify
   nvidia-smi && $0 start && $0 test
 SETUP
 }

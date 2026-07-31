@@ -45,6 +45,10 @@ say() { printf '\033[1;36m[stack]\033[0m %s\n' "$*"; }
 
 api_up() { curl -sf -m 2 http://localhost:8000/healthz >/dev/null 2>&1; }
 ui_up()  { curl -sf -m 2 -o /dev/null http://localhost:3000/login 2>/dev/null; }
+# brain-api warms the query path (one embedding + one chat completion) before it
+# binds :8020. Against local llama.cpp that is ~10s, well past the point where
+# next dev answers — so it has to be waited on, not just probed once.
+brain_up() { curl -sf -m 2 http://localhost:8020/healthz >/dev/null 2>&1; }
 
 # Free the given TCP port by killing whatever LISTENs on it (this stack owns
 # :8000 and :3000). TERM first, then KILL if it clings.
@@ -191,8 +195,8 @@ say "ui…"
 
 # --- 6. wait + report -----------------------------------------------------------
 say "waiting for health…"
-for _ in $(seq 1 30); do
-  api_up && ui_up && break
+for _ in $(seq 1 60); do
+  api_up && ui_up && brain_up && break
   sleep 1
 done
 
@@ -200,7 +204,7 @@ status() { if eval "$2"; then echo "  ✅ $1"; else echo "  ❌ $1  (log: $3)"; 
 echo
 status "api        http://localhost:8000" api_up "$API_LOG"
 status "ui         http://localhost:3000" ui_up "$UI_LOG"
-status "brain-api  http://localhost:8020" "curl -sf -m 2 http://localhost:8020/healthz >/dev/null" "docker logs km2_brain_api"
+status "brain-api  http://localhost:8020" brain_up "docker logs km2_brain_api"
 status "mailpit    http://localhost:8025" "curl -sf -m 2 -o /dev/null http://localhost:8025" "docker logs km2_mailpit"
 status "worker" "docker ps --format '{{.Names}}' | grep -q km2_worker_fixed" "docker logs km2_worker_fixed"
 status "beat" "docker ps --format '{{.Names}}' | grep -q km2_beat" "docker logs km2_beat"

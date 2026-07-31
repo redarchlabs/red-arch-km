@@ -7,6 +7,7 @@ import time
 from collections.abc import Iterator
 from typing import Any, cast
 
+from brain_sdk.reranking.protocol import Reranker
 from openai.types.chat import ChatCompletionMessageParam
 from shared_config import get_tracer
 
@@ -44,6 +45,23 @@ respond naturally to greetings and questions about how to use this assistant.
 # Long enough to show the sentence a citation came from, short enough to keep
 # the sources list compact and the SSE payload small.
 _SNIPPET_MAX_CHARS = 240
+
+# --- same-document expansion -------------------------------------------- #
+# Dense top-k ranks a passage that *describes* something above the passage that
+# *contains* it: "what are the names of all six ships" matches the section
+# introducing the fleet, while the table listing the six names ranks ~37th. So
+# after ranking, the best-scoring document's remaining chunks are pulled in as
+# context even though they didn't rank on their own.
+#
+# How many top-ranked documents get expanded. One keeps the added context tightly
+# focused on the single best match; raising this dilutes the prompt fast.
+_EXPAND_TOP_DOCS = 1
+# Character budget for ADDED sibling text (~1.5k tokens). A typical KB article
+# fits whole; a long one contributes its opening sections and stops.
+_EXPAND_CHAR_BUDGET = 6000
+# Hard cap on siblings fetched per document, so a pathologically chunked
+# document can't turn one query into a huge scroll.
+_EXPAND_MAX_CHUNKS = 40
 
 
 def _snippet(text: str, max_chars: int = _SNIPPET_MAX_CHARS) -> str:
@@ -115,27 +133,42 @@ class SearchService:
         access_keys: list[int] | None = None,
         tags: list[str] | None = None,
         folder_tags: list[str] | None = None,
+        expand_documents: bool = True,
     ) -> dict[str, Any]:
         """Semantic search over chunk vectors.
 
         ``tags`` are ANDed (every one required). ``folder_tags`` are ORed among
         themselves (the doc must carry at least one) — used to scope retrieval
         to a set of folders without excluding docs that only match one of them.
+
+        ``expand_documents`` (default on) additionally pulls the top-ranked
+        document's other chunks in reading order — see
+        :meth:`_expand_top_documents`. Pass ``False`` for a pure ranked-hits
+        view (e.g. relevance debugging).
+
+        When a reranker is configured, a wider shortlist is fetched from the
+        vector store and re-scored down to ``limit`` before expansion — see
+        :meth:`_rerank_hits`. Expansion then follows the *reranked* leader, which
+        is the point: it is what puts the answering document in the prompt.
         """
         metrics = get_metrics()
         start = time.perf_counter()
         status = "success"
+        reranker = self._stores.reranker
+        # Over-fetch only when something will re-score it; otherwise the vector
+        # store sees exactly the request it always saw.
+        fetch = max(limit, self._settings.rerank_candidates) if reranker else limit
 
         try:
             with _tracer.start_as_current_span(
                 "vector_search",
-                attributes={"tenant_id": tenant_id, "limit": limit},
+                attributes={"tenant_id": tenant_id, "limit": limit, "candidates": fetch},
             ):
                 query_vector = self._stores.embedder.embed(query)
                 results = self._stores.vector.search(
                     tenant_id=tenant_id,
                     query_vector=query_vector,
-                    limit=limit,
+                    limit=fetch,
                     access_keys=access_keys,
                     required_tags=tags,
                     any_tags=folder_tags,
@@ -150,10 +183,134 @@ class SearchService:
                 (time.perf_counter() - start) * 1000,
                 {"tenant_id": tenant_id, "status": status},
             )
-        return {
-            "hits": [{"id": r.id, "score": r.score, "payload": r.payload} for r in results],
-            "total": len(results),
-        }
+        hits = [{"id": r.id, "score": r.score, "payload": r.payload} for r in results]
+        if reranker is not None:
+            hits = self._rerank_hits(reranker, query, hits, limit)
+        if expand_documents:
+            hits = self._expand_top_documents(
+                tenant_id,
+                hits,
+                access_keys=access_keys,
+                tags=tags,
+                folder_tags=folder_tags,
+            )
+        return {"hits": hits, "total": len(hits)}
+
+    def _resolve_chunk_limit(self, chunk_limit: int | None) -> int:
+        """How many ranked passages ground an answer: the caller's value, else config.
+
+        Kept as a resolve-at-call-time lookup rather than a signature default so the
+        two chat entry points cannot drift apart, and so the setting can be changed
+        without touching either one.
+        """
+        return chunk_limit if chunk_limit is not None else self._settings.chat_chunk_limit
+
+    def _rerank_hits(
+        self,
+        reranker: Reranker,
+        query: str,
+        hits: list[dict[str, Any]],
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        """Re-score the dense shortlist with a cross-encoder; keep the best ``limit``.
+
+        Dense retrieval embeds query and passage independently, so it ranks by
+        topical similarity and cannot see that "how many people can each ship
+        handle" is answered by "**Standard Crew Complement:** 5,500 officers and
+        crew" — no shared vocabulary, not near neighbours. Those passages sat
+        outside the top 5 while a booking FAQ about crew limits sat inside it. A
+        cross-encoder reads query and passage together and scores that pair.
+
+        The dense score is kept as ``dense_score`` so the two rankings can be
+        compared when debugging relevance; ``score`` becomes the rerank score,
+        which is what every downstream consumer orders by.
+
+        Never raises: a reranker that is down, slow, or misconfigured degrades to
+        the dense top-``limit`` — the exact behaviour from before it existed.
+        """
+        if not hits:
+            return hits
+
+        start = time.perf_counter()
+        try:
+            with _tracer.start_as_current_span("rerank", attributes={"candidates": len(hits), "top_n": limit}):
+                ranked = reranker.rerank(query, [h["payload"].get("text", "") for h in hits], top_n=limit)
+        except Exception as e:  # noqa: BLE001 - reranking is an enhancement
+            logger.warning("Rerank failed (%s); falling back to dense order", e)
+            return hits[:limit]
+
+        out = [{**hits[r.index], "score": r.score, "dense_score": hits[r.index]["score"]} for r in ranked[:limit]]
+        logger.debug(
+            "Reranked %d candidates to %d in %.0fms",
+            len(hits),
+            len(out),
+            (time.perf_counter() - start) * 1000,
+        )
+        # An empty result would silently answer from no context at all; the dense
+        # order is a far better failure mode than none.
+        return out or hits[:limit]
+
+    def _expand_top_documents(
+        self,
+        tenant_id: str,
+        hits: list[dict[str, Any]],
+        *,
+        access_keys: list[int] | None,
+        tags: list[str] | None,
+        folder_tags: list[str] | None,
+    ) -> list[dict[str, Any]]:
+        """Add the best-ranked document's un-retrieved chunks after its top hit.
+
+        Retrieval scores one passage at a time, so an answer spread across a
+        document's sibling sections — a table of names, a spec list, the rest of a
+        procedure — is invisible to top-k even when the document itself ranks
+        first. Reading that whole document costs a fraction of the prompt and
+        turns "I don't know" into an answer.
+
+        Siblings are inserted directly after the hit that pulled them in, in
+        ``chunk_order``, so the document reads contiguously and the surrounding
+        ranked passages keep their relative order (citation numbers stay aligned
+        because sources and context blocks both enumerate this one list). They
+        carry ``expanded: True`` and score 0.0 — they were not vector matches.
+
+        Never raises: expansion is an enhancement, so a failing scroll degrades
+        to the plain ranked hits.
+        """
+        seen_ids = {hit.get("id") for hit in hits}
+        expanded_docs: set[str] = set()
+        out: list[dict[str, Any]] = []
+
+        for hit in hits:
+            out.append(hit)
+            doc_key = str(hit.get("payload", {}).get("document_key") or "")
+            if not doc_key or doc_key in expanded_docs or len(expanded_docs) >= _EXPAND_TOP_DOCS:
+                continue
+            expanded_docs.add(doc_key)
+            try:
+                siblings = self._stores.vector.list_document_chunks(
+                    tenant_id=tenant_id,
+                    document_key=doc_key,
+                    limit=_EXPAND_MAX_CHUNKS,
+                    access_keys=access_keys,
+                    required_tags=tags,
+                    any_tags=folder_tags,
+                )
+            except Exception as e:  # noqa: BLE001 - context enrichment must not fail a search
+                logger.warning("Document expansion failed for %s: %s", doc_key, e)
+                continue
+
+            budget = _EXPAND_CHAR_BUDGET
+            for sibling in siblings:
+                if sibling.id in seen_ids:
+                    continue
+                text = sibling.payload.get("text", "")
+                if len(text) > budget:
+                    break
+                budget -= len(text)
+                seen_ids.add(sibling.id)
+                out.append({"id": sibling.id, "score": 0.0, "payload": sibling.payload, "expanded": True})
+
+        return out
 
     def vector_chat(
         self,
@@ -165,17 +322,24 @@ class SearchService:
         tags: list[str] | None = None,
         folder_tags: list[str] | None = None,
         use_knowledge_graph: bool = True,
-        chunk_limit: int = 5,
+        chunk_limit: int | None = None,
+        expand_documents: bool = True,
     ) -> dict[str, Any]:
-        """Hybrid RAG: vector retrieval + optional graph context → LLM synthesis."""
+        """Hybrid RAG: vector retrieval + optional graph context → LLM synthesis.
+
+        ``chunk_limit`` defaults to the configured ``CHAT_CHUNK_LIMIT``; an explicit
+        value still wins, which is what makes A/B-ing the limit possible without a
+        redeploy.
+        """
         # 1. Vector retrieval
         vector_result = self.vector_search(
             tenant_id=tenant_id,
             query=query,
-            limit=chunk_limit,
+            limit=self._resolve_chunk_limit(chunk_limit),
             access_keys=access_keys,
             tags=tags,
             folder_tags=folder_tags,
+            expand_documents=expand_documents,
         )
         hits = vector_result["hits"]
 
@@ -229,22 +393,27 @@ class SearchService:
         tags: list[str] | None = None,
         folder_tags: list[str] | None = None,
         use_knowledge_graph: bool = True,
-        chunk_limit: int = 5,
+        chunk_limit: int | None = None,
+        expand_documents: bool = True,
     ) -> Iterator[dict[str, Any]]:
         """Streaming hybrid RAG chat.
 
         Yields event dicts with `type` in {"sources", "graph", "delta", "done", "error"}.
         The caller is responsible for serialising events to the wire format (e.g. SSE).
+
+        ``chunk_limit`` defaults to the configured ``CHAT_CHUNK_LIMIT`` — see
+        :meth:`vector_chat`. This is the path the UI chat actually takes.
         """
         # 1. Vector retrieval
         try:
             vector_result = self.vector_search(
                 tenant_id=tenant_id,
                 query=query,
-                limit=chunk_limit,
+                limit=self._resolve_chunk_limit(chunk_limit),
                 access_keys=access_keys,
                 tags=tags,
                 folder_tags=folder_tags,
+                expand_documents=expand_documents,
             )
             hits = vector_result["hits"]
         except Exception as e:

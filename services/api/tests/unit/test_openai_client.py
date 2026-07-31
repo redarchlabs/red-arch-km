@@ -15,6 +15,7 @@ from api.services.openai_client import (
     base_url,
     make_async_openai,
     make_openai,
+    model_routes,
 )
 
 
@@ -23,10 +24,17 @@ class _Settings:
     """Minimal stand-in — the helpers read one attribute by design."""
 
     openai_base_url: str = ""
+    openai_model_routes: str = ""
 
 
 HOSTED = _Settings()
 LOCAL = _Settings(openai_base_url="http://localhost:11434/v1")
+# A small model on its own port beside the big one: what makes the answer-model
+# dropdown mean something when each server serves exactly one loaded model.
+ROUTED = _Settings(
+    openai_base_url="http://127.0.0.1:8099/v1",
+    openai_model_routes="qwen3-4b-fast=http://127.0.0.1:8097/v1",
+)
 
 
 class TestBaseUrl:
@@ -98,3 +106,57 @@ class TestSettingsField:
 
         assert Settings(openai_base_url="").openai_base_url == ""
         assert api_key_required(Settings(openai_base_url="")) is True
+
+
+class TestModelRoutes:
+    """Per-model endpoints. One llama.cpp process serves ONE loaded model, so asking for
+    a different model id only means something if it can reach a different server."""
+
+    def test_unset_is_no_routes(self) -> None:
+        assert model_routes(HOSTED) == {}
+
+    def test_parses_comma_and_space_separated_pairs(self) -> None:
+        settings = _Settings(openai_model_routes="a=http://x/v1, b=http://y/v1  c=http://z/v1")
+        assert model_routes(settings) == {"a": "http://x/v1", "b": "http://y/v1", "c": "http://z/v1"}
+
+    def test_model_ids_match_case_insensitively(self) -> None:
+        settings = _Settings(openai_model_routes="Qwen3-4B-Fast=http://x/v1")
+        assert base_url(settings, "qwen3-4b-FAST") == "http://x/v1"
+
+    def test_malformed_entries_are_skipped_not_fatal(self) -> None:
+        """A typo in one route must not take every LLM call down with it — the caller
+        falls back to the global endpoint instead."""
+        settings = _Settings(
+            openai_base_url="http://global/v1",
+            openai_model_routes="broken, =http://nomodel/v1, ok=http://x/v1, alsobroken=",
+        )
+        assert model_routes(settings) == {"ok": "http://x/v1"}
+        assert base_url(settings, "broken") == "http://global/v1"
+
+    def test_non_string_setting_is_ignored(self) -> None:
+        # Settings are frequently MagicMocked; a mock attribute is truthy.
+        assert model_routes(_Settings(openai_model_routes=object())) == {}  # type: ignore[arg-type]
+
+
+class TestRoutedBaseUrl:
+    def test_routed_model_wins_over_the_global_endpoint(self) -> None:
+        assert base_url(ROUTED, "qwen3-4b-fast") == "http://127.0.0.1:8097/v1"
+
+    def test_unrouted_model_falls_back_to_the_global_endpoint(self) -> None:
+        assert base_url(ROUTED, "qwen3-30b") == "http://127.0.0.1:8099/v1"
+
+    def test_no_model_argument_is_the_old_behaviour(self) -> None:
+        assert base_url(ROUTED) == "http://127.0.0.1:8099/v1"
+
+    def test_client_is_bound_to_the_routed_endpoint(self) -> None:
+        client = make_async_openai(ROUTED, None, model="qwen3-4b-fast")
+        assert str(client.base_url).rstrip("/") == "http://127.0.0.1:8097/v1"
+        sync = make_openai(ROUTED, None, model="qwen3-4b-fast")
+        assert str(sync.base_url).rstrip("/") == "http://127.0.0.1:8097/v1"
+
+    def test_routed_local_model_needs_no_key_while_hosted_still_does(self) -> None:
+        """A hybrid deployment: hosted OpenAI for the big model, a local small one for
+        spoken answers. The key requirement follows the endpoint the model resolves to."""
+        hybrid = _Settings(openai_model_routes="local-fast=http://127.0.0.1:8097/v1")
+        assert api_key_required(hybrid, "gpt-5-mini") is True
+        assert api_key_required(hybrid, "local-fast") is False

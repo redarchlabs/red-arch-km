@@ -917,6 +917,22 @@ function ChatEditor({ el, onChange }: { el: ChatEl; onChange: (el: FormElement) 
   );
 }
 
+/** Recognition languages offered for a chat element's microphone. Regional variants are
+ * listed separately because they are not interchangeable to a recogniser: es-MX and es-ES
+ * differ in vocabulary and accent modelling, and picking the wrong one shows up as
+ * mis-transcribed words rather than an error. Not exhaustive — the field accepts any
+ * BCP-47 tag; these are the ones worth one click. */
+const VOICE_LANGS: ReadonlyArray<{ tag: string; label: string }> = [
+  { tag: "en-US", label: "English (United States)" },
+  { tag: "en-GB", label: "English (United Kingdom)" },
+  { tag: "es-MX", label: "Spanish (Mexico)" },
+  { tag: "es-US", label: "Spanish (United States)" },
+  { tag: "es-ES", label: "Spanish (Spain)" },
+  { tag: "fr-FR", label: "French (France)" },
+  { tag: "de-DE", label: "German (Germany)" },
+  { tag: "pt-BR", label: "Portuguese (Brazil)" },
+];
+
 /** Builder controls for voice input — the browser mic drives speech-to-text so a
  * person can talk to the robot. `mode` is only the initial default; viewers can
  * flip between hold-to-talk and always-on at runtime. */
@@ -947,13 +963,30 @@ function ChatVoiceEditor({ el, onChange }: { el: ChatEl; onChange: (el: FormElem
             </select>
           </Row>
           <Row label="Language">
+            {/* A list, not a plain text box: the useful tags are regional (es-MX transcribes a
+             * Mexican speaker better than es-ES) and nobody remembers BCP-47 from memory. Still
+             * an input, so an unlisted locale can be typed in — the browser decides what it can
+             * actually recognise, and this field is only what we ask it for. */}
             <input
               className={input}
+              list="chat-voice-langs"
               placeholder="en-US"
               value={v.lang ?? "en-US"}
               onChange={(e) => patch({ lang: e.target.value || "en-US" })}
             />
+            <datalist id="chat-voice-langs">
+              {VOICE_LANGS.map((l) => (
+                <option key={l.tag} value={l.tag}>
+                  {l.label}
+                </option>
+              ))}
+            </datalist>
           </Row>
+          <p className="text-[11px] text-muted-foreground">
+            Sets the language the microphone transcribes. The robot answers in whatever language the
+            question is asked in; speaking it aloud in that language also needs a matching voice
+            installed on the screen doing the talking.
+          </p>
           <Row label="Pause while answering">
             <input
               type="checkbox"

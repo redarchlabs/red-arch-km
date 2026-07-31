@@ -9,9 +9,10 @@
 #
 # This is ./run-stack.sh plus three things it does not do on its own:
 #
-#   1. starts the two llama.cpp servers    (./run-local-llm-stack.sh)
+#   1. starts the llama.cpp servers         (./run-local-llm-stack.sh)
 #   2. layers docker/docker-compose.local-llm.yml over brain-api
-#   3. exports OPENAI_BASE_URL so the host API's workflow actions go local too
+#   3. exports OPENAI_BASE_URL (+ OPENAI_MODEL_ROUTES) so the host API's workflow
+#      actions go local too
 #
 # Use ./run-stack.sh for the normal hosted-OpenAI stack; this script never edits
 # .env, .env.host, or docker-compose.yml, so switching back is just running that.
@@ -21,6 +22,9 @@
 #                                    llm_respond/llm_grade, chunk summaries,
 #                                    fact extraction, agent tool calling
 #   embed :8098  nomic-embed-text    retrieval, ingest, entity vectors
+#   fast  :8097  Qwen3-4B-Instruct   short spoken answers (the summarize action), when a
+#                                    caller asks for the fast model id. Optional: if this
+#                                    server is not up, those calls fall back to :8099.
 #
 # ── What still calls out ────────────────────────────────────────────────────────
 #   • Clerk — authentication (a deliberate exception; there is no local IdP here)
@@ -40,6 +44,12 @@ LLM_STACK=./run-local-llm-stack.sh
 OVERRIDE=docker/docker-compose.local-llm.yml
 CHAT_PORT="${CHAT_PORT:-8099}"
 EMBED_PORT="${EMBED_PORT:-8098}"
+FAST_PORT="${FAST_PORT:-8097}"
+RERANK_PORT="${RERANK_PORT:-8096}"
+# Routing key for the small model, not a name llama.cpp honours — it serves whatever it
+# loaded. Must match run-local-llm-stack.sh's FAST_MODEL_NAME and the answer-model list
+# on a chat element.
+FAST_MODEL_NAME="${FAST_MODEL_NAME:-qwen3-4b-fast}"
 
 say()  { printf '\033[1;35m[local]\033[0m %s\n' "$*"; }
 warn() { printf '\033[33m[local]\033[0m %s\n' "$*"; }
@@ -135,7 +145,31 @@ for p in "$CHAT_PORT" "$EMBED_PORT"; do
     || die "no model server on :$p — check $LLM_STACK status"
 done
 
+# The fast server is OPTIONAL — it only serves calls that explicitly ask for its model
+# id, and an unrouted id falls back to the chat server. So a missing 4B model file
+# degrades speed, never correctness, and must not stop the stack from starting.
+if curl -sf -m 3 "http://127.0.0.1:$FAST_PORT/health" >/dev/null; then
+  export OPENAI_MODEL_ROUTES="$FAST_MODEL_NAME=http://127.0.0.1:$FAST_PORT/v1"
+  say "fast model server on :$FAST_PORT — routing '$FAST_MODEL_NAME' there"
+else
+  warn "no fast model server on :$FAST_PORT — '$FAST_MODEL_NAME' will fall back to :$CHAT_PORT"
+fi
+
 GW=$(gateway)
+GW_ADDR="${GW:-172.22.0.1}"
+
+# The reranker is OPTIONAL in the same way the fast server is: brain-api treats an empty
+# RERANK_BASE_URL as "keep the dense order", which is how retrieval behaved before it
+# existed. Pointing it at a dead port instead would make every single search log a failed
+# rerank and then fall back anyway — same answers, noisier.
+if curl -sf -m 3 "http://127.0.0.1:$RERANK_PORT/health" >/dev/null; then
+  export LOCAL_RERANK_URL="http://$GW_ADDR:$RERANK_PORT/v1"
+  say "rerank server on :$RERANK_PORT — cross-encoder reranking enabled"
+else
+  export LOCAL_RERANK_URL=""
+  warn "no rerank server on :$RERANK_PORT — retrieval falls back to dense ranking"
+fi
+
 if [ -z "$GW" ]; then
   # First-ever start: the network doesn't exist until compose creates it, and the
   # compose default (172.22.0.1) is then almost always right. Nothing to do but warn.

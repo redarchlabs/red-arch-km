@@ -27,7 +27,7 @@ import uuid
 from collections.abc import Callable
 from typing import Any
 
-from brain_sdk.chunking.chunker import create_sectioned_chunks
+from brain_sdk.chunking.chunker import SectionedChunk, create_sectioned_chunks, is_navigational_chunk
 from brain_sdk.facts.doc_profiles import GENERIC, PROFILE_REGISTRY, DocumentProfile
 from brain_sdk.facts.pipeline import Chunk
 from brain_sdk.summarization.chunk_summarizer import SummaryNode
@@ -43,6 +43,27 @@ _tracer = get_tracer("brain_api.ingest")
 _CHUNK_SIZE_TOKENS = 500
 _CHUNK_OVERLAP_TOKENS = 20
 _TRIPLET_WORKERS = 8
+
+
+def _drop_navigational(chunks: list[SectionedChunk], *, document_key: str) -> list[SectionedChunk]:
+    """Drop link-only "Related knowledge" / "See also" sections before indexing.
+
+    They name every neighbouring document, so they score highly on almost any
+    question about the corpus while containing no answer — pure top-k pollution.
+    A document that is ENTIRELY navigation (a link index) is kept as-is: making
+    it unsearchable would be worse than the noise it adds.
+    """
+    kept = [sc for sc in chunks if not is_navigational_chunk(sc.text, sc.section)]
+    if not kept:
+        return chunks
+    dropped = len(chunks) - len(kept)
+    if dropped:
+        logger.info(
+            "Skipped %d navigational chunk(s) for document %s",
+            dropped,
+            document_key,
+        )
+    return kept
 
 
 def _centroid(vectors: list[list[float]]) -> list[float]:
@@ -133,6 +154,7 @@ class IngestService:
                     chunk_size_tokens=_CHUNK_SIZE_TOKENS,
                     overlap_tokens=_CHUNK_OVERLAP_TOKENS,
                 )
+                sectioned = _drop_navigational(sectioned, document_key=document_key)
                 chunks = [sc.text for sc in sectioned]
                 span.set_attribute("chunk_count", len(chunks))
 

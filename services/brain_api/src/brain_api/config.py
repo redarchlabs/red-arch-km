@@ -60,6 +60,48 @@ class BrainAPISettings(BaseSettings):
     # are created at this width, so every stored vector must be re-embedded.
     embedding_dimension: int = Field(default=0, validation_alias="EMBEDDING_DIMENSION")
 
+    # --- reranking ------------------------------------------------------
+    # Cross-encoder re-scoring of the dense shortlist. Dense search embeds query
+    # and passage separately, so it ranks on topical similarity and misses
+    # paraphrase: "how many people can each ship handle" did not retrieve
+    # "Standard Crew Complement: 5,500 officers and crew" from the very document
+    # that answers it. A cross-encoder reads the pair together and scores it.
+    #
+    # Empty URL = off, and retrieval behaves exactly as it did before — the same
+    # convention as openai_base_url/embedding_base_url. Any Cohere-shaped
+    # /rerank endpoint works: llama.cpp --reranking (local), TEI, Jina, Cohere.
+    # OpenAI has no rerank API, so a hosted-OpenAI deployment leaves this unset.
+    rerank_base_url: str = Field(default="", validation_alias="RERANK_BASE_URL")
+    rerank_model: str = Field(default="", validation_alias="RERANK_MODEL")
+    rerank_api_key: str = Field(default="", validation_alias="RERANK_API_KEY")
+    # How many dense hits are scored before the top `limit` are kept. This is the
+    # whole point of the feature: the passage that answers the question has to be
+    # IN the shortlist for reranking to promote it, and the ones that were missed
+    # sat well below the old top-5. Raising it costs one forward pass each.
+    rerank_candidates: int = Field(default=30, validation_alias="RERANK_CANDIDATES")
+    rerank_timeout: float = Field(default=20.0, validation_alias="RERANK_TIMEOUT")
+
+    # How many RANKED passages a chat answer is grounded in. Sibling expansion adds
+    # more on top (see _expand_top_documents), so this is not the size of the prompt.
+    #
+    # Was 5, which is too tight for an "each X" question: the passages answering
+    # "how many people can each ship handle" live in two different documents, and five
+    # slots let the best-ranked one take them all.
+    #
+    # NOT free to raise without limit, and the ceiling is a QUALITY one, not latency.
+    # Measured on the Robots corpus, two runs per setting: at 10, "what ships do we
+    # have" reliably gained a seventh, non-existent ship — the 10th slot admitted a
+    # template document ("Ship name: **Starship Horizon** (change to your simulator's
+    # ship)"), which the model then read as fact. 8 and 9 both answer correctly. 8 is
+    # the default rather than 9 to keep a slot of margin below that cliff instead of
+    # sitting exactly on one corpus's edge.
+    #
+    # Latency did NOT drive this choice: alternating runs measured 10 as FASTER than 5
+    # (14.2s/7.1s vs 18.4s/10.2s). Wall-clock tracks generation length and llama.cpp's
+    # prompt cache, not the ranked-hit count — the prompt is dominated by the ~18
+    # chunks same-document expansion adds.
+    chat_chunk_limit: int = Field(default=8, validation_alias="CHAT_CHUNK_LIMIT")
+
     # Agentic fact engine (provider-agnostic; OpenAI is the default provider).
     # `use_fact_engine` gates the new reified-claim ingest + agentic query path;
     # the legacy top-K RAG path stays available regardless.

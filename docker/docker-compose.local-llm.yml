@@ -4,9 +4,10 @@
 # llama.cpp servers and puts the host API on the local chat endpoint. Not used by a plain
 # `./run-stack.sh` — that intentionally stays on hosted OpenAI.
 #
-# Two endpoints because ONE llama.cpp process cannot serve both: a server started for
-# chat answers /v1/embeddings with "501 This server does not support embeddings", and
-# --embeddings mode does not serve chat.
+# Three endpoints because ONE llama.cpp process cannot serve more than one role: a server
+# started for chat answers /v1/embeddings with "501 This server does not support
+# embeddings", --embeddings mode does not serve chat, and --reranking needs its own model
+# (a cross-encoder) entirely.
 #
 # 172.22.0.1 is the km2_network gateway = the docker host, where the model servers run.
 # Confirm with:  docker network inspect km2_network -f '{{(index .IPAM.Config 0).Gateway}}'
@@ -29,3 +30,14 @@ services:
       EMBEDDING_BASE_URL: http://${LOCAL_LLM_GATEWAY:-172.22.0.1}:${LOCAL_EMBED_PORT:-8098}/v1
       OPENAI_EMBEDDING_MODEL: ${LOCAL_EMBED_MODEL:-nomic-embed-text-v1.5}
       EMBEDDING_DIMENSION: ${LOCAL_EMBED_DIM:-768}
+      # reranking: bge-reranker-v2-m3 — cross-encoder re-scoring of the dense shortlist.
+      # Unlike the embedder this is NOT a migration: it changes ranking only, nothing
+      # stored, so it can be turned on and off freely.
+      #
+      # `${VAR-default}` without the colon: run-local.sh sets LOCAL_RERANK_URL to the
+      # empty string when no rerank server is up, which DISABLES reranking (empty URL =
+      # dense order) instead of pointing brain-api at a dead port. Left unset — a manual
+      # `docker compose -f … -f docker-compose.local-llm.yml up` — the default applies.
+      RERANK_BASE_URL: ${LOCAL_RERANK_URL-http://172.22.0.1:8096/v1}
+      RERANK_MODEL: ${LOCAL_RERANK_MODEL:-bge-reranker-v2-m3}
+      RERANK_CANDIDATES: ${RERANK_CANDIDATES:-30}

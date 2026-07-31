@@ -6,6 +6,7 @@ from brain_sdk.chunking.chunker import (
     chunk_text,
     create_sectioned_chunks,
     create_sentence_based_overlapping_chunks,
+    is_navigational_chunk,
     text_to_tokens,
     tokens_to_text,
 )
@@ -139,3 +140,62 @@ class TestLongSentence:
         assert len(chunks) >= 2
         # ...and it lands in a chunk that exceeds chunk_size on its own.
         assert any(len(text_to_tokens(c)) > chunk_size for c in chunks)
+
+
+class TestNavigationalChunks:
+    """Link-only "Related knowledge" sections are indexing noise: they name every
+    neighbouring document, so they rank high on any corpus question and answer
+    none of them. Chunk text arrives with newlines collapsed to spaces, hence the
+    single-line fixtures — a line-oriented test would never fire in production."""
+
+    def test_related_knowledge_link_list_is_navigational(self) -> None:
+        text = (
+            "## Related knowledge  - [Simulator history and technology](11-space-center-simulators.md) "
+            "- [Space Center overview and history](10-space-center-overview.md)"
+        )
+        assert is_navigational_chunk(text, "The Ship Fleet › Related knowledge")
+
+    def test_see_also_detected_without_a_section_label(self) -> None:
+        text = "## See also - [Alpha](a.md) - [Beta](b.md) - [Gamma](c.md)"
+        assert is_navigational_chunk(text)
+
+    def test_prose_with_links_is_kept(self) -> None:
+        text = (
+            "## Booking  Reserve a mission at least two weeks ahead; group rates apply to "
+            "twelve or more participants. See [pricing](70-pricing.md) and [policies](72-policies.md) "
+            "for the current terms before you confirm a date."
+        )
+        assert not is_navigational_chunk(text, "Booking")
+
+    def test_a_heading_plus_one_link_is_still_navigation(self) -> None:
+        """Found live: 01-ollie-conduct-rules ends with "## Related knowledge" and a SINGLE
+        link, and a 2-link floor left it indexed. Nothing in a heading-plus-link chunk can
+        answer a question, so the link count is not what makes it noise."""
+        assert is_navigational_chunk("## Related knowledge - [Ollie's identity](00-ollie-identity.md)",
+                                     "Conduct Rules › Related knowledge")
+
+    def test_prose_citing_one_document_is_still_kept(self) -> None:
+        """…and the residue rule, not the link count, is what protects real content."""
+        text = ("## Overview  The centre runs five-hour missions for school groups through the "
+                "autumn term; see [pricing](70-pricing.md) before booking a date.")
+        assert not is_navigational_chunk(text, "Overview")
+
+    def test_content_section_named_like_navigation_is_kept(self) -> None:
+        """The heading is not the signal — link density is. A section titled
+        "Related knowledge" that actually explains something stays indexed."""
+        text = (
+            "## Related knowledge  Every mission draws on the fleet specifications and the "
+            "staff roster, which crews should read before launch day, as covered in "
+            "[specs](20-ships-fleet.md) and [roster](12-staff.md)."
+        )
+        assert not is_navigational_chunk(text, "Related knowledge")
+
+    def test_table_of_data_is_kept(self) -> None:
+        text = (
+            "## Quick comparison  | Ship | Class | Registry | |---|---|---| "
+            "| Magellan | Atlas Class Carrier | CAA-1998-C | | Cassini | Voyager Class Cruiser | CRV-9020 |"
+        )
+        assert not is_navigational_chunk(text, "Quick comparison")
+
+    def test_empty_text_is_not_navigational(self) -> None:
+        assert not is_navigational_chunk("", None)

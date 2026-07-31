@@ -9,7 +9,6 @@ still returned unchanged so existing parsing is unaffected.
 from __future__ import annotations
 
 import pytest
-
 from api.services.llm_stream import partial_string_field, stream_json_content
 
 
@@ -89,9 +88,7 @@ class _FakeCompletions:
 
 class _FakeClient:
     def __init__(self, pieces: list[str], sink: list[dict] | None = None) -> None:
-        self.chat = type(
-            "chat", (), {"completions": _FakeCompletions(pieces, sink if sink is not None else [])}
-        )()
+        self.chat = type("chat", (), {"completions": _FakeCompletions(pieces, sink if sink is not None else [])})()
 
 
 class TestStreamJsonContent:
