@@ -55,6 +55,19 @@ class VectorStore(Protocol):
         """Semantic search over chunk vectors."""
         ...
 
+    def list_document_chunks(
+        self,
+        tenant_id: str,
+        document_key: str,
+        *,
+        limit: int = 50,
+        access_keys: list[int] | None = None,
+        required_tags: list[str] | None = None,
+        any_tags: list[str] | None = None,
+    ) -> list[SearchResult]:
+        """Every indexed chunk of one document, ordered by ``chunk_order``."""
+        ...
+
     def delete_document(self, tenant_id: str, document_key: str) -> None:
         """Delete all vectors associated with a document key."""
         ...

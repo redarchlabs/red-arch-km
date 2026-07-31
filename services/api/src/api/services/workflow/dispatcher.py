@@ -200,7 +200,10 @@ class WorkflowDispatchService:
         key = await self._org_openai_key(org_id) or self._settings.openai_api_key.get_secret_value()
         from api.services.openai_client import api_key_required, make_async_openai
 
-        if not key and api_key_required(self._settings):
+        # Model first: a routed model (OPENAI_MODEL_ROUTES) has its own endpoint, which
+        # also decides whether a key is required.
+        model = opts.get("model") or self._settings.openai_summary_model
+        if not key and api_key_required(self._settings, model):
             raise ActionError("summarization requires an OpenAI API key (org or central)")
         from api.services.spoken_summary import summarize_for_speech
 
@@ -208,8 +211,7 @@ class WorkflowDispatchService:
         # (run_inline_on_change) path — would hold the request's pooled DB
         # connection for minutes. The inline dispatch also has an overall budget
         # (see entity_records._dispatch_inline_workflows), this bounds a single call.
-        client = make_async_openai(self._settings, key, timeout=30.0)
-        model = opts.get("model") or self._settings.openai_summary_model
+        client = make_async_openai(self._settings, key, model=model, timeout=30.0)
         return await summarize_for_speech(
             client,
             model,

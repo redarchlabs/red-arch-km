@@ -22,6 +22,7 @@ from brain_sdk.facts.resolution import EntityResolver, PredicateResolver
 from brain_sdk.graph_store.neo4j_store import Neo4jGraphStore
 from brain_sdk.llm.factory import make_llm_client
 from brain_sdk.llm.protocol import LLMClient
+from brain_sdk.reranking.http_reranker import HTTPReranker
 from brain_sdk.summarization.chunk_summarizer import ChunkSummarizer
 from brain_sdk.vector_store.qdrant_store import QdrantVectorStore
 
@@ -45,6 +46,11 @@ class Stores:
         self._vector: QdrantVectorStore | None = None
         self._graph: Neo4jGraphStore | None = None
         self._embedder: OpenAIEmbeddingProvider | None = None
+        # None is a *valid* built value (reranking unconfigured), so a separate
+        # flag rather than the `is None` check every other client uses — without
+        # it, an off deployment would re-attempt the build on every search.
+        self._reranker: HTTPReranker | None = None
+        self._reranker_built = False
         self._summarizer: ChunkSummarizer | None = None
         self._extractor: TripletExtractor | None = None
         # Fact engine (reified-claim store + provider-agnostic LLM + agent).
@@ -87,6 +93,34 @@ class Stores:
                         dimension=self.embedder.dimension,
                     )
         return self._vector
+
+    @property
+    def reranker(self) -> HTTPReranker | None:
+        """Cross-encoder reranker, or ``None`` when no endpoint is configured.
+
+        Retrieval treats reranking as an enhancement: ``None`` means keep the
+        dense order, which is exactly the behaviour before this existed. A
+        construction failure (bad URL) degrades the same way rather than taking
+        search down with it.
+        """
+        if not self._reranker_built:
+            with self._lock:
+                if not self._reranker_built:
+                    url = self._settings.rerank_base_url.strip()
+                    if url:
+                        try:
+                            self._reranker = HTTPReranker(
+                                base_url=url,
+                                model=self._settings.rerank_model,
+                                api_key=self._settings.rerank_api_key,
+                                timeout=self._settings.rerank_timeout,
+                            )
+                            logger.info("Reranking enabled via %s", url)
+                        except Exception as e:  # noqa: BLE001 - never block search
+                            logger.warning("Reranker unavailable (%s); using dense order", e)
+                            self._reranker = None
+                    self._reranker_built = True
+        return self._reranker
 
     @property
     def graph(self) -> Neo4jGraphStore:
@@ -255,6 +289,10 @@ class Stores:
         )
 
     async def close(self) -> None:
+        if self._reranker is not None:
+            self._reranker.close()
+            self._reranker = None
+            self._reranker_built = False
         if self._graph is not None:
             self._graph.close()
             self._graph = None

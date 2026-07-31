@@ -9,7 +9,6 @@ so a caller that ignores streaming sees no behavioural change.
 from __future__ import annotations
 
 import pytest
-
 from api.services.spoken_summary import summarize_for_speech
 
 
@@ -71,9 +70,7 @@ class _FakeCompletions:
 
 class _FakeClient:
     def __init__(self, pieces: list[str | None], sink: list[dict] | None = None) -> None:
-        self.chat = type(
-            "chat", (), {"completions": _FakeCompletions(pieces, sink if sink is not None else [])}
-        )()
+        self.chat = type("chat", (), {"completions": _FakeCompletions(pieces, sink if sink is not None else [])})()
 
 
 class TestStreamingSummary:
@@ -99,9 +96,7 @@ class TestStreamingSummary:
         assert not calls[0].get("stream")
 
         calls.clear()
-        await summarize_for_speech(
-            _FakeClient(["hi"], calls), "gpt-5-nano", text="t", on_delta=lambda d: None
-        )
+        await summarize_for_speech(_FakeClient(["hi"], calls), "gpt-5-nano", text="t", on_delta=lambda d: None)
         assert calls[0].get("stream") is True
 
     @pytest.mark.asyncio
@@ -109,18 +104,14 @@ class TestStreamingSummary:
         seen: list[str] = []
         client = _FakeClient(["Hello", None, "", " there"])
 
-        out = await summarize_for_speech(
-            client, "gpt-5-nano", text="t", on_delta=lambda d: seen.append(d)
-        )
+        out = await summarize_for_speech(client, "gpt-5-nano", text="t", on_delta=lambda d: seen.append(d))
 
         assert seen == ["Hello", " there"]  # empty/None chunks are not published
         assert out == "Hello there"
 
     @pytest.mark.asyncio
     async def test_falls_back_to_input_when_the_stream_yields_nothing(self) -> None:
-        out = await summarize_for_speech(
-            _FakeClient([]), "gpt-5-nano", text="fallback text", on_delta=lambda d: None
-        )
+        out = await summarize_for_speech(_FakeClient([]), "gpt-5-nano", text="fallback text", on_delta=lambda d: None)
         assert out == "fallback text"
 
     @pytest.mark.asyncio
@@ -130,9 +121,7 @@ class TestStreamingSummary:
         def explode(_: str) -> None:
             raise RuntimeError("redis is down")
 
-        out = await summarize_for_speech(
-            _FakeClient(["still ", "works"]), "gpt-5-nano", text="t", on_delta=explode
-        )
+        out = await summarize_for_speech(_FakeClient(["still ", "works"]), "gpt-5-nano", text="t", on_delta=explode)
         assert out == "still works"
 
     @pytest.mark.asyncio
@@ -142,16 +131,12 @@ class TestStreamingSummary:
         async def sink(delta: str) -> None:
             seen.append(delta)
 
-        out = await summarize_for_speech(
-            _FakeClient(["a", "b"]), "gpt-5-nano", text="t", on_delta=sink
-        )
+        out = await summarize_for_speech(_FakeClient(["a", "b"]), "gpt-5-nano", text="t", on_delta=sink)
         assert seen == ["a", "b"]
         assert out == "ab"
 
     @pytest.mark.asyncio
     async def test_still_pins_reasoning_effort_when_streaming(self) -> None:
         calls: list[dict] = []
-        await summarize_for_speech(
-            _FakeClient(["x"], calls), "gpt-5-nano", text="t", on_delta=lambda d: None
-        )
+        await summarize_for_speech(_FakeClient(["x"], calls), "gpt-5-nano", text="t", on_delta=lambda d: None)
         assert calls[0].get("reasoning_effort") == "minimal"

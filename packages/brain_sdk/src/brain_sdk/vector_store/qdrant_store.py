@@ -22,6 +22,26 @@ def _batched(items: list[Any], size: int) -> list[list[Any]]:
     return [items[i : i + size] for i in range(0, len(items), size)]
 
 
+def _chunk_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
+    """Project a stored chunk payload onto the fields retrieval consumers read.
+
+    ``section`` (the Markdown heading path) is part of the contract: callers label
+    passages and build citation deep-links from it, so omitting it here silently
+    strips every passage's heading before it reaches the prompt.
+    """
+    payload = payload or {}
+    return {
+        "text": payload.get("text", ""),
+        "summary": payload.get("summary", ""),
+        "section": payload.get("section"),
+        "chunk_order": payload.get("chunk_order", 0),
+        "document_id": payload.get("document_id", ""),
+        "document_key": payload.get("document_key", ""),
+        "document_title": payload.get("document_title", ""),
+        "type": payload.get("type", ""),
+    }
+
+
 class QdrantVectorStore:
     """VectorStore implementation backed by Qdrant."""
 
@@ -48,6 +68,44 @@ class QdrantVectorStore:
 
     def _doc_collection(self, tenant_id: str) -> str:
         return f"{tenant_id}-{self._doc_suffix}"
+
+    @staticmethod
+    def _chunk_conditions(
+        *,
+        access_keys: list[int] | None = None,
+        required_tags: list[str] | None = None,
+        any_tags: list[str] | None = None,
+        filters: list[dict[str, Any]] | None = None,
+    ) -> list[rest.Condition]:
+        """Build the tag/access/term conditions shared by chunk reads.
+
+        Kept in one place so ranked search and same-document expansion enforce
+        IDENTICAL visibility rules — an expansion that skipped these would leak
+        chunks the caller's access keys exclude.
+        """
+        must: list[rest.Condition] = []
+
+        if filters:
+            for f in filters:
+                term = f.get("term", {})
+                for field_name, value in term.items():
+                    must.append(rest.FieldCondition(key=field_name, match=rest.MatchValue(value=value)))
+
+        if required_tags:
+            # AND semantics: every required tag must be present.
+            must.extend(rest.FieldCondition(key="tags", match=rest.MatchValue(value=tag)) for tag in required_tags)
+
+        if any_tags:
+            # OR semantics within the set: the doc must carry at least one of
+            # these tags. Used for folder scoping — a doc lives in exactly one
+            # folder, so "in folder A or folder B" is `tags MatchAny [folder:A,
+            # folder:B]`. Still ANDs with required_tags / access_keys.
+            must.append(rest.FieldCondition(key="tags", match=rest.MatchAny(any=any_tags)))
+
+        if access_keys:
+            must.append(rest.FieldCondition(key="access_keys", match=rest.MatchAny(any=access_keys)))
+
+        return must
 
     def ensure_collections(self, tenant_id: str, *, reset: bool = False) -> None:
         for name in [self._chunk_collection(tenant_id), self._doc_collection(tenant_id)]:
@@ -118,28 +176,12 @@ class QdrantVectorStore:
         filters: list[dict[str, Any]] | None = None,
     ) -> list[SearchResult]:
         collection = self._chunk_collection(tenant_id)
-        must: list[rest.Condition] = []
-
-        if filters:
-            for f in filters:
-                term = f.get("term", {})
-                for field_name, value in term.items():
-                    must.append(rest.FieldCondition(key=field_name, match=rest.MatchValue(value=value)))
-
-        if required_tags:
-            # AND semantics: every required tag must be present.
-            must.extend(rest.FieldCondition(key="tags", match=rest.MatchValue(value=tag)) for tag in required_tags)
-
-        if any_tags:
-            # OR semantics within the set: the doc must carry at least one of
-            # these tags. Used for folder scoping — a doc lives in exactly one
-            # folder, so "in folder A or folder B" is `tags MatchAny [folder:A,
-            # folder:B]`. Still ANDs with required_tags / access_keys.
-            must.append(rest.FieldCondition(key="tags", match=rest.MatchAny(any=any_tags)))
-
-        if access_keys:
-            must.append(rest.FieldCondition(key="access_keys", match=rest.MatchAny(any=access_keys)))
-
+        must = self._chunk_conditions(
+            access_keys=access_keys,
+            required_tags=required_tags,
+            any_tags=any_tags,
+            filters=filters,
+        )
         query_filter = rest.Filter(must=must) if must else None
 
         results = self._client.query_points(
@@ -152,24 +194,45 @@ class QdrantVectorStore:
             with_vectors=False,
         ).points
 
-        return [
-            SearchResult(
-                id=str(p.id),
-                score=p.score,
-                payload={
-                    "text": payload.get("text", ""),
-                    "summary": payload.get("summary", ""),
-                    "chunk_order": payload.get("chunk_order", 0),
-                    "document_id": payload.get("document_id", ""),
-                    "document_key": payload.get("document_key", ""),
-                    "document_title": payload.get("document_title", ""),
-                    "type": payload.get("type", ""),
-                },
-            )
-            for p in results
-            if p
-            for payload in (p.payload or {},)
-        ]
+        return [SearchResult(id=str(p.id), score=p.score, payload=_chunk_payload(p.payload)) for p in results if p]
+
+    def list_document_chunks(
+        self,
+        tenant_id: str,
+        document_key: str,
+        *,
+        limit: int = 50,
+        access_keys: list[int] | None = None,
+        required_tags: list[str] | None = None,
+        any_tags: list[str] | None = None,
+    ) -> list[SearchResult]:
+        """Every indexed chunk of one document, in ``chunk_order``.
+
+        Backs same-document expansion at retrieval time: a question like "name all
+        six ships" matches the section that *introduces* the list while the section
+        that *contains* it sits far down the ranking, so the winning document's
+        siblings are worth reading even though they didn't rank. Scores are 0.0 —
+        these are not vector matches.
+
+        The same tag/access filters as :meth:`search` are applied, so expansion can
+        never widen what a caller is allowed to see.
+        """
+        conditions = self._chunk_conditions(
+            access_keys=access_keys,
+            required_tags=required_tags,
+            any_tags=any_tags,
+        )
+        conditions.append(rest.FieldCondition(key="document_key", match=rest.MatchValue(value=document_key)))
+        points, _ = self._client.scroll(
+            collection_name=self._chunk_collection(tenant_id),
+            scroll_filter=rest.Filter(must=conditions),
+            limit=limit,
+            with_payload=True,
+            with_vectors=False,
+        )
+        results = [SearchResult(id=str(p.id), score=0.0, payload=_chunk_payload(p.payload)) for p in points if p]
+        results.sort(key=lambda r: r.payload.get("chunk_order") or 0)
+        return results
 
     def delete_document(self, tenant_id: str, document_key: str) -> None:
         conditions: list[rest.Condition] = [

@@ -275,3 +275,50 @@ class TestIngestService:
         service.init_tenant("t1")
         mock_stores.vector.ensure_collections.assert_called_once_with("t1")
         mock_stores.graph.initialize_tenant.assert_called_once_with("t1")
+
+
+class TestNavigationalChunkFiltering:
+    """Link-only sections are dropped before embedding: they consume retrieval
+    slots on every corpus question and contain no answer."""
+
+    @staticmethod
+    def _indexed_texts(mock_stores: MagicMock) -> list[str]:
+        """Chunk texts actually upserted into the chunks collection."""
+        for call in mock_stores.vector.upsert_vectors.call_args_list:
+            if call.kwargs.get("collection_type", "chunks") == "chunks":
+                return [r.payload["text"] for r in call.kwargs.get("records", call.args[1])]
+        return []
+
+    def test_related_knowledge_section_is_not_indexed(self, mock_stores: MagicMock) -> None:
+        text = (
+            "# The Ship Fleet\n\nSix ships make up the current fleet.\n\n"
+            "## Related knowledge\n\n- [Overview](10-overview.md)\n- [Staff](12-staff.md)\n"
+        )
+        IngestService(mock_stores).ingest_document(
+            tenant_id="t1",
+            document_key="dk1",
+            title="Fleet",
+            text=text,
+            tags=[],
+            access_keys=[],
+            use_knowledge_graph=False,
+        )
+        indexed = self._indexed_texts(mock_stores)
+        assert any("Six ships" in t for t in indexed)
+        assert not any("Related knowledge" in t for t in indexed)
+
+    def test_document_that_is_only_links_is_still_indexed(self, mock_stores: MagicMock) -> None:
+        """A pure link index must stay searchable — dropping every chunk would
+        make the document invisible, which is worse than the noise it adds."""
+        text = "# Index\n\n- [Alpha](a.md)\n- [Beta](b.md)\n- [Gamma](c.md)\n"
+        result = IngestService(mock_stores).ingest_document(
+            tenant_id="t1",
+            document_key="dk2",
+            title="Index",
+            text=text,
+            tags=[],
+            access_keys=[],
+            use_knowledge_graph=False,
+        )
+        assert result["chunks"] >= 1
+        assert self._indexed_texts(mock_stores)

@@ -29,6 +29,9 @@ class VectorSearchRequest(BaseModel):
     access_keys: list[int] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
     folder_tags: list[str] = Field(default_factory=list)
+    # Pull the top-ranked document's sibling chunks into the result (default on);
+    # off gives a pure ranked-hits view for relevance debugging.
+    expand_documents: bool = True
 
 
 class VectorChatRequest(BaseModel):
@@ -39,7 +42,11 @@ class VectorChatRequest(BaseModel):
     tags: list[str] = Field(default_factory=list)
     folder_tags: list[str] = Field(default_factory=list)
     use_knowledge_graph: bool = True
-    chunk_limit: int = Field(default=5, ge=1, le=20)
+    # Omitted => the service's CHAT_CHUNK_LIMIT. A literal default here would
+    # silently outrank that setting, since callers (brain_client.vector_chat, and so
+    # every workflow knowledge_search and agent tool) never send the field.
+    chunk_limit: int | None = Field(default=None, ge=1, le=20)
+    expand_documents: bool = True
 
 
 def _get_service(stores: Annotated[Stores, Depends(get_stores)]) -> SearchService:
@@ -61,6 +68,7 @@ async def vector_search(
             access_keys=body.access_keys or None,
             tags=body.tags,
             folder_tags=body.folder_tags or None,
+            expand_documents=body.expand_documents,
         )
     except Exception:
         logger.exception("Vector search failed")
@@ -87,6 +95,7 @@ async def vector_chat(
             folder_tags=body.folder_tags or None,
             use_knowledge_graph=body.use_knowledge_graph,
             chunk_limit=body.chunk_limit,
+            expand_documents=body.expand_documents,
         )
     except Exception:
         logger.exception("Vector chat failed")

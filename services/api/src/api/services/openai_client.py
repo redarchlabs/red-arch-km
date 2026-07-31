@@ -37,33 +37,69 @@ if TYPE_CHECKING:  # pragma: no cover - import cycle / heavy dep kept out of run
 _PLACEHOLDER_KEY = "not-needed"
 
 
-def base_url(settings: Any) -> str | None:
-    """The configured OpenAI-compatible endpoint, or ``None`` for hosted OpenAI.
+def model_routes(settings: Any) -> dict[str, str]:
+    """Parse ``OPENAI_MODEL_ROUTES`` into ``{model id: base URL}``.
+
+    One self-hosted server serves ONE loaded model, so "pick a model" only means
+    something if different model ids can reach different endpoints. A fast small
+    model for condensing retrieved passages and a large one for reasoning are
+    different processes on different ports; this maps the id a caller asks for
+    onto the server that actually has it.
+
+    Format is ``model=url`` pairs separated by commas or whitespace::
+
+        OPENAI_MODEL_ROUTES=qwen3-4b=http://127.0.0.1:8097/v1, qwen3-30b=http://127.0.0.1:8099/v1
+
+    Unset (the default) means every model goes to ``OPENAI_BASE_URL`` as before.
+    Malformed entries are skipped rather than raising: a typo in one route must not
+    take the whole service down, and the fallback is the plain global endpoint.
+    """
+    configured = getattr(settings, "openai_model_routes", "")
+    if not isinstance(configured, str) or not configured.strip():
+        return {}
+    routes: dict[str, str] = {}
+    for entry in configured.replace(",", " ").split():
+        model, _, url = entry.partition("=")
+        model, url = model.strip(), url.strip()
+        if model and url:
+            routes[model.lower()] = url
+    return routes
+
+
+def base_url(settings: Any, model: str | None = None) -> str | None:
+    """The OpenAI-compatible endpoint for ``model``, or ``None`` for hosted OpenAI.
 
     Accepts any settings object exposing ``openai_base_url`` so the API service and the
     worker/brain services can share the convention without sharing a Settings class.
+    A ``model`` with an entry in :func:`model_routes` wins over the global endpoint.
 
     Only a real ``str`` counts. Settings are frequently ``MagicMock``\\ ed in tests, and a
     mock attribute is truthy — without the type check it would sail through as a URL and
     fail deep inside httpx instead of here.
     """
+    if model:
+        routed = model_routes(settings).get(model.strip().lower())
+        if routed:
+            return routed
     configured = getattr(settings, "openai_base_url", "")
     if not isinstance(configured, str):
         return None
     return configured.strip() or None
 
 
-def api_key_required(settings: Any) -> bool:
+def api_key_required(settings: Any, model: str | None = None) -> bool:
     """Whether a caller must have an API key before it can talk to the model.
 
     False when pointed at a self-hosted endpoint — local servers authenticate nothing, and
-    demanding a key there is how "run everything locally" fails on its first request.
+    demanding a key there is how "run everything locally" fails on its first request. A
+    routed model is judged by ITS endpoint, so a hybrid setup (hosted OpenAI plus one local
+    model) still refuses to run keyless against OpenAI while the local route needs nothing.
     """
-    return base_url(settings) is None
+    return base_url(settings, model) is None
 
 
-def _kwargs(settings: Any, key: str | None, extra: dict[str, Any]) -> dict[str, Any]:
-    url = base_url(settings)
+def _kwargs(settings: Any, key: str | None, model: str | None, extra: dict[str, Any]) -> dict[str, Any]:
+    url = base_url(settings, model)
     # The SDK rejects an empty api_key, so fall back to a placeholder the local server drops.
     kwargs: dict[str, Any] = {"api_key": key or (_PLACEHOLDER_KEY if url else "")}
     if url:
@@ -72,18 +108,20 @@ def _kwargs(settings: Any, key: str | None, extra: dict[str, Any]) -> dict[str, 
     return kwargs
 
 
-def make_async_openai(settings: Any, key: str | None, **extra: Any) -> AsyncOpenAI:
-    """An ``AsyncOpenAI`` bound to the configured endpoint.
+def make_async_openai(settings: Any, key: str | None, *, model: str | None = None, **extra: Any) -> AsyncOpenAI:
+    """An ``AsyncOpenAI`` bound to the endpoint serving ``model``.
 
-    ``extra`` passes through to the SDK constructor (e.g. ``timeout=30.0``).
+    Pass ``model`` whenever the caller has already resolved which model it will ask for,
+    so a routed model reaches its own server. ``extra`` passes through to the SDK
+    constructor (e.g. ``timeout=30.0``).
     """
     from openai import AsyncOpenAI
 
-    return AsyncOpenAI(**_kwargs(settings, key, extra))
+    return AsyncOpenAI(**_kwargs(settings, key, model, extra))
 
 
-def make_openai(settings: Any, key: str | None, **extra: Any) -> OpenAI:
-    """A synchronous ``OpenAI`` bound to the configured endpoint."""
+def make_openai(settings: Any, key: str | None, *, model: str | None = None, **extra: Any) -> OpenAI:
+    """A synchronous ``OpenAI`` bound to the endpoint serving ``model``."""
     from openai import OpenAI
 
-    return OpenAI(**_kwargs(settings, key, extra))
+    return OpenAI(**_kwargs(settings, key, model, extra))

@@ -4,8 +4,10 @@ namespace (a step's captured output feeding a later step)."""
 from __future__ import annotations
 
 import uuid
+from unittest import mock
 
 import pytest
+from api.services.workflow import actions as actions_module
 from api.services.workflow.actions import (
     ACTION_REGISTRY,
     ActionContext,
@@ -253,6 +255,38 @@ class TestSummarizeForSpeech:
         assert "who is the CEO?" in calls[0]["messages"][1]["content"]
 
     @pytest.mark.asyncio
+    async def test_source_text_precedes_the_question_for_prefix_caching(self) -> None:
+        """Ordering is a latency contract, not cosmetics: a self-hosted chat server
+        reuses the KV cache only for an unchanged prompt PREFIX. Retrieved passages
+        repeat across a conversation's turns while the question never does, so the
+        passages must come first — leading with the question re-evaluates the whole
+        context every turn (measured 9.8s vs 2.4s per follow-up on ~2.2k tokens)."""
+        from api.services.spoken_summary import summarize_for_speech
+
+        calls: list[dict] = []
+        client = _FakeClient(reply="ok", sink=calls)
+        await summarize_for_speech(
+            client,
+            "gpt-5-nano",
+            text="PASSAGES-HERE",
+            question="QUESTION-HERE",
+        )
+        user = calls[0]["messages"][1]["content"]
+        assert user.index("PASSAGES-HERE") < user.index("QUESTION-HERE")
+
+    @pytest.mark.asyncio
+    async def test_instruction_asks_for_specifics_over_generalities(self) -> None:
+        """A wider retrieval context tempts the model to answer at a summary altitude
+        ("crew sizes vary by ship"); the persona has to push back toward the numbers."""
+        from api.services.spoken_summary import summarize_for_speech
+
+        calls: list[dict] = []
+        await summarize_for_speech(_FakeClient(reply="ok", sink=calls), "gpt-5-nano", text="t", question="q")
+        system = calls[0]["messages"][0]["content"].lower()
+        assert "specifics" in system
+        assert "name each one" in system
+
+    @pytest.mark.asyncio
     async def test_falls_back_to_input_when_model_returns_empty(self) -> None:
         from api.services.spoken_summary import summarize_for_speech
 
@@ -277,6 +311,11 @@ class TestSummarizeForSpeech:
         calls: list[dict] = []
         await summarize_for_speech(_FakeClient(sink=calls), model, text="some text")
         assert calls[0].get("reasoning_effort") == effort
+
+
+def handler_summarize():
+    """The registered summarize handler (registry holds instances, not classes)."""
+    return ACTION_REGISTRY["summarize"]
 
 
 def _summ_ctx(config, *, after=None, vars=None, summarize=None):
@@ -364,3 +403,118 @@ class TestSummarizeAction:
         out = handler.simulate(ctx)
         assert out["text"] == "<summarized spoken reply>"
         assert out["input_chars"] == len("long text")
+
+
+class TestSummarizeSpeaksWhileWriting:
+    """The robot used to stand silent for the whole answer: the workflow generated the reply,
+    then a trailing step POSTed the finished text. Speaking clause by clause takes
+    time-to-first-sound off the answer's LENGTH, which is what makes a detailed reply usable."""
+
+    @staticmethod
+    def _ctx(extra: dict, *, inputs: dict | None = None) -> ActionContext:
+        ctx = _summ_ctx({"text": "{{vars.kb.answer}}", **extra}, vars={"kb": {"answer": "source text"}})
+        ctx.inputs = inputs or {}
+        ctx.resolve_connection = None  # type: ignore[assignment]
+        return ctx
+
+    @pytest.mark.asyncio
+    async def test_no_connection_means_no_voice_sink(self) -> None:
+        """Silence is the default: every other summarize node in a workflow (condensing a
+        query, a not-found line) must never reach the robot."""
+        seen: list[dict] = []
+
+        async def _summarize(opts: dict) -> str:
+            seen.append(opts)
+            return "ok"
+
+        ctx = self._ctx({})
+        ctx.summarize = _summarize  # type: ignore[assignment]
+        out = await handler_summarize().execute(ctx)
+        assert seen[0]["on_chunk"] is None
+        assert out["streamed_speech"] is False
+
+    @pytest.mark.asyncio
+    async def test_configured_connection_speaks_each_clause_appending_after_the_first(self) -> None:
+        posts: list[dict] = []
+
+        async def _summarize(opts: dict) -> str:
+            # Stand in for the model: hand the action's sink two finished clauses.
+            await opts["on_chunk"]("First clause.", 0)
+            await opts["on_chunk"]("Second clause.", 1)
+            return "First clause. Second clause."
+
+        async def _fake_call(ctx, **kwargs):  # noqa: ANN001, ANN003
+            posts.append(kwargs)
+            return {"ok": True, "status_code": 200, "body": {}}
+
+        ctx = self._ctx({"speak_connection": "robot"})
+        ctx.summarize = _summarize  # type: ignore[assignment]
+        with mock.patch.object(actions_module, "call_connection", _fake_call):
+            out = await handler_summarize().execute(ctx)
+
+        assert out["streamed_speech"] is True
+        assert [p["body"] for p in posts] == [
+            {"text": "First clause.", "append": False},
+            {"text": "Second clause.", "append": True},
+        ]
+        # First clause interrupts a stale line; the rest queue behind it.
+        assert all(p["path"] == "/say" and p["method"] == "POST" for p in posts)
+        assert all(p["connection"] == "robot" for p in posts)
+
+    @pytest.mark.asyncio
+    async def test_path_and_field_are_configurable(self) -> None:
+        posts: list[dict] = []
+
+        async def _summarize(opts: dict) -> str:
+            await opts["on_chunk"]("Hi.", 0)
+            return "Hi."
+
+        async def _fake_call(ctx, **kwargs):  # noqa: ANN001, ANN003
+            posts.append(kwargs)
+            return {"ok": True}
+
+        ctx = self._ctx({"speak_connection": "robot", "speak_path": "/speak", "speak_field": "line"})
+        ctx.summarize = _summarize  # type: ignore[assignment]
+        with mock.patch.object(actions_module, "call_connection", _fake_call):
+            await handler_summarize().execute(ctx)
+        assert posts[0]["path"] == "/speak"
+        assert posts[0]["body"] == {"line": "Hi.", "append": False}
+
+    @pytest.mark.asyncio
+    async def test_per_run_speak_toggle_silences_it(self) -> None:
+        """The chat's Speak switch has to reach this: a muted answer should still be written
+        and stored, just not voiced."""
+        seen: list[dict] = []
+
+        async def _summarize(opts: dict) -> str:
+            seen.append(opts)
+            return "ok"
+
+        ctx = self._ctx(
+            {"speak_connection": "robot", "speak": {"$ref": "inputs.speak"}},
+            inputs={"speak": False},
+        )
+        ctx.summarize = _summarize  # type: ignore[assignment]
+        out = await handler_summarize().execute(ctx)
+        assert seen[0]["on_chunk"] is None
+        assert out["streamed_speech"] is False
+
+    @pytest.mark.asyncio
+    async def test_an_unreachable_robot_does_not_lose_the_answer(self) -> None:
+        """The answer is also recorded and displayed. A robot that is off, muted, or 401ing
+        must cost the caller its voice, not its text."""
+
+        async def _summarize(opts: dict) -> str:
+            from api.services.spoken_summary import _emit_chunk
+
+            await _emit_chunk(opts["on_chunk"], "First clause.", 0)  # raises inside, swallowed there
+            return "First clause."
+
+        async def _boom(ctx, **kwargs):  # noqa: ANN001, ANN003
+            raise RuntimeError("connection refused")
+
+        ctx = self._ctx({"speak_connection": "robot"})
+        ctx.summarize = _summarize  # type: ignore[assignment]
+        with mock.patch.object(actions_module, "call_connection", _boom):
+            out = await handler_summarize().execute(ctx)
+        assert out["text"] == "First clause."

@@ -74,6 +74,13 @@ class Settings(BaseSettings):
     # the robot's own KM2 instance sets it. A local endpoint needs no credential, so
     # this also makes the API key optional — see api/services/openai_client.py.
     openai_base_url: str = Field(default="", validation_alias="OPENAI_BASE_URL")
+    # Per-model overrides of that endpoint: "model=url" pairs, comma or space separated.
+    # A self-hosted server serves ONE loaded model, so choosing a model only means
+    # something when different ids can reach different processes — e.g. a small fast
+    # model for condensing retrieved passages into a spoken line (generation-bound work
+    # where a 30B model spends ~1.2s per 10 words) alongside a large one for reasoning.
+    # Unset (default): every model goes to openai_base_url, exactly as before.
+    openai_model_routes: str = Field(default="", validation_alias="OPENAI_MODEL_ROUTES")
 
     # Additional LLM providers for the multi-provider agent org (services/agents/).
     # Each central key is a fallback; an org's own key (org_provider_credentials)

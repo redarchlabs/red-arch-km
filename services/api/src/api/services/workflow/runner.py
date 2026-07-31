@@ -214,13 +214,16 @@ class ActionExecutor:
         key (falls back to the central key), mirroring the RAG/agent key precedence."""
         if self._settings is None:
             raise ActionError("summarization requires Settings (not wired in this context)")
+        # Resolve the model BEFORE the client: a model may be routed to its own
+        # endpoint (OPENAI_MODEL_ROUTES), which decides both the base URL and whether
+        # a key is needed at all.
+        model = opts.get("model") or self._settings.openai_summary_model
         key = await self._org_openai_key(org_id) or self._settings.openai_api_key.get_secret_value()
-        if not key and api_key_required(self._settings):
+        if not key and api_key_required(self._settings, model):
             raise ActionError("summarization requires an OpenAI API key (org or central)")
         from api.services.spoken_summary import summarize_for_speech
 
-        client = make_async_openai(self._settings, key)
-        model = opts.get("model") or self._settings.openai_summary_model
+        client = make_async_openai(self._settings, key, model=model)
         return await summarize_for_speech(
             client,
             model,
@@ -231,6 +234,10 @@ class ActionExecutor:
             # Only streams when the caller is watching this run; the returned
             # summary — and everything downstream of it — is identical either way.
             on_delta=self._on_delta(opts),
+            # Speaks each finished clause through the action's connection while the rest is
+            # still being written. Built by the action (it owns the connection + SSRF guard);
+            # None unless the node names a connection to speak through.
+            on_chunk=opts.get("on_chunk"),
         )
 
     def _on_delta(self, opts: dict[str, Any]) -> Any:
@@ -248,13 +255,13 @@ class ActionExecutor:
         (falls back to the central key) and the chat model, mirroring _summarize's wiring."""
         if self._settings is None:
             raise ActionError("llm_decide requires Settings (not wired in this context)")
+        model = opts.get("model") or self._settings.openai_model
         key = await self._org_openai_key(org_id) or self._settings.openai_api_key.get_secret_value()
-        if not key and api_key_required(self._settings):
+        if not key and api_key_required(self._settings, model):
             raise ActionError("llm_decide requires an OpenAI API key (org or central)")
         from api.services.llm_decide import decide_action
 
-        client = make_async_openai(self._settings, key)
-        model = opts.get("model") or self._settings.openai_model
+        client = make_async_openai(self._settings, key, model=model)
         return await decide_action(
             client,
             model,
@@ -275,13 +282,13 @@ class ActionExecutor:
         pass threshold."""
         if self._settings is None:
             raise ActionError("llm_grade requires Settings (not wired in this context)")
+        model = opts.get("model") or self._settings.openai_model
         key = await self._org_openai_key(org_id) or self._settings.openai_api_key.get_secret_value()
-        if not key and api_key_required(self._settings):
+        if not key and api_key_required(self._settings, model):
             raise ActionError("llm_grade requires an OpenAI API key (org or central)")
         from api.services.llm_grade import grade_answer
 
-        client = make_async_openai(self._settings, key)
-        model = opts.get("model") or self._settings.openai_model
+        client = make_async_openai(self._settings, key, model=model)
         return await grade_answer(
             client,
             model,
@@ -296,13 +303,13 @@ class ActionExecutor:
         mirroring _decide's wiring. Returns a structured ``{reply, coach, done}`` turn."""
         if self._settings is None:
             raise ActionError("llm_respond requires Settings (not wired in this context)")
+        model = opts.get("model") or self._settings.openai_model
         key = await self._org_openai_key(org_id) or self._settings.openai_api_key.get_secret_value()
-        if not key and api_key_required(self._settings):
+        if not key and api_key_required(self._settings, model):
             raise ActionError("llm_respond requires an OpenAI API key (org or central)")
         from api.services.llm_respond import respond_action
 
-        client = make_async_openai(self._settings, key)
-        model = opts.get("model") or self._settings.openai_model
+        client = make_async_openai(self._settings, key, model=model)
         return await respond_action(
             client,
             model,

@@ -23,6 +23,19 @@ logger = logging.getLogger(__name__)
 _HEADING_RE = re.compile(r"^ {0,3}(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$")
 _SECTION_SEP = " › "
 
+# An inline Markdown link: [label](target). Used to measure how much of a chunk
+# is link scaffolding rather than prose — see :func:`is_navigational_chunk`.
+_MD_LINK_RE = re.compile(r"!?\[[^\]]*\]\([^)]*\)")
+# List bullets, rules, table pipes, and punctuation that survive link removal.
+_NAV_SCAFFOLD_RE = re.compile(r"[\s\-*+•·|>:;,.()\[\]/#=_—–]+")
+# One link is enough. A chunk whose whole content is a heading plus link(s) has nothing to
+# answer with either way — its searchable text is a heading and some document titles — so the
+# only thing a higher floor bought was leaving single-link cross-reference blocks in the index
+# to crowd real passages out of the top-k. The residue rule below is what protects genuine
+# content that happens to cite one document.
+_MIN_NAV_LINKS = 1
+_MAX_NAV_RESIDUE_CHARS = 40
+
 _MAX_ITERATIONS = 10_000_000
 # Default encoding for modern OpenAI models (GPT-4o, GPT-5 family).
 # Older models like text-embedding-ada-002 use cl100k_base; callers can
@@ -222,6 +235,37 @@ def _split_by_headings(full_text: str) -> list[tuple[str | None, str]]:
 
     flush()
     return segments if segments else [(None, full_text.strip())]
+
+
+def is_navigational_chunk(text: str, section: str | None = None) -> bool:
+    """True when a chunk is pure navigation — a heading plus a list of links.
+
+    "Related knowledge" / "See also" sections carry no facts, yet they read as
+    highly on-topic to an embedding model (they name every neighbouring
+    document), so they crowd real answers out of a small top-k. Indexing them
+    costs retrieval slots and buys nothing: the LLM cannot answer from a link.
+
+    Detection is link DENSITY, not a heading whitelist, because chunk text
+    arrives with newlines collapsed to spaces (the sentence chunker rejoins on
+    " "), so a line-oriented test would never fire. A chunk qualifies when it
+    holds at least :data:`_MIN_NAV_LINKS` Markdown links and, once the links,
+    the leading heading, and list/punctuation scaffolding are removed, almost no
+    prose is left. Anything with real sentences around its links is kept.
+    """
+    body = text.strip()
+    if section:
+        # The chunker keeps the heading line in the body; strip that leaf title so
+        # the label's own words don't count as prose ("Related knowledge" is not
+        # content). Matched with the '#' markers optional for OCR/plain text.
+        leaf = section.split(_SECTION_SEP)[-1].strip()
+        if leaf:
+            body = re.sub(rf"^\s*#{{0,6}}\s*{re.escape(leaf)}", "", body, count=1)
+
+    if len(_MD_LINK_RE.findall(body)) < _MIN_NAV_LINKS:
+        return False
+
+    residue = _MD_LINK_RE.sub(" ", body)
+    return len(_NAV_SCAFFOLD_RE.sub("", residue)) <= _MAX_NAV_RESIDUE_CHARS
 
 
 def create_sectioned_chunks(

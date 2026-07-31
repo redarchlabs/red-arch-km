@@ -12,7 +12,6 @@ import json
 import uuid
 
 import pytest
-
 from api.services.workflow.stream import (
     EVENT_DELTA,
     EVENT_DONE,
@@ -257,7 +256,7 @@ class TestRunnerWiring:
             return {watched_field: "x"}
 
         monkeypatch.setattr(importlib.import_module(module), function, fake_action)
-        monkeypatch.setattr("api.services.workflow.runner.make_async_openai", lambda s, k: object())
+        monkeypatch.setattr("api.services.workflow.runner.make_async_openai", lambda s, k, **kw: object())
 
         publisher = RunStreamPublisher(_FakeRedis(), uuid.uuid4(), str(uuid.uuid4()))
         executor = ActionExecutor(None, settings=_StubSettings(), delta_sink=publisher)  # type: ignore[arg-type]
@@ -280,9 +279,7 @@ class TestRunnerWiring:
             return "summary"
 
         monkeypatch.setattr(spoken_summary, "summarize_for_speech", fake_summarize)
-        monkeypatch.setattr(
-            "api.services.workflow.runner.make_async_openai", lambda settings, key: object()
-        )
+        monkeypatch.setattr("api.services.workflow.runner.make_async_openai", lambda settings, key, **kw: object())
 
         executor = ActionExecutor(None, settings=_StubSettings(), delta_sink=delta_sink)  # type: ignore[arg-type]
         monkeypatch.setattr(executor, "_org_openai_key", lambda org_id: _none())

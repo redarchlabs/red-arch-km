@@ -881,7 +881,13 @@ function ChatNode({ el, preview }: { el: ChatElement; preview: boolean }) {
           // Fast mode = retrieval-only, so synthesize is its inverse.
           inputs.synthesize = !fastMode;
           inputs.use_knowledge_graph = useGraph;
-          inputs.max_words = concise ? controls?.concise_words ?? 20 : controls?.verbose_words ?? 45;
+          // Word budget, and therefore how much DETAIL survives. Retrieval hands the
+          // summariser a whole document's worth of specifics; too tight a cap forces it
+          // to answer at a summary altitude ("crew sizes vary by ship") instead of
+          // quoting them. Measured on the same context: 20 words generalises, ~100 gives
+          // per-item numbers. These are the fallbacks — a chat element's own
+          // concise_words / verbose_words win.
+          inputs.max_words = concise ? controls?.concise_words ?? 45 : controls?.verbose_words ?? 200;
           inputs.speak = speak;
           if (answerModel) inputs.answer_model = answerModel;
         }

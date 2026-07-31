@@ -619,6 +619,51 @@ class SendWebhook:
         }
 
 
+async def call_connection(
+    ctx: ActionContext,
+    *,
+    connection: Any,
+    path: Any = "",
+    url: Any = None,
+    method: str = "POST",
+    body: Any = None,
+    headers: dict[str, str] | None = None,
+    action: str,
+) -> dict[str, Any]:
+    """One authenticated HTTP call through a stored connection.
+
+    Shared by the ``http_request`` action and by any action that needs to reach the same
+    outbound surface mid-execution (``summarize`` speaks its clauses through it). Kept in one
+    place deliberately: it carries the connection's auth injection AND the deny-by-default
+    SSRF guard, and a second copy is how one of those two silently stops being applied.
+    """
+    conn: ResolvedConnection | None = None
+    if connection:
+        if ctx.resolve_connection is None:
+            raise ActionError("connections are not available in this context")
+        conn = await ctx.resolve_connection(str(connection))
+        if conn is None:
+            raise ActionError(f"connection not found: {connection!r}")
+
+    base = (conn.base_url if conn and conn.base_url else "") or ""
+    target = url or (base.rstrip("/") + "/" + str(path or "").lstrip("/"))
+    parsed = urlparse(str(target))
+    _check_outbound_host(parsed.hostname or "", parsed.scheme, ctx, action=action)
+
+    sent = dict(headers or {})
+    sent.update(_auth_headers(conn))
+
+    import httpx
+
+    async with httpx.AsyncClient(timeout=WEBHOOK_TIMEOUT_SECONDS) as client:
+        resp = await client.request(method, str(target), headers=sent, json=body if body is not None else None)
+    try:
+        parsed_body: Any = resp.json()
+    except Exception:  # noqa: BLE001 - any non-JSON body falls back to text
+        parsed_body = resp.text
+    return {"status_code": resp.status_code, "ok": resp.is_success, "body": parsed_body}
+
+
 @register
 class HttpRequest:
     """Authenticated HTTP call via a reusable connection (the connector task).
@@ -634,41 +679,22 @@ class HttpRequest:
     type = "http_request"
 
     async def execute(self, ctx: ActionContext) -> dict[str, Any]:
-        conn: ResolvedConnection | None = None
-        name = ctx.config.get("connection")
-        if name:
-            if ctx.resolve_connection is None:
-                raise ActionError("connections are not available in this context")
-            conn = await ctx.resolve_connection(str(name))
-            if conn is None:
-                raise ActionError(f"connection not found: {name!r}")
-
-        base = (conn.base_url if conn and conn.base_url else "") or ""
-        url = ctx.config.get("url") or (base.rstrip("/") + "/" + str(ctx.config.get("path", "")).lstrip("/"))
-        parsed = urlparse(url)
-        host = parsed.hostname or ""
-        _check_outbound_host(host, parsed.scheme, ctx, action="http_request")
-
-        method = str(ctx.config.get("method", "GET")).upper()
-        headers: dict[str, str] = {}
-        for key, value in (ctx.config.get("headers") or {}).items():
-            headers[str(key)] = str(value)
-        headers.update(_auth_headers(conn))
         # Render ``{{after.x}}`` / ``{{vars.kb.answer}}`` tokens in the JSON body so a
         # request can carry values from the trigger or an earlier captured step
         # (e.g. speak a knowledge_search answer). The URL/host is intentionally NOT
         # templated — it stays under the connection + SSRF allow-list.
         body = _render_deep(ctx.config.get("body"), _trigger_context(ctx))
-
-        import httpx
-
-        async with httpx.AsyncClient(timeout=WEBHOOK_TIMEOUT_SECONDS) as client:
-            resp = await client.request(method, url, headers=headers, json=body if body is not None else None)
-        try:
-            parsed_body: Any = resp.json()
-        except Exception:  # noqa: BLE001 - any non-JSON body falls back to text
-            parsed_body = resp.text
-        return {"status_code": resp.status_code, "ok": resp.is_success, "body": parsed_body}
+        headers: dict[str, str] = {str(k): str(v) for k, v in (ctx.config.get("headers") or {}).items()}
+        return await call_connection(
+            ctx,
+            connection=ctx.config.get("connection"),
+            path=ctx.config.get("path", ""),
+            url=ctx.config.get("url"),
+            method=str(ctx.config.get("method", "GET")).upper(),
+            body=body,
+            headers=headers,
+            action="http_request",
+        )
 
     def simulate(self, ctx: ActionContext) -> dict[str, Any]:
         # Never resolve/echo the secret in a dry run.
@@ -793,6 +819,42 @@ class Summarize:
 
     type = "summarize"
 
+    def _speak_sink(self, ctx: ActionContext) -> Any:
+        """Build the "speak each clause as it is written" callback, or None.
+
+        Config: ``{"speak_connection": "robot", "speak_path": "/say", "speak_field": "text",
+        "speak": {"$ref": "inputs.speak"}}``. With a connection set, the robot starts talking
+        after the first phrase instead of after the whole answer — the difference between
+        ~2s and ~13s of silence on a detailed reply, and what makes a generous word budget
+        affordable. ``speak`` may be a literal or a per-run toggle so the chat's Speak switch
+        still silences it; absent, a configured connection speaks.
+
+        The first clause is sent with ``append: false`` so a new answer cuts off a stale one;
+        every clause after it appends, or each would cancel its predecessor mid-word and only
+        the last sentence would be heard.
+        """
+        context = _trigger_context(ctx)
+        connection = _resolve_dynamic(ctx.config.get("speak_connection"), context)
+        connection = str(connection or "").strip()
+        if not connection:
+            return None
+        if not _as_bool(_resolve_dynamic(ctx.config.get("speak"), context), True):
+            return None
+        path = str(_resolve_dynamic(ctx.config.get("speak_path"), context) or "/say")
+        field = str(_resolve_dynamic(ctx.config.get("speak_field"), context) or "text")
+
+        async def speak(clause: str, index: int) -> None:
+            await call_connection(
+                ctx,
+                connection=connection,
+                path=path,
+                method="POST",
+                body={field: clause, "append": index > 0},
+                action="summarize.speak",
+            )
+
+        return speak
+
     def _field(self, ctx: ActionContext, key: str) -> str:
         raw = ctx.config.get(key)
         context = _trigger_context(ctx)
@@ -813,6 +875,7 @@ class Summarize:
         # resolves to None → the runner falls back to the org's default summary model.
         max_words = _as_int(_resolve_dynamic(ctx.config.get("max_words"), context), 30)
         model = str(_resolve_dynamic(ctx.config.get("model"), context) or "").strip() or None
+        speak = self._speak_sink(ctx)
         spoken = await ctx.summarize(
             {
                 "text": text,
@@ -825,12 +888,23 @@ class Summarize:
                 # line — and only the one the viewer is meant to read should be
                 # painted live. Off by default so an internal step never leaks.
                 "stream": bool(ctx.config.get("stream")),
+                # Same opt-in reasoning for the VOICE: only the node the author marks as the
+                # answer should be spoken, and only clause by clause when it names a
+                # connection to speak through.
+                "on_chunk": speak,
             }
         )
-        return {"text": spoken, "input_chars": len(text), "output_chars": len(spoken)}
+        return {
+            "text": spoken,
+            "input_chars": len(text),
+            "output_chars": len(spoken),
+            # Lets a downstream node tell whether the voice already carried this answer, so a
+            # trailing "say the whole thing" step is not needed (and would repeat it).
+            "streamed_speech": speak is not None,
+        }
 
     def simulate(self, ctx: ActionContext) -> dict[str, Any]:
-        # Never call the LLM in a dry run.
+        # Never call the LLM in a dry run — and never make the robot talk, either.
         text = self._field(ctx, "text")
         return {"text": "<summarized spoken reply>", "input_chars": len(text), "output_chars": 0}
 
