@@ -163,10 +163,24 @@ pidfile_of() { echo "$LAB/llama-$1.pid"; }
 # the embedder needs --embeddings and nothing else.
 flags_of() {
   case "$1" in
-    # -ncmoe 44 keeps the first 44 layers' experts on CPU and puts the last 4 on the
-    # GPU — measured ~12% faster than --cpu-moe (all 48 on CPU) on a RAG-shaped prompt,
-    # at 4.5 GB VRAM instead of 2.8 GB. Do not raise it further on a 6 GB card: -ncmoe 40
-    # fails at startup with "failed to allocate compute pp buffers".
+    # -ncmoe 44 keeps the first 44 layers' experts on CPU and puts the last 4 on the GPU.
+    #
+    # An earlier note here claimed ~12% faster than --cpu-moe (all 48 on CPU). RE-MEASURED
+    # 31 Jul 2026 as an adjacent A/B/A (44 → 48 → 44, three runs each, -ub 2048) and it
+    # does NOT hold: 25.5 / 24.9 / 24.4 tok/s. Four expert layers cost 1492 MiB of VRAM
+    # (5682 vs 4190) and bought under 2% — inside the run-to-run noise.
+    #
+    # That is the important thing to know before spending money on this box: partial
+    # expert offload scales badly, because generation waits on whichever experts are
+    # still in system RAM. 44 of 48 still commuting means you keep essentially all of
+    # the cost. The speedup is a STEP, not a slope — it arrives when the last expert
+    # lands on the card (~18 GB of weights + KV, so a 24 GB GPU), not gradually as
+    # layers move. Doubling to 12 GB would move ~16 layers (≈373 MiB each) and still
+    # leave 28 on the CPU path.
+    #
+    # 44 is kept because it costs nothing to keep and would pay off on a bigger card.
+    # Do not lower it here: -ncmoe 43 dies with "CUDA error: out of memory" once
+    # -ub 2048's compute buffers are allocated.
     # -np 2 rather than the default 4: fewer slots means a larger KV budget each and a
     # better chance the previous turn's prefix is still cached.
     # --cache-reuse makes that cached prefix actually pay off. A chat turn's prompt is
