@@ -548,6 +548,11 @@ function isSelfEcho(heard: string, spoken: string): boolean {
   return s.includes(h) || h.includes(s);
 }
 
+/** How long a turn may sit unanswered before the chat gives up on it. Comfortably
+ * past the run call's own 120s timeout, so this only catches a run that reported
+ * success and then never wrote a reply. */
+const ANSWER_TIMEOUT_MS = 180_000;
+
 /** Default "one moment…" chatter shown/spoken while a slow answer is still cooking.
  * `{q}` is swapped for the person's question so some lines restate what was asked
  * (which both reassures the asker and buys the robot time). */
@@ -749,6 +754,17 @@ function ChatNode({ el, preview }: { el: ChatElement; preview: boolean }) {
     return () => window.clearInterval(id);
   }, [thinking]);
 
+  // Backstop: a run that reports success but never writes a reply would otherwise
+  // leave the indicator running for the life of the page. The run call itself times
+  // out at 120s, so anything still waiting well past that is never arriving.
+  useEffect(() => {
+    if (!thinking) return;
+    const id = window.setTimeout(() => {
+      if (mountedRef.current) failTurn("The robot did not reply. Try asking again.");
+    }, ANSWER_TIMEOUT_MS);
+    return () => window.clearTimeout(id);
+  }, [thinking]);
+
   // While the robot is thinking, drip out filler chatter: the first line after
   // `delay_ms`, then another every `interval_ms`, until the reply lands (which
   // flips `thinking` off and tears this down). Each line is also spoken through
@@ -798,6 +814,19 @@ function ChatNode({ el, preview }: { el: ChatElement; preview: boolean }) {
     streamAbortRef.current?.abort();
     streamAbortRef.current = null;
     setLiveAnswer("");
+  };
+
+  /**
+   * End a turn that will never produce a reply: stop the timer, the filler chatter
+   * and the stream, and surface why. Every failure path routes through here so none
+   * of them can leave the "thinking" indicator running on its own.
+   */
+  const failTurn = (message: string) => {
+    askedAtRef.current = null;
+    setThinking(false);
+    setFillers([]);
+    stopAnswerStream();
+    setErr(message);
   };
 
   /**
@@ -905,14 +934,25 @@ function ChatNode({ el, preview }: { el: ChatElement; preview: boolean }) {
           el.answer_workflow_id,
           { inputs, ...(streamToken ? { stream_token: streamToken } : {}) },
           120000,
-        ).catch((e: unknown) => {
-          if (!mountedRef.current) return;
-          askedAtRef.current = null;
-          setThinking(false);
-          setFillers([]);
-          stopAnswerStream();
-          setErr(e instanceof Error ? e.message : "The robot could not answer");
-        });
+        )
+          .then((result) => {
+            // A FAILED run still answers HTTP 200 — the failure is in the body, so
+            // the .catch below never sees it. Without this the spinner ticks forever
+            // waiting for a robot_message the run never wrote: observed at 508s after
+            // the LLM connection dropped mid-answer ("peer closed connection without
+            // sending complete message body").
+            //
+            // Only failure is handled here. A succeeded run may still be moments away
+            // from its message landing, and the poll is what picks that up.
+            if (!mountedRef.current) return;
+            if (result.status === "failed" || result.error) {
+              failTurn(result.error || "The robot could not answer");
+            }
+          })
+          .catch((e: unknown) => {
+            if (!mountedRef.current) return;
+            failTurn(e instanceof Error ? e.message : "The robot could not answer");
+          });
       }
     } catch (e: unknown) {
       setErr(e instanceof Error ? e.message : "Failed to send");
