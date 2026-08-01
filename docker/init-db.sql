@@ -43,3 +43,11 @@ $$;
 GRANT app_user TO km_app;
 GRANT CONNECT ON DATABASE redarch_km TO km_app;
 GRANT CREATE ON SCHEMA public TO km_app;
+
+-- CREATE on the schema builds the ce_* table, but the entity authoring path then
+-- points a foreign key at orgs (ce_<uuid>.org_id -> orgs.id), and Postgres wants
+-- REFERENCES on the *referenced* table to allow that. Without it every runtime
+-- entity creation dies with "permission denied for table orgs". Granted to
+-- app_user so km_app inherits it like every other table privilege; it is narrower
+-- than the CRUD app_user already holds on orgs (see migration 041).
+GRANT REFERENCES ON TABLE orgs TO app_user;
