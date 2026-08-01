@@ -61,13 +61,27 @@ function evalNode(expr: unknown, ctx: ExprContext): unknown {
     }
     case "!":
       return !truthy(ev[0]);
+    // Truthy cast. The idiomatic JsonLogic way to ask "is this set?" — an author
+    // gating an element on a relation being populated writes {"!!": [{"var": "..."}]}.
+    case "!!":
+      return truthy(ev[0]);
     case "==":
     case "!=":
+    case "===":
+    case "!==":
     case "<":
     case "<=":
     case ">":
     case ">=":
       return compare(op, ev[0], ev[1]);
+    // Membership, matching the server evaluator: an element in a list, or a
+    // substring of a string. A missing container is never a match.
+    case "in": {
+      const [needle, container] = ev;
+      if (Array.isArray(container)) return container.includes(needle);
+      if (typeof container === "string") return container.includes(String(needle ?? ""));
+      return false;
+    }
     case "+":
     case "-":
     case "*":
@@ -123,8 +137,14 @@ function compare(op: string, a: unknown, b: unknown): boolean {
     x = na;
     y = nb;
   }
+  // `==`/`!=` compare loosely across types (numeric strings are coerced above);
+  // `===`/`!==` are the strict forms, which never coerce — the server-side
+  // evaluator draws the same distinction, so an expression must mean the same
+  // thing whether a gateway or an element's `visible_when` evaluates it.
   if (op === "==") return x === y;
   if (op === "!=") return x !== y;
+  if (op === "===") return a === b;
+  if (op === "!==") return a !== b;
   if (x == null || y == null) return false;
   if (op === "<") return (x as number) < (y as number);
   if (op === "<=") return (x as number) <= (y as number);

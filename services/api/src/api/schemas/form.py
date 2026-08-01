@@ -89,6 +89,15 @@ class FormConfig(BaseModel):
 
     version: int = 2
     elements: list[FormElement] = Field(default_factory=list)
+    # Optional live refresh: when set, the runtime viewer re-fetches the render on
+    # this cadence so record-bound elements (progress bars, calculated values,
+    # `visible_when` gates, section fields, a state-driven `image`) follow the
+    # record as a workflow changes it — the page-level counterpart to the per-element
+    # `poll_ms` that `record_list`/`report`/`live_value` already have. Values the
+    # viewer has EDITED are preserved across a refresh (a refresh never clobbers
+    # typing); it is meant for status/display pages, not data-entry forms.
+    # Floor of 1s so a page can't hammer the API.
+    refresh_ms: int | None = Field(default=None, ge=1000, le=3_600_000)
 
     @model_validator(mode="before")
     @classmethod

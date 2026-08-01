@@ -376,3 +376,198 @@ class TestGradeQuiz:
         handler = ACTION_REGISTRY["grade_quiz"]
         with pytest.raises(ActionError):
             await handler.execute(_ctx({}, repo=FakeRepo([]), inputs={}))
+
+
+class TestUpdateRecordIncrements:
+    """`increments` is the counter/gauge primitive: a workflow can add to a field's
+    CURRENT value (score, fuel, attempt counts) which a `{{ }}` template can't express."""
+
+    @pytest.mark.asyncio
+    async def test_delta_is_added_to_the_stored_value(self) -> None:
+        rid = uuid.uuid4()
+        repo = FakeRepo([{"id": rid, "score": 40, "solved": 2}])
+        handler = ACTION_REGISTRY["update_record"]
+        ctx = _ctx(
+            {
+                "target_slug": "mission_run",
+                "record_id": str(rid),
+                "increments": {"score": {"$ref": "vars.p.points"}, "solved": 1},
+            },
+            repo=repo,
+            vars={"p": {"points": 15}},
+        )
+        await handler.execute(ctx)
+        _, patch = repo.update_calls[0]
+        assert patch == {"score": 55, "solved": 3}
+
+    @pytest.mark.asyncio
+    async def test_clamp_bounds_the_result(self) -> None:
+        rid = uuid.uuid4()
+        repo = FakeRepo([{"id": rid, "shields": 10, "hull": 95}])
+        handler = ACTION_REGISTRY["update_record"]
+        ctx = _ctx(
+            {
+                "target_slug": "mission_run",
+                "record_id": str(rid),
+                "increments": {"shields": -20, "hull": 20},
+                "clamp": {"shields": [0, 100], "hull": [0, 100]},
+            },
+            repo=repo,
+        )
+        await handler.execute(ctx)
+        _, patch = repo.update_calls[0]
+        assert patch == {"shields": 0, "hull": 100}  # neither runs off the gauge
+
+    @pytest.mark.asyncio
+    async def test_missing_current_value_counts_as_zero(self) -> None:
+        rid = uuid.uuid4()
+        repo = FakeRepo([{"id": rid}])
+        handler = ACTION_REGISTRY["update_record"]
+        ctx = _ctx({"target_slug": "s", "record_id": str(rid), "increments": {"score": 10}}, repo=repo)
+        await handler.execute(ctx)
+        assert repo.update_calls[0][1] == {"score": 10}
+
+    @pytest.mark.asyncio
+    async def test_unresolvable_delta_is_skipped_not_zeroed(self) -> None:
+        # An unset `{{ inputs.bonus }}` must not wipe the field it was meant to bump.
+        rid = uuid.uuid4()
+        repo = FakeRepo([{"id": rid, "score": 40}])
+        handler = ACTION_REGISTRY["update_record"]
+        ctx = _ctx(
+            {"target_slug": "s", "record_id": str(rid), "increments": {"score": "{{ inputs.bonus }}"}},
+            repo=repo,
+            inputs={},
+        )
+        await handler.execute(ctx)
+        assert repo.update_calls[0][1] == {}
+
+    @pytest.mark.asyncio
+    async def test_explicit_values_win_over_increments(self) -> None:
+        rid = uuid.uuid4()
+        repo = FakeRepo([{"id": rid, "score": 40}])
+        handler = ACTION_REGISTRY["update_record"]
+        ctx = _ctx(
+            {"target_slug": "s", "record_id": str(rid), "values": {"score": 0}, "increments": {"score": 10}},
+            repo=repo,
+        )
+        await handler.execute(ctx)
+        assert repo.update_calls[0][1] == {"score": 0}  # a reset beats a bump
+
+    @pytest.mark.asyncio
+    async def test_increments_alone_satisfy_the_non_empty_requirement(self) -> None:
+        rid = uuid.uuid4()
+        repo = FakeRepo([{"id": rid, "n": 1}])
+        handler = ACTION_REGISTRY["update_record"]
+        await handler.execute(_ctx({"target_slug": "s", "record_id": str(rid), "increments": {"n": 1}}, repo=repo))
+        assert repo.update_calls[0][1] == {"n": 2}
+
+    @pytest.mark.asyncio
+    async def test_empty_config_still_raises(self) -> None:
+        handler = ACTION_REGISTRY["update_record"]
+        with pytest.raises(ActionError):
+            await handler.execute(_ctx({"target_slug": "s", "values": {}, "increments": {}}, repo=FakeRepo([])))
+
+    @pytest.mark.asyncio
+    async def test_fractional_delta_keeps_precision(self) -> None:
+        rid = uuid.uuid4()
+        repo = FakeRepo([{"id": rid, "level": Decimal("2.5")}])
+        handler = ACTION_REGISTRY["update_record"]
+        await handler.execute(_ctx({"target_slug": "s", "record_id": str(rid), "increments": {"level": 0.25}}, repo=repo))
+        assert repo.update_calls[0][1] == {"level": 2.75}
+
+
+class TestRandomAction:
+    """`random` is the variety primitive — without it a workflow can only ever do the
+    same thing in the same order, so nothing can feel unpredictable."""
+
+    @pytest.mark.asyncio
+    async def test_rolls_within_an_inclusive_range(self) -> None:
+        handler = ACTION_REGISTRY["random"]
+        for _ in range(50):
+            out = await handler.execute(_ctx({"min": 1, "max": 6}))
+            assert 1 <= out["value"] <= 6
+            assert out["min"] == 1 and out["max"] == 6
+
+    @pytest.mark.asyncio
+    async def test_defaults_to_a_percentage_roll(self) -> None:
+        out = await ACTION_REGISTRY["random"].execute(_ctx({}))
+        assert 1 <= out["value"] <= 100
+        assert out["min"] == 1 and out["max"] == 100
+
+    @pytest.mark.asyncio
+    async def test_seed_makes_the_roll_reproducible(self) -> None:
+        handler = ACTION_REGISTRY["random"]
+        first = await handler.execute(_ctx({"min": 1, "max": 1000, "seed": "deep-horizon"}))
+        again = await handler.execute(_ctx({"min": 1, "max": 1000, "seed": "deep-horizon"}))
+        assert first["value"] == again["value"]
+
+    @pytest.mark.asyncio
+    async def test_choices_pick_is_one_based_for_sequence_lookups(self) -> None:
+        handler = ACTION_REGISTRY["random"]
+        out = await handler.execute(_ctx({"choices": ["asteroids", "boarders", "flare"], "seed": 7}))
+        assert out["choice"] in ("asteroids", "boarders", "flare")
+        assert out["value"] == out["index"] + 1  # value indexes a 1-based `sequence`
+        assert out["max"] == 3
+
+    @pytest.mark.asyncio
+    async def test_bounds_resolve_from_run_values(self) -> None:
+        # The bank size is only known at run time (e.g. a counted hazard table).
+        out = await ACTION_REGISTRY["random"].execute(
+            _ctx({"min": 1, "max": {"$ref": "vars.n.count"}}, vars={"n": {"count": 4}})
+        )
+        assert 1 <= out["value"] <= 4 and out["max"] == 4
+
+    @pytest.mark.asyncio
+    async def test_inverted_bounds_are_tolerated(self) -> None:
+        out = await ACTION_REGISTRY["random"].execute(_ctx({"min": 10, "max": 2}))
+        assert 2 <= out["value"] <= 10
+
+    @pytest.mark.asyncio
+    async def test_empty_choices_falls_back_to_a_number_roll(self) -> None:
+        out = await ACTION_REGISTRY["random"].execute(_ctx({"choices": [], "min": 5, "max": 5}))
+        assert out["value"] == 5 and out["choice"] is None
+
+
+class TestLlmQuestion:
+    """`llm_question` writes ONE complete multiple-choice question in the same shape a
+    stored question record uses, so a create_record step can persist it field-for-field."""
+
+    @pytest.mark.asyncio
+    async def test_returns_every_question_field(self) -> None:
+        captured: dict = {}
+
+        async def fake_question(opts):
+            captured.update(opts)
+            return {
+                "title": "Oxygen Fractions",
+                "prompt": "The tank is 3/4 full of 200 L. How many liters?",
+                "choice_a": "75",
+                "choice_b": "150",
+                "choice_c": "100",
+                "choice_d": "175",
+                "correct_choice": "B",
+                "hint": "Quarter it, then take three.",
+            }
+
+        ctx = _ctx({"topic": "fractions on a ship", "audience": "{{inputs.band}} grade"}, inputs={"band": "3-5"})
+        ctx.question = fake_question
+        out = await ACTION_REGISTRY["llm_question"].execute(ctx)
+        assert out["correct_choice"] == "B"
+        assert out["choice_a"] == "75" and out["choice_d"] == "175"
+        assert captured["audience"] == "3-5 grade"  # templates resolve before the call
+
+    @pytest.mark.asyncio
+    async def test_missing_topic_raises(self) -> None:
+        ctx = _ctx({"audience": "2nd grade"})
+        ctx.question = lambda opts: None
+        with pytest.raises(ActionError):
+            await ACTION_REGISTRY["llm_question"].execute(ctx)
+
+    @pytest.mark.asyncio
+    async def test_unavailable_capability_raises(self) -> None:
+        with pytest.raises(ActionError):
+            await ACTION_REGISTRY["llm_question"].execute(_ctx({"topic": "orbits"}))
+
+    def test_dry_run_never_calls_the_model(self) -> None:
+        out = ACTION_REGISTRY["llm_question"].simulate(_ctx({"topic": "orbits"}))
+        assert out["prompt"] == "" and out["correct_choice"] == ""

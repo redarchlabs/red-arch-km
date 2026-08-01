@@ -12,8 +12,10 @@ import {
   type FormElement,
   type FormRender,
   type FormSubmit,
+  type ImageElement,
   type InputElement,
   type LiveValueElement,
+  type PuzzlePadElement,
   type RecordListElement,
   type ReportElement,
   type SectionElement,
@@ -28,9 +30,14 @@ import { Dialog, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { buildCatalog, fieldMeta, relatedEntityId } from "@/lib/forms/catalog";
 import { fillTokens } from "@/lib/forms/href";
 import { evaluate } from "@/lib/forms/jsonLogic";
+import { mergeServerValues, sameValue } from "@/lib/forms/mergeValues";
+import { displayLiveValue, formatLiveValue, readJsonPointer } from "@/lib/forms/liveValue";
 import { useSpeechRecognition } from "@/lib/speech/useSpeechRecognition";
 
 import { FieldControl } from "./FieldControl";
+import { QrCodeCard } from "./QrCodeCard";
+import { PuzzlePad } from "./puzzle/PuzzlePad";
+import type { PadOutcome } from "./puzzle/types";
 import { SlideDeck, coerceSlides } from "./SlideDeck";
 
 /**
@@ -107,16 +114,6 @@ function collectInputs(elements: FormElement[]): InputElement[] {
 }
 
 /** Read a dot-path (e.g. `head.pitch`, `items.0.name`) out of a parsed JSON value. */
-function readJsonPointer(data: unknown, pointer?: string | null): unknown {
-  if (!pointer) return data;
-  let cur: unknown = data;
-  for (const part of pointer.split(".")) {
-    if (cur == null || typeof cur !== "object") return undefined;
-    cur = (cur as Record<string, unknown>)[part];
-  }
-  return cur;
-}
-
 /** A read-only readout that polls a CORS-reachable endpoint and shows a JSON value.
  * Top-level (owns polling state) so it's not re-created each parent render. */
 function LiveValueNode({ el }: { el: LiveValueElement }) {
@@ -136,7 +133,7 @@ function LiveValueNode({ el }: { el: LiveValueElement }) {
         const picked = readJsonPointer(json, el.json_pointer);
         if (!alive) return;
         setOk(true);
-        setValue(picked == null ? "—" : typeof picked === "object" ? JSON.stringify(picked) : String(picked));
+        setValue(formatLiveValue(picked));
       } catch {
         if (!alive) return;
         setOk(false);
@@ -159,7 +156,9 @@ function LiveValueNode({ el }: { el: LiveValueElement }) {
           ok ? "" : "text-destructive"
         }`}
       >
-        {value}
+        {/* Translated at render, not in the poll, so an edited map takes effect on the
+            next render instead of only on the next re-poll. */}
+        {displayLiveValue(value, el.value_map)}
         {el.units ? <span className="ml-1 text-muted-foreground">{el.units}</span> : null}
       </div>
     </div>
@@ -521,10 +520,20 @@ function newStreamToken(): string {
 /** Rough estimate of how long it takes to speak `text` aloud, used by always-on
  * voice to keep the mic paused until the robot has (approximately) finished
  * talking — otherwise the mic transcribes the robot's own reply and loops.
- * ~150 wpm ≈ 400ms/word, plus a base for startup/network, clamped to a sane band. */
+ * ~150 wpm ≈ 400ms/word, plus a base for startup/network.
+ *
+ * The ceiling has to clear the LONGEST answer the chat can produce, not a typical
+ * one. A chat element's `verbose_words` goes up to 200, which is ~80s of speech;
+ * the old 20s cap silently truncated anything past ~48 words, so the mic reopened
+ * mid-sentence and transcribed the rest of the robot's own answer as a new
+ * question. It stays capped only so a freak input can't wedge the mic shut.
+ *
+ * `TAIL_PAD_MS` covers the gap between the last word and recognition settling —
+ * without it the final syllable reliably bleeds into the reopened mic. */
 function estimateSpeechMs(text: string): number {
   const words = text.trim().split(/\s+/).filter(Boolean).length;
-  return Math.min(20000, Math.max(1500, 800 + words * 400));
+  const TAIL_PAD_MS = 1200;
+  return Math.min(180_000, Math.max(1500, 800 + words * 400 + TAIL_PAD_MS));
 }
 
 /** Normalize speech text for self-echo comparison: lowercase, strip everything but
@@ -843,7 +852,16 @@ function ChatNode({ el, preview }: { el: ChatElement; preview: boolean }) {
         for await (const event of streamRunTokens(streamToken, { signal: controller.signal })) {
           if (!mountedRef.current || controller.signal.aborted) return;
           if (event.type === "delta" && event.text) {
-            setLiveAnswer((prev) => prev + event.text);
+            setLiveAnswer((prev) => {
+              const next = prev + event.text;
+              // The robot speaks each finished clause as it streams, well before the
+              // reply record lands — so the self-echo backstop has to track the text
+              // being spoken RIGHT NOW. Left until the poll loop set it, this ref
+              // still held the PREVIOUS answer for the whole streaming window, which
+              // is exactly when a bleed-through has to be recognized.
+              lastRobotSpokenRef.current = next;
+              return next;
+            });
           } else if (event.type === "done" || event.type === "error") {
             // The run has finished writing the reply — go get it now rather than
             // leaving the answer on screen as a preview for another poll cycle.
@@ -1257,7 +1275,7 @@ function ChatNode({ el, preview }: { el: ChatElement; preview: boolean }) {
         <input
           className="w-full rounded-md border bg-background px-3 py-2 text-sm disabled:opacity-60"
           placeholder={micActive ? "Listening…" : el.placeholder ?? "Message the robot…"}
-          value={micActive && voiceInterim ? voiceInterim : input}
+          value={micActive && voiceInterim && !isSelfEcho(voiceInterim, lastRobotSpokenRef.current) ? voiceInterim : input}
           disabled={preview || sending || micActive}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {
@@ -1425,12 +1443,29 @@ export function FormRenderer({
   const [related, setRelated] = useState<Record<string, RelatedState>>(() => initRelated(render));
   const [ui, setUi] = useState<Record<string, number | boolean>>({});
 
-  const setRoot = (slug: string, v: unknown) => setValues((p) => ({ ...p, [slug]: v }));
-  const setSection = (relId: string, slug: string, v: unknown) =>
+  // What the viewer has EDITED. A live refresh (a view's `config.refresh_ms` makes the
+  // page re-fetch) re-seeds values from the server, and must never overwrite something
+  // half-typed — so every key touched here is skipped on refresh. Refs, not state:
+  // dirtiness only gates the merge effect and must never itself trigger a render.
+  const dirtyRef = useRef<Set<string>>(new Set());
+  const relatedDirtyRef = useRef(false);
+  const markRelatedDirty = () => {
+    relatedDirtyRef.current = true;
+  };
+
+  const setRoot = (slug: string, v: unknown) => {
+    dirtyRef.current.add(slug);
+    setValues((p) => ({ ...p, [slug]: v }));
+  };
+  const setSection = (relId: string, slug: string, v: unknown) => {
+    markRelatedDirty();
     setRelated((p) => ({ ...p, [relId]: { ...p[relId], values: { ...p[relId]?.values, [slug]: v } } }));
+  };
   const rowsOf = (relId: string): RowState[] => related[relId]?.rows ?? [];
-  const setRows = (relId: string, rows: RowState[]) =>
+  const setRows = (relId: string, rows: RowState[]) => {
+    markRelatedDirty();
     setRelated((p) => ({ ...p, [relId]: { ...p[relId], rows } }));
+  };
   const setRowValue = (relId: string, idx: number, slug: string, v: unknown) => {
     const rows = [...rowsOf(relId)];
     rows[idx] = { ...rows[idx], values: { ...rows[idx].values, [slug]: v } };
@@ -1460,6 +1495,22 @@ export function FormRenderer({
       return changed ? next : prev;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [render]);
+
+  // Adopt a refreshed render: `values` is seeded once at mount, so without this a
+  // re-fetched render would change nothing on screen. Untouched keys follow the
+  // server; edited ones (dirtyRef) are left alone, and identical values produce no
+  // state change so a quiet poll never re-renders the tree.
+  useEffect(() => {
+    setValues((prev) => mergeServerValues(prev, render.values, dirtyRef.current));
+    // Related state is a nested structure; re-seed it wholesale, but only while the
+    // viewer hasn't edited any of it (a status page never does).
+    if (!relatedDirtyRef.current) {
+      setRelated((prev) => {
+        const next = initRelated(render);
+        return sameValue(prev, next) ? prev : next;
+      });
+    }
   }, [render]);
 
   const buildPayload = (): FormSubmit => {
@@ -1509,6 +1560,22 @@ export function FormRenderer({
         else window.location.href = href;
       }
     }
+  };
+
+  /** A puzzle pad finished. Its outcome joins the values the action's `inputs`
+   * expressions can read, so a workflow input is written exactly as a button's
+   * would be — `{"var": "answer"}`, `{"var": "solved"}`. */
+  const completePuzzle = async (el: PuzzlePadElement, scope: Scope, outcome: PadOutcome) => {
+    const action = el.on_complete;
+    if (!action) return;
+    if (action.confirm && !window.confirm(action.confirm)) return;
+    // Root values first, so a pad inside a section can still reference the page
+    // record; the section's own values shadow them, and the outcome wins over both.
+    const context = { ...values, ...scope.values, ...outcome };
+    const inputs: Record<string, unknown> = {};
+    for (const [k, expr] of Object.entries(action.inputs ?? {})) inputs[k] = evaluate(expr, context);
+    await onRunWorkflow?.(action.workflow_id, inputs);
+    if (action.success_message) toast.success(action.success_message);
   };
 
   const rootScope: Scope = {
@@ -1579,6 +1646,25 @@ export function FormRenderer({
         return (
           <div className={spanClass(el.width)}>
             <LiveValueNode el={el} />
+          </div>
+        );
+      case "image":
+        return <div className={spanClass(el.width)}>{ImageNode({ el, scope })}</div>;
+      case "qr_code":
+        return (
+          <div className={spanClass(el.width)}>
+            <QrCodeCard el={el} values={scope.values} recordId={render.record_id} disabled={preview} />
+          </div>
+        );
+      case "puzzle_pad":
+        return (
+          <div className={spanClass(el.width)}>
+            <PuzzlePad
+              el={el}
+              values={scope.values}
+              disabled={preview || submitting}
+              onComplete={(outcome) => void completePuzzle(el, scope, outcome)}
+            />
           </div>
         );
       case "slides": {
@@ -1689,6 +1775,29 @@ export function FormRenderer({
     return <p className="text-sm text-muted-foreground">{el.text}</p>;
   }
 
+  /** A display-only picture. The `url` is token-filled from the enclosing scope's
+   * values (`{id}` = the bound record id) and scheme-checked by `fillTokens`, so the
+   * artwork can follow record state — e.g. `/sim/ship-{ship_condition}.svg`. */
+  function ImageNode({ el, scope }: { el: ImageElement; scope: Scope }) {
+    const src = fillTokens(el.url ?? "", { ...scope.values, id: render.record_id ?? "" });
+    if (!src) return null;
+    return (
+      <figure className="space-y-1">
+        {/* eslint-disable-next-line @next/next/no-img-element -- author-supplied URL
+            (relative or remote); next/image needs build-time-known domains. */}
+        <img
+          src={src}
+          alt={el.alt ?? el.caption ?? ""}
+          className="w-full rounded-md object-contain"
+          style={el.max_height ? { maxHeight: `${el.max_height}px` } : undefined}
+        />
+        {el.caption ? (
+          <figcaption className="text-center text-xs text-muted-foreground">{el.caption}</figcaption>
+        ) : null}
+      </figure>
+    );
+  }
+
   function CalculatedNode({ el, scope }: { el: CalculatedElement; scope: Scope }) {
     const result = evaluate(el.expression, scope.values);
     const display = result == null ? "—" : String(result);
@@ -1737,18 +1846,33 @@ export function FormRenderer({
   }
 
   function ButtonNode({ el }: { el: ButtonElement }) {
+    // Each variant darkens one step on hover and a further step while held, following the
+    // same /90-then-/80 ramp as the shared buttonVariants (ui/components/ui/button-variants).
     const styles: Record<string, string> = {
-      primary: "bg-primary text-primary-foreground",
-      secondary: "border bg-background",
-      danger: "bg-destructive text-destructive-foreground",
-      ghost: "hover:bg-muted",
+      primary: "bg-primary text-primary-foreground hover:bg-primary/90 active:bg-primary/80",
+      secondary: "border bg-background hover:bg-accent hover:text-accent-foreground active:bg-accent/80",
+      danger: "bg-destructive text-destructive-foreground hover:bg-destructive/90 active:bg-destructive/80",
+      ghost: "hover:bg-muted active:bg-muted/80",
+    };
+    // The press effect is scale+shadow rather than colour alone, because these buttons are
+    // tapped on a touch screen during a mission, where there is no hover state to feel.
+    const interaction =
+      "transition-all duration-150 hover:shadow-sm active:scale-[0.97] active:shadow-none " +
+      "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring " +
+      "disabled:pointer-events-none disabled:opacity-60";
+    // Sized for the pointer that will actually hit it: a cursor by default, a
+    // finger on a view presented on a tablet or a wall display.
+    const sizes: Record<string, string> = {
+      default: "rounded-md px-4 py-2 text-sm",
+      large: "min-h-14 rounded-xl px-6 py-3 text-lg",
+      xl: "min-h-20 rounded-2xl px-8 py-4 text-2xl",
     };
     return (
       <button
         type={el.action.kind === "submit" ? "submit" : "button"}
         disabled={preview || submitting}
         onClick={el.action.kind === "submit" ? undefined : () => void runButton(el)}
-        className={`rounded-md px-4 py-2 text-sm font-medium disabled:opacity-60 ${styles[el.style]}`}
+        className={`font-medium ${sizes[el.size ?? "default"] ?? sizes.default} ${interaction} ${styles[el.style]}`}
       >
         {el.label}
       </button>

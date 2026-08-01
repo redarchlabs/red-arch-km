@@ -19,6 +19,8 @@ model in ``models/custom_entity.py``):
 
 from __future__ import annotations
 
+import contextlib
+import json
 import re
 import uuid
 from dataclasses import dataclass
@@ -31,10 +33,40 @@ from api.schemas.form_elements import MAX_TREE_DEPTH, tree_depth
 # fetched into the row so the link can substitute it.
 _LINK_TOKEN_RE = re.compile(r"\{(\w+)\}")
 
+# ``{slug}`` placeholders inside a ``puzzle_pad`` spec. Narrower than the link
+# pattern above: a spec is full of author text, so only something shaped like a
+# field slug counts as a binding.
+_SPEC_TOKEN_RE = re.compile(r"\{([a-z][a-z0-9_]*)\}")
+
 
 def _link_field_tokens(href_template: str) -> list[str]:
     """Anchor field slugs a link column references (every ``{token}`` but ``{id}``)."""
     return [tok for tok in _LINK_TOKEN_RE.findall(href_template) if tok != "id"]
+
+
+def _puzzle_pad_slugs(el: Any) -> list[str]:
+    """Record fields a ``puzzle_pad`` reads.
+
+    Two sources, both of which must validate and be FETCHED — a pad whose data
+    never arrives renders as an empty console:
+
+    * the ``*_field`` attributes, where kind/spec/prompt/hint are pulled wholesale
+      from a record field;
+    * ``{slug}`` placeholders inside an INLINE spec, which is what lets one
+      authored pad serve many records (``{"label": "{choice_a}"}``) with nothing
+      stored per row.
+
+    The placeholder pattern is deliberately the shape of a field slug, so ordinary
+    text in a puzzle (``{1}``, ``{Red}``) is not mistaken for a binding and
+    rejected. The client fills tokens with the identical pattern.
+    """
+    names = ("kind_field", "spec_field", "prompt_field", "hint_field")
+    out = [slug for slug in (getattr(el, name, None) for name in names) if isinstance(slug, str) and slug]
+    spec = getattr(el, "spec", None)
+    if spec:
+        out.extend(_SPEC_TOKEN_RE.findall(json.dumps(spec)))
+    # Preserve order, drop duplicates — a slug named twice must be fetched once.
+    return list(dict.fromkeys(out))
 
 
 def _expr_var_slugs(expr: Any) -> list[str]:
@@ -57,6 +89,64 @@ def _expr_var_slugs(expr: Any) -> list[str]:
                 walk(item)
 
     walk(expr)
+    return out
+
+
+def collect_workflow_ids(elements: list[Any]) -> set[uuid.UUID]:
+    """Every workflow the tree can start, from anywhere it can be started.
+
+    This is the allow-list for anonymous access: a share token lets a stranger run
+    what the PAGE offers and nothing else, so a leaked link can never be turned
+    into "run any workflow in the org". Derived from the config rather than stored
+    separately, so it cannot drift from what the page actually shows — editing a
+    view to drop a button also drops the permission.
+
+    Walks containers recursively and covers every element that carries a workflow:
+    button run-actions, a puzzle pad's on-complete, a record list's row action, and
+    a chat's answer workflow.
+    """
+    out: set[uuid.UUID] = set()
+
+    def add(value: Any) -> None:
+        if isinstance(value, uuid.UUID):
+            out.add(value)
+        elif isinstance(value, str):
+            # A blank or malformed id simply grants nothing — failing closed is the
+            # right reading of "this button isn't wired up yet".
+            with contextlib.suppress(ValueError):
+                out.add(uuid.UUID(value))
+
+    def visit(el: Any) -> None:
+        etype = getattr(el, "type", None)
+        action = getattr(el, "action", None)
+        if action is not None and getattr(action, "kind", None) == "run_workflow":
+            add(getattr(action, "workflow_id", None))
+        if etype == "puzzle_pad":
+            on_complete = getattr(el, "on_complete", None)
+            if on_complete is not None:
+                add(getattr(on_complete, "workflow_id", None))
+        elif etype == "record_list":
+            add(getattr(el, "row_workflow_id", None))
+        elif etype == "chat":
+            add(getattr(el, "answer_workflow_id", None))
+        elif etype == "tab_group":
+            for tab in el.tabs:
+                for child in tab.elements:
+                    visit(child)
+        elif etype == "accordion":
+            for pane in el.panes:
+                for child in pane.elements:
+                    visit(child)
+        elif etype == "columns":
+            for col in el.columns:
+                for child in col.elements:
+                    visit(child)
+        elif etype in ("panel", "section", "block"):
+            for child in el.elements:
+                visit(child)
+
+    for e in elements:
+        visit(e)
     return out
 
 
@@ -170,12 +260,22 @@ def _validate_element(
     elif etype == "calculated":
         if el.target_slug is not None:
             _require_field(el.target_slug, ctx, fields_by_entity)
+    elif etype == "puzzle_pad":
+        for slug in _puzzle_pad_slugs(el):
+            _require_field(slug, ctx, fields_by_entity)
+    elif etype == "qr_code":
+        # The url may carry `{slug}` placeholders filled from the record, so a
+        # typo'd slug fails here rather than encoding a broken link into a QR
+        # code nobody can read by eye.
+        for slug in _link_field_tokens(el.url):
+            _require_field(slug, ctx, fields_by_entity)
     elif etype in (
         "label",
         "button",
         "form_ref",
         "input",
         "live_value",
+        "image",
         "progress",
         "slides",
         "chat",
@@ -307,6 +407,12 @@ def _leaf_slugs(elements: list[Any]) -> tuple[list[str], set[str], list[CalcBind
                 write.add(el.slug)
         elif el.type == "calculated" and el.target_slug is not None:
             calc.append(CalcBinding(el.target_slug, el.expression))
+        elif el.type == "puzzle_pad":
+            # Reads only — the pad never writes the related record. Its kind/spec/
+            # prompt/hint fields are declared so they are fetched into this
+            # container's values, which is where the pad looks for them.
+            for slug in _puzzle_pad_slugs(el):
+                declare(slug)
     return display, write, calc
 
 
@@ -341,6 +447,16 @@ def flatten(elements: list[Any], rels: dict[uuid.UUID, RelInfo]) -> Bindings:
         elif etype == "slides" and getattr(el, "slug", None):
             # A slug-bound deck reads the record's JSON slide field — fetch it.
             declare(el.slug)
+        elif etype == "puzzle_pad":
+            # Display-only, like progress: declare the fields the pad reads its
+            # kind/spec/prompt/hint from so build_render fetches them.
+            for slug in _puzzle_pad_slugs(el):
+                declare(slug)
+        elif etype == "qr_code":
+            # Declare the url's `{slug}` tokens so they are fetched — an unfilled
+            # token would encode a link with a hole in it.
+            for slug in _link_field_tokens(el.url):
+                declare(slug)
         elif etype == "section":
             info = rels[el.relationship_id]
             display, write, calc = _leaf_slugs(el.elements)

@@ -12,13 +12,24 @@ function genId(): string {
 
 export type PaletteKind = FormElement["type"];
 
-export const LEAF_KINDS: PaletteKind[] = ["field", "label", "calculated", "progress", "input", "live_value", "button"];
+export const LEAF_KINDS: PaletteKind[] = [
+  "field",
+  "label",
+  "image",
+  "calculated",
+  "progress",
+  "input",
+  "live_value",
+  "button",
+];
 export const DATA_KINDS: PaletteKind[] = ["section", "table", "block"];
 export const LAYOUT_KINDS: PaletteKind[] = ["tab_group", "panel", "accordion", "columns"];
 // Palette for the view builder: no entity-bound leaves, plus embedded forms. `input`,
 // `live_value`, `progress` and `record_list` are unbound, so they're valid in standalone views too.
 export const VIEW_KINDS: PaletteKind[] = [
   "label",
+  "image",
+  "qr_code",
   "input",
   "live_value",
   "progress",
@@ -27,6 +38,7 @@ export const VIEW_KINDS: PaletteKind[] = [
   "record_list",
   "chat",
   "button",
+  "puzzle_pad",
   "form_ref",
   ...LAYOUT_KINDS,
 ];
@@ -34,6 +46,8 @@ export const VIEW_KINDS: PaletteKind[] = [
 export const KIND_LABELS: Record<PaletteKind, string> = {
   field: "Field",
   label: "Label / text",
+  image: "Image / picture",
+  qr_code: "QR code (open on a phone / tablet)",
   calculated: "Calculated",
   input: "Input (slider / toggle / text)",
   live_value: "Live value",
@@ -43,6 +57,7 @@ export const KIND_LABELS: Record<PaletteKind, string> = {
   record_list: "Record list / status board",
   chat: "Chat",
   button: "Button",
+  puzzle_pad: "Puzzle pad (tap / drag / colour)",
   form_ref: "Embedded form",
   section: "Related record (1:1)",
   table: "Table (1:M)",
@@ -60,6 +75,19 @@ export function newElement(kind: PaletteKind): FormElement {
       return { id, type: "field", slug: "", width: "full" };
     case "label":
       return { id, type: "label", text: "Text", variant: "paragraph" };
+    case "image":
+      return { id, type: "image", url: "", alt: "", caption: null, max_height: 320 };
+    case "qr_code":
+      return {
+        id,
+        type: "qr_code",
+        url: "",
+        label: "Show QR code",
+        caption: "Point a phone or tablet camera at this.",
+        display: "button",
+        host: null,
+        size: 320,
+      };
     case "calculated":
       return {
         id,
@@ -117,7 +145,30 @@ export function newElement(kind: PaletteKind): FormElement {
         placeholder: "Message the robot…",
       };
     case "button":
-      return { id, type: "button", label: "Submit", action: { kind: "submit" }, style: "primary" };
+      return { id, type: "button", label: "Submit", action: { kind: "submit" }, style: "primary", size: "default" };
+    case "puzzle_pad":
+      // Ships with a playable example rather than an empty shell: a pad with no
+      // spec can't render anything, so a blank default would drop a broken
+      // element on the canvas and leave the author guessing at the JSON shape.
+      return {
+        id,
+        type: "puzzle_pad",
+        kind: "choices",
+        prompt: "Which one is it?",
+        spec: {
+          options: [
+            { value: "A", label: "First answer" },
+            { value: "B", label: "Second answer" },
+            { value: "C", label: "Third answer" },
+            { value: "D", label: "Fourth answer" },
+          ],
+          columns: 2,
+        },
+        hint: "",
+        on_complete: null,
+        submit_label: "Transmit",
+        show_hint: true,
+      };
     case "form_ref":
       return { id, type: "form_ref", form_id: "", mode: "display" };
     case "section":

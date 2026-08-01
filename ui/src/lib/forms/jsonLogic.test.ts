@@ -65,4 +65,71 @@ describe("jsonLogic evaluator (parity with form_expression.py)", () => {
     expect(evaluate({ unknown_op: [1, 2] }, {})).toBe(null);
     expect(evaluate({ date_add: ["not-a-date", 1, "day"] }, {})).toBe(null);
   });
+
+  // These ops exist in the SERVER-side evaluator (services/workflow/jsonlogic.py).
+  // A `visible_when` written against that vocabulary is evaluated HERE, so a gap
+  // silently hid whole sections of a view (an unknown op throws -> null -> falsy).
+  describe("parity with the server evaluator", () => {
+    it("!! casts to truthy", () => {
+      expect(evaluate({ "!!": [{ var: "puzzle" }] }, { puzzle: "an-id" })).toBe(true);
+      expect(evaluate({ "!!": [{ var: "puzzle" }] }, { puzzle: null })).toBe(false);
+      expect(evaluate({ "!!": [{ var: "puzzle" }] }, {})).toBe(false);
+    });
+
+    it("=== and !== compare strictly, without numeric coercion", () => {
+      expect(evaluate({ "===": [3, 3] }, {})).toBe(true);
+      expect(evaluate({ "===": ["3", 3] }, {})).toBe(false); // `==` would coerce
+      expect(evaluate({ "==": ["3", 3] }, {})).toBe(true);
+      expect(evaluate({ "!==": [{ var: "status" }, "complete"] }, { status: "active" })).toBe(true);
+      expect(evaluate({ "!==": [{ var: "status" }, "complete"] }, { status: "complete" })).toBe(false);
+    });
+
+    it("gates the crew station's answer buttons on a live challenge", () => {
+      // The exact expression the Crew Station view uses: show the answer buttons
+      // only when a challenge is loaded, unanswered, and the mission is running.
+      const showButtons = {
+        and: [
+          { "!!": [{ var: "current_puzzle" }] },
+          { "==": [{ var: "last_result" }, "none"] },
+          { "!==": [{ var: "status" }, "complete"] },
+        ],
+      };
+      const live = { current_puzzle: "p-1", last_result: "none", status: "active" };
+      expect(Boolean(evaluate(showButtons, live))).toBe(true);
+      expect(Boolean(evaluate(showButtons, { ...live, current_puzzle: null }))).toBe(false);
+      expect(Boolean(evaluate(showButtons, { ...live, last_result: "correct" }))).toBe(false);
+      expect(Boolean(evaluate(showButtons, { ...live, status: "complete" }))).toBe(false);
+    });
+    it("in matches a list element or a substring", () => {
+      expect(evaluate({ in: ["b", ["a", "b"]] }, {})).toBe(true);
+      expect(evaluate({ in: ["z", ["a", "b"]] }, {})).toBe(false);
+      expect(evaluate({ in: ["ell", "hello"] }, {})).toBe(true);
+      expect(evaluate({ in: ["x", null] }, {})).toBe(false);
+    });
+  });
+});
+
+describe("puzzle pad outcome expressions", () => {
+  // The crew station maps a pad's outcome into workflow inputs with these exact
+  // expressions. `graded` has to tell "the pad graded this and says no" apart from
+  // "the pad was never told the answer" — a distinction `!` cannot make, since
+  // false and null are both falsy.
+  const graded = { "!==": [{ var: "solved" }, null] };
+
+  it("reports graded for a pad that returned a verdict, either way", () => {
+    expect(evaluate(graded, { solved: true })).toBe(true);
+    expect(evaluate(graded, { solved: false })).toBe(true);
+  });
+
+  it("reports NOT graded when the pad was never told the answer", () => {
+    expect(evaluate(graded, { solved: null })).toBe(false);
+  });
+
+  it("lets the outcome shadow a same-named record field", () => {
+    // `solved` is also a mission_run field (puzzles solved so far). The renderer
+    // spreads the outcome last precisely so the pad's verdict wins here.
+    const context = { ...{ solved: 7 }, ...{ solved: null, answer: "C" } };
+    expect(evaluate(graded, context)).toBe(false);
+    expect(evaluate({ var: "answer" }, context)).toBe("C");
+  });
 });

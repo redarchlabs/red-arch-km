@@ -374,6 +374,69 @@ def test_record_list_row_workflow_inputs_round_trip():
     assert rl["row_workflow_inputs"]["learner_email"] == {"var": "email"}
 
 
+def test_live_value_value_map_round_trips_and_is_optional():
+    """A live_value can relabel the raw reading it polls — the robot console shows
+    "Thinking…" for a `true` off GET /pose rather than the encoding. Optional, so
+    every existing readout (no map) keeps validating unchanged."""
+    cfg = FormConfig.model_validate(
+        {
+            "version": 2,
+            "elements": [
+                {
+                    "type": "live_value",
+                    "label": "Thinking",
+                    "url": "https://localhost:8080/pose",
+                    "json_pointer": "thinking",
+                    "value_map": {"true": "🤔 Thinking…", "false": "idle"},
+                },
+                {"type": "live_value", "label": "Head pitch", "url": "https://localhost:8080/pose"},
+            ],
+        }
+    )
+    mapped, plain = cfg.model_dump(mode="json")["elements"]
+    assert mapped["value_map"] == {"true": "🤔 Thinking…", "false": "idle"}
+    assert plain["value_map"] is None
+
+
+def test_image_element_is_unbound_and_scheme_guarded(ids, fields_by_entity, rels):
+    """An `image` binds no entity data (so it's valid in a standalone view) and its
+    url is scheme-checked like a link href — it is rendered as a live `src`, and a
+    `{token}` url must not be able to smuggle a javascript: payload."""
+    cfg = FormConfig.model_validate(
+        {
+            "version": 2,
+            "elements": [
+                {
+                    "type": "image",
+                    "url": "/sim/ship-{ship_condition}.svg",
+                    "alt": "The ship",
+                    "caption": "Hull integrity nominal",
+                    "max_height": 320,
+                }
+            ],
+        }
+    )
+    fl.validate(cfg.elements, ids["root"], fields_by_entity, rels)  # no raise
+    b = fl.flatten(cfg.elements, rels)
+    assert b.root.write_slugs == set()
+    assert not b.containers
+
+    with pytest.raises(ValidationError):
+        FormConfig.model_validate(
+            {"version": 2, "elements": [{"type": "image", "url": "javascript:alert(1)"}]}
+        )
+
+
+def test_view_refresh_ms_round_trips_and_is_bounded():
+    """A view can declare a live-refresh cadence so the runtime re-reads its record.
+    Optional (existing configs are unchanged) and floored at 1s so a stored value
+    can't make a page hammer the API."""
+    assert FormConfig.model_validate({"version": 2, "elements": []}).refresh_ms is None
+    assert FormConfig.model_validate({"version": 2, "elements": [], "refresh_ms": 2000}).refresh_ms == 2000
+    with pytest.raises(ValidationError):
+        FormConfig.model_validate({"version": 2, "elements": [], "refresh_ms": 100})
+
+
 def test_button_link_href_scheme_guarded():
     """A button link href accepts a templated relative URL and rejects a dangerous
     scheme (it's navigated to at click time, so it must not smuggle javascript:)."""
@@ -492,3 +555,207 @@ def test_legacy_upgrade_is_idempotent():
     once = FormConfig.model_validate(legacy)
     twice = FormConfig.model_validate(once.model_dump(mode="json"))
     assert once.model_dump(mode="json") == twice.model_dump(mode="json")
+
+
+def test_puzzle_pad_declares_the_fields_it_reads(ids, fields_by_entity, rels):
+    """A pad reads its kind/spec/prompt/hint from record fields, so those slugs must
+    be FETCHED into the render even though the pad shows no field of its own — a pad
+    whose spec never arrives renders as an empty console. It writes nothing."""
+    fields_by_entity[ids["root"]] |= {"kind", "spec", "prompt", "hint"}
+    cfg = FormConfig.model_validate(
+        {
+            "version": 2,
+            "elements": [
+                {
+                    "type": "puzzle_pad",
+                    "kind": "wires",
+                    "kind_field": "kind",
+                    "spec_field": "spec",
+                    "prompt_field": "prompt",
+                    "hint_field": "hint",
+                }
+            ],
+        }
+    )
+    fl.validate(cfg.elements, ids["root"], fields_by_entity, rels)  # no raise
+    b = fl.flatten(cfg.elements, rels)
+    assert set(b.root.display_slugs) == {"kind", "spec", "prompt", "hint"}
+    assert b.root.write_slugs == set()
+
+
+def test_puzzle_pad_with_an_inline_spec_binds_nothing(ids, fields_by_entity, rels):
+    """A fixed puzzle names no fields, so it is valid in a standalone view."""
+    cfg = FormConfig.model_validate(
+        {
+            "version": 2,
+            "elements": [
+                {
+                    "type": "puzzle_pad",
+                    "kind": "choices",
+                    "prompt": "Which one?",
+                    "spec": {"options": [{"value": "A"}, {"value": "B"}]},
+                }
+            ],
+        }
+    )
+    fl.validate(cfg.elements, ids["root"], fields_by_entity, rels)  # no raise
+    b = fl.flatten(cfg.elements, rels)
+    assert b.root.display_slugs == []
+    assert not b.containers
+
+
+def test_puzzle_pad_rejects_an_unknown_field(ids, fields_by_entity, rels):
+    """A typo'd slug fails at save time rather than silently rendering a blank pad."""
+    cfg = FormConfig.model_validate(
+        {"version": 2, "elements": [{"type": "puzzle_pad", "kind": "choices", "spec_field": "nope"}]}
+    )
+    with pytest.raises(LayoutError):
+        fl.validate(cfg.elements, ids["root"], fields_by_entity, rels)
+
+
+def test_puzzle_pad_inside_a_section_follows_the_related_record(ids, fields_by_entity, rels):
+    """The shape the crew-station uses: the pad sits in a 1:1 section pointing at the
+    CURRENT puzzle record, so its fields resolve against the related entity and are
+    fetched into that section's values."""
+    fields_by_entity[ids["related"]] |= {"kind", "spec"}
+    cfg = FormConfig.model_validate(
+        {
+            "version": 2,
+            "elements": [
+                {
+                    "type": "section",
+                    "relationship_id": str(ids["rel_1to1"]),
+                    "mode": "inline",
+                    "elements": [
+                        {"type": "puzzle_pad", "kind": "choices", "kind_field": "kind", "spec_field": "spec"}
+                    ],
+                }
+            ],
+        }
+    )
+    fl.validate(cfg.elements, ids["root"], fields_by_entity, rels)  # no raise
+    section = next(c for c in fl.flatten(cfg.elements, rels).containers if isinstance(c, SectionBinding))
+    assert set(section.display_slugs) == {"kind", "spec"}
+    assert section.write_slugs == set()
+
+
+def test_puzzle_pad_rejects_an_unknown_kind():
+    """`kind` picks the interaction; an unrecognised one would render nothing."""
+    with pytest.raises(ValidationError):
+        FormConfig.model_validate(
+            {"version": 2, "elements": [{"type": "puzzle_pad", "kind": "crossword"}]}
+        )
+
+
+def test_button_size_defaults_and_round_trips():
+    """Touch sizing for a kiosk-presented view; absent means the mouse-sized default,
+    so every existing button is unaffected."""
+    cfg = FormConfig.model_validate(
+        {
+            "version": 2,
+            "elements": [
+                {"type": "button", "label": "Go", "style": "primary"},
+                {"type": "button", "label": "Big", "style": "primary", "size": "xl"},
+            ],
+        }
+    )
+    assert [el.size for el in cfg.elements] == ["default", "xl"]
+    with pytest.raises(ValidationError):
+        FormConfig.model_validate(
+            {"version": 2, "elements": [{"type": "button", "label": "X", "size": "enormous"}]}
+        )
+
+
+def test_puzzle_pad_inline_spec_tokens_are_declared(ids, fields_by_entity, rels):
+    """`{slug}` placeholders in an inline spec are what let ONE authored pad serve
+    every record it renders against, so those slugs must be fetched — otherwise the
+    labels fill in blank."""
+    fields_by_entity[ids["root"]] |= {"choice_a", "choice_b"}
+    cfg = FormConfig.model_validate(
+        {
+            "version": 2,
+            "elements": [
+                {
+                    "type": "puzzle_pad",
+                    "kind": "choices",
+                    "spec": {
+                        "options": [
+                            {"value": "A", "label": "{choice_a}"},
+                            {"value": "B", "label": "{choice_b}"},
+                        ]
+                    },
+                }
+            ],
+        }
+    )
+    fl.validate(cfg.elements, ids["root"], fields_by_entity, rels)  # no raise
+    assert set(fl.flatten(cfg.elements, rels).root.display_slugs) == {"choice_a", "choice_b"}
+
+
+def test_puzzle_pad_spec_text_is_not_mistaken_for_a_binding(ids, fields_by_entity, rels):
+    """Puzzle specs are full of author text. Only something shaped like a field slug
+    counts as a placeholder, so a label like `{Red}` or `{1}` neither binds nor fails
+    validation."""
+    cfg = FormConfig.model_validate(
+        {
+            "version": 2,
+            "elements": [
+                {
+                    "type": "puzzle_pad",
+                    "kind": "choices",
+                    "spec": {"options": [{"value": "A", "label": "{Red}"}, {"value": "B", "label": "{1}"}]},
+                }
+            ],
+        }
+    )
+    fl.validate(cfg.elements, ids["root"], fields_by_entity, rels)  # no raise
+    assert fl.flatten(cfg.elements, rels).root.display_slugs == []
+
+
+def test_qr_code_is_unbound_but_declares_its_url_tokens(ids, fields_by_entity, rels):
+    """A QR binds no entity data (so it is valid in a standalone view), but a
+    `{slug}` in its url must be fetched — an unfilled token would encode a link
+    with a hole in it, and nobody can spot that by looking at a QR code."""
+    cfg = FormConfig.model_validate(
+        {
+            "version": 2,
+            "elements": [
+                {
+                    "type": "qr_code",
+                    "url": "/views/abc/kiosk?record_id={id}&crew={name}",
+                    "host": "http://192.168.0.30:3000",
+                    "label": "Connect the iPad",
+                }
+            ],
+        }
+    )
+    fl.validate(cfg.elements, ids["root"], fields_by_entity, rels)  # no raise
+    b = fl.flatten(cfg.elements, rels)
+    # `{id}` is the record itself, not a field, so only `name` is declared.
+    assert b.root.display_slugs == ["name"]
+    assert b.root.write_slugs == set()
+    assert not b.containers
+
+
+def test_qr_code_rejects_an_unknown_url_token(ids, fields_by_entity, rels):
+    cfg = FormConfig.model_validate(
+        {"version": 2, "elements": [{"type": "qr_code", "url": "/x?c={nope}"}]}
+    )
+    with pytest.raises(LayoutError):
+        fl.validate(cfg.elements, ids["root"], fields_by_entity, rels)
+
+
+def test_qr_code_url_and_host_are_scheme_guarded():
+    """Both are turned into a navigable link, so neither may smuggle a scheme."""
+    for bad in ({"url": "javascript:alert(1)"}, {"url": "/x", "host": "javascript:alert(1)"}):
+        with pytest.raises(ValidationError):
+            FormConfig.model_validate({"version": 2, "elements": [{"type": "qr_code", **bad}]})
+
+
+def test_qr_code_size_is_bounded():
+    """A stored size drives an <img> box; unbounded values make a page unusable."""
+    assert FormConfig.model_validate(
+        {"version": 2, "elements": [{"type": "qr_code", "url": "/x"}]}
+    ).elements[0].size == 320
+    with pytest.raises(ValidationError):
+        FormConfig.model_validate({"version": 2, "elements": [{"type": "qr_code", "url": "/x", "size": 40}]})

@@ -13,6 +13,8 @@ import type {
   FieldElement,
   FormElement,
   LabelElement,
+  PuzzlePadElement,
+  QrCodeElement,
   RecordListElement,
   RecordListFilterConfig,
   SectionElement,
@@ -159,6 +161,10 @@ function ElementEditor({
       return <FieldEditor el={el} fields={fieldsOf(ctx, entityId)} onChange={onChange} />;
     case "label":
       return <LabelEditor el={el} onChange={onChange} />;
+    case "image":
+      return <ImageEditor el={el} onChange={onChange} />;
+    case "qr_code":
+      return <QrCodeEditor el={el} onChange={onChange} />;
     case "calculated":
       return <CalculatedEditor el={el} fields={fieldsOf(ctx, entityId)} onChange={onChange} />;
     case "input":
@@ -175,6 +181,8 @@ function ElementEditor({
       return <ChatEditor el={el} onChange={onChange} />;
     case "button":
       return <ButtonEditor el={el} onChange={onChange} />;
+    case "puzzle_pad":
+      return <PuzzlePadEditor el={el} onChange={onChange} />;
     case "form_ref":
       return <FormRefEditor el={el} forms={ctx.forms ?? []} onChange={onChange} />;
     case "section":
@@ -744,6 +752,100 @@ function InputEditor({ el, onChange }: { el: InputEl; onChange: (el: FormElement
   );
 }
 
+type ImageEl = Extract<FormElement, { type: "image" }>;
+
+function ImageEditor({ el, onChange }: { el: ImageEl; onChange: (el: FormElement) => void }) {
+  return (
+    <div className="space-y-1.5">
+      <Row label="Image URL">
+        <input
+          className={input}
+          placeholder="/sim/ship-{ship_condition}.svg"
+          value={el.url}
+          onChange={(e) => onChange({ ...el, url: e.target.value })}
+        />
+      </Row>
+      <Row label="Alt text">
+        <input
+          className={input}
+          value={el.alt ?? ""}
+          onChange={(e) => onChange({ ...el, alt: e.target.value || null })}
+        />
+      </Row>
+      <Row label="Caption">
+        <input
+          className={input}
+          value={el.caption ?? ""}
+          onChange={(e) => onChange({ ...el, caption: e.target.value || null })}
+        />
+      </Row>
+      <Row label="Max height (px)">
+        <input
+          className={input}
+          type="number"
+          value={el.max_height ?? ""}
+          onChange={(e) => onChange({ ...el, max_height: Number(e.target.value) || null })}
+        />
+      </Row>
+    </div>
+  );
+}
+
+function QrCodeEditor({ el, onChange }: { el: QrCodeElement; onChange: (el: FormElement) => void }) {
+  return (
+    <div className="space-y-1.5">
+      <Row label="Link">
+        <input
+          className={input}
+          placeholder="/views/<id>/kiosk?record_id={id}"
+          value={el.url}
+          onChange={(e) => onChange({ ...el, url: e.target.value })}
+        />
+      </Row>
+      <Row label="Host">
+        <input
+          className={input}
+          placeholder="(optional) http://192.168.0.30:3000"
+          value={el.host ?? ""}
+          onChange={(e) => onChange({ ...el, host: e.target.value || null })}
+        />
+      </Row>
+      <Row label="Label">
+        <input
+          className={input}
+          value={el.label ?? ""}
+          onChange={(e) => onChange({ ...el, label: e.target.value || null })}
+        />
+      </Row>
+      <Row label="Caption">
+        <input
+          className={input}
+          value={el.caption ?? ""}
+          onChange={(e) => onChange({ ...el, caption: e.target.value || null })}
+        />
+      </Row>
+      <Row label="Show as">
+        <select
+          className={input}
+          value={el.display ?? "button"}
+          onChange={(e) => onChange({ ...el, display: e.target.value as NonNullable<QrCodeElement["display"]> })}
+        >
+          <option value="button">Button (opens a popup)</option>
+          <option value="inline">Always on screen</option>
+        </select>
+      </Row>
+      <Row label="Size (px)">
+        <input
+          className={input}
+          type="number"
+          value={el.size ?? 320}
+          onChange={(e) => onChange({ ...el, size: Number(e.target.value) || 320 })}
+        />
+      </Row>
+    </div>
+  );
+}
+
 type LiveValueEl = Extract<FormElement, { type: "live_value" }>;
 
 function LiveValueEditor({ el, onChange }: { el: LiveValueEl; onChange: (el: FormElement) => void }) {
@@ -785,6 +887,22 @@ function LiveValueEditor({ el, onChange }: { el: LiveValueEl; onChange: (el: For
           className={input}
           value={el.units ?? ""}
           onChange={(e) => onChange({ ...el, units: e.target.value || null })}
+        />
+      </Row>
+      <Row label="Display map (JSON)">
+        <textarea
+          className={`${input} font-mono`}
+          rows={3}
+          placeholder={'{ "true": "Thinking…", "false": "idle" }'}
+          defaultValue={el.value_map ? JSON.stringify(el.value_map, null, 2) : ""}
+          onBlur={(e) => {
+            const text = e.target.value.trim();
+            try {
+              onChange({ ...el, value_map: text ? (JSON.parse(text) as Record<string, string>) : null });
+            } catch {
+              /* keep the last valid map; invalid JSON is ignored on blur */
+            }
+          }}
         />
       </Row>
     </div>
@@ -1183,6 +1301,17 @@ function ButtonEditor({ el, onChange }: { el: ButtonElement; onChange: (el: Butt
           ))}
         </select>
       </Row>
+      <Row label="Size">
+        <select
+          className={input}
+          value={el.size ?? "default"}
+          onChange={(e) => onChange({ ...el, size: e.target.value as NonNullable<ButtonElement["size"]> })}
+        >
+          <option value="default">Default (mouse)</option>
+          <option value="large">Large (touch)</option>
+          <option value="xl">Extra large (kiosk)</option>
+        </select>
+      </Row>
       <Row label="Action">
         <select
           className={input}
@@ -1222,6 +1351,188 @@ function ButtonEditor({ el, onChange }: { el: ButtonElement; onChange: (el: Butt
             className={input}
             value={el.action.href}
             onChange={(e) => onChange({ ...el, action: { kind: "link", href: e.target.value } })}
+          />
+        </Row>
+      ) : null}
+    </div>
+  );
+}
+
+/** A playable starting point for each puzzle kind. An author picking a kind gets
+ * a spec that already works, so the JSON shape is discovered by editing rather
+ * than by guessing from documentation. */
+const PUZZLE_EXAMPLES: Record<PuzzlePadElement["kind"], Record<string, unknown>> = {
+  choices: {
+    options: [
+      { value: "A", label: "First answer" },
+      { value: "B", label: "Second answer" },
+      { value: "C", label: "Third answer" },
+      { value: "D", label: "Fourth answer" },
+    ],
+    columns: 2,
+  },
+  keypad: { max_len: 4, units: "%", allow_decimal: false },
+  sequence: { items: [{ label: "Seal the hatch" }, { label: "Pressurise" }, { label: "Open inner door" }] },
+  wires: {
+    pairs: [
+      { left: "Reactor", right: "Power core", color: "#ef4444" },
+      { left: "Antenna", right: "Comms relay", color: "#3b82f6" },
+      { left: "Pump", right: "Coolant tank", color: "#22c55e" },
+    ],
+  },
+  sort: {
+    bins: [{ label: "Recycle" }, { label: "Jettison" }],
+    items: [
+      { label: "Water", bin: 0 },
+      { label: "Scrap metal", bin: 0 },
+      { label: "Broken sensor", bin: 1 },
+    ],
+  },
+  color: {
+    palette: [
+      { name: "Red", color: "#ef4444" },
+      { name: "Blue", color: "#3b82f6" },
+      { name: "Yellow", color: "#eab308" },
+    ],
+    regions: [
+      { label: "Nose cone", target: "Red" },
+      { label: "Wings", target: "Blue" },
+      { label: "Engines", target: "Yellow" },
+    ],
+  },
+};
+
+function PuzzlePadEditor({
+  el,
+  onChange,
+}: {
+  el: PuzzlePadElement;
+  onChange: (el: FormElement) => void;
+}) {
+  const action = el.on_complete;
+  return (
+    <div className="space-y-1.5">
+      <Row label="Kind">
+        <select
+          className={input}
+          value={el.kind}
+          onChange={(e) => onChange({ ...el, kind: e.target.value as PuzzlePadElement["kind"] })}
+        >
+          <option value="choices">Choices (big tap targets)</option>
+          <option value="keypad">Number pad</option>
+          <option value="sequence">Order the steps</option>
+          <option value="wires">Wires (drag to connect)</option>
+          <option value="sort">Sort into bins (drag)</option>
+          <option value="color">Colour the regions</option>
+        </select>
+      </Row>
+      <Row label="Kind from field">
+        <input
+          className={input}
+          placeholder="(optional) record field holding the kind"
+          value={el.kind_field ?? ""}
+          onChange={(e) => onChange({ ...el, kind_field: e.target.value || null })}
+        />
+      </Row>
+      <Row label="Prompt">
+        <input
+          className={input}
+          value={el.prompt ?? ""}
+          onChange={(e) => onChange({ ...el, prompt: e.target.value || null })}
+        />
+      </Row>
+      <Row label="Prompt from field">
+        <input
+          className={input}
+          placeholder="(optional) e.g. prompt"
+          value={el.prompt_field ?? ""}
+          onChange={(e) => onChange({ ...el, prompt_field: e.target.value || null })}
+        />
+      </Row>
+      <Row label="Spec (JSON)">
+        <div className="space-y-1">
+          <textarea
+            key={`${el.id}-${el.kind}`}
+            className={`${input} font-mono`}
+            rows={6}
+            defaultValue={JSON.stringify(el.spec ?? {}, null, 2)}
+            onBlur={(e) => {
+              try {
+                onChange({ ...el, spec: JSON.parse(e.target.value || "{}") });
+              } catch {
+                /* keep the last valid spec; invalid JSON is ignored on blur */
+              }
+            }}
+          />
+          <button
+            type="button"
+            className="text-xs text-muted-foreground underline hover:text-foreground"
+            onClick={() => onChange({ ...el, spec: PUZZLE_EXAMPLES[el.kind] })}
+          >
+            Insert example for “{el.kind}”
+          </button>
+        </div>
+      </Row>
+      <Row label="Spec from field">
+        <input
+          className={input}
+          placeholder="(optional) e.g. spec"
+          value={el.spec_field ?? ""}
+          onChange={(e) => onChange({ ...el, spec_field: e.target.value || null })}
+        />
+      </Row>
+      <Row label="Hint">
+        <input
+          className={input}
+          value={el.hint ?? ""}
+          onChange={(e) => onChange({ ...el, hint: e.target.value || null })}
+        />
+      </Row>
+      <Row label="Hint from field">
+        <input
+          className={input}
+          placeholder="(optional) e.g. hint"
+          value={el.hint_field ?? ""}
+          onChange={(e) => onChange({ ...el, hint_field: e.target.value || null })}
+        />
+      </Row>
+      <Row label="Send label">
+        <input
+          className={input}
+          value={el.submit_label ?? ""}
+          placeholder="Transmit"
+          onChange={(e) => onChange({ ...el, submit_label: e.target.value })}
+        />
+      </Row>
+      <Row label="On finish → workflow">
+        <input
+          className={input}
+          placeholder="(optional) workflow id"
+          value={action?.workflow_id ?? ""}
+          onChange={(e) =>
+            onChange({
+              ...el,
+              on_complete: e.target.value
+                ? { kind: "run_workflow", workflow_id: e.target.value, inputs: action?.inputs ?? {} }
+                : null,
+            })
+          }
+        />
+      </Row>
+      {action ? (
+        <Row label="Inputs (JSON)">
+          <textarea
+            className={`${input} font-mono`}
+            rows={4}
+            placeholder={'{ "choice": { "var": "answer" }, "correct": { "var": "solved" } }'}
+            defaultValue={JSON.stringify(action.inputs ?? {}, null, 2)}
+            onBlur={(e) => {
+              try {
+                onChange({ ...el, on_complete: { ...action, inputs: JSON.parse(e.target.value || "{}") } });
+              } catch {
+                /* keep the last valid inputs map */
+              }
+            }}
           />
         </Row>
       ) : null}
