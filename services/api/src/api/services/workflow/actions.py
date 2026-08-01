@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import datetime as dt
 import ipaddress
+import random
 import re
 import uuid
 from collections.abc import Awaitable, Callable
@@ -119,6 +120,11 @@ class ActionContext:
     # learner, and whether the objective is met. Built by the runner; None on the dry-run
     # test path.
     respond: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]] | None = None
+    # Constrained-LLM authoring of ONE multiple-choice question: given ``{topic, audience,
+    # style, model}`` returns ``{title, prompt, choice_a..choice_d, correct_choice, hint}``
+    # — the same shape a stored question record uses, so it can be persisted as-is. Built
+    # by the runner; None on the dry-run test path.
+    question: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]] | None = None
 
 
 class ActionHandler(Protocol):
@@ -277,6 +283,53 @@ def _as_int(value: Any, default: int) -> int:
         return int(float(value))
     except (TypeError, ValueError):
         return default
+
+
+def _as_float(value: Any, default: float | None = None) -> float | None:
+    """Coerce a resolved config value to a float, tolerating a ``{{ }}`` template that
+    rendered to a numeric string. ``None``/blank/garbage → ``default``."""
+    if value is None or value == "":
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _apply_increments(
+    record: dict[str, Any],
+    increments_cfg: dict[str, Any],
+    clamp_cfg: dict[str, Any],
+    context: dict[str, Any],
+) -> dict[str, Any]:
+    """Turn ``increments`` (field → delta) into absolute values against ``record``.
+
+    Deltas resolve like any other config value (literal / ``$ref`` / ``{{ }}``) and are
+    added to the record's CURRENT value; a missing or non-numeric current value counts
+    as 0, so a fresh record still accumulates. An optional ``clamp`` entry
+    (``{"shields": [0, 100]}``) bounds the result — either bound may be ``null`` to leave
+    that side open. A delta that resolves to nothing numeric is skipped rather than
+    zeroing the field, so an unset ``{{ inputs.bonus }}`` can't wipe a score.
+
+    Integer-valued arithmetic stays integral (a score reads ``40``, not ``40.0``).
+    """
+    out: dict[str, Any] = {}
+    for slug, raw_delta in increments_cfg.items():
+        delta = _as_float(_resolve_dynamic(raw_delta, context))
+        if delta is None:
+            continue
+        current = _as_float(record.get(slug), 0.0) or 0.0
+        total = current + delta
+        bounds = clamp_cfg.get(slug)
+        if isinstance(bounds, (list, tuple)) and len(bounds) == 2:
+            low = _as_float(_resolve_dynamic(bounds[0], context))
+            high = _as_float(_resolve_dynamic(bounds[1], context))
+            if low is not None:
+                total = max(low, total)
+            if high is not None:
+                total = min(high, total)
+        out[slug] = int(total) if float(total).is_integer() else total
+    return out
 
 
 def _as_str_list(value: Any) -> list[str] | None:
@@ -459,6 +512,15 @@ class UpdateRecord:
     update the TRIGGERING record (back-compat with ``update_record_field``). Each
     value may be a literal, a ``$ref`` envelope, or a ``{{ }}`` template.
 
+    ``increments`` writes RELATIVE numbers — the thing ``values`` cannot express,
+    because a template can't do arithmetic. Each entry is a delta added to the field's
+    current value (``{"score": {"$ref": "vars.p.points"}, "shields": -20, "tries": 1}``),
+    and an optional ``clamp`` bounds the result (``{"shields": [0, 100]}``; either bound
+    may be null). This is the counter/gauge primitive a stateful workflow needs: scores,
+    fuel, attempt counts, inventory. Read-modify-write in one step — fine for a single
+    driving process, but two workflows incrementing the SAME field concurrently can lose
+    an update. ``values`` wins over ``increments`` for a field named by both.
+
     Writes emit a record-change event (fires entity-triggered workflows) — an
     announcer keyed off this entity must only READ + act, never write it back, or
     it will loop."""
@@ -467,10 +529,12 @@ class UpdateRecord:
 
     async def execute(self, ctx: ActionContext) -> dict[str, Any]:
         values_cfg = ctx.config.get("values")
-        if not isinstance(values_cfg, dict) or not values_cfg:
-            raise ActionError("update_record requires a non-empty values map")
+        increments_cfg = ctx.config.get("increments")
+        has_increments = isinstance(increments_cfg, dict) and bool(increments_cfg)
+        if (not isinstance(values_cfg, dict) or not values_cfg) and not has_increments:
+            raise ActionError("update_record requires a non-empty values map or increments map")
         context = _trigger_context(ctx)
-        values = _resolve_value_map(values_cfg, context)
+        values = _resolve_value_map(values_cfg, context) if isinstance(values_cfg, dict) else {}
         target_slug = ctx.config.get("target_slug")
         if target_slug:
             repo = await ctx.repo_for_slug(str(target_slug))
@@ -480,6 +544,18 @@ class UpdateRecord:
                 raise ActionError("update_record requires a triggering record or a target_slug")
             repo = await ctx.trigger_repo()
             record_id = ctx.record_id
+        if has_increments:
+            # Deltas are relative to what's stored NOW, so the row has to be read back
+            # here rather than reusing a `get_record` snapshot taken earlier in the run.
+            current = await repo.get(record_id)
+            if current is None:
+                raise ActionError(f"update_record: record {record_id} not found")
+            clamp_cfg = ctx.config.get("clamp")
+            bumped = _apply_increments(
+                current, increments_cfg, clamp_cfg if isinstance(clamp_cfg, dict) else {}, context
+            )
+            # Explicit `values` win: an author naming a field in both means to SET it.
+            values = {**bumped, **values}
         updated = await repo.update(record_id, values)
         return {
             "target_slug": target_slug,
@@ -504,6 +580,11 @@ class UpdateRecord:
         return {
             "target_slug": ctx.config.get("target_slug"),
             "values": _jsonable(_resolve_value_map(ctx.config.get("values", {}) or {}, _trigger_context(ctx))),
+            # Deltas are relative to live data the dry run deliberately doesn't read, so
+            # report what WOULD be applied rather than a fabricated result.
+            "increments": _jsonable(
+                _resolve_value_map(ctx.config.get("increments", {}) or {}, _trigger_context(ctx))
+            ),
         }
 
 
@@ -1141,6 +1222,55 @@ class GradeQuiz:
 
 
 @register
+class LlmQuestion:
+    """Write ONE multiple-choice question with an LLM (structured output).
+
+    The generator that keeps a bank from running dry: given a ``topic`` and the
+    ``audience`` to pitch it at, this returns a COMPLETE question —
+    ``{title, prompt, choice_a..choice_d, correct_choice, hint}`` — in the same shape a
+    stored question record uses, so the next node can ``create_record`` it field-for-field
+    and a later gateway can grade an answer against ``{{vars.q.correct_choice}}``.
+
+    Config: ``{"topic": "fractions, framed as a ship's oxygen tank", "audience":
+    "{{vars.m.grade_band}} grade", "style"?: "in the voice of a ship's computer",
+    "model"?: "..."}``. Fields may be literals, ``{{ }}`` templates, or ``$ref``
+    envelopes. Wire ``capture`` (e.g. ``"q"``) to use the result downstream.
+
+    The answer key comes from the model, so it is only as reliable as the model: fine for
+    practice and play, not for graded assessment — hand-authored questions stay the source
+    of truth there. Read-only (calls the LLM, mutates nothing)."""
+
+    type = "llm_question"
+
+    def _field(self, ctx: ActionContext, key: str) -> str:
+        raw = ctx.config.get(key)
+        context = _trigger_context(ctx)
+        resolved = _resolve_ref(raw, context) if isinstance(raw, dict) else _render_template(str(raw or ""), context)
+        return str(resolved or "").strip()
+
+    async def execute(self, ctx: ActionContext) -> dict[str, Any]:
+        if ctx.question is None:
+            raise ActionError("llm_question is not available in this context")
+        topic = self._field(ctx, "topic")
+        if not topic:
+            raise ActionError("llm_question requires a non-empty topic")
+        model = str(_resolve_dynamic(ctx.config.get("model"), _trigger_context(ctx)) or "").strip() or None
+        result = await ctx.question(
+            {
+                "topic": topic,
+                "audience": self._field(ctx, "audience") or None,
+                "style": self._field(ctx, "style") or None,
+                "model": model,
+            }
+        )
+        return {key: str(result.get(key) or "") for key in _QUESTION_FIELDS}
+
+    def simulate(self, ctx: ActionContext) -> dict[str, Any]:
+        # Never call the LLM in a dry run.
+        return dict.fromkeys(_QUESTION_FIELDS, "")
+
+
+@register
 class LlmRespond:
     """Role-play a persona + coach the learner for a training SIMULATOR.
 
@@ -1204,6 +1334,72 @@ class LlmRespond:
     def simulate(self, ctx: ActionContext) -> dict[str, Any]:
         # Never call the LLM in a dry run.
         return {"reply": "", "coach": "", "done": False}
+
+
+@register
+class RandomAction:
+    """Roll dice — the source of variety a deterministic engine otherwise lacks.
+
+    Without this, a workflow can only ever do the same thing in the same order, so
+    anything that should feel unpredictable (a hazard that may or may not strike, which
+    one strikes, sampling a queue) has no primitive to build on. Capture the node (e.g.
+    ``"roll"``) and branch on it from an exclusive gateway:
+    ``{"<=": [{"var": "vars.roll.value"}, 40]}`` is "40% of the time".
+
+    Config: ``{"min": 1, "max": 100}`` rolls an integer in that inclusive range
+    (the default is a 1–100 percentage roll). ``{"choices": [...]}`` instead picks one
+    element uniformly — the list may be a literal or a ``$ref``/template resolving to
+    one. ``min``/``max`` are resolved per run too, so ``{"max": {"$ref": "vars.n.count"}}``
+    rolls against a bank whose size is only known at run time. An optional ``seed``
+    makes the roll reproducible (tests, replayable scenarios).
+
+    Output: ``{"value", "index", "choice", "min", "max"}`` — with ``choices``, ``value``
+    is the 1-based pick (so it can index a 1-based ``sequence`` field directly) and
+    ``index`` its 0-based position. Read-only: it touches nothing."""
+
+    type = "random"
+
+    async def execute(self, ctx: ActionContext) -> dict[str, Any]:
+        return self._roll(ctx)
+
+    def simulate(self, ctx: ActionContext) -> dict[str, Any]:
+        # A dry run may roll freely — it has no side effects.
+        return self._roll(ctx)
+
+    def _roll(self, ctx: ActionContext) -> dict[str, Any]:
+        context = _trigger_context(ctx)
+        seed = _resolve_dynamic(ctx.config.get("seed"), context)
+        rng = random.Random(seed) if seed not in (None, "") else random.Random()  # noqa: S311 - game dice, not crypto
+
+        choices = _resolve_dynamic(ctx.config.get("choices"), context)
+        if isinstance(choices, (list, tuple)) and choices:
+            index = rng.randrange(len(choices))
+            return {
+                "value": index + 1,  # 1-based so it can address a `sequence` field
+                "index": index,
+                "choice": _jsonable(choices[index]),
+                "min": 1,
+                "max": len(choices),
+            }
+
+        low = _as_int(_resolve_dynamic(ctx.config.get("min"), context), 1)
+        high = _as_int(_resolve_dynamic(ctx.config.get("max"), context), 100)
+        if high < low:
+            low, high = high, low
+        value = rng.randint(low, high)  # noqa: S311 - game dice, not crypto
+        return {"value": value, "index": value - low, "choice": None, "min": low, "max": high}
+
+
+_QUESTION_FIELDS = (
+    "title",
+    "prompt",
+    "choice_a",
+    "choice_b",
+    "choice_c",
+    "choice_d",
+    "correct_choice",
+    "hint",
+)
 
 
 @register

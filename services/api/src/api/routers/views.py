@@ -8,24 +8,34 @@ shared ``FormRenderer`` and resolves any embedded ``form_ref`` widgets client-si
 from __future__ import annotations
 
 import uuid
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth.dependencies import OrgContext, require_org_access, require_org_admin
-from api.dependencies import get_tenant_db
+from api.config import Settings, get_settings
+from api.dependencies import get_db, get_tenant_db
 from api.schemas.form import FormRenderRead
-from api.schemas.view import ViewCreate, ViewRead, ViewUpdate
+from api.schemas.view import ViewCreate, ViewRead, ViewShareCreated, ViewShareRequest, ViewUpdate
+from api.schemas.workflow import ManualRunResult
 from api.services.form_service import (
     FormConflictError,
     FormError,
     FormNotFoundError,
     FormValidationError,
 )
+from api.services.rate_limit import SlidingWindowLimiter
 from api.services.view_service import ViewService
+from api.services.view_share import (
+    PublicViewService,
+    ViewShareAdminService,
+    ViewShareError,
+    unsupported_elements,
+)
 
 router = APIRouter()
+public_router = APIRouter()
 
 _ERROR_STATUS = {
     FormConflictError: status.HTTP_409_CONFLICT,
@@ -126,6 +136,122 @@ async def render_view(
             view_id,
             parsed_id,
             current_user_email=ctx.user.email if resolve_me else None,
+        )
+    except FormError as exc:
+        _raise_http(exc)
+
+
+# ------------------------------------------------------------------ #
+# Anonymous access (org-admin to enable; unauthenticated to use)
+#
+# Off unless an admin turns it on for a specific view. See
+# ``api.services.view_share`` for the full security model.
+# ------------------------------------------------------------------ #
+_ERROR_STATUS[ViewShareError] = status.HTTP_403_FORBIDDEN
+
+# Per-token throttle on the unauthenticated endpoints so a leaked link cannot be
+# hammered. Per-process, lazily sized from settings on first use — same shape as
+# the public form limiter.
+_public_limiter: SlidingWindowLimiter | None = None
+
+
+def _rate_limit_public(token: str, settings: Annotated[Settings, Depends(get_settings)]) -> None:
+    global _public_limiter
+    if _public_limiter is None:
+        # A kiosk re-renders on a timer, so this ceiling is per token and sized for
+        # a page that polls, not for a form that is submitted once.
+        _public_limiter = SlidingWindowLimiter(max(settings.rate_limit_per_minute, 120))
+    if not _public_limiter.allow(token):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many requests. Please slow down and try again shortly.",
+        )
+
+
+@router.post("/{view_id}/share", response_model=ViewShareCreated)
+async def enable_view_share(
+    view_id: uuid.UUID,
+    body: ViewShareRequest,
+    ctx: Annotated[OrgContext, Depends(require_org_admin)],
+    session: Annotated[AsyncSession, Depends(get_tenant_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> ViewShareCreated:
+    """Turn on anonymous access, or ROTATE the existing link.
+
+    Returns the raw token exactly once — only its hash is stored, so a link that
+    is lost or over-shared is replaced, never recovered. Rotating invalidates the
+    previous link immediately.
+    """
+    try:
+        view, raw = await ViewShareAdminService(session, ctx.org_id).enable(
+            view_id, record_id=body.record_id, expires_at=body.expires_at
+        )
+    except FormError as exc:
+        _raise_http(exc)
+    base = (settings.public_base_url or "").rstrip("/")
+    return ViewShareCreated(
+        url=f"{base}/s/{raw}",
+        token=raw,
+        expires_at=view.public_expires_at,
+        record_id=view.public_record_id,
+        unsupported_elements=unsupported_elements(view.config or {}),
+    )
+
+
+@router.delete("/{view_id}/share", response_model=ViewRead)
+async def disable_view_share(
+    view_id: uuid.UUID,
+    ctx: Annotated[OrgContext, Depends(require_org_admin)],
+    session: Annotated[AsyncSession, Depends(get_tenant_db)],
+) -> ViewRead:
+    """Revoke anonymous access. The existing link stops working immediately."""
+    try:
+        view = await ViewShareAdminService(session, ctx.org_id).disable(view_id)
+    except FormError as exc:
+        _raise_http(exc)
+    return ViewRead.model_validate(view)
+
+
+@public_router.get("/{token}", response_model=FormRenderRead, dependencies=[Depends(_rate_limit_public)])
+async def public_render_view(
+    token: str,
+    session: Annotated[AsyncSession, Depends(get_db)],
+) -> FormRenderRead:
+    """Render a shared view for someone with no login.
+
+    The record is the one pinned when sharing was enabled — never taken from the
+    request, so the link cannot be walked onto another row.
+    """
+    try:
+        return await PublicViewService(session).render(token)
+    except FormError as exc:
+        _raise_http(exc)
+
+
+@public_router.post(
+    "/{token}/workflows/{workflow_id}/run",
+    response_model=ManualRunResult,
+    dependencies=[Depends(_rate_limit_public)],
+)
+async def public_run_view_workflow(
+    token: str,
+    workflow_id: uuid.UUID,
+    body: dict[str, Any],
+    session: Annotated[AsyncSession, Depends(get_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> ManualRunResult:
+    """Run one of THIS view's workflows anonymously.
+
+    Bounded by the view's own element tree: a workflow the page does not reference
+    is rejected, so a leaked link can do what the page does and nothing more.
+    """
+    try:
+        return await PublicViewService(session).run_workflow(
+            token,
+            workflow_id,
+            inputs=body.get("inputs") if isinstance(body.get("inputs"), dict) else None,
+            after=body.get("after") if isinstance(body.get("after"), dict) else None,
+            settings=settings,
         )
     except FormError as exc:
         _raise_http(exc)

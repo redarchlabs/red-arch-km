@@ -12,12 +12,18 @@ import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
 //   to /documents itself).
 // - `/intake/*` is the public intake-form page: an external user (holding only
 //   a form-link token) fills it in without a Clerk session.
+// - `/s/*` is a SHARED VIEW: a view an org admin has explicitly opened to
+//   anonymous access (a crew station on a tablet, a status board). The token in
+//   the path is the only credential, and what it permits is enforced by the API
+//   (`api/services/view_share.py`) — the record is pinned and only the view's own
+//   workflows can run. Every view is closed here until someone opts it in.
 const isPublicRoute = createRouteMatcher([
   "/",
   "/help(.*)",
   "/login(.*)",
   "/sign-up(.*)",
   "/intake(.*)",
+  "/s(.*)",
 ]);
 
 export default clerkMiddleware(async (auth, req) => {

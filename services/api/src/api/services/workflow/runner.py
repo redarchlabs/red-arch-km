@@ -156,6 +156,7 @@ class ActionExecutor:
             decide=lambda opts: self._decide(org_id, opts),
             grade=lambda opts: self._grade(org_id, opts),
             respond=lambda opts: self._respond(org_id, opts),
+            question=lambda opts: self._question(org_id, opts),
         )
         try:
             output = await handler.execute(ctx)
@@ -295,6 +296,27 @@ class ActionExecutor:
             answer=str(opts.get("answer") or ""),
             question=str(opts.get("question") or ""),
             rubric=str(opts.get("rubric") or ""),
+        )
+
+    async def _question(self, org_id: uuid.UUID, opts: dict[str, Any]) -> dict[str, Any]:
+        """Constrained-LLM question authoring for the llm_question action. Same key/model
+        wiring as _grade; returns a complete multiple-choice question the caller can store
+        field-for-field."""
+        if self._settings is None:
+            raise ActionError("llm_question requires Settings (not wired in this context)")
+        model = opts.get("model") or self._settings.openai_model
+        key = await self._org_openai_key(org_id) or self._settings.openai_api_key.get_secret_value()
+        if not key and api_key_required(self._settings, model):
+            raise ActionError("llm_question requires an OpenAI API key (org or central)")
+        from api.services.llm_question import generate_question
+
+        client = make_async_openai(self._settings, key, model=model)
+        return await generate_question(
+            client,
+            model,
+            topic=str(opts.get("topic") or ""),
+            audience=str(opts.get("audience") or ""),
+            style=str(opts.get("style") or ""),
         )
 
     async def _respond(self, org_id: uuid.UUID, opts: dict[str, Any]) -> dict[str, Any]:

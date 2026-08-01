@@ -67,6 +67,24 @@ feed a button's workflow inputs or a calculated expression (reference it as
 - **Default** — the starting value.
 `,
   ),
+  image: topic(
+    "Image element",
+    `
+A **picture** on the screen — the visual anchor a status page needs (a ship, a floor
+plan, a product shot). Display only; it reads no data and writes none.
+
+- **Image URL** — a relative path (e.g. \`/sim/ship-nominal.svg\`) or an \`http(s)\` URL.
+  It may contain \`{token}\` placeholders filled from the record: \`{id}\` is the bound
+  record id and \`{field_slug}\` any field value — so \`/sim/ship-{condition}.svg\`
+  makes the artwork FOLLOW the record's state.
+- **Alt text** — what the picture shows, for screen readers.
+- **Caption** — optional line under the image.
+- **Max height (px)** — caps the height; the image always scales down to fit its column.
+
+Pair it with the view's **refresh** setting so the picture swaps as a workflow
+changes the record.
+`,
+  ),
   live_value: topic(
     "Live value element",
     `
@@ -79,6 +97,9 @@ value pulled from the JSON response — a generic way to display live external s
   shows the whole body.
 - **Poll (ms)** — how often to refresh.
 - **Units** — an optional suffix shown after the value.
+- **Display map** — optional \`{ "true": "Thinking…", "false": "idle" }\` translation of
+  the raw value, so a status flag reads as a status instead of as \`true\`. Values it
+  doesn't name are shown unchanged.
 `,
   ),
   progress: topic(
@@ -194,6 +215,64 @@ An action control — how a form or view **kicks off something**.
   - **Call connection** — POST/GET straight to a saved connection (body templated
     from the screen's values); runs server-side with the connection's auth.
   - **Link / navigate** — go to a URL.
+- **Size** — default is sized for a mouse; **large** and **XL** are for a view
+  presented on a tablet or a wall display, where a finger is the pointer.
+`,
+  ),
+  qr_code: topic(
+    "QR code element",
+    `
+Turns a link into a **QR code**, so a screen can hand a URL to a phone or tablet
+without anyone typing an address. The usual job: getting a shared iPad onto a
+kiosk view.
+
+- **Link** — where the code should point. Usually a relative path such as
+  \`/views/<id>/kiosk?record_id={id}\`; \`{token}\` placeholders are filled from
+  the record, exactly like a link button's href.
+- **Host** — *the one that matters.* A relative link is resolved against whatever
+  address **this page** was opened at. Open the console at \`localhost\` and the
+  code will say \`localhost\`, which means *the tablet* to the tablet — it scans
+  fine and then fails. Set Host to the machine's network address (e.g.
+  \`http://192.168.0.30:3000\`) and the code works no matter how you opened the
+  console. The card warns you when the link is only reachable locally.
+- **Show as** — a button that opens a popup (good for a console that stays open
+  all day), or always on screen.
+
+The card also shows the encoded link as text and copies it on click, for when a
+camera isn't handy.
+`,
+  ),
+  puzzle_pad: topic(
+    "Puzzle pad element",
+    `
+A **hands-on interactive surface** — the element for when the point is the doing,
+not the answering. Use it for a repair console, a checklist drill, a training
+exercise, or a kids' activity.
+
+- **Kind** — what the person actually does:
+  - **Choices** — big tap targets (multiple choice, sized for a finger).
+  - **Number pad** — key a value in and send it (no on-screen keyboard covering
+    the screen).
+  - **Order the steps** — tap items into the right sequence.
+  - **Wires** — *drag* a lead from a port to its match. Tapping both ends works
+    too, which is what saves it on a small screen.
+  - **Sort into bins** — *drag* items where they belong.
+  - **Colour** — pick a colour, tap a region. Paint-by-label, or free paint.
+- **Where the puzzle comes from** — set the prompt/spec/hint inline for a fixed
+  puzzle, or point each at a **record field** so the pad follows whatever the
+  record says now. A field with a value wins; the inline value is the fallback.
+  Put the pad inside a *Related record* section to follow a "current puzzle" link.
+- **Spec** — JSON whose shape depends on the kind (the editor shows an example
+  for the kind you pick). A malformed spec renders as a clear message, not as
+  half a puzzle.
+- **When finished** — optionally run a workflow. Its inputs can read the outcome:
+  \`solved\`, \`answer\`, \`attempts\`, \`elapsed_ms\`, plus any value on screen.
+
+**Who decides "correct".** Choices and Number pad are *never told the answer* —
+they report what was picked and a workflow grades it, so keep the answer field
+out of the view. The other kinds have to be sent their target in order to be
+drawn at all, so the pad grades those itself; treat \`solved\` as a player's word,
+which is right for a game and wrong for an exam.
 `,
   ),
   form_ref: topic(

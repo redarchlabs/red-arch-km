@@ -75,3 +75,38 @@ def test_date_diff():
 def test_bad_formula_degrades_to_none():
     assert fx.evaluate({"unknown_op": [1, 2]}, {}) is None
     assert fx.evaluate({"date_add": ["not-a-date", 1, "day"]}, {}) is None
+
+
+def test_truthy_cast_matches_the_client():
+    """`!!` is how an author asks "is this set?" — a view gates the crew station's
+    challenge on it. The client evaluator has it, so this one must too, or the same
+    expression means different things on the two sides."""
+    assert fx.evaluate({"!!": [{"var": "rel"}]}, {"rel": "abc"}) is True
+    assert fx.evaluate({"!!": [{"var": "rel"}]}, {"rel": None}) is False
+    assert fx.evaluate({"!!": [{"var": "rel"}]}, {}) is False
+    assert fx.evaluate({"!!": [{"var": "rows"}]}, {"rows": []}) is False
+
+
+def test_strict_equality_does_not_coerce():
+    """`===`/`!==` are the strict forms: unlike `==` they never coerce a numeric
+    string, which is the whole reason an author reaches for them."""
+    assert fx.evaluate({"==": ["5", 5]}, {}) is True
+    assert fx.evaluate({"===": ["5", 5]}, {}) is False
+    assert fx.evaluate({"===": [5, 5]}, {}) is True
+    assert fx.evaluate({"!==": [{"var": "status"}, "complete"]}, {"status": "active"}) is True
+    assert fx.evaluate({"!==": [{"var": "status"}, "complete"]}, {"status": "complete"}) is False
+
+
+def test_strict_equality_keeps_booleans_apart_from_numbers():
+    """A bool is not 1 under strict equality, matching JavaScript."""
+    assert fx.evaluate({"===": [True, 1]}, {}) is False
+    assert fx.evaluate({"===": [True, True]}, {}) is True
+
+
+def test_membership_covers_lists_and_substrings():
+    """`in` matches an element of a list or a substring of a string; a missing
+    container is never a match rather than an error."""
+    assert fx.evaluate({"in": ["b", ["a", "b"]]}, {}) is True
+    assert fx.evaluate({"in": ["c", ["a", "b"]]}, {}) is False
+    assert fx.evaluate({"in": ["ell", "hello"]}, {}) is True
+    assert fx.evaluate({"in": ["x", {"var": "missing"}]}, {}) is False
