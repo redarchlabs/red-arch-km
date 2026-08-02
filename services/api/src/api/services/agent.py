@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 
 from fastapi import HTTPException
 from pydantic import ValidationError
+from shared_config import current_date_line
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from api import db_scope
@@ -1717,7 +1718,10 @@ class AgentService:
             yield {"type": "error", "error": "No OpenAI API key configured for this org."}
             return
 
-        messages: list[dict[str, Any]] = [{"role": "system", "content": _SYSTEM_PROMPT}, *history]
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": f"{_SYSTEM_PROMPT}\n{current_date_line()}"},
+            *history,
+        ]
         try:
             for _ in range(MAX_ITERATIONS):
                 response = await self._client.chat.completions.create(

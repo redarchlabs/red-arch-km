@@ -253,15 +253,24 @@ class Stores:
     def _search_passages(
         self, query: str, limit: int, tenant_id: str, access_keys: tuple[int, ...]
     ) -> list[dict[str, Any]]:
-        """Passage-search tool for the agent: embed + Qdrant search → payloads."""
+        """Passage-search tool for the agent: embed + Qdrant search → payloads.
+
+        Mirrors SearchService's rerank step: dense retrieval alone ranks by
+        topical similarity and cannot put the passage for a specific date range
+        above 51 near-identical siblings, so when a reranker is configured a
+        wider shortlist is cross-encoder re-scored and cut to ``limit``. A
+        reranker failure degrades to the dense top-``limit``.
+        """
+        reranker = self.reranker
+        fetch = max(limit, self._settings.rerank_candidates) if reranker else limit
         query_vector = self.embedder.embed(query)
         results = self.vector.search(
             tenant_id=tenant_id,
             query_vector=query_vector,
-            limit=limit,
+            limit=fetch,
             access_keys=list(access_keys) or None,
         )
-        return [
+        hits = [
             {
                 "document_title": r.payload.get("document_title", "Untitled"),
                 "document_key": r.payload.get("document_key", ""),
@@ -270,6 +279,14 @@ class Stores:
             }
             for r in results
         ]
+        if reranker is not None and hits:
+            try:
+                ranked = reranker.rerank(query, [h["text"] for h in hits], top_n=limit)
+                hits = [{**hits[r.index], "score": r.score, "dense_score": hits[r.index]["score"]} for r in ranked]
+            except Exception as e:  # noqa: BLE001 - reranking is an enhancement
+                logger.warning("Agent passage rerank failed (%s); dense order kept", e)
+                hits = hits[:limit]
+        return hits[:limit]
 
     def search_passages(
         self, query: str, *, limit: int, tenant_id: str, access_keys: tuple[int, ...] = ()
