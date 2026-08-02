@@ -175,6 +175,75 @@ func TestProvisionOrRelink_NoEmailSkipsLookup(t *testing.T) {
 	}
 }
 
+// Without a Clerk JWT template the session token carries no username/email
+// claims. Storing those raw writes empty strings into two UNIQUE columns, so the
+// FIRST claimless user takes ” and every subsequent one collides → 23505 →
+// blanket 403 lockout. Fall back to sub-derived values (unique by construction),
+// mirroring the Python provisioner.
+func TestProvisionOrRelink_BlankClaimsGetSubDerivedFallbacks(t *testing.T) {
+	f := &fakeProvisioner{upserted: repository.UserProfile{AuthSubject: "user_blank"}}
+	claims := middleware.UserClaims{Sub: "user_blank", Email: "", PreferredUsername: ""}
+
+	if _, err := provisionOrRelinkUser(context.Background(), f, claims); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if f.upsertArg.Username != "user_blank" {
+		t.Errorf("Username = %q, want the sub as fallback", f.upsertArg.Username)
+	}
+	if f.upsertArg.Email != "user_blank@placeholder.invalid" {
+		t.Errorf("Email = %q, want a sub-derived placeholder", f.upsertArg.Email)
+	}
+}
+
+// Two different claimless users must not collide on the UNIQUE columns.
+func TestProvisionOrRelink_BlankClaimsAreUniquePerSubject(t *testing.T) {
+	a := &fakeProvisioner{upserted: repository.UserProfile{AuthSubject: "user_a"}}
+	b := &fakeProvisioner{upserted: repository.UserProfile{AuthSubject: "user_b"}}
+
+	if _, err := provisionOrRelinkUser(context.Background(), a, middleware.UserClaims{Sub: "user_a"}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, err := provisionOrRelinkUser(context.Background(), b, middleware.UserClaims{Sub: "user_b"}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if a.upsertArg.Username == b.upsertArg.Username {
+		t.Errorf("two claimless users share username %q — UNIQUE collision", a.upsertArg.Username)
+	}
+	if a.upsertArg.Email == b.upsertArg.Email {
+		t.Errorf("two claimless users share email %q — UNIQUE collision", a.upsertArg.Email)
+	}
+}
+
+// Real claims must still win over the fallbacks.
+func TestProvisionOrRelink_RealClaimsBeatFallbacks(t *testing.T) {
+	f := &fakeProvisioner{byEmailErr: pgx.ErrNoRows, upserted: repository.UserProfile{AuthSubject: "user_real"}}
+	claims := middleware.UserClaims{Sub: "user_real", Email: "real@example.com", EmailVerified: true, PreferredUsername: "realname"}
+
+	if _, err := provisionOrRelinkUser(context.Background(), f, claims); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if f.upsertArg.Username != "realname" || f.upsertArg.Email != "real@example.com" {
+		t.Errorf("upsert args = %+v, want the real claims", f.upsertArg)
+	}
+}
+
+// A blank username alongside a real email falls back independently — the
+// fallback is per-field, not all-or-nothing.
+func TestProvisionOrRelink_FallbacksArePerField(t *testing.T) {
+	f := &fakeProvisioner{byEmailErr: pgx.ErrNoRows, upserted: repository.UserProfile{AuthSubject: "user_partial"}}
+	claims := middleware.UserClaims{Sub: "user_partial", Email: "partial@example.com", EmailVerified: true}
+
+	if _, err := provisionOrRelinkUser(context.Background(), f, claims); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if f.upsertArg.Username != "user_partial" {
+		t.Errorf("Username = %q, want the sub fallback", f.upsertArg.Username)
+	}
+	if f.upsertArg.Email != "partial@example.com" {
+		t.Errorf("Email = %q, want the real claim preserved", f.upsertArg.Email)
+	}
+}
+
 // A real DB error from the email lookup propagates (not treated as no-match).
 func TestProvisionOrRelink_EmailLookupErrorPropagates(t *testing.T) {
 	dbErr := errors.New("connection reset")

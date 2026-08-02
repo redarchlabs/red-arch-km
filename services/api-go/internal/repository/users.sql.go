@@ -247,8 +247,8 @@ const upsertUserProfile = `-- name: UpsertUserProfile :one
 INSERT INTO user_profiles (id, auth_subject, username, email, description, is_site_admin)
 VALUES ($1, $2, $3, $4, $5, $6)
 ON CONFLICT (auth_subject) DO UPDATE SET
-    username = EXCLUDED.username,
-    email = EXCLUDED.email,
+    username = COALESCE(NULLIF(EXCLUDED.username, ''), user_profiles.username),
+    email = COALESCE(NULLIF(EXCLUDED.email, ''), user_profiles.email),
     updated_at = NOW()
 RETURNING id, auth_subject, username, email, description, is_site_admin, created_at, updated_at
 `
@@ -262,6 +262,14 @@ type UpsertUserProfileParams struct {
 	IsSiteAdmin pgtype.Bool `json:"is_site_admin"`
 }
 
+// The DO UPDATE branch is reached only when two first-logins for the same
+// subject race (the caller reads by auth_subject first and provisions solely on
+// ErrNoRows). It must therefore be non-destructive: a blank incoming claim means
+// "the token didn't assert this", NOT "clear the stored value". Overwriting
+// unconditionally let a claimless token blank out a real username/email — and
+// both columns are UNIQUE, so an UPDATE touching them escalates to a FOR UPDATE
+// tuple lock that blocks the FOR KEY SHARE every INSERT referencing the user
+// must take (chat_sessions.user_id, documents.uploaded_by_id).
 func (q *Queries) UpsertUserProfile(ctx context.Context, arg UpsertUserProfileParams) (UserProfile, error) {
 	row := q.db.QueryRow(ctx, upsertUserProfile,
 		arg.ID,
