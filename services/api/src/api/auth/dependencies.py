@@ -18,7 +18,7 @@ from sqlalchemy.orm import selectinload
 
 from api.auth.clerk import validate_clerk_token
 from api.config import Settings, get_settings
-from api.dependencies import get_db, get_org_id
+from api.dependencies import auth_provisioning_session, get_db, get_org_id
 from api.models.user import UserOrgMembership
 from api.services.user_provisioning import provision_user_from_claims
 
@@ -60,11 +60,37 @@ def _ensure_active(profile: Any) -> None:
         )
 
 
+async def _provision(
+    settings: Settings,
+    *,
+    sub: str,
+    username: str,
+    email: str,
+) -> CurrentUser:
+    """Provision/resolve the profile in its own short transaction.
+
+    Deliberately *not* on the request-scoped ``get_db`` session — see
+    :func:`api.dependencies.auth_provisioning_session` for why holding this write
+    across the request deadlocked requests against their own second connection.
+
+    ``CurrentUser`` is built inside the block so nothing lazy-loads afterwards.
+    """
+    async with auth_provisioning_session(settings) as session:
+        profile = await provision_user_from_claims(session, sub=sub, username=username, email=email)
+        _ensure_active(profile)
+        return CurrentUser(
+            sub=profile.auth_subject,
+            username=profile.username,
+            email=profile.email,
+            profile_id=profile.id,
+            is_site_admin=profile.is_site_admin,
+        )
+
+
 async def _resolve_e2e_user(
     test_user: str,
     test_secret: str,
     settings: Settings,
-    session: AsyncSession,
 ) -> CurrentUser:
     """Resolve a user via the E2E test bypass.
 
@@ -88,15 +114,7 @@ async def _resolve_e2e_user(
         )
     email = email or f"{username}@e2e.local"
 
-    profile = await provision_user_from_claims(session, sub=f"e2e-{username}", username=username, email=email)
-    _ensure_active(profile)
-    return CurrentUser(
-        sub=profile.auth_subject,
-        username=profile.username,
-        email=profile.email,
-        profile_id=profile.id,
-        is_site_admin=profile.is_site_admin,
-    )
+    return await _provision(settings, sub=f"e2e-{username}", username=username, email=email)
 
 
 def _token_issuer(token: str) -> str:
@@ -127,16 +145,21 @@ async def _verify_bearer_token(token: str, settings: Settings) -> dict[str, Any]
 
 async def get_current_user(
     settings: Annotated[Settings, Depends(get_settings)],
-    session: Annotated[AsyncSession, Depends(get_db)],
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer_scheme)] = None,
     x_test_user: Annotated[str | None, Header(alias="X-Test-User")] = None,
     x_test_secret: Annotated[str | None, Header(alias="X-Test-Secret")] = None,
 ) -> CurrentUser:
-    """Validate the bearer token (or E2E bypass) and return the current user."""
+    """Validate the bearer token (or E2E bypass) and return the current user.
+
+    Takes no request-scoped session on purpose: the only DB work here is
+    provisioning, which runs in its own short transaction so its row lock cannot
+    outlive this dependency. Callers that need a session declare ``get_db``
+    themselves (e.g. :func:`require_org_access`).
+    """
     # E2E test mode takes precedence, but is locked behind the config flag
     # AND a matching shared secret. Never active in production.
     if settings.e2e_test_mode and x_test_user:
-        return await _resolve_e2e_user(x_test_user, x_test_secret or "", settings, session)
+        return await _resolve_e2e_user(x_test_user, x_test_secret or "", settings)
 
     if credentials is None:
         raise HTTPException(
@@ -165,16 +188,7 @@ async def get_current_user(
             detail="Token missing subject claim",
         )
 
-    profile = await provision_user_from_claims(session, sub=sub, username=username, email=email)
-    _ensure_active(profile)
-
-    return CurrentUser(
-        sub=sub,
-        username=profile.username,
-        email=profile.email,
-        profile_id=profile.id,
-        is_site_admin=profile.is_site_admin,
-    )
+    return await _provision(settings, sub=sub, username=username, email=email)
 
 
 async def require_org_access(

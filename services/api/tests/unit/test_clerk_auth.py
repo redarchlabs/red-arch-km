@@ -205,8 +205,9 @@ async def test_get_current_user_rejects_missing_sub(
     creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials="token")
 
     with pytest.raises(HTTPException) as exc:
-        # session is never reached — the sub check precedes provisioning.
-        await dependencies.get_current_user(settings=settings, session=None, credentials=creds)  # type: ignore[arg-type]
+        # No session is taken at all — provisioning opens its own, and the
+        # sub check precedes it anyway.
+        await dependencies.get_current_user(settings=settings, credentials=creds)
     assert exc.value.status_code == 401
     assert exc.value.detail == "Token missing subject claim"
 
@@ -222,7 +223,7 @@ async def test_get_current_user_rejects_missing_credentials() -> None:
     settings = Settings(secret_key="x", clerk_jwt_issuer=ISSUER, clerk_allowed_azp="http://localhost:3000")
 
     with pytest.raises(HTTPException) as exc:
-        await dependencies.get_current_user(settings=settings, session=None, credentials=None)  # type: ignore[arg-type]
+        await dependencies.get_current_user(settings=settings, credentials=None)
     assert exc.value.status_code == 401
     assert exc.value.detail == "Authorization required"
 
@@ -267,7 +268,7 @@ async def test_get_current_user_handles_jwks_outage(
     creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials=_sign(rsa_key))
 
     with pytest.raises(HTTPException) as exc:
-        await dependencies.get_current_user(settings=settings, session=None, credentials=creds)  # type: ignore[arg-type]
+        await dependencies.get_current_user(settings=settings, credentials=creds)
     assert exc.value.status_code == 401
     assert exc.value.detail == "Invalid or expired token"
 
