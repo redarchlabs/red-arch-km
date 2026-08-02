@@ -30,10 +30,12 @@ import json
 import logging
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 from brain_sdk.facts.protocol import FactStore
 from brain_sdk.llm.protocol import LLMClient, LLMMessage
+from brain_sdk.query_dates import current_week_range, resolve_relative_dates
 
 logger = logging.getLogger(__name__)
 
@@ -92,8 +94,36 @@ document may state the answer even when no claim was extracted for it.
 - Only answer "no information is available" AFTER search_passages has also come \
 back empty. A fact-tool miss alone is never sufficient grounds to give up.
 - Every observation is labelled [E<n>] evidence. Cite the evidence ids you used.
+- Only cite [E<n>] ids from THIS conversation turn's observations. Evidence from \
+earlier turns is gone — re-run the tool if you need it again.
 - Stop as soon as you can answer; do not loop needlessly.
 """
+
+
+# Deterministic backstop for the passage tool: the system prompt tells the
+# model to rewrite "this week" into real dates before searching, but small
+# local models don't reliably comply — see brain_sdk.query_dates.
+_current_week_range = current_week_range
+_resolve_relative_dates = resolve_relative_dates
+
+
+def _system_prompt(now: datetime | None = None) -> str:
+    """The static prompt plus the current date, resolved at request time.
+
+    The model has no clock; without this it cannot resolve "today"/"this
+    week" and will search the knowledge base for the current date instead.
+    """
+    moment = (now or datetime.now()).astimezone()
+    date_line = (
+        f"The current date is {moment.strftime('%A, %B')} {moment.day}, {moment.year} "
+        f"({moment.date().isoformat()}); the current week runs {_current_week_range(moment)}. "
+        "Resolve relative time references BEFORE calling tools: never put words like "
+        "'today', 'this week', or 'current' in tool queries — replace them with the "
+        "concrete date, date range, month, or year (e.g. search_passages for the "
+        f"dates around {moment.strftime('%B')} {moment.day}, or claim_query with "
+        f"as_of={moment.date().isoformat()}). Never use a tool to look up the current date."
+    )
+    return f"{_SYSTEM_PROMPT}\n{date_line}"
 
 
 class FactAgent:
@@ -129,7 +159,7 @@ class FactAgent:
     def stream(
         self, question: str, ctx: AgentContext, *, history: list[LLMMessage] | None = None
     ) -> Iterator[dict[str, Any]]:
-        messages: list[LLMMessage] = [LLMMessage("system", _SYSTEM_PROMPT)]
+        messages: list[LLMMessage] = [LLMMessage("system", _system_prompt())]
         messages.extend(history or [])
         messages.append(LLMMessage("user", f"Question: {question}"))
 
@@ -283,6 +313,7 @@ class FactAgent:
         query = str(args.get("query", "")).strip()
         if not query:
             return "search_passages requires a query", []
+        query = _resolve_relative_dates(query)
         limit = int(args.get("limit", 5))
         hits = self._vector_search(query, limit, ctx.tenant_id, ctx.access_keys)
         lines = [f"- {h.get('document_title', 'Untitled')}: {str(h.get('text', ''))[:400]}" for h in hits]
