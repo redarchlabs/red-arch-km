@@ -20,9 +20,12 @@ class _FakeFactStore:
         return self.log.record(gap)
 
 
-def _stores() -> MagicMock:
+def _stores(agent: MagicMock) -> MagicMock:
+    """Stores double: the router now builds the agent itself (per-request model
+    pin), so the fake hands it back through make_fact_agent."""
     stores = MagicMock()
     stores.fact_store = _FakeFactStore()
+    stores.make_fact_agent.return_value = agent
     return stores
 
 
@@ -40,9 +43,9 @@ async def test_agent_ask_returns_answer_and_grounding() -> None:
         iterations=2,
         unsupported_citations=[],
     )
-    stores = _stores()
+    stores = _stores(agent)
 
-    result = await agent_ask(_body(), agent=agent, stores=stores, _api_key="x")
+    result = await agent_ask(_body(), stores=stores, _api_key="x")
 
     assert result["answer"] == "Acme is in Paris [E1]."
     assert result["citations"] == ["E1"]
@@ -57,6 +60,24 @@ async def test_agent_ask_returns_answer_and_grounding() -> None:
 
 
 @pytest.mark.asyncio
+async def test_agent_ask_threads_the_model_pin_into_the_agent() -> None:
+    agent = MagicMock()
+    agent.run.return_value = AgentResult(
+        answer="ok",
+        citations=[],
+        evidence=[{"id": "E1", "tool": "claim_query", "result": [{"x": 1}]}],
+        iterations=1,
+        unsupported_citations=[],
+    )
+    stores = _stores(agent)
+    body = AgentAskRequest(tenant_id="t1", query="Where is Acme HQ?", model="qwen3-30b")
+
+    await agent_ask(body, stores=stores, _api_key="x")
+
+    stores.make_fact_agent.assert_called_once_with(model="qwen3-30b")
+
+
+@pytest.mark.asyncio
 async def test_agent_ask_records_gap_when_facts_empty() -> None:
     agent = MagicMock()
     agent.run.return_value = AgentResult(
@@ -65,9 +86,9 @@ async def test_agent_ask_records_gap_when_facts_empty() -> None:
         evidence=[{"id": "E1", "tool": "claim_query", "result": []}],
         iterations=1,
     )
-    stores = _stores()
+    stores = _stores(agent)
 
-    await agent_ask(_body(), agent=agent, stores=stores, _api_key="x")
+    await agent_ask(_body(), stores=stores, _api_key="x")
 
     gaps = stores.fact_store.log.list_open("t1")
     assert len(gaps) == 1
@@ -86,9 +107,9 @@ async def test_agent_ask_stream_emits_sse_frames_and_captures_gap() -> None:
             {"type": "final", "answer": "No info", "citations": [], "unsupported_citations": []},
         ]
     )
-    stores = _stores()
+    stores = _stores(agent)
 
-    response = await agent_ask_stream(_body(), agent=agent, stores=stores, _api_key="x")
+    response = await agent_ask_stream(_body(), stores=stores, _api_key="x")
 
     frames = [chunk async for chunk in response.body_iterator]
     body = "".join(frames)
@@ -111,9 +132,9 @@ async def test_agent_ask_stream_no_gap_when_facts_present() -> None:
             {"type": "final", "answer": "Paris [E1]", "citations": ["E1"]},
         ]
     )
-    stores = _stores()
+    stores = _stores(agent)
 
-    response = await agent_ask_stream(_body(), agent=agent, stores=stores, _api_key="x")
+    response = await agent_ask_stream(_body(), stores=stores, _api_key="x")
     [_ async for _ in response.body_iterator]  # drain
 
     assert stores.fact_store.log.list_open("t1") == []

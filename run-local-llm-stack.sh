@@ -57,6 +57,10 @@
 #                    spoken answer is ~4s of generation; the latency that remains is the COLD
 #                    prefill of a new context (~220 tok/s), which prompt-prefix caching, not
 #                    speculation, is what fixes
+#   --mlock          pins the weights in RAM so an IDLE server does not go cold (CHAT_MLOCK)
+#   --no-mmap        the other half of that: weights become anonymous memory, ~14 GB rather
+#                    than the whole 18.6 GB file, and llama.cpp asks for it anyway with
+#                    tensor overrides (-ncmoe) in play
 #   enable_thinking  off: Qwen3 otherwise emits reasoning blocks that KM2 renders as speech
 
 set -euo pipefail
@@ -72,6 +76,33 @@ EMBED_PORT="${EMBED_PORT:-8098}"
 FAST_PORT="${FAST_PORT:-8097}"
 RERANK_PORT="${RERANK_PORT:-8096}"
 CHAT_MODEL="${CHAT_MODEL:-Qwen3-30B-A3B-Q4_K_M.gguf}"
+# --- keeping the chat server warm ----------------------------------------------------------
+# An IDLE chat server goes COLD, and the bill lands on whoever asks the next question.
+# MEASURED 1 Aug 2026 on a ~2.9k-token RAG prompt after ~15 hours idle:
+#
+#   warm    610 tok/s prefill    24.6 tok/s generation      9.5s answer
+#   cold     30 tok/s prefill     4.6 tok/s generation    102.8s answer     <-- 20x
+#
+# Nothing about the request changed — retrieval took 2.3s of that in both cases. The weights
+# were simply no longer in memory. `-ncmoe 44` keeps ~14 GB of expert tensors on the CPU side,
+# and mmap makes them FILE-backed: with free RAM at 1 GB and swap 7/7 GB full (VS Code, Chrome,
+# a browser full of tabs), the kernel reclaims them for free during a long idle gap, and the
+# next prefill faults all 14 GB back off disk. The tell in llama-chat.log is the first batch
+# eating nearly all the time — `prompt processing, n_tokens = 2048, progress = 0.69, t = 91.47 s`.
+#
+# --mlock pins them so reclaim cannot take them. --no-mmap goes with it and is not optional
+# here: with mmap the lock covers the whole 18.6 GB file, without it host RAM holds only what
+# did not go to the card (~14 GB, the GPU's ~4.5 GB is copied and dropped). llama.cpp asks for
+# --no-mmap on its own once -ncmoe is in play ("tensor overrides to CPU are used with mmap
+# enabled - consider using --no-mmap"). Cost is a slower START — the file is read rather than
+# mapped — which is why START_TIMEOUT is generous.
+#
+# This needs RLIMIT_MEMLOCK raised, which is root's to grant and NOT something this script can
+# do for you; start_one refuses rather than let llama.cpp warn and silently run unpinned. Set
+# CHAT_MLOCK=0 to go back to mmap (correct on a box with real memory pressure — locked pages
+# are pages the kernel can never reclaim, so pinning 14 GB it cannot spare pushes the pain
+# somewhere else).
+CHAT_MLOCK="${CHAT_MLOCK:-1}"
 # --- speculative decoding (chat server) ---------------------------------------------------
 # GENERATION is the wall on this box: ~8.5 tok/s, so a detailed 70-word spoken answer spends
 # ~11s producing tokens. Speculation proposes several tokens at once and lets the 30B verify
@@ -118,6 +149,11 @@ FAST_MODEL="${FAST_MODEL:-Qwen3-4B-Instruct-2507-Q4_K_M.gguf}"
 # requested name (it serves what it loaded), so this is purely the routing key that
 # must match OPENAI_MODEL_ROUTES and the chat element's answer-model list.
 FAST_MODEL_NAME="${FAST_MODEL_NAME:-qwen3-4b-fast}"
+# The routing key for the BIG model, same idea. Unrouted calls already reach the chat
+# server via OPENAI_BASE_URL, so this name is not how you get here — it is how a workflow
+# node pins itself to local inference explicitly, which is what makes a local-vs-hosted
+# comparison mean anything.
+CHAT_MODEL_NAME="${CHAT_MODEL_NAME:-qwen3-30b}"
 # Reported to KM2 as OPENAI_EMBEDDING_MODEL. llama.cpp ignores the requested model name
 # (it serves whatever was loaded), but KM2 records it, so keep it human-readable rather
 # than deriving it from the quantised filename.
@@ -212,6 +248,8 @@ flags_of() {
              -b "${CHAT_BATCH:-2048}" -ub "${CHAT_UBATCH:-2048}" \
              --cache-reuse "${CHAT_CACHE_REUSE:-256}" \
              --chat-template-kwargs '{"enable_thinking":false}'
+           # Keeps an idle server from going cold — see CHAT_MLOCK above for the numbers.
+           [[ "$CHAT_MLOCK" == 1 ]] && printf '%s\n' --mlock --no-mmap
            # Appended separately so that SPEC_TYPE=none emits nothing at all: llama-server
            # rejects an empty --spec-type/-md rather than ignoring it.
            if [[ "$SPEC_TYPE" != "none" ]]; then
@@ -286,6 +324,37 @@ docker_gateway() {
   docker network inspect "$DOCKER_NET" -f '{{(index .IPAM.Config 0).Gateway}}' 2>/dev/null || true
 }
 
+# --mlock is two limits, and only one of them is ours. The SOFT limit we raise here to
+# whatever the login session allows; the HARD limit is root's, and llama.cpp's response to
+# an insufficient one is a warning on stderr followed by running UNPINNED — i.e. exactly the
+# cold-start problem CHAT_MLOCK exists to fix, minus any sign that it did not work. So refuse.
+require_memlock() {
+  local model="$1" need hard
+  need=$(stat -c %s "$model")
+  hard=$(ulimit -Hl)                     # KiB, or the literal "unlimited"
+  if [[ "$hard" != unlimited ]] && (( hard * 1024 < need )); then
+    die "chat: --mlock needs RLIMIT_MEMLOCK ≥ $(( need / 1024**3 )) GiB, this session's hard limit is $(( hard / 1024**2 )) GiB.
+
+  Grant it once, as root (applies to your NEXT login):
+      echo '$USER  -  memlock  unlimited' | sudo tee /etc/security/limits.d/90-llama-memlock.conf
+
+  Or for THIS shell, without logging out — then re-run this command from the same shell:
+      sudo prlimit --pid \$\$ --memlock=unlimited
+
+  Or start unpinned and accept a cold first request after an idle gap:
+      CHAT_MLOCK=0 $0 start chat"
+  fi
+  ulimit -Sl "$hard" 2>/dev/null || true   # the child inherits it across setsid/exec
+}
+
+# Wrapped in a function rather than inlined at both call sites: as the last statement of a
+# `for` body, a bare `[[ … ]] && …` makes the whole loop exit 1 and `set -e` kills the script.
+memlock_gate() {
+  if [[ "$1" == chat && "$CHAT_MLOCK" == 1 ]]; then
+    require_memlock "$(resolve_model "$(model_of chat)")"
+  fi
+}
+
 resolve_model() {
   local m="$1"
   [[ -f "$m" ]] && { echo "$m"; return; }
@@ -306,6 +375,7 @@ start_one() {
   Reclaim:  kill $holder   then re-run $0 start $name"
 
   model=$(resolve_model "$(model_of "$name")")
+  memlock_gate "$name"
   dim "$name: $(basename "$model") -> :$port"
 
   # The child records its OWN pid. `setsid ... & echo $!` records setsid's pid instead,
@@ -363,6 +433,13 @@ status_one() {
   # even while it is actively serving, a very convincing way to fool yourself.
   [[ -f "$log" ]] && printf '     requests  %s served since start\n' \
     "$(grep -c 'launch_slot_' "$log" || true)"
+  # Resident vs LOCKED, because --mlock failing is not fatal to llama.cpp — it warns once and
+  # serves happily unpinned, and the only symptom is a 100s answer a day later. `locked 0 GiB`
+  # against a running chat server means CHAT_MLOCK did not take.
+  if [[ -r "/proc/$pid/status" ]]; then
+    awk '/^VmRSS:/{r=$2} /^VmLck:/{l=$2} END{printf "     memory    %.1f GiB resident, %.1f GiB locked\n", r/1048576, l/1048576}' \
+      "/proc/$pid/status"
+  fi
   return 0
 }
 
@@ -384,7 +461,11 @@ cmd_env() {
   echo
   echo "  host processes (uvicorn):"
   echo "    OPENAI_BASE_URL=http://127.0.0.1:$CHAT_PORT/v1"
-  echo "    OPENAI_MODEL_ROUTES=$FAST_MODEL_NAME=http://127.0.0.1:$FAST_PORT/v1"
+  echo "    OPENAI_MODEL_ROUTES=$CHAT_MODEL_NAME=http://127.0.0.1:$CHAT_PORT/v1, $FAST_MODEL_NAME=http://127.0.0.1:$FAST_PORT/v1, gpt-4.1-mini=https://api.openai.com/v1"
+  echo
+  dim "  A route wins over OPENAI_BASE_URL, so adding a hosted id to that list is how one"
+  dim "  org runs on OpenAI while the rest stay on this box — the model name a workflow's"
+  dim "  LLM node asks for is the whole switch. Hosted ids need an org or central API key."
   echo
   if [[ -n "$gw" ]]; then
     echo "  docker containers (brain-api):"
@@ -502,6 +583,9 @@ case "${1:-status}" in
   start)   shift; for s in $(resolve_targets "${1:-all}"); do start_one "$s"; done; cmd_env ;;
   stop)    shift; for s in $(resolve_targets "${1:-all}"); do stop_one "$s"; done ;;
   restart) shift; t="${1:-all}"
+           # Before stopping anything: a preflight that refuses AFTER the stop loop would
+           # leave the server down rather than restarted.
+           for s in $(resolve_targets "$t"); do memlock_gate "$s"; done
            for s in $(resolve_targets "$t"); do stop_one "$s"; done
            for s in $(resolve_targets "$t"); do start_one "$s"; done; cmd_env ;;
   status)  shift; cmd_status "${1:-all}" ;;

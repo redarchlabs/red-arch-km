@@ -56,6 +56,9 @@ class Stores:
         # Fact engine (reified-claim store + provider-agnostic LLM + agent).
         self._fact_store: Neo4jFactStore | None = None
         self._llm: LLMClient | None = None
+        # Per-model LLM clients for the org model pin (orgs.default_llm_model,
+        # threaded in on the agent request). Keyed by model id, built lazily.
+        self._model_llms: dict[str, LLMClient] = {}
         self._resolver: EntityResolver | None = None
         self._claim_extractor: ClaimExtractor | None = None
         self._fact_pipeline: FactIngestPipeline | None = None
@@ -279,10 +282,42 @@ class Stores:
         """Construct a DigestBuilder for (re)building community summaries."""
         return DigestBuilder(self.fact_store, self.llm)
 
-    def make_fact_agent(self) -> FactAgent:
-        """Construct a FactAgent wired to the fact store + passage search."""
+    def llm_for_model(self, model: str | None) -> LLMClient:
+        """The fact-engine LLM for a per-request model override, or the default.
+
+        An override is an OpenAI-compatible model id (the per-org pin,
+        orgs.default_llm_model) resolved to its endpoint via OPENAI_MODEL_ROUTES
+        — so it is always served by the openai provider, even when the
+        deployment's default agent LLM is a different provider. Cached per model
+        id so repeated requests reuse one client/connection pool.
+        """
+        if not model or model == self._settings.resolved_agent_model:
+            return self.llm
+        with self._lock:
+            client = self._model_llms.get(model)
+            if client is None:
+                from brain_api.openai_client import base_url
+
+                url = base_url(self._settings, model)
+                client = make_llm_client(
+                    provider="openai",
+                    model=model,
+                    # A routed local endpoint authenticates nothing but the SDK
+                    # wants a non-empty key; hosted keeps the real key requirement.
+                    api_key=self._settings.openai_api_key or ("not-needed" if url else ""),
+                    base_url=url,
+                )
+                self._model_llms[model] = client
+            return client
+
+    def make_fact_agent(self, model: str | None = None) -> FactAgent:
+        """Construct a FactAgent wired to the fact store + passage search.
+
+        ``model`` pins the agent's reasoning LLM for this request (the per-org
+        model pin); None keeps the deployment default.
+        """
         return FactAgent(
-            self.llm,
+            self.llm_for_model(model),
             self.fact_store,
             vector_search=self._search_passages,
             max_iterations=self._settings.agent_max_iterations,

@@ -16,7 +16,16 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useOrg } from "@/context/OrgContext";
 import { getApiErrorMessage } from "@/lib/api/errors";
-import { createOrg, deleteOrg, listOrgs, NIL_UUID, updateOrg, type OrgUpdateInput } from "@/lib/api/orgs";
+import {
+  createOrg,
+  deleteOrg,
+  listLlmModels,
+  listOrgs,
+  NIL_UUID,
+  updateOrg,
+  type LlmModelCatalog,
+  type OrgUpdateInput,
+} from "@/lib/api/orgs";
 import { listViews, type View } from "@/lib/api/views";
 import type { Org } from "@/types";
 
@@ -32,9 +41,14 @@ export function OrgManager() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [editHomeViewId, setEditHomeViewId] = useState("");
+  const [editLlmModel, setEditLlmModel] = useState("");
   // Views of the *current* org: the views API is scoped to the X-Org-ID header,
   // so the Home view selector can only be offered for the current org's row.
   const [views, setViews] = useState<View[]>([]);
+  // Global model catalog (platform default + OPENAI_MODEL_ROUTES ids), so the
+  // AI-model selector works on any org's row. Failures leave it null and the
+  // selector falls back to a free-text input.
+  const [llmCatalog, setLlmCatalog] = useState<LlmModelCatalog | null>(null);
 
   const [deleteTarget, setDeleteTarget] = useState<Org | null>(null);
   const [deleteConfirmText, setDeleteConfirmText] = useState("");
@@ -54,6 +68,21 @@ export function OrgManager() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const catalog = await listLlmModels();
+        if (!cancelled) setLlmCatalog(catalog);
+      } catch {
+        if (!cancelled) setLlmCatalog(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Load the current org's views to populate the Home view selector. Scoped to
   // the current org because listViews() reads the X-Org-ID header; failures just
@@ -102,7 +131,8 @@ export function OrgManager() {
     // The home view can only be edited on the current org (see `views` above).
     const isCurrent = org.id === currentOrgId;
     const homeChanged = isCurrent && editHomeViewId !== (org.home_view_id ?? "");
-    if (!nameChanged && !homeChanged) {
+    const modelChanged = editLlmModel.trim() !== (org.default_llm_model ?? "");
+    if (!nameChanged && !homeChanged && !modelChanged) {
       setEditingId(null);
       return;
     }
@@ -110,6 +140,8 @@ export function OrgManager() {
     if (nameChanged) input.name = trimmed;
     // Empty selection clears the home view via the NIL_UUID sentinel.
     if (homeChanged) input.home_view_id = editHomeViewId || NIL_UUID;
+    // Empty string clears the pin back to the platform default.
+    if (modelChanged) input.default_llm_model = editLlmModel.trim();
     try {
       await updateOrg(org.id, input);
       setEditingId(null);
@@ -215,6 +247,47 @@ export function OrgManager() {
                           <span className="mt-1 block">Switch to this org to set its home view.</span>
                         )}
                       </label>
+                      <label className="block text-xs text-muted-foreground">
+                        AI model
+                        {llmCatalog ? (
+                          <select
+                            className="mt-1 h-8 w-full max-w-xs rounded-md border bg-background px-2 text-sm text-foreground"
+                            value={editLlmModel}
+                            onChange={(e) => setEditLlmModel(e.target.value)}
+                          >
+                            <option value="">Platform default ({llmCatalog.default})</option>
+                            {llmCatalog.models
+                              .filter((m) => m !== llmCatalog.default)
+                              .map((m) => (
+                                <option key={m} value={m}>
+                                  {m}
+                                </option>
+                              ))}
+                            {/* Keep the current pin selectable even when the options above
+                                don't render it: a pin equal to the platform default id (which
+                                is filtered out) or an id with no configured route. */}
+                            {editLlmModel &&
+                            (editLlmModel === llmCatalog.default ||
+                              !llmCatalog.models.includes(editLlmModel)) ? (
+                              <option value={editLlmModel}>
+                                {editLlmModel}
+                                {llmCatalog.models.includes(editLlmModel) ? "" : " (not routed)"}
+                              </option>
+                            ) : null}
+                          </select>
+                        ) : (
+                          <Input
+                            value={editLlmModel}
+                            onChange={(e) => setEditLlmModel(e.target.value)}
+                            placeholder="Model id (blank = platform default)"
+                            className="mt-1 h-8 max-w-xs"
+                          />
+                        )}
+                        <span className="mt-1 block">
+                          Pins every AI feature in this org (chat, workflows, assistant) to one model — e.g. a
+                          local model vs a 3rd-party provider.
+                        </span>
+                      </label>
                     </div>
                   ) : (
                     <>
@@ -231,6 +304,7 @@ export function OrgManager() {
                           setEditingId(org.id);
                           setEditName(org.name);
                           setEditHomeViewId(org.home_view_id ?? "");
+                          setEditLlmModel(org.default_llm_model ?? "");
                         }}
                         aria-label={`Edit ${org.name}`}
                       >

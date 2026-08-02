@@ -1673,6 +1673,7 @@ class AgentService:
         session_factory: async_sessionmaker[AsyncSession],
         org_openai_key: str | None = None,
         org_context: OrgContext | None = None,
+        org_default_model: str | None = None,
     ) -> None:
         self._org_id = org_id
         self._settings = settings
@@ -1681,10 +1682,22 @@ class AgentService:
         # and enforce their permissions; None (unit tests exercising config
         # tools) is treated as admin, preserving the prior admin-only behaviour.
         self._ctx = org_context
+        # Org-pinned model (orgs.default_llm_model) beats the env default, so a
+        # whole org can run the assistant on local or 3rd-party inference. Kept
+        # separately from _model because brain-api calls should only carry an
+        # EXPLICIT org pin, never the api service's env default.
+        self._org_default_model = org_default_model
+        self._model = org_default_model or settings.openai_model
         key = org_openai_key or settings.openai_api_key.get_secret_value()
         # A self-hosted endpoint (OPENAI_BASE_URL) authenticates nothing, so a missing key
         # is not a reason to go client-less there — see api/services/openai_client.py.
-        self._client = make_async_openai(settings, key) if key or not api_key_required(settings) else None
+        # The model is passed so a routed model (OPENAI_MODEL_ROUTES) reaches its
+        # own endpoint and decides whether a key is required at all.
+        self._client = (
+            make_async_openai(settings, key, model=self._model)
+            if key or not api_key_required(settings, self._model)
+            else None
+        )
 
     @asynccontextmanager
     async def _tenant_session(self) -> AsyncGenerator[AsyncSession]:
@@ -1708,7 +1721,7 @@ class AgentService:
         try:
             for _ in range(MAX_ITERATIONS):
                 response = await self._client.chat.completions.create(
-                    model=self._settings.openai_model,
+                    model=self._model,
                     messages=messages,
                     tools=TOOLS,
                     tool_choice="auto",
@@ -1760,7 +1773,7 @@ class AgentService:
             )
             try:
                 wrap_up = await self._client.chat.completions.create(
-                    model=self._settings.openai_model,
+                    model=self._model,
                     messages=messages,
                     tools=TOOLS,
                     tool_choice="none",
@@ -1823,7 +1836,12 @@ class AgentService:
         # No DB access — talks to brain-api. The (unused) session keeps the
         # dispatch signature uniform across tools.
         client = BrainAPIClient(self._settings)
-        result = await client.vector_chat(tenant_id=str(self._org_id), query=args["query"])
+        result = await client.vector_chat(
+            tenant_id=str(self._org_id),
+            query=args["query"],
+            # Only an explicit org pin travels to brain-api; None keeps its default.
+            model=self._org_default_model,
+        )
         return {"answer": result.get("answer") or result}
 
     async def _tool_list_entities(self, session: AsyncSession, _args: dict[str, Any]) -> dict[str, Any]:
@@ -1948,7 +1966,7 @@ class AgentService:
         num_modules = max(2, min(5, int(args.get("num_modules") or 3)))
         blueprint = await generate_course_blueprint(
             self._client,
-            self._settings.openai_model,
+            self._model,
             topic=topic,
             category=category,
             audience=audience,

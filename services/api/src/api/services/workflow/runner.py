@@ -186,6 +186,9 @@ class ActionExecutor:
             tags=opts.get("tags"),
             folder_tags=opts.get("folder_tags"),
             use_knowledge_graph=bool(opts.get("use_knowledge_graph", True)),
+            # Org-pinned model for the brain-api answer synthesis; None lets
+            # brain-api use its own configured default.
+            model=opts.get("model") or await self._org_default_model(org_id),
         )
 
     async def _retrieve_knowledge(self, org_id: uuid.UUID, opts: dict[str, Any]) -> dict[str, Any]:
@@ -218,7 +221,7 @@ class ActionExecutor:
         # Resolve the model BEFORE the client: a model may be routed to its own
         # endpoint (OPENAI_MODEL_ROUTES), which decides both the base URL and whether
         # a key is needed at all.
-        model = opts.get("model") or self._settings.openai_summary_model
+        model = opts.get("model") or await self._org_default_model(org_id) or self._settings.openai_summary_model
         key = await self._org_openai_key(org_id) or self._settings.openai_api_key.get_secret_value()
         if not key and api_key_required(self._settings, model):
             raise ActionError("summarization requires an OpenAI API key (org or central)")
@@ -256,7 +259,7 @@ class ActionExecutor:
         (falls back to the central key) and the chat model, mirroring _summarize's wiring."""
         if self._settings is None:
             raise ActionError("llm_decide requires Settings (not wired in this context)")
-        model = opts.get("model") or self._settings.openai_model
+        model = opts.get("model") or await self._org_default_model(org_id) or self._settings.openai_model
         key = await self._org_openai_key(org_id) or self._settings.openai_api_key.get_secret_value()
         if not key and api_key_required(self._settings, model):
             raise ActionError("llm_decide requires an OpenAI API key (org or central)")
@@ -283,7 +286,7 @@ class ActionExecutor:
         pass threshold."""
         if self._settings is None:
             raise ActionError("llm_grade requires Settings (not wired in this context)")
-        model = opts.get("model") or self._settings.openai_model
+        model = opts.get("model") or await self._org_default_model(org_id) or self._settings.openai_model
         key = await self._org_openai_key(org_id) or self._settings.openai_api_key.get_secret_value()
         if not key and api_key_required(self._settings, model):
             raise ActionError("llm_grade requires an OpenAI API key (org or central)")
@@ -304,7 +307,7 @@ class ActionExecutor:
         field-for-field."""
         if self._settings is None:
             raise ActionError("llm_question requires Settings (not wired in this context)")
-        model = opts.get("model") or self._settings.openai_model
+        model = opts.get("model") or await self._org_default_model(org_id) or self._settings.openai_model
         key = await self._org_openai_key(org_id) or self._settings.openai_api_key.get_secret_value()
         if not key and api_key_required(self._settings, model):
             raise ActionError("llm_question requires an OpenAI API key (org or central)")
@@ -325,7 +328,7 @@ class ActionExecutor:
         mirroring _decide's wiring. Returns a structured ``{reply, coach, done}`` turn."""
         if self._settings is None:
             raise ActionError("llm_respond requires Settings (not wired in this context)")
-        model = opts.get("model") or self._settings.openai_model
+        model = opts.get("model") or await self._org_default_model(org_id) or self._settings.openai_model
         key = await self._org_openai_key(org_id) or self._settings.openai_api_key.get_secret_value()
         if not key and api_key_required(self._settings, model):
             raise ActionError("llm_respond requires an OpenAI API key (org or central)")
@@ -355,6 +358,21 @@ class ActionExecutor:
         if not stored:
             return None
         return decrypt_secret(stored, self._settings.org_encryption_key.get_secret_value())
+
+    async def _org_default_model(self, org_id: uuid.UUID) -> str | None:
+        """The org's pinned LLM model id, or None for the platform default.
+
+        Sits between an explicit node ``config.model`` and the env defaults, so a
+        whole org can run on local or 3rd-party inference (via OPENAI_MODEL_ROUTES)
+        without every workflow node naming a model. The session identity map makes
+        the repeated Org lookups within one run effectively free. Session-less
+        contexts (some tests / stream wiring) simply have no org pin.
+        """
+        if self._session is None:
+            return None
+        from api.services.org_llm import org_default_llm_model
+
+        return await org_default_llm_model(self._session, org_id)
 
     async def _resolve_connection(self, org_id: uuid.UUID, name: str) -> Any:
         """Load a named connection (org-scoped) and decrypt its secret. Returns a

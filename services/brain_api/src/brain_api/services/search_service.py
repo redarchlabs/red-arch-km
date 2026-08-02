@@ -8,12 +8,13 @@ from collections.abc import Iterator
 from typing import Any, cast
 
 from brain_sdk.reranking.protocol import Reranker
+from openai import OpenAI
 from openai.types.chat import ChatCompletionMessageParam
 from shared_config import get_tracer
 
 from brain_api.config import BrainAPISettings
 from brain_api.observability import get_metrics
-from brain_api.openai_client import make_openai
+from brain_api.openai_client import base_url, make_openai
 from brain_api.stores import Stores
 
 logger = logging.getLogger(__name__)
@@ -92,6 +93,19 @@ class SearchService:
         # Honours OPENAI_BASE_URL so this instance's chat can run against a local
         # OpenAI-compatible server; unset, this is exactly OpenAI(api_key=…) as before.
         self._llm = make_openai(settings, settings.openai_api_key)
+
+    def _chat_client(self, model: str) -> OpenAI:
+        """The client whose endpoint serves ``model``.
+
+        A per-request model (an org pinned to local or 3rd-party inference) may be
+        routed to its own endpoint via OPENAI_MODEL_ROUTES, so the constructor-built
+        default client is only correct when the model resolves to the same base URL.
+        Client construction is cheap (no connection until the first call), so the
+        routed case just builds one on the fly.
+        """
+        if base_url(self._settings, model) == base_url(self._settings):
+            return self._llm
+        return make_openai(self._settings, self._settings.openai_api_key, model=model)
 
     def warm_up(self) -> None:
         """Exercise the read path once so the first *real* user query is warm.
@@ -324,12 +338,14 @@ class SearchService:
         use_knowledge_graph: bool = True,
         chunk_limit: int | None = None,
         expand_documents: bool = True,
+        model: str | None = None,
     ) -> dict[str, Any]:
         """Hybrid RAG: vector retrieval + optional graph context → LLM synthesis.
 
         ``chunk_limit`` defaults to the configured ``CHAT_CHUNK_LIMIT``; an explicit
         value still wins, which is what makes A/B-ing the limit possible without a
-        redeploy.
+        redeploy. ``model`` overrides the configured chat model for the synthesis
+        step (an org pinned to local or 3rd-party inference); None keeps the default.
         """
         # 1. Vector retrieval
         vector_result = self.vector_search(
@@ -364,10 +380,16 @@ class SearchService:
             self._build_messages(query, chat_history or [], context_blocks),
         )
 
-        # 4. Synthesize answer
+        # 4. Synthesize answer. Routing applies ONLY to an explicit per-request
+        # pin: the configured default model name may coincide with a routed id
+        # (llama.cpp serves whatever it loaded, regardless of the name asked
+        # for), and routing it would silently move every unpinned org's chat to
+        # that route's endpoint.
+        chat_model = model or self._settings.openai_chat_model
+        client = self._chat_client(chat_model) if model else self._llm
         try:
-            response = self._llm.chat.completions.create(
-                model=self._settings.openai_chat_model,
+            response = client.chat.completions.create(
+                model=chat_model,
                 messages=messages,
                 max_tokens=1000,
                 temperature=0.3,
@@ -395,14 +417,16 @@ class SearchService:
         use_knowledge_graph: bool = True,
         chunk_limit: int | None = None,
         expand_documents: bool = True,
+        model: str | None = None,
     ) -> Iterator[dict[str, Any]]:
         """Streaming hybrid RAG chat.
 
         Yields event dicts with `type` in {"sources", "graph", "delta", "done", "error"}.
         The caller is responsible for serialising events to the wire format (e.g. SSE).
 
-        ``chunk_limit`` defaults to the configured ``CHAT_CHUNK_LIMIT`` — see
-        :meth:`vector_chat`. This is the path the UI chat actually takes.
+        ``chunk_limit`` defaults to the configured ``CHAT_CHUNK_LIMIT`` and ``model``
+        overrides the synthesis model — see :meth:`vector_chat`. This is the path
+        the UI chat actually takes.
         """
         # 1. Vector retrieval
         try:
@@ -447,9 +471,12 @@ class SearchService:
             self._build_messages(query, chat_history or [], context_blocks),
         )
 
+        # Routing only for an explicit pin — see vector_chat's synthesis comment.
+        chat_model = model or self._settings.openai_chat_model
+        client = self._chat_client(chat_model) if model else self._llm
         try:
-            stream = self._llm.chat.completions.create(
-                model=self._settings.openai_chat_model,
+            stream = client.chat.completions.create(
+                model=chat_model,
                 messages=messages,
                 max_tokens=1000,
                 temperature=0.3,

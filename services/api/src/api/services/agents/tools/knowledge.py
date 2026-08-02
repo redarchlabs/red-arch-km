@@ -26,10 +26,16 @@ async def _search_knowledge(ctx: ToolContext, args: dict[str, Any]) -> dict[str,
     if ctx.settings is None:
         return {"error": "knowledge search is not configured"}
     from api.services.brain_client import BrainAPIClient
+    from api.services.org_llm import org_default_llm_model
 
     client = BrainAPIClient(ctx.settings)
     try:
-        result = await client.vector_chat(tenant_id=str(ctx.org_id), query=query)
+        result = await client.vector_chat(
+            tenant_id=str(ctx.org_id),
+            query=query,
+            # Org-pinned answer model (local vs 3rd-party); None = brain-api default.
+            model=await org_default_llm_model(ctx.session, ctx.org_id),
+        )
     except Exception as exc:  # noqa: BLE001 - surface as a tool error, don't crash the run
         return {"error": f"knowledge search failed: {exc}"}
     answer = result.get("answer") or result.get("response") or result.get("result")

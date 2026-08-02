@@ -26,6 +26,12 @@ services:
       LOCAL_LLM_GATEWAY: ${LOCAL_LLM_GATEWAY:-172.22.0.1}
       # chat: Qwen3-30B-A3B — RAG answers, chunk summaries, fact extraction
       OPENAI_BASE_URL: http://${LOCAL_LLM_GATEWAY:-172.22.0.1}:${LOCAL_CHAT_PORT:-8099}/v1
+      # Per-model endpoint routes (model id → base URL), container-perspective:
+      # what lets a per-org model pin (orgs.default_llm_model, threaded in on the
+      # chat request) reach the right server — local llama.cpp via the gateway,
+      # hosted OpenAI ids at api.openai.com. Exported by run-local.sh; empty when
+      # unset, which disables routing and keeps every model on OPENAI_BASE_URL.
+      OPENAI_MODEL_ROUTES: ${BRAIN_OPENAI_MODEL_ROUTES:-}
       # embeddings: nomic-embed-text-v1.5 — retrieval, ingest, entity vectors
       EMBEDDING_BASE_URL: http://${LOCAL_LLM_GATEWAY:-172.22.0.1}:${LOCAL_EMBED_PORT:-8098}/v1
       OPENAI_EMBEDDING_MODEL: ${LOCAL_EMBED_MODEL:-nomic-embed-text-v1.5}

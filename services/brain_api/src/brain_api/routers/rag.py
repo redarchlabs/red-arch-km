@@ -32,8 +32,9 @@ class AskRequest(BaseModel):
 
     SECURITY (defense-in-depth note): brain-api sits behind a single shared
     ``X-API-Key`` (``BRAIN_API_KEY``) and *trusts* the caller-supplied
-    ``tenant_id`` and ``access_keys`` — the key holder (the app backend) is
-    responsible for scoping these to the authenticated end user before calling.
+    ``tenant_id``, ``access_keys``, and ``model`` — the key holder (the app
+    backend) is responsible for scoping these to the authenticated end user
+    (and the org's pinned model) before calling.
     That makes ``BRAIN_API_KEY`` a high-value secret: anyone holding it can read
     ANY tenant's data by passing an arbitrary ``tenant_id``. It must never be
     exposed to browsers/end users, only to server-side callers that have already
@@ -52,6 +53,9 @@ class AskRequest(BaseModel):
         description="Folder-membership tags (folder:<id>); ORed to scope retrieval to a set of folders.",
     )
     use_knowledge_graph: bool = True
+    # Answer-synthesis model override (an org pinned to local or 3rd-party
+    # inference); omitted/null keeps the configured OPENAI_CHAT_MODEL.
+    model: str | None = Field(default=None, max_length=100)
 
 
 def _get_service(stores: Annotated[Stores, Depends(get_stores)]) -> SearchService:
@@ -75,6 +79,7 @@ async def ask(
             tags=body.tags,
             folder_tags=body.folder_tags or None,
             use_knowledge_graph=body.use_knowledge_graph,
+            model=body.model,
         )
     except Exception:
         logger.exception("RAG ask failed")
@@ -109,6 +114,7 @@ async def ask_stream(
             tags=body.tags,
             folder_tags=body.folder_tags or None,
             use_knowledge_graph=body.use_knowledge_graph,
+            model=body.model,
         ):
             yield f"data: {json.dumps(event)}\n\n"
 

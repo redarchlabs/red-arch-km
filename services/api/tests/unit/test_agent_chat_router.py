@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncIterator
+from types import SimpleNamespace
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from api.auth.dependencies import CurrentUser, OrgContext
@@ -22,6 +23,13 @@ def settings() -> Settings:
         brain_api_url="http://brain-api:8000",
         brain_api_key="test-key",
     )
+
+
+def _session(pin: str | None = None) -> MagicMock:
+    """Session double: the endpoints resolve the org's LLM pin via session.get."""
+    session = MagicMock()
+    session.get = AsyncMock(return_value=SimpleNamespace(default_llm_model=pin))
+    return session
 
 
 @pytest.fixture
@@ -58,7 +66,7 @@ async def test_agent_chat_returns_grounded_answer(
     monkeypatch.setattr(search_router, "BrainAPIClient", FakeClient)
     body = AgentChatRequest(query="Where is Acme HQ?", tags=["policy"])
 
-    result = await search_router.agent_chat(body, ctx=admin_ctx, session=MagicMock(), settings=settings)
+    result = await search_router.agent_chat(body, ctx=admin_ctx, session=_session(), settings=settings)
 
     assert result.answer == "Acme is in Paris [E1]."
     assert result.citations == ["E1"]
@@ -77,9 +85,12 @@ async def test_agent_chat_passes_tenant_and_admin_access(
             return await super().agent_ask(**kwargs)
 
     monkeypatch.setattr(search_router, "BrainAPIClient", Capturing)
-    await search_router.agent_chat(AgentChatRequest(query="q"), ctx=admin_ctx, session=MagicMock(), settings=settings)
+    await search_router.agent_chat(
+        AgentChatRequest(query="q"), ctx=admin_ctx, session=_session("qwen3-30b"), settings=settings
+    )
     assert captured["tenant_id"] == str(admin_ctx.org_id)
     assert captured["access_keys"] is None  # admin → unrestricted
+    assert captured["model"] == "qwen3-30b"  # org LLM pin travels to brain-api
 
 
 @pytest.mark.asyncio
@@ -88,7 +99,7 @@ async def test_agent_chat_stream_forwards_sse(
 ) -> None:
     monkeypatch.setattr(search_router, "BrainAPIClient", FakeClient)
     response = await search_router.agent_chat_stream(
-        AgentChatRequest(query="q"), ctx=admin_ctx, session=MagicMock(), settings=settings
+        AgentChatRequest(query="q"), ctx=admin_ctx, session=_session(), settings=settings
     )
     body = "".join([chunk.decode() async for chunk in response.body_iterator])
     assert '"type": "thought"' in body
