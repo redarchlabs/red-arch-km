@@ -48,6 +48,12 @@ class BrainAPISettings(BaseSettings):
     # embeddings once ended up at a chat-only server, failing every ingest with
     # "501 This server does not support embeddings".
     openai_base_url: str = Field(default="", validation_alias="OPENAI_BASE_URL")
+    # Per-model endpoint routes ("model=url" pairs, comma/whitespace separated).
+    # A model id with a route reaches that endpoint instead of openai_base_url.
+    # This is what makes a per-org model pin (orgs.default_llm_model, threaded in
+    # on the chat request) actually land on the right server — local llama.cpp
+    # for one org, hosted OpenAI for another. Same format as the API service.
+    openai_model_routes: str = Field(default="", validation_alias="OPENAI_MODEL_ROUTES")
     openai_embedding_model: str = Field(
         default="text-embedding-3-small",
         validation_alias="OPENAI_EMBEDDING_MODEL",

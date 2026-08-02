@@ -53,6 +53,12 @@ def model_routes(settings: Any) -> dict[str, str]:
     Unset (the default) means every model goes to ``OPENAI_BASE_URL`` as before.
     Malformed entries are skipped rather than raising: a typo in one route must not
     take the whole service down, and the fallback is the plain global endpoint.
+
+    Keys keep the operator's ORIGINAL casing: they leave this module (the org
+    model-pin catalog serves them to admins, who store and send them verbatim as
+    the literal ``model`` field), and a case-sensitive server (vLLM's
+    ``--served-model-name``, hosted APIs) must see the exact configured spelling.
+    Lookups are case-insensitive in :func:`base_url`.
     """
     configured = getattr(settings, "openai_model_routes", "")
     if not isinstance(configured, str) or not configured.strip():
@@ -62,7 +68,7 @@ def model_routes(settings: Any) -> dict[str, str]:
         model, _, url = entry.partition("=")
         model, url = model.strip(), url.strip()
         if model and url:
-            routes[model.lower()] = url
+            routes[model] = url
     return routes
 
 
@@ -78,7 +84,9 @@ def base_url(settings: Any, model: str | None = None) -> str | None:
     fail deep inside httpx instead of here.
     """
     if model:
-        routed = model_routes(settings).get(model.strip().lower())
+        wanted = model.strip().lower()
+        # Case-insensitive match against original-cased keys (see model_routes).
+        routed = next((url for key, url in model_routes(settings).items() if key.lower() == wanted), None)
         if routed:
             return routed
     configured = getattr(settings, "openai_base_url", "")

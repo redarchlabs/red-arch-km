@@ -21,6 +21,7 @@ from api.schemas.common import PaginatedResponse, PaginationParams, make_page
 from api.schemas.org import OrgCreate, OrgRead, OrgUpdate
 from api.services.brain_client import BrainAPIClient
 from api.services.crypto import encrypt_secret
+from api.services.openai_client import model_routes
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -38,6 +39,23 @@ async def list_orgs(
     else:
         orgs, total = await repo.list_for_user(user.profile_id, offset=pagination.offset, limit=pagination.page_size)
     return make_page([OrgRead.model_validate(o) for o in orgs], total, pagination)
+
+
+@router.get("/llm-models")
+async def list_llm_models(
+    _admin: Annotated[CurrentUser, Depends(require_site_admin)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> dict[str, object]:
+    """The model ids an org can be pinned to via ``default_llm_model``.
+
+    Declared before ``GET /{org_id}`` so the literal path wins the route match.
+    ``models`` lists every id with its own endpoint route (OPENAI_MODEL_ROUTES)
+    plus the platform defaults; ``default`` is what an org with no override uses.
+    """
+    routed = sorted(model_routes(settings).keys())
+    defaults = [settings.openai_model, settings.openai_summary_model]
+    models = list(dict.fromkeys(routed + [m for m in defaults if m]))
+    return {"default": settings.openai_model, "models": models}
 
 
 @router.post("/", response_model=OrgRead, status_code=status.HTTP_201_CREATED)
@@ -118,6 +136,8 @@ async def update_org(
         # sets it. The repo interprets the sentinel (mirrors the openai_api_key
         # "empty string clears" convention on this same endpoint).
         home_view_id=body.home_view_id,
+        # None = no change; empty string clears back to the platform default.
+        default_llm_model=body.default_llm_model,
     )
     return OrgRead.model_validate(org)
 

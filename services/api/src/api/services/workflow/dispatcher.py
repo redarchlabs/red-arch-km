@@ -166,6 +166,9 @@ class WorkflowDispatchService:
             tags=opts.get("tags"),
             folder_tags=opts.get("folder_tags"),
             use_knowledge_graph=bool(opts.get("use_knowledge_graph", True)),
+            # Org-pinned model for the brain-api answer synthesis; None lets
+            # brain-api use its own configured default.
+            model=opts.get("model") or await self._org_default_model(org_id),
         )
 
     async def _retrieve_knowledge(self, org_id: uuid.UUID, opts: dict[str, Any]) -> dict[str, Any]:
@@ -202,7 +205,7 @@ class WorkflowDispatchService:
 
         # Model first: a routed model (OPENAI_MODEL_ROUTES) has its own endpoint, which
         # also decides whether a key is required.
-        model = opts.get("model") or self._settings.openai_summary_model
+        model = opts.get("model") or await self._org_default_model(org_id) or self._settings.openai_summary_model
         if not key and api_key_required(self._settings, model):
             raise ActionError("summarization requires an OpenAI API key (org or central)")
         from api.services.spoken_summary import summarize_for_speech
@@ -230,6 +233,15 @@ class WorkflowDispatchService:
         if not stored:
             return None
         return decrypt_secret(stored, self._settings.org_encryption_key.get_secret_value())
+
+    async def _org_default_model(self, org_id: uuid.UUID) -> str | None:
+        """The org's pinned LLM model id, or None for the platform default.
+        Mirrors ``ActionExecutor._org_default_model`` on the legacy walker path."""
+        if self._session is None:
+            return None
+        from api.services.org_llm import org_default_llm_model
+
+        return await org_default_llm_model(self._session, org_id)
 
     async def _resolve_connection(self, org_id: uuid.UUID, name: str) -> Any:
         """Load a named connection (org-scoped) and decrypt its secret. Returns a

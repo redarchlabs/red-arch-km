@@ -19,6 +19,7 @@ import {
 } from "@/lib/api/entities";
 import { getApiErrorMessage } from "@/lib/api/errors";
 import { listForms, type FormElement } from "@/lib/api/forms";
+import { ShareViewCard } from "@/components/views/ShareViewCard";
 import { getView, updateView, type View } from "@/lib/api/views";
 import { buildRenderFromConfig } from "@/lib/forms/catalogFromEntities";
 
@@ -31,6 +32,10 @@ export default function ViewBuilderPage({ params }: { params: Promise<{ id: stri
 
   const [view, setView] = useState<View | null>(null);
   const [elements, setElements] = useState<FormElement[]>([]);
+  // Live-refresh cadence for the runtime viewer (null = load once). Kept in state so
+  // it round-trips through save — the editor writes the whole config, so dropping it
+  // here would silently un-live a status page on the next layout edit.
+  const [refreshMs, setRefreshMs] = useState<number | null>(null);
   const [allEntities, setAllEntities] = useState<EntityDefinition[]>([]);
   const [allRels, setAllRels] = useState<EntityRelationship[]>([]);
   const [forms, setForms] = useState<{ id: string; name: string }[]>([]);
@@ -47,6 +52,7 @@ export default function ViewBuilderPage({ params }: { params: Promise<{ id: stri
       const v = await getView(id);
       setView(v);
       setElements(v.config.elements ?? []);
+      setRefreshMs(v.config.refresh_ms ?? null);
       const [all, fs] = await Promise.all([
         listEntities().catch(() => []),
         listForms().catch(() => []),
@@ -73,7 +79,9 @@ export default function ViewBuilderPage({ params }: { params: Promise<{ id: stri
     setSaved(false);
     setError(null);
     try {
-      const updated = await updateView(id, { config: { version: 2, elements } });
+      const updated = await updateView(id, {
+        config: { version: 2, elements, refresh_ms: refreshMs },
+      });
       setView(updated);
       setSaved(true);
     } catch (e: unknown) {
@@ -148,7 +156,24 @@ export default function ViewBuilderPage({ params }: { params: Promise<{ id: stri
 
       <Card>
         <CardContent className="space-y-4 pt-6">
-          <h2 className="text-lg font-semibold">Layout</h2>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h2 className="text-lg font-semibold">Layout</h2>
+            <label className="flex items-center gap-2 text-sm text-muted-foreground">
+              Auto-refresh
+              <select
+                className="rounded-md border bg-background px-2 py-1 text-sm"
+                value={refreshMs ?? ""}
+                onChange={(e) => setRefreshMs(e.target.value ? Number(e.target.value) : null)}
+              >
+                <option value="">Off (load once)</option>
+                <option value={2000}>Every 2s</option>
+                <option value={5000}>Every 5s</option>
+                <option value={15000}>Every 15s</option>
+                <option value={60000}>Every minute</option>
+              </select>
+              <span className="text-xs">re-reads the record so the screen stays live</span>
+            </label>
+          </div>
           <LayoutBuilder
             elements={elements}
             entityId={view.entity_definition_id ?? ""}
@@ -158,6 +183,8 @@ export default function ViewBuilderPage({ params }: { params: Promise<{ id: stri
           />
         </CardContent>
       </Card>
+
+      <ShareViewCard view={view} onChange={setView} />
 
       <Dialog open={showPreview} onClose={() => setShowPreview(false)} className="max-w-2xl">
         <DialogHeader>

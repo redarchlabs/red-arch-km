@@ -129,7 +129,13 @@ def _eval(expr: Any, ctx: dict[str, Any]) -> Any:
         return ev[-1] if ev else None
     if op == "!":
         return not _truthy(ev[0])
-    if op in ("==", "!=", "<", "<=", ">", ">="):
+    if op == "!!":
+        # Truthy cast — how an author asks "is this set?", e.g. gating an element
+        # on a relationship being populated.
+        return _truthy(ev[0])
+    if op == "in":
+        return _contains(ev)
+    if op in ("==", "!=", "===", "!==", "<", "<=", ">", ">="):
         return _compare(op, ev)
     if op in ("+", "-", "*", "/"):
         return _arith(op, ev)
@@ -144,8 +150,35 @@ def _eval(expr: Any, ctx: dict[str, Any]) -> Any:
     raise ValueError(f"unknown operator: {op!r}")
 
 
+def _contains(ev: list[Any]) -> bool:
+    """Membership: an element of a list, or a substring of a string. A missing
+    container is never a match. Mirrors the client evaluator exactly."""
+    needle, container = (ev + [None, None])[:2]
+    if isinstance(container, list):
+        return needle in container
+    if isinstance(container, str):
+        return ("" if needle is None else str(needle)) in container
+    return False
+
+
+def _strict_eq(a: Any, b: Any) -> bool:
+    """``===``/``!==`` — no coercion, so ``"5"`` is not ``5``. JavaScript has one
+    number type, so int and float are compared as one; a bool is never a number."""
+    if isinstance(a, bool) != isinstance(b, bool):
+        return False
+    if not isinstance(a, bool) and isinstance(a, (int, float, Decimal)) and isinstance(b, (int, float, Decimal)):
+        return a == b
+    return type(a) is type(b) and a == b
+
+
 def _compare(op: str, ev: list[Any]) -> bool:
     a, b = (ev + [None, None])[:2]
+    # Strict forms compare the RAW operands — they must not see the numeric
+    # coercion below, which is exactly what makes them strict.
+    if op == "===":
+        return _strict_eq(a, b)
+    if op == "!==":
+        return not _strict_eq(a, b)
     na, nb = _num(a), _num(b)
     if na is not None and nb is not None:
         a, b = na, nb

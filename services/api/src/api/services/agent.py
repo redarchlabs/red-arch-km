@@ -568,6 +568,7 @@ TOOLS: list[dict[str, Any]] = [
                                         "update_record_field",
                                         "update_record",
                                         "get_record",
+                                        "random",
                                         "log",
                                         "send_webhook",
                                         "http_request",
@@ -602,12 +603,37 @@ TOOLS: list[dict[str, Any]] = [
                                         "workflow into the new record."
                                     ),
                                 },
+                                "increments": {
+                                    "type": "object",
+                                    "description": (
+                                        "update_record: field slug -> NUMERIC DELTA added to the "
+                                        "field's current value (literal/$ref/token). The counter "
+                                        'primitive templates cannot express: {"score": {"$ref": '
+                                        '"vars.p.points"}, "shields": -20, "tries": 1}. Pair with '
+                                        '"clamp" to bound the result.'
+                                    ),
+                                },
+                                "clamp": {
+                                    "type": "object",
+                                    "description": (
+                                        'update_record: field slug -> [min, max] bounding an "increments" '
+                                        'result, e.g. {"shields": [0, 100]}. Either bound may be null.'
+                                    ),
+                                },
                                 "field": {
                                     "type": "string",
                                     "description": "update_record_field: field slug on the triggering record.",
                                 },
                                 "value": {"description": "update_record_field: the new value."},
                                 "message": {"type": "string", "description": "log: message to record."},
+                                "min": {"description": "random: low bound of the roll (default 1)."},
+                                "max": {"description": "random: high bound of the roll (default 100)."},
+                                "choices": {
+                                    "description": (
+                                        "random: pick one element uniformly instead of rolling a number; "
+                                        "output.value is the 1-based pick, output.choice the element."
+                                    ),
+                                },
                                 "url": {
                                     "type": "string",
                                     "description": "send_webhook/http_request: target URL (host must be allow-listed).",
@@ -1436,6 +1462,10 @@ _ASSISTANT_ACTION_TYPES = frozenset(
         # fields of any record by id or latest/first (services/workflow/actions.py).
         "get_record",
         "update_record",
+        # Dice: the variety primitive (hazard rolls, sampling) — read-only.
+        "random",
+        # Author one multiple-choice question with an LLM, in record shape.
+        "llm_question",
         "log",
         # Outbound / messaging actions — the runtime has handlers for these
         # (services/workflow/actions.py); the simple linear builder passes their
@@ -1643,6 +1673,7 @@ class AgentService:
         session_factory: async_sessionmaker[AsyncSession],
         org_openai_key: str | None = None,
         org_context: OrgContext | None = None,
+        org_default_model: str | None = None,
     ) -> None:
         self._org_id = org_id
         self._settings = settings
@@ -1651,10 +1682,22 @@ class AgentService:
         # and enforce their permissions; None (unit tests exercising config
         # tools) is treated as admin, preserving the prior admin-only behaviour.
         self._ctx = org_context
+        # Org-pinned model (orgs.default_llm_model) beats the env default, so a
+        # whole org can run the assistant on local or 3rd-party inference. Kept
+        # separately from _model because brain-api calls should only carry an
+        # EXPLICIT org pin, never the api service's env default.
+        self._org_default_model = org_default_model
+        self._model = org_default_model or settings.openai_model
         key = org_openai_key or settings.openai_api_key.get_secret_value()
         # A self-hosted endpoint (OPENAI_BASE_URL) authenticates nothing, so a missing key
         # is not a reason to go client-less there — see api/services/openai_client.py.
-        self._client = make_async_openai(settings, key) if key or not api_key_required(settings) else None
+        # The model is passed so a routed model (OPENAI_MODEL_ROUTES) reaches its
+        # own endpoint and decides whether a key is required at all.
+        self._client = (
+            make_async_openai(settings, key, model=self._model)
+            if key or not api_key_required(settings, self._model)
+            else None
+        )
 
     @asynccontextmanager
     async def _tenant_session(self) -> AsyncGenerator[AsyncSession]:
@@ -1678,7 +1721,7 @@ class AgentService:
         try:
             for _ in range(MAX_ITERATIONS):
                 response = await self._client.chat.completions.create(
-                    model=self._settings.openai_model,
+                    model=self._model,
                     messages=messages,
                     tools=TOOLS,
                     tool_choice="auto",
@@ -1730,7 +1773,7 @@ class AgentService:
             )
             try:
                 wrap_up = await self._client.chat.completions.create(
-                    model=self._settings.openai_model,
+                    model=self._model,
                     messages=messages,
                     tools=TOOLS,
                     tool_choice="none",
@@ -1793,7 +1836,12 @@ class AgentService:
         # No DB access — talks to brain-api. The (unused) session keeps the
         # dispatch signature uniform across tools.
         client = BrainAPIClient(self._settings)
-        result = await client.vector_chat(tenant_id=str(self._org_id), query=args["query"])
+        result = await client.vector_chat(
+            tenant_id=str(self._org_id),
+            query=args["query"],
+            # Only an explicit org pin travels to brain-api; None keeps its default.
+            model=self._org_default_model,
+        )
         return {"answer": result.get("answer") or result}
 
     async def _tool_list_entities(self, session: AsyncSession, _args: dict[str, Any]) -> dict[str, Any]:
@@ -1918,7 +1966,7 @@ class AgentService:
         num_modules = max(2, min(5, int(args.get("num_modules") or 3)))
         blueprint = await generate_course_blueprint(
             self._client,
-            self._settings.openai_model,
+            self._model,
             topic=topic,
             category=category,
             audience=audience,
@@ -2625,6 +2673,35 @@ class AgentService:
                         "state (a device reading, a status). Not entity-bound."
                     ),
                 },
+                "image": {
+                    "required": ["type", "url"],
+                    "optional": ["alt", "caption", "max_height", "width"],
+                    "use": (
+                        "A display-only PICTURE — the visual anchor of a status page (a ship, a floor "
+                        "plan, a product shot). `url` is a relative path or http(s) URL and may carry "
+                        "{token} placeholders filled from the record ({id} = bound record id, "
+                        "{<field_slug>} = a field value), so the artwork FOLLOWS record state — e.g. "
+                        "'/sim/ship-{ship_condition}.svg'. Pair with the view config's `refresh_ms` to "
+                        "make it swap live. Not entity-bound; valid in standalone views."
+                    ),
+                },
+                "qr_code": {
+                    "required": ["type", "url"],
+                    "optional": ["label", "caption", "display (button|inline)", "host", "size", "width"],
+                    "use": (
+                        "A QR CODE for a url — how a screen hands a link to a phone or tablet without "
+                        "anyone typing an address (getting a shared iPad onto a kiosk view). `url` is "
+                        "relative or http(s) and may carry {token} placeholders filled from the record "
+                        "({id} = bound record id). `display:'button'` keeps it behind a tap; 'inline' "
+                        "draws it in place. Not entity-bound; valid in standalone views."
+                    ),
+                    "host": (
+                        "IMPORTANT: a relative url resolves against the address the PAGE was opened at, "
+                        "so a console opened at localhost produces a QR saying 'localhost' — which means "
+                        "'this tablet' to the tablet and fails. Set `host` to the machine's LAN address "
+                        "(e.g. 'http://192.168.0.30:3000') to make the code independent of that."
+                    ),
+                },
                 "slides": {
                     "required": ["type"],
                     "optional": ["label", "slug", "slides", "width"],
@@ -2642,7 +2719,7 @@ class AgentService:
                 },
                 "button": {
                     "required": ["type", "label", "style (primary|secondary|danger|ghost)", "action"],
-                    "optional": ["width"],
+                    "optional": ["width", "size (default|large|xl)"],
                     "action": (
                         "one of: {kind:'submit'} | {kind:'run_workflow', workflow_id, "
                         "inputs:{<name>:<expression>}, confirm?, success_message?} | "
@@ -2650,11 +2727,62 @@ class AgentService:
                         "method?, path?, body:{<key>:<expression>}, confirm?, success_message?} "
                         "(POST straight to a saved Connection, server-side; body templated from form values)"
                     ),
+                    "note": "Use size 'large'/'xl' for a view presented on a tablet or wall display.",
+                },
+                "puzzle_pad": {
+                    "required": ["type", "kind (choices|keypad|sequence|wires|sort|color)"],
+                    "optional": [
+                        "kind_field",
+                        "spec",
+                        "spec_field",
+                        "prompt",
+                        "prompt_field",
+                        "hint",
+                        "hint_field",
+                        "on_complete",
+                        "submit_label",
+                        "show_hint",
+                        "min_height",
+                        "width",
+                    ],
+                    "use": (
+                        "A HANDS-ON interactive surface: big tap targets, a number pad, ordering, "
+                        "DRAG-to-connect wires, DRAG-to-sort bins, or tap-to-paint colouring. Use it "
+                        "when the point is the doing — a repair console, a checklist drill, a kids' "
+                        "activity — and fields+buttons cannot express it. The pad runs entirely in the "
+                        "browser and reports only the OUTCOME to `on_complete`."
+                    ),
+                    "sourcing": (
+                        "kind/spec/prompt/hint may be inline OR read from a record field via the "
+                        "matching *_field (a field with a value wins; the inline value is the "
+                        "fallback). spec_field may hold a JSON object or JSON text. Put a puzzle_pad "
+                        "inside a `section` bound to the relationship that points at the current "
+                        "puzzle record, so the pad follows whatever that record is now."
+                    ),
+                    "spec": (
+                        "choices: {options:[{value,label}], columns?:2} — NO answer, the pad reports "
+                        "the picked value. | keypad: {max_len?, units?, allow_decimal?, allow_sign?} — "
+                        "NO answer, reports the keyed digits. | sequence: {items:[{label}], "
+                        "order:[<0-based indices in correct order>]}. | wires: {pairs:[{left,right,"
+                        "color?}]}. | sort: {bins:[{label}], items:[{label,bin:<bin index>}]}. | "
+                        "color: {regions:[{label,color}], palette:[<css colors>], free?:bool}."
+                    ),
+                    "grading": (
+                        "choices/keypad never receive the answer — grade them in the workflow against "
+                        "an answer field the view does NOT name. sequence/wires/sort/color must be "
+                        "sent their target to be drawable, so the pad grades locally and reports "
+                        "`solved`; trust that like a player's word, not an exam result."
+                    ),
+                    "on_complete": (
+                        "{kind:'run_workflow', workflow_id, inputs:{<name>:<expression>}} where "
+                        'expressions may read the outcome: {"var":"solved"} (bool), {"var":"answer"} '
+                        '(string), {"var":"attempts"}, {"var":"elapsed_ms"} — plus any scope value.'
+                    ),
                 },
                 "section": {
                     "required": ["type", "relationship_id", "mode (inline|modal)", "elements"],
                     "optional": ["label"],
-                    "use": "A single (1:1) related record; elements are field/calculated/label.",
+                    "use": "A single (1:1) related record; elements are field/calculated/label/puzzle_pad.",
                 },
                 "table": {
                     "required": ["type", "anchor_relationship_id", "columns"],

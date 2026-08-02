@@ -26,6 +26,10 @@ class OrgUpdate(BaseModel):
     # None means "no change". Use the all-zero UUID or an explicit value handled
     # by the router/repo to set/clear (see update_org).
     home_view_id: uuid.UUID | None = None
+    # Org-wide default LLM model id (routed via OPENAI_MODEL_ROUTES, so it pins
+    # the org to local or 3rd-party inference). Empty string clears it back to
+    # the platform default; None means "no change".
+    default_llm_model: str | None = Field(default=None, max_length=100)
 
 
 class OrgRead(BaseModel):
@@ -36,6 +40,7 @@ class OrgRead(BaseModel):
     description: str | None
     use_knowledge_graph: bool
     home_view_id: uuid.UUID | None = None
+    default_llm_model: str | None = None
 
 
 class DimensionCreate(BaseModel):

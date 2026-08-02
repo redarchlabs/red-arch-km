@@ -11,9 +11,11 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth.api_key import ApiKeyPrincipal, require_scope
 from api.config import Settings, get_settings
+from api.dependencies import get_db
 from api.schemas.search import (
     ChatRequest,
     ChatResponse,
@@ -22,6 +24,7 @@ from api.schemas.search import (
     SearchResult,
 )
 from api.services.brain_client import BrainAPIClient
+from api.services.org_llm import org_default_llm_model
 from api.services.search_access import folder_tags, service_key_access_keys
 
 router = APIRouter()
@@ -66,6 +69,7 @@ async def chat(
     body: ChatRequest,
     principal: Annotated[ApiKeyPrincipal, Depends(require_scope("search:read"))],
     settings: Annotated[Settings, Depends(get_settings)],
+    session: Annotated[AsyncSession, Depends(get_db)],
 ) -> ChatResponse:
     """Hybrid RAG chat: an answer grounded in the org's knowledge base.
 
@@ -79,6 +83,8 @@ async def chat(
         tags=body.tags,
         folder_tags=folder_tags(body.folder_ids),
         use_knowledge_graph=body.use_knowledge_graph,
+        # Org-pinned answer model (local vs 3rd-party); None = brain-api default.
+        model=await org_default_llm_model(session, principal.org_id),
     )
     return ChatResponse(
         answer=result.get("answer", ""),

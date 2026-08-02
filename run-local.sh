@@ -50,6 +50,20 @@ RERANK_PORT="${RERANK_PORT:-8096}"
 # loaded. Must match run-local-llm-stack.sh's FAST_MODEL_NAME and the answer-model list
 # on a chat element.
 FAST_MODEL_NAME="${FAST_MODEL_NAME:-qwen3-4b-fast}"
+# Same idea for the big local model. OPENAI_BASE_URL already sends *unrouted* calls to the
+# chat server, so this name is not needed to reach it — it exists so a workflow node can
+# say "local, explicitly" rather than "whatever the deployment default happens to be",
+# which is the whole point of comparing an org on local against an org on hosted OpenAI.
+CHAT_MODEL_NAME="${CHAT_MODEL_NAME:-qwen3-30b}"
+# Model ids that must reach HOSTED OpenAI even though OPENAI_BASE_URL points at llama.cpp.
+#
+# Routes are model→URL and win over OPENAI_BASE_URL, so naming api.openai.com here is what
+# lets ONE deployment serve both: an org whose LLM nodes ask for `gpt-4.1-mini` goes out to
+# OpenAI, an org whose nodes ask for `qwen3-30b` (or name nothing at all) stays on this box.
+# Inverting it instead — clearing OPENAI_BASE_URL so hosted is the default — would silently
+# move every existing org onto OpenAI, so the local default is deliberately left alone.
+HOSTED_OPENAI_MODELS="${HOSTED_OPENAI_MODELS:-gpt-4.1-mini gpt-5-mini gpt-5-nano}"
+HOSTED_OPENAI_URL="${HOSTED_OPENAI_URL:-https://api.openai.com/v1}"
 
 say()  { printf '\033[1;35m[local]\033[0m %s\n' "$*"; }
 warn() { printf '\033[33m[local]\033[0m %s\n' "$*"; }
@@ -145,18 +159,47 @@ for p in "$CHAT_PORT" "$EMBED_PORT"; do
     || die "no model server on :$p — check $LLM_STACK status"
 done
 
+# Per-model endpoints. Built as a list so local and hosted routes compose: every entry is
+# "<model id>=<base url>", and api/services/openai_client.py resolves a call's endpoint from
+# the model id the caller asked for, falling back to OPENAI_BASE_URL when the id is unrouted.
+ROUTES=("$CHAT_MODEL_NAME=http://127.0.0.1:$CHAT_PORT/v1")
+
 # The fast server is OPTIONAL — it only serves calls that explicitly ask for its model
 # id, and an unrouted id falls back to the chat server. So a missing 4B model file
 # degrades speed, never correctness, and must not stop the stack from starting.
 if curl -sf -m 3 "http://127.0.0.1:$FAST_PORT/health" >/dev/null; then
-  export OPENAI_MODEL_ROUTES="$FAST_MODEL_NAME=http://127.0.0.1:$FAST_PORT/v1"
+  ROUTES+=("$FAST_MODEL_NAME=http://127.0.0.1:$FAST_PORT/v1")
   say "fast model server on :$FAST_PORT — routing '$FAST_MODEL_NAME' there"
 else
   warn "no fast model server on :$FAST_PORT — '$FAST_MODEL_NAME' will fall back to :$CHAT_PORT"
 fi
 
+# Hosted OpenAI, reachable by model id. Skipped entirely without a key: routing an id at
+# api.openai.com with nothing to authenticate with turns a clear KM2-side "no key" error
+# into a 401 from OpenAI, which is a worse thing to debug mid-demo.
+#
+# The key is read out of .env.host rather than the environment because uvicorn — not this
+# script — is what loads that file, so OPENAI_API_KEY is not set here. An org supplying its
+# OWN key in the UI still works without a central one; this check only decides whether to
+# advertise the hosted route at all.
+HAVE_OPENAI_KEY=$(grep -sE '^OPENAI_API_KEY=.+' .env.host >/dev/null && echo 1 || echo "")
+if [[ -n "$HAVE_OPENAI_KEY" && -n "$HOSTED_OPENAI_MODELS" ]]; then
+  for m in $HOSTED_OPENAI_MODELS; do ROUTES+=("$m=$HOSTED_OPENAI_URL"); done
+  say "hosted OpenAI routed for: $HOSTED_OPENAI_MODELS"
+else
+  warn "no OPENAI_API_KEY — hosted OpenAI models unrouted, every org stays local"
+fi
+
+export OPENAI_MODEL_ROUTES="${ROUTES[*]}"
+
 GW=$(gateway)
 GW_ADDR="${GW:-172.22.0.1}"
+
+# The same routes from the CONTAINER's perspective: brain-api resolves the per-org
+# model pin (orgs.default_llm_model) itself, and 127.0.0.1 inside a container is the
+# container — local entries swap in the docker-network gateway, hosted entries pass
+# through unchanged. Consumed by docker-compose.local-llm.yml.
+export BRAIN_OPENAI_MODEL_ROUTES="${OPENAI_MODEL_ROUTES//http:\/\/127.0.0.1:/http:\/\/$GW_ADDR:}"
 
 # The reranker is OPTIONAL in the same way the fast server is: brain-api treats an empty
 # RERANK_BASE_URL as "keep the dense order", which is how retrieval behaved before it
