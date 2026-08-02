@@ -1,4 +1,5 @@
 from shared_config.database import DatabaseSettings
+from shared_config.dates import current_date_line
 from shared_config.logging import JSONFormatter, configure_logging
 from shared_config.observability import ObservabilitySettings
 from shared_config.openai import OpenAISettings
@@ -14,6 +15,7 @@ __all__ = [
     "TelemetryHandles",
     "configure_logging",
     "configure_telemetry",
+    "current_date_line",
     "get_meter",
     "get_tracer",
 ]

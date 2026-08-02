@@ -221,3 +221,22 @@ class TestAgentLoop:
         assert "search_passages" in prompt
         # The rule must tie an empty fact-tool result to trying passages.
         assert "no results" in prompt and "search_passages before" in prompt
+
+    def test_system_prompt_includes_current_date(self) -> None:
+        from datetime import datetime
+
+        from brain_sdk.facts.agent import _system_prompt
+
+        prompt = _system_prompt(datetime(2026, 8, 2, 12, 0))
+        assert "2026-08-02" in prompt
+        assert "July 27–August 2" in prompt  # Monday–Sunday week span
+
+    def test_resolve_relative_dates_anchors_query(self) -> None:
+        from datetime import datetime
+
+        from brain_sdk.facts.agent import _resolve_relative_dates
+
+        now = datetime(2026, 8, 2, 12, 0)
+        assert _resolve_relative_dates("lesson for this week", now) == "lesson for the week of July 27–August 2, 2026"
+        # Queries without relative-time words pass through untouched.
+        assert _resolve_relative_dates("Ezra Nehemiah lesson", now) == "Ezra Nehemiah lesson"

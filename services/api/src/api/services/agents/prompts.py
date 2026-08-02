@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from shared_config import current_date_line
+
 from api.models.agent import Agent
 
 _KIND_GUIDANCE = {
@@ -30,4 +32,5 @@ def build_system_prompt(agent: Agent) -> str:
         "Use the available tools to accomplish the request. Only take actions you are "
         "permitted to take; if a tool is denied, explain what you would need and stop."
     )
+    parts.append(current_date_line())
     return "\n\n".join(parts)
