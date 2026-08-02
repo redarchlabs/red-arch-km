@@ -15,6 +15,12 @@ interface Props {
   children: ReactNode;
 }
 
+/** Routes presented on a shared device (`/views/<id>/kiosk`): still authenticated,
+ * but rendered with NO app chrome — no nav rail, no header, no help dock. The
+ * person in front of a crew station or a wall display is doing one task, and every
+ * bit of KM2's authoring UI is both a distraction and a way out of the app. */
+const KIOSK_ROUTE = /^\/views\/[^/]+\/kiosk(\/|$)/;
+
 export default function AuthenticatedLayout({ children }: Props) {
   const router = useRouter();
   const pathname = usePathname();
@@ -65,6 +71,17 @@ export default function AuthenticatedLayout({ children }: Props) {
 
   if (!isAuthenticated) {
     return null;
+  }
+
+  // Kiosk: authenticated, but the view owns the whole screen. HelpProvider stays
+  // so any descendant that registers a help topic still has its context; only the
+  // visible chrome (rail, header, dock) is dropped.
+  if (KIOSK_ROUTE.test(pathname ?? "")) {
+    return (
+      <HelpProvider>
+        <main className="min-h-screen w-full bg-background">{children}</main>
+      </HelpProvider>
+    );
   }
 
   return (

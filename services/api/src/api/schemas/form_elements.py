@@ -177,7 +177,75 @@ class LiveValueElement(_Element):
     json_pointer: str | None = None  # dot path into the JSON body; whole body if None
     poll_ms: int = 1000
     units: str | None = None
+    # Optional display translation, keyed by the stringified value:
+    # ``{"true": "Thinking…", "false": "idle"}``. A status flag polled off a device reads
+    # as a status this way instead of as ``true`` — the readout says what the state means
+    # rather than how it is encoded. Unlisted values pass through unchanged, so a partial
+    # map only relabels the cases it names.
+    value_map: dict[str, str] | None = None
     width: FieldWidth | None = None
+
+
+class ImageElement(_Element):
+    """A display-only picture — the visual anchor a status page needs (a ship, a
+    floor plan, a product shot) that no data element can supply.
+
+    ``url`` may carry ``{token}`` placeholders filled from the enclosing scope's
+    values at render time (``{id}`` = the bound record id, ``{<field_slug>}`` = a
+    field value, each URL-encoded), so the image can FOLLOW record state — e.g.
+    ``/sim/ship-{condition}.svg`` swaps the artwork as a ship takes damage.
+    Only relative or ``http(s)`` URLs are allowed (same rule as link hrefs).
+
+    Not entity-bound, so it is valid in a standalone view. ``max_height`` caps the
+    rendered height in px (the image always scales down to the column width)."""
+
+    type: Literal["image"] = "image"
+    url: str
+    alt: str | None = None
+    caption: str | None = None
+    max_height: int | None = None  # px cap; None = natural height within the column
+    width: FieldWidth | None = None
+
+    @field_validator("url")
+    @classmethod
+    def _reject_dangerous_scheme(cls, v: str) -> str:
+        return _assert_safe_href(v)
+
+
+class QrCodeElement(_Element):
+    """A QR code for a URL — how a screen hands a link to a phone or tablet.
+
+    Typing a LAN address into a tablet is the most error-prone step in setting up
+    a shared device, so this exists to remove it: the operator opens the console
+    on their laptop, taps the button, and points the tablet's camera at it.
+
+    ``url`` may be relative (``/views/<id>/kiosk?record_id=…``), in which case it
+    is resolved at render time against ``host`` if set, else against the address
+    the page itself was opened at. ``{token}`` placeholders are filled from the
+    record like a link href. Only relative or ``http(s)`` URLs are allowed.
+
+    **A relative URL is only as good as the address in the browser bar.** A page
+    opened at ``localhost`` produces a QR that says ``localhost``, which means
+    "this tablet" to the tablet and therefore fails. Set ``host`` to the machine's
+    LAN address to make it independent of how the console was opened; the rendered
+    card always shows the encoded URL and warns when it is a loopback address.
+    """
+
+    type: Literal["qr_code"] = "qr_code"
+    url: str
+    label: str | None = None  # button text / card heading
+    caption: str | None = None  # short instruction under the code
+    # ``button`` keeps the code behind a tap (a console that is on screen all day
+    # shouldn't carry a permanent QR); ``inline`` draws it in place.
+    display: Literal["button", "inline"] = "button"
+    host: str | None = None  # origin to resolve a relative url against
+    size: int = Field(default=320, ge=96, le=1024)  # rendered px
+    width: FieldWidth | None = None
+
+    @field_validator("url", "host")
+    @classmethod
+    def _reject_dangerous_scheme(cls, v: str | None) -> str | None:
+        return None if v is None else _assert_safe_href(v)
 
 
 class ProgressElement(_Element):
@@ -403,10 +471,10 @@ class SectionElement(_Element):
     elements: list[SectionChild] = Field(default_factory=list)
 
 
-SectionChild = Annotated[
-    FieldElement | CalculatedElement | LabelElement,
-    Field(discriminator="type"),
-]
+# ``SectionChild`` (what may appear inside a section/block) is defined further down,
+# after ``PuzzlePadElement`` — it is one of the members. The annotations that use it
+# are lazy strings (``from __future__ import annotations``) and resolved by the
+# ``model_rebuild()`` calls at the end of this module.
 
 
 # ------------------------------------------------------------------ #
@@ -543,7 +611,101 @@ class ButtonElement(_Element):
     label: str = "Button"
     action: ButtonAction = Field(default_factory=SubmitAction)
     style: Literal["primary", "secondary", "danger", "ghost"] = "primary"
+    # Touch target. The default is sized for a mouse; ``large``/``xl`` are for a view
+    # presented on a tablet or a wall display, where a finger — often a child's —
+    # is the pointer and a 32px control is a miss waiting to happen.
+    size: Literal["default", "large", "xl"] = "default"
     width: FieldWidth | None = None
+
+
+# ------------------------------------------------------------------ #
+# Puzzle pad — a hands-on interactive surface
+# ------------------------------------------------------------------ #
+# What the pad puts on screen. Each kind is a different *physical* interaction,
+# not a different question format, because the point is the doing:
+#   choices  — big tap targets (the multiple-choice case, sized for a finger)
+#   keypad   — a number pad; the person keys in a value and transmits it
+#   sequence — tap items into the right order (a launch checklist, a procedure)
+#   wires    — DRAG a lead from a port to its matching port; a repair console
+#   sort     — DRAG items into labelled bins (classify, triage, stow)
+#   color    — pick a colour, tap a region; paint a panel to match a target
+PuzzleKind = Literal["choices", "keypad", "sequence", "wires", "sort", "color"]
+
+
+class PuzzlePadElement(_Element):
+    """A hands-on puzzle surface: the interaction happens IN the browser, and only
+    the outcome crosses back into workflow-land.
+
+    Everything else in this schema either shows data or collects a value. This
+    element exists because dragging a wire onto a port, or painting six hull
+    panels, is not expressible as fields and buttons — and because a workflow
+    engine that steps through nodes cannot model a per-touch interaction. So the
+    division is: the pad owns the *doing*, the workflow owns the *consequences*.
+
+    **Where the puzzle comes from.** Each of ``kind``/``spec``/``prompt``/``hint``
+    can be given inline (a fixed puzzle) or read from a record field via the
+    matching ``*_field`` (a puzzle that changes as the record does). A field wins
+    over its inline counterpart when it holds a value, so an inline value doubles
+    as the fallback. ``spec`` is a free-form JSON object whose shape depends on
+    ``kind`` — the client validates it and refuses to render a malformed one
+    rather than half-drawing a puzzle nobody can solve.
+
+    **Who decides "correct".** Two honest cases, and the difference is not a
+    policy choice but a fact about what the browser must be told:
+
+    * ``choices`` and ``keypad`` — the pad NEVER receives the answer. It reports
+      what the person picked or keyed in, and a workflow compares that against the
+      answer field on the record. Keep the answer out of the view's fields and it
+      never reaches the device.
+    * ``sequence``, ``wires``, ``sort``, ``color`` — the target arrangement IS the
+      puzzle; it cannot be drawn without being sent. The pad grades locally and
+      reports whether it was solved. Treat that verdict as a player's word, which
+      is the right trust level for a game and the wrong one for an exam.
+
+    **What it reports.** On completion the pad evaluates ``on_complete.inputs``
+    against the enclosing scope's values PLUS the outcome: ``solved`` (bool),
+    ``answer`` (a short string — the chosen value, keyed digits, or a summary of
+    the arrangement), ``attempts`` and ``elapsed_ms``. So a workflow input reads
+    ``{"var": "answer"}`` exactly as a button's would.
+    """
+
+    type: Literal["puzzle_pad"] = "puzzle_pad"
+
+    kind: PuzzleKind = "choices"
+    kind_field: str | None = None  # record field holding one of PuzzleKind
+    spec: dict[str, Any] | None = None
+    spec_field: str | None = None  # record field holding the spec (JSON object or JSON text)
+    prompt: str | None = None
+    prompt_field: str | None = None
+    hint: str | None = None
+    hint_field: str | None = None
+
+    # Run when the person finishes. Optional so a pad can be dropped into a page
+    # purely to be played with (a practice pad that records nothing).
+    on_complete: RunWorkflowAction | None = None
+    submit_label: str = "Transmit"
+    # Offer a "Need a hint?" reveal when a hint is available. The hint stays hidden
+    # until asked for, so it costs nothing to attach one to every puzzle.
+    show_hint: bool = True
+    # Minimum height in px for the interactive area. A drag puzzle needs room; the
+    # default suits a tablet held in landscape.
+    min_height: int | None = None
+    width: FieldWidth | None = None
+
+    @field_validator("spec")
+    @classmethod
+    def _reject_huge_spec(cls, v: dict[str, Any] | None) -> dict[str, Any] | None:
+        """Bound the stored spec. A puzzle is a handful of ports or panels; anything
+        near this cap is a mistake or an attempt to make a view expensive to render."""
+        if v is not None and len(v) > 32:
+            raise ValueError("puzzle spec has too many top-level keys (max 32)")
+        return v
+
+
+SectionChild = Annotated[
+    FieldElement | CalculatedElement | LabelElement | PuzzlePadElement,
+    Field(discriminator="type"),
+]
 
 
 class FormRefElement(_Element):
@@ -649,12 +811,15 @@ FormElement = Annotated[
     | CalculatedElement
     | InputElement
     | LiveValueElement
+    | ImageElement
+    | QrCodeElement
     | ProgressElement
     | SlidesElement
     | ReportElement
     | RecordListElement
     | ChatElement
     | ButtonElement
+    | PuzzlePadElement
     | FormRefElement
     | TableElement
     | SectionElement

@@ -59,6 +59,7 @@ class BrainAPIClient:
         tags: list[str] | None = None,
         folder_tags: list[str] | None = None,
         use_knowledge_graph: bool = True,
+        model: str | None = None,
     ) -> dict[str, Any]:
         async with httpx.AsyncClient(timeout=120) as client:
             response = await client.post(
@@ -71,6 +72,8 @@ class BrainAPIClient:
                     "tags": tags or [],
                     "folder_tags": folder_tags or [],
                     "use_knowledge_graph": use_knowledge_graph,
+                    # Org-pinned answer model; null lets brain-api use its default.
+                    "model": model,
                 },
                 headers=self._headers(),
             )
@@ -116,6 +119,7 @@ class BrainAPIClient:
         tags: list[str] | None = None,
         folder_tags: list[str] | None = None,
         use_knowledge_graph: bool = True,
+        model: str | None = None,
     ) -> AsyncIterator[bytes]:
         """Stream raw SSE bytes from the brain-api's /api/v1/ask/stream endpoint.
 
@@ -136,6 +140,8 @@ class BrainAPIClient:
                     "tags": tags or [],
                     "folder_tags": folder_tags or [],
                     "use_knowledge_graph": use_knowledge_graph,
+                    # Org-pinned answer model; null lets brain-api use its default.
+                    "model": model,
                 },
                 headers=self._headers(),
             ) as response,
@@ -152,6 +158,7 @@ class BrainAPIClient:
         chat_history: list[dict[str, str]] | None = None,
         access_keys: list[int] | None = None,
         tags: list[str] | None = None,
+        model: str | None = None,
     ) -> dict[str, Any]:
         """Non-streaming agentic (fact-engine) query against brain-api."""
         async with httpx.AsyncClient(timeout=180) as client:
@@ -163,6 +170,8 @@ class BrainAPIClient:
                     "chat_history": chat_history or [],
                     "access_keys": access_keys or [],
                     "tags": tags or [],
+                    # Org-pinned reasoning model; null = brain-api's agent default.
+                    "model": model,
                 },
                 headers=self._headers(),
             )
@@ -177,6 +186,7 @@ class BrainAPIClient:
         chat_history: list[dict[str, str]] | None = None,
         access_keys: list[int] | None = None,
         tags: list[str] | None = None,
+        model: str | None = None,
     ) -> AsyncIterator[bytes]:
         """Stream raw SSE bytes from brain-api's agentic /api/v1/agent/ask/stream.
 
@@ -194,6 +204,8 @@ class BrainAPIClient:
                     "chat_history": chat_history or [],
                     "access_keys": access_keys or [],
                     "tags": tags or [],
+                    # Org-pinned reasoning model; null = brain-api's agent default.
+                    "model": model,
                 },
                 headers=self._headers(),
             ) as response,

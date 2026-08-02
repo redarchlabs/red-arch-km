@@ -9,6 +9,11 @@ export interface Org {
   use_knowledge_graph: boolean;
   /** Optional per-org landing view; drives the sidebar "Home" nav item. */
   home_view_id?: string | null;
+  /**
+   * Org-wide default LLM model id (pins the org to local or 3rd-party
+   * inference via OPENAI_MODEL_ROUTES); null = platform default.
+   */
+  default_llm_model?: string | null;
 }
 
 export interface UserProfile {

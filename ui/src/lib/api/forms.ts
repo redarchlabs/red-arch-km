@@ -98,12 +98,43 @@ export interface LiveValueElement extends ElementBase {
   json_pointer?: string | null;
   poll_ms?: number;
   units?: string | null;
+  /** Display translation keyed by the stringified value (`{"true": "Thinking…"}`);
+   * unlisted values pass through unchanged. */
+  value_map?: Record<string, string> | null;
+  width?: FieldWidth | null;
+}
+
+/** A display-only picture. `url` may carry `{token}` placeholders filled from the
+ * enclosing scope's values (`{id}` = the bound record id, `{<field_slug>}` = a field
+ * value), so the artwork can follow record state — e.g. `/sim/ship-{condition}.svg`.
+ * Relative or http(s) URLs only. */
+export interface ImageElement extends ElementBase {
+  type: "image";
+  url: string;
+  alt?: string | null;
+  caption?: string | null;
+  /** px cap on rendered height; the image always scales down to the column width. */
+  max_height?: number | null;
   width?: FieldWidth | null;
 }
 
 /** A display-only progress bar. `value` is a JsonLogic expression over the form's
  * values (or a literal) yielding a number; the bar fills `value / max`, clamped to
  * `[0, max]`. `show_percent` draws the computed percentage on the bar. */
+/** A QR code for a URL — how a screen hands a link to a phone or tablet without
+ * anyone typing an address. A relative `url` resolves against `host` if set, else
+ * against the address the page was opened at. */
+export interface QrCodeElement extends ElementBase {
+  type: "qr_code";
+  url: string;
+  label?: string | null;
+  caption?: string | null;
+  display?: "button" | "inline";
+  host?: string | null;
+  size?: number;
+  width?: FieldWidth | null;
+}
+
 export interface ProgressElement extends ElementBase {
   type: "progress";
   label?: string | null;
@@ -296,6 +327,31 @@ export interface ButtonElement extends ElementBase {
   label: string;
   action: ButtonAction;
   style: "primary" | "secondary" | "danger" | "ghost";
+  /** Touch target size. `large`/`xl` are for a view presented on a tablet or a
+   * wall display, where a finger is the pointer. */
+  size?: "default" | "large" | "xl";
+  width?: FieldWidth | null;
+}
+
+/** A hands-on interactive surface — big tap targets, a number pad, ordering,
+ * drag-to-connect wires, drag-to-sort bins, or tap-to-paint colouring. The
+ * interaction runs entirely in the browser; only the outcome reaches a workflow.
+ * See `services/api/src/api/schemas/form_elements.py` for the spec shapes and
+ * for which kinds are graded on the client vs. the server. */
+export interface PuzzlePadElement extends ElementBase {
+  type: "puzzle_pad";
+  kind: "choices" | "keypad" | "sequence" | "wires" | "sort" | "color";
+  kind_field?: string | null;
+  spec?: Record<string, unknown> | null;
+  spec_field?: string | null;
+  prompt?: string | null;
+  prompt_field?: string | null;
+  hint?: string | null;
+  hint_field?: string | null;
+  on_complete?: RunWorkflowAction | null;
+  submit_label?: string;
+  show_hint?: boolean;
+  min_height?: number | null;
   width?: FieldWidth | null;
 }
 
@@ -411,12 +467,15 @@ export type FormElement =
   | CalculatedElement
   | InputElement
   | LiveValueElement
+  | ImageElement
+  | QrCodeElement
   | ProgressElement
   | SlidesElement
   | ReportElement
   | RecordListElement
   | ChatElement
   | ButtonElement
+  | PuzzlePadElement
   | FormRefElement
   | TableElement
   | SectionElement
@@ -429,6 +488,10 @@ export type FormElement =
 export interface FormConfig {
   version: number;
   elements: FormElement[];
+  /** Live refresh cadence (ms) for the runtime *view* viewer: it re-fetches the render
+   * on this cadence so record-bound elements follow the record as workflows change it.
+   * Edited values are preserved across a refresh. Null/absent = fetch once. */
+  refresh_ms?: number | null;
 }
 
 // ---- form entity + CRUD DTOs ----

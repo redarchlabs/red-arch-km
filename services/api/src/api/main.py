@@ -199,6 +199,9 @@ def create_app() -> FastAPI:
     app.include_router(workflows.router, prefix="/api/workflows", tags=["workflows"])
     app.include_router(forms.router, prefix="/api/forms", tags=["forms"])
     app.include_router(views.router, prefix="/api/views", tags=["views"])
+    # Unauthenticated: a share token in the path is the only credential. Off for
+    # every view unless an org admin explicitly enables it (see view_share).
+    app.include_router(views.public_router, prefix="/api/public/views", tags=["views-public"])
     app.include_router(reports.router, prefix="/api/reports", tags=["reports"])
     # Public, unauthenticated form rendering + submission (org resolved from token).
     app.include_router(forms.public_router, prefix="/api/public/forms", tags=["forms-public"])

@@ -23,6 +23,7 @@ from api.schemas.search import (
     SearchResult,
 )
 from api.services.brain_client import BrainAPIClient
+from api.services.org_llm import org_default_llm_model
 from api.services.search_access import folder_tags as _folder_tags
 from api.services.search_access import resolve_user_access_keys as _get_user_access_keys
 
@@ -84,6 +85,8 @@ async def chat(
         tags=body.tags,
         folder_tags=_folder_tags(body.folder_ids),
         use_knowledge_graph=body.use_knowledge_graph,
+        # Org-pinned answer model (local vs 3rd-party); None = brain-api default.
+        model=await org_default_llm_model(session, ctx.org_id),
     )
 
     return ChatResponse(
@@ -110,6 +113,8 @@ async def agent_chat(
         chat_history=body.chat_history,
         access_keys=access_keys,
         tags=body.tags,
+        # Org-pinned reasoning model (local vs 3rd-party); None = agent default.
+        model=await org_default_llm_model(session, ctx.org_id),
     )
     return AgentChatResponse(
         answer=result.get("answer", ""),
@@ -130,6 +135,9 @@ async def agent_chat_stream(
     """Streaming agentic chat — proxies brain-api's agent SSE trace to the UI."""
     access_keys = await _get_user_access_keys(session, ctx)
     client = BrainAPIClient(settings)
+    # Resolved before streaming starts: the tenant session closes with the
+    # request scope while the iterator may outlive it.
+    org_model = await org_default_llm_model(session, ctx.org_id)
 
     async def iterator() -> AsyncIterator[bytes]:
         try:
@@ -139,6 +147,7 @@ async def agent_chat_stream(
                 chat_history=body.chat_history,
                 access_keys=access_keys,
                 tags=body.tags,
+                model=org_model,
             ):
                 yield chunk
         except Exception:
@@ -171,6 +180,9 @@ async def chat_stream(
     """
     access_keys = await _get_user_access_keys(session, ctx)
     client = BrainAPIClient(settings)
+    # Resolved before streaming starts: the tenant session closes with the
+    # request scope while the iterator may outlive it.
+    org_model = await org_default_llm_model(session, ctx.org_id)
 
     async def iterator() -> AsyncIterator[bytes]:
         try:
@@ -182,6 +194,7 @@ async def chat_stream(
                 tags=body.tags,
                 folder_tags=_folder_tags(body.folder_ids),
                 use_knowledge_graph=body.use_knowledge_graph,
+                model=org_model,
             ):
                 yield chunk
         except Exception:

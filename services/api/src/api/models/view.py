@@ -10,9 +10,10 @@ of embedded forms + actions. RLS-scoped like every tenant table.
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Boolean, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -33,6 +34,16 @@ class View(Base, UUIDMixin, TimestampMixin, LineageMixin):
     )
     config: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    # --- anonymous access (off unless explicitly enabled; see migration 042) ---
+    # SHA-256 of the share token. The raw token is shown once at enable time and
+    # never persisted, so a database read cannot recover a working link.
+    public_token_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # The record an anonymous render is PINNED to. Without this a token would be a
+    # licence to walk every record of the view's entity.
+    public_record_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    public_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    public_enabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True)
     org: Mapped[Org] = relationship()
