@@ -15,7 +15,9 @@ from failing on a key it will never use.
 
 from __future__ import annotations
 
+import ipaddress
 from typing import Any
+from urllib.parse import urlparse
 
 # Imported at module scope (unlike the API service's copy, which keeps ``openai`` out of
 # its import graph deliberately): brain_api already imports the SDK eagerly elsewhere, so
@@ -73,6 +75,29 @@ def base_url(settings: Any, model: str | None = None) -> str | None:
     if not isinstance(configured, str):
         return None
     return configured.strip() or None
+
+
+def is_local_endpoint(url: str | None) -> bool:
+    """Whether ``url`` is served from this machine or its private network.
+
+    ``None`` means "no base_url", i.e. the SDK's default of hosted OpenAI — so it
+    is deliberately NOT local. A bare hostname with no dot is a container/service
+    name on the compose network (``llama``, ``brain-api``); an address is local
+    when it is loopback or RFC1918 private, which covers both ``127.0.0.1`` and
+    the docker gateway a container uses to reach a host-run model server.
+    """
+    if not url:
+        return False
+    host = urlparse(url).hostname or ""
+    if not host:
+        return False
+    if host in {"localhost", "host.docker.internal"}:
+        return True
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return "." not in host
+    return address.is_loopback or address.is_private
 
 
 def api_key_required(settings: Any, model: str | None = None) -> bool:

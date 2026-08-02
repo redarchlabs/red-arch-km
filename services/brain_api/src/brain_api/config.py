@@ -54,6 +54,18 @@ class BrainAPISettings(BaseSettings):
     # on the chat request) actually land on the right server — local llama.cpp
     # for one org, hosted OpenAI for another. Same format as the API service.
     openai_model_routes: str = Field(default="", validation_alias="OPENAI_MODEL_ROUTES")
+    # Summarisation is one LLM call per chunk over EVERY ingested document —
+    # thousands of calls for a corpus, where chat is one call per question. It
+    # therefore wants its own (usually smaller, usually local) model, so a bulk
+    # re-index does not compete with the model answering questions. Resolved
+    # through openai_model_routes like any other model id. Empty keeps the
+    # historical behaviour exactly: openai_chat_model at openai_base_url.
+    summarizer_model: str = Field(default="", validation_alias="SUMMARIZER_MODEL")
+    # Assert "this deployment summarises locally". A non-local summariser
+    # endpoint is then a hard error instead of a silent whole-corpus egress to a
+    # metered API — the failure a missing or typo'd OPENAI_BASE_URL produces,
+    # which is otherwise invisible because a hosted endpoint answers happily.
+    summarizer_require_local: bool = Field(default=False, validation_alias="SUMMARIZER_REQUIRE_LOCAL")
     openai_embedding_model: str = Field(
         default="text-embedding-3-small",
         validation_alias="OPENAI_EMBEDDING_MODEL",

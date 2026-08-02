@@ -27,6 +27,7 @@ from brain_sdk.summarization.chunk_summarizer import ChunkSummarizer
 from brain_sdk.vector_store.qdrant_store import QdrantVectorStore
 
 from brain_api.config import BrainAPISettings
+from brain_api.openai_client import base_url, is_local_endpoint
 
 logger = logging.getLogger(__name__)
 
@@ -142,12 +143,59 @@ class Stores:
         if self._summarizer is None:
             with self._lock:
                 if self._summarizer is None:
+                    # Resolve the endpoint through the SAME routing table as chat
+                    # (previously this handed openai_base_url straight to the SDK,
+                    # so a summariser could not be pointed at its own server and
+                    # the model name it sent was whatever chat happened to use).
+                    # An unset summarizer_model resolves via None -> openai_base_url,
+                    # preserving the previous behaviour exactly.
+                    pinned = self._settings.summarizer_model or None
+                    model = pinned or self._settings.openai_chat_model
+                    url = base_url(self._settings, pinned)
+                    self._guard_summarizer_endpoint(model, url)
                     self._summarizer = ChunkSummarizer(
-                        api_key=self._settings.openai_api_key,
-                        model=self._settings.openai_chat_model,
-                        base_url=self._settings.openai_base_url,
+                        # A self-hosted server authenticates nothing but the SDK
+                        # still demands a non-empty key (mirrors make_openai).
+                        api_key=self._settings.openai_api_key or ("not-needed" if url else ""),
+                        model=model,
+                        base_url=url,
                     )
         return self._summarizer
+
+    def _guard_summarizer_endpoint(self, model: str, url: str | None) -> None:
+        """Refuse (or flag) a summariser that would bill a whole-corpus re-index.
+
+        Summarising is one LLM call per chunk over every document, so a misrouted
+        summariser is both a surprise bill and a surprise data egress — and it is
+        silent, because a hosted endpoint answers perfectly happily.
+
+        Intent cannot be inferred from config alone: an unset ``OPENAI_BASE_URL``
+        is a correct hosted deployment and a broken local one at the same time.
+        So the hard check is opt-in via ``SUMMARIZER_REQUIRE_LOCAL`` (run-local.sh
+        sets it), and the softer mismatch — a deployment that declared a
+        self-hosted endpoint yet summarises elsewhere — is logged as a warning.
+        """
+        if is_local_endpoint(url):
+            return
+        destination = url or "https://api.openai.com (SDK default)"
+        if self._settings.summarizer_require_local:
+            msg = (
+                f"Summarisation would run against {destination} for model {model!r}, but "
+                "SUMMARIZER_REQUIRE_LOCAL is set. Summarising is one LLM call per chunk "
+                "over every document, so this is a metered, whole-corpus egress. Point "
+                "SUMMARIZER_MODEL at a locally routed model id (see OPENAI_MODEL_ROUTES), "
+                "fix OPENAI_BASE_URL, or clear SUMMARIZER_REQUIRE_LOCAL to allow it."
+            )
+            raise ValueError(msg)
+        if self._settings.openai_base_url:
+            logger.warning(
+                "Summarisation resolves to %s for model %r, but OPENAI_BASE_URL is a "
+                "self-hosted endpoint (%s) — every ingest will bill to that API. Set "
+                "SUMMARIZER_MODEL to a locally routed model id to keep it local.",
+                destination,
+                model,
+                self._settings.openai_base_url,
+            )
 
     @property
     def extractor(self) -> TripletExtractor:
@@ -313,8 +361,6 @@ class Stores:
         with self._lock:
             client = self._model_llms.get(model)
             if client is None:
-                from brain_api.openai_client import base_url
-
                 url = base_url(self._settings, model)
                 client = make_llm_client(
                     provider="openai",
