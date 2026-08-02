@@ -32,6 +32,15 @@ services:
       # hosted OpenAI ids at api.openai.com. Exported by run-local.sh; empty when
       # unset, which disables routing and keeps every model on OPENAI_BASE_URL.
       OPENAI_MODEL_ROUTES: ${BRAIN_OPENAI_MODEL_ROUTES:-}
+      # Summarisation runs one LLM call per chunk over every ingested document,
+      # so it is the one workload big enough to be worth its own model — set this
+      # to a routed id (e.g. the fast 4B) to keep a bulk re-index from competing
+      # with the model answering questions. Empty = the chat model, as before.
+      SUMMARIZER_MODEL: ${BRAIN_SUMMARIZER_MODEL:-}
+      # Local mode asserts local summarisation: if SUMMARIZER_MODEL/OPENAI_BASE_URL
+      # ever resolve off-box, ingest fails loudly instead of quietly metering a
+      # whole-corpus re-index against a paid API.
+      SUMMARIZER_REQUIRE_LOCAL: ${BRAIN_SUMMARIZER_REQUIRE_LOCAL:-true}
       # embeddings: nomic-embed-text-v1.5 — retrieval, ingest, entity vectors
       EMBEDDING_BASE_URL: http://${LOCAL_LLM_GATEWAY:-172.22.0.1}:${LOCAL_EMBED_PORT:-8098}/v1
       OPENAI_EMBEDDING_MODEL: ${LOCAL_EMBED_MODEL:-nomic-embed-text-v1.5}
