@@ -32,6 +32,11 @@ class Org(Base, UUIDMixin, TimestampMixin):
     # Agent-org autonomy posture: high_touch (every external/side-effecting action
     # asks the human) | balanced | hands_off. Enforced in agents/authority.py.
     agent_autonomy: Mapped[str] = mapped_column(String(16), default="high_touch", server_default="high_touch")
+    # Org-wide default LLM model id. When set, LLM calls made for this org that
+    # don't name a model explicitly use it (resolution: explicit config.model >
+    # this column > env defaults). Routed through OPENAI_MODEL_ROUTES, so it pins
+    # the whole org to local or hosted inference. NULL = platform default.
+    default_llm_model: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
     # Relationships
     regions: Mapped[list[Region]] = relationship(back_populates="org", cascade="all, delete-orphan")

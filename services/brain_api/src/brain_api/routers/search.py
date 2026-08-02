@@ -47,6 +47,9 @@ class VectorChatRequest(BaseModel):
     # every workflow knowledge_search and agent tool) never send the field.
     chunk_limit: int | None = Field(default=None, ge=1, le=20)
     expand_documents: bool = True
+    # Answer-synthesis model override (an org pinned to local or 3rd-party
+    # inference); omitted/null keeps the configured OPENAI_CHAT_MODEL.
+    model: str | None = Field(default=None, max_length=100)
 
 
 def _get_service(stores: Annotated[Stores, Depends(get_stores)]) -> SearchService:
@@ -96,6 +99,7 @@ async def vector_chat(
             use_knowledge_graph=body.use_knowledge_graph,
             chunk_limit=body.chunk_limit,
             expand_documents=body.expand_documents,
+            model=body.model,
         )
     except Exception:
         logger.exception("Vector chat failed")

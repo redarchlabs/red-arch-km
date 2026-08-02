@@ -93,6 +93,7 @@ class OrgRepository:
         use_knowledge_graph: bool | None = None,
         openai_api_key: str | None = None,
         home_view_id: uuid.UUID | None = None,
+        default_llm_model: str | None = None,
     ) -> Org:
         if name is not None:
             org.name = name
@@ -109,5 +110,9 @@ class OrgRepository:
             # value before it reaches here (services/crypto.py). An empty string
             # clears the key.
             org.openai_api_key = openai_api_key or None
+        if default_llm_model is not None:
+            # Same convention as openai_api_key: empty string clears back to the
+            # platform default, any other value pins the org to that model id.
+            org.default_llm_model = default_llm_model.strip() or None
         await self._session.flush()
         return org

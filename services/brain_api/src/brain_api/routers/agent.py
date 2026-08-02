@@ -36,6 +36,9 @@ class AgentAskRequest(BaseModel):
     chat_history: list[dict[str, str]] = Field(default_factory=list)
     access_keys: list[int] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
+    # Reasoning-model override (the per-org model pin, trusted from the API-key
+    # holder like tenant_id/access_keys); omitted/null keeps the agent default.
+    model: str | None = Field(default=None, max_length=100)
 
 
 class DigestRebuildRequest(BaseModel):
@@ -64,9 +67,10 @@ def _history(body: AgentAskRequest) -> list[LLMMessage]:
     return out
 
 
-def _agent(stores: Annotated[Stores, Depends(get_stores)]) -> FactAgent:
+def _agent(stores: Stores, body: AgentAskRequest) -> FactAgent:
+    """Build the request's FactAgent — reasoning LLM pinned when the body asks."""
     stores.ensure_fact_schema()
-    return stores.make_fact_agent()
+    return stores.make_fact_agent(model=body.model)
 
 
 def _context(body: AgentAskRequest) -> AgentContext:
@@ -111,11 +115,11 @@ def _capture_gap(
 @router.post("/agent/ask")
 async def agent_ask(
     body: AgentAskRequest,
-    agent: Annotated[FactAgent, Depends(_agent)],
     stores: Annotated[Stores, Depends(get_stores)],
     _api_key: Annotated[str, Depends(require_api_key)],
 ) -> dict[str, Any]:
     """Non-streaming agentic query. Returns the answer, citations, and trace."""
+    agent = _agent(stores, body)
     try:
         result = await asyncio.to_thread(agent.run, body.query, _context(body), history=_history(body))
     except Exception:
@@ -164,7 +168,6 @@ async def agent_digest_rebuild(
 @router.post("/agent/ask/stream")
 async def agent_ask_stream(
     body: AgentAskRequest,
-    agent: Annotated[FactAgent, Depends(_agent)],
     stores: Annotated[Stores, Depends(get_stores)],
     _api_key: Annotated[str, Depends(require_api_key)],
 ) -> StreamingResponse:
@@ -172,6 +175,7 @@ async def agent_ask_stream(
 
     Event types: ``thought`` | ``tool_call`` | ``tool_result`` | ``final`` | ``error``.
     """
+    agent = _agent(stores, body)
     ctx = _context(body)
     history = _history(body)
 

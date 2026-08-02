@@ -53,6 +53,7 @@ async def agent_chat_stream(
     # see AgentService.apply_tenant_scope for why RLS/app_user is not used.
     factory = get_session_factory(settings)
     org_key: str | None = None
+    org_model: str | None = None
     async with factory() as session:
         await apply_tenant_scope(session, ctx.org_id)
         org = (await session.execute(select(Org).where(Org.id == ctx.org_id))).scalar_one_or_none()
@@ -60,8 +61,17 @@ async def agent_chat_stream(
         # Stored encrypted at rest (services/crypto.py); decrypt for the client.
         if stored:
             org_key = decrypt_secret(stored, settings.org_encryption_key.get_secret_value())
+        # Org-pinned LLM model (local vs 3rd-party); None = platform default.
+        org_model = org.default_llm_model if org else None
 
-    agent = AgentService(ctx.org_id, settings, session_factory=factory, org_openai_key=org_key, org_context=ctx)
+    agent = AgentService(
+        ctx.org_id,
+        settings,
+        session_factory=factory,
+        org_openai_key=org_key,
+        org_context=ctx,
+        org_default_model=org_model,
+    )
     history = [{"role": m.role, "content": m.content} for m in body.messages]
 
     async def iterator() -> AsyncGenerator[bytes]:

@@ -21,6 +21,14 @@ export interface OrgUpdateInput {
   use_knowledge_graph?: boolean;
   /** Real UUID sets the home view; `NIL_UUID` clears it; omit for no change. */
   home_view_id?: string | null;
+  /** Model id pins the org's LLM; empty string clears to the platform default; omit for no change. */
+  default_llm_model?: string;
+}
+
+/** Model ids an org can be pinned to, plus the platform default. */
+export interface LlmModelCatalog {
+  default: string;
+  models: string[];
 }
 
 export async function listOrgs(): Promise<Org[]> {
@@ -39,6 +47,11 @@ export async function getOrg(id: string): Promise<Org> {
 
 export async function createOrg(input: OrgCreateInput): Promise<Org> {
   const response = await apiClient.post<Org>("/orgs/", input);
+  return response.data;
+}
+
+export async function listLlmModels(): Promise<LlmModelCatalog> {
+  const response = await apiClient.get<LlmModelCatalog>("/orgs/llm-models");
   return response.data;
 }
 
