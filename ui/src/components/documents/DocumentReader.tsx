@@ -1,7 +1,7 @@
 "use client";
 
 import { Columns2, ExternalLink, Loader2, Rows3 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Markdown } from "@/components/common/Markdown";
 import { SummaryTree } from "@/components/documents/SummaryTree";
@@ -13,6 +13,7 @@ import {
   getDocumentChunks,
   getDocumentContent,
 } from "@/lib/api/documents";
+import { segmentOriginalByChunks } from "@/lib/readerSegments";
 import { cn } from "@/lib/utils";
 
 /** How many chunks to pull per lazy-load page. */
@@ -324,25 +325,39 @@ export function DocumentReader({
         </div>
       ) : (
         <div className="min-h-0 flex-1 overflow-y-auto p-5">
-          <ol className="space-y-5">
-            {chunks.map((chunk) => (
-              <li
-                key={chunk.id}
-                id={`reader-chunk-${chunk.chunk_order}`}
-                className={cn(
-                  chunk.chunk_order === targetChunkOrder &&
-                    "rounded-md border border-primary bg-primary/10 p-3",
-                )}
-              >
-                {chunk.summary ? (
-                  <div className="mb-1.5 rounded-md border-l-2 border-primary/60 bg-muted/40 px-3 py-1.5 text-sm italic text-muted-foreground">
-                    {chunk.summary}
-                  </div>
-                ) : null}
-                <div className="whitespace-pre-wrap text-sm leading-relaxed">{chunk.text}</div>
-              </li>
-            ))}
-          </ol>
+          {original?.content ? (
+            // Summaries inlined into the ORIGINAL source, so Markdown renders as
+            // headings/lists/tables instead of flattened chunk text.
+            <EmbeddedOriginal
+              content={original.content}
+              format={original.format}
+              chunks={chunks}
+              targetChunkOrder={targetChunkOrder}
+            />
+          ) : (
+            // No readable original (PDF/image/OCR): the chunk text is all there
+            // is, and it is whitespace-flattened, so it stays unformatted.
+            <ol className="space-y-5">
+              {chunks.map((chunk) => (
+                <li
+                  key={chunk.id}
+                  id={`reader-chunk-${chunk.chunk_order}`}
+                  className={cn(
+                    chunk.chunk_order === targetChunkOrder &&
+                      "rounded-md border border-primary bg-primary/10 p-3",
+                  )}
+                >
+                  {chunk.summary ? (
+                    <div className="mb-1.5 rounded-md border-l-2 border-primary/60 bg-muted/40 px-3 py-1.5 text-sm italic text-muted-foreground">
+                      {chunk.summary}
+                    </div>
+                  ) : null}
+                  <div className="whitespace-pre-wrap text-sm leading-relaxed">{chunk.text}</div>
+                </li>
+              ))}
+            </ol>
+          )}
+          {/* Shared by both branches — more summaries page in as it is reached. */}
           <div ref={sentinelRef}>
             <LoadSentinel loading={loading} hasMore={hasMore} loaded={chunks.length} total={total} />
           </div>
@@ -372,6 +387,51 @@ function ModeButton({ active, onClick, icon, label }: ModeButtonProps) {
       {icon}
       <span className="hidden sm:inline">{label}</span>
     </button>
+  );
+}
+
+interface EmbeddedOriginalProps {
+  content: string;
+  format: DocumentContentResponse["format"];
+  chunks: DocumentChunk[];
+  targetChunkOrder?: number | null;
+}
+
+/**
+ * Embedded view over a readable original: the source is cut at the loaded
+ * chunks' boundaries and each slice is introduced by that chunk's summary.
+ * Markdown slices render formatted; plain text keeps its line breaks.
+ */
+function EmbeddedOriginal({ content, format, chunks, targetChunkOrder }: EmbeddedOriginalProps) {
+  const segments = useMemo(() => segmentOriginalByChunks(content, chunks), [content, chunks]);
+  return (
+    <ol className="space-y-5">
+      {segments.map((segment, index) => {
+        const isTarget = segment.summaries.some((s) => s.chunkOrder === targetChunkOrder);
+        return (
+          <li
+            key={`${index}-${segment.summaries[0]?.chunkOrder ?? "lead"}`}
+            className={cn(isTarget && "rounded-md border border-primary bg-primary/10 p-3")}
+          >
+            {segment.summaries.map((s) => (
+              // The citation deep-link scrolls to this id (see the target effect).
+              <div
+                key={s.chunkOrder}
+                id={`reader-chunk-${s.chunkOrder}`}
+                className="mb-1.5 rounded-md border-l-2 border-primary/60 bg-muted/40 px-3 py-1.5 text-sm italic text-muted-foreground"
+              >
+                {s.summary || `Section ${s.chunkOrder + 1}`}
+              </div>
+            ))}
+            {format === "markdown" ? (
+              <Markdown content={segment.text} />
+            ) : (
+              <div className="whitespace-pre-wrap text-sm leading-relaxed">{segment.text}</div>
+            )}
+          </li>
+        );
+      })}
+    </ol>
   );
 }
 
