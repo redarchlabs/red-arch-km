@@ -7,10 +7,11 @@ import time
 from collections.abc import Iterator
 from typing import Any, cast
 
+from brain_sdk.query_dates import resolve_relative_dates
 from brain_sdk.reranking.protocol import Reranker
 from openai import OpenAI
 from openai.types.chat import ChatCompletionMessageParam
-from shared_config import get_tracer
+from shared_config import current_date_line, get_tracer
 
 from brain_api.config import BrainAPISettings
 from brain_api.observability import get_metrics
@@ -172,6 +173,10 @@ class SearchService:
         # Over-fetch only when something will re-score it; otherwise the vector
         # store sees exactly the request it always saw.
         fetch = max(limit, self._settings.rerank_candidates) if reranker else limit
+
+        # Anchor "this week"/"today" to concrete dates BEFORE embedding: the
+        # rewritten query is also what the reranker scores against below.
+        query = resolve_relative_dates(query)
 
         try:
             with _tracer.start_as_current_span(
@@ -556,7 +561,9 @@ class SearchService:
         chat_history: list[dict[str, str]],
         context: str,
     ) -> list[dict[str, str]]:
-        messages: list[dict[str, str]] = [{"role": "system", "content": _RAG_SYSTEM_PROMPT}]
+        messages: list[dict[str, str]] = [
+            {"role": "system", "content": f"{_RAG_SYSTEM_PROMPT}\n{current_date_line()}"}
+        ]
 
         # Clamp history to last 10 turns to control context size
         for turn in chat_history[-10:]:
