@@ -438,8 +438,11 @@ class TestUpdateRecordIncrements:
             repo=repo,
             inputs={},
         )
-        await handler.execute(ctx)
-        assert repo.update_calls[0][1] == {}
+        out = await handler.execute(ctx)
+        # Nothing resolved, so the row is not touched AT ALL — an empty patch would still
+        # bump `updated_at` and emit a record-change event for a write that says nothing.
+        assert repo.update_calls == []
+        assert out["updated"] is False
 
     @pytest.mark.asyncio
     async def test_explicit_values_win_over_increments(self) -> None:

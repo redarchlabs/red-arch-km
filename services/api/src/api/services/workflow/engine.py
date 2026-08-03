@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
@@ -59,7 +60,12 @@ logger = logging.getLogger(__name__)
 
 # Run-wide budgets (generalize the legacy MAX_RUN_STEPS delay-cycle guard). A
 # bounded loop is allowed, but these guarantee termination.
-MAX_RUN_STEPS = 200
+#
+# MAX_RUN_STEPS accumulates ACROSS resume cycles, so a long-lived paced run (e.g. a
+# robot conducting a lesson: ask → timer → check → ask …) exhausts it even though it
+# is never looping unboundedly. Configurable so such a run does not have to be split
+# into artificially chained runs; the guard itself always remains.
+MAX_RUN_STEPS = int(os.environ.get("WORKFLOW_MAX_RUN_STEPS", "200"))
 MAX_TOKENS_PER_RUN = 500
 MAX_TOKEN_DEPTH = 32
 # A 'running' (leased) token older than this is presumed crashed and requeued.
@@ -414,7 +420,7 @@ class TokenEngine:
             return await self._dispatch_gateway(node, token, run, model, tokens)
 
         if node.type == C.NODE_EVENT:
-            return self._dispatch_event(node, token, model)
+            return self._dispatch_event(node, token, model, run)
 
         if node.type == C.NODE_TASK:
             return await self._dispatch_task(node, token, run, model, runs)
@@ -475,11 +481,11 @@ class TokenEngine:
             # deadline (the timer sweep reactivates it on expiry); else park open.
             boundary = _timer_boundary_for(model, node.id)
             if boundary is not None:
-                delay = int((boundary.data or {}).get("delay_seconds", 0) or 0)
+                delay = _resolve_delay_seconds(boundary.data or {}, run)
                 return NodeOutcome(
                     "park",
                     wait_kind=wait_kind,
-                    resume_at=datetime.now(UTC) + timedelta(seconds=max(0, delay)),
+                    resume_at=datetime.now(UTC) + timedelta(seconds=delay),
                     token_data={**data, "_armed": True},
                 )
             return NodeOutcome("park", wait_kind=wait_kind)
@@ -689,8 +695,11 @@ class TokenEngine:
                 "after": snapshot.get("after"),
                 # Carry the parent's manual-run inputs so a called sub-process can
                 # also resolve ``inputs.<key>`` (the primary inter-run channel is
-                # still ``vars`` via a task's ``capture``).
-                "inputs": snapshot.get("inputs") or {},
+                # still ``vars`` via a task's ``capture``), then let the call node
+                # OVERRIDE per invocation via ``call_inputs``. Without the override a
+                # loop could only ever call its child with one fixed argument, which
+                # makes an otherwise reusable child (ask question N) uncallable.
+                "inputs": _resolve_call_inputs(node, run, snapshot),
                 "vars": run.variables or {},
             },
             depth=run.depth + 1,
@@ -861,7 +870,11 @@ class TokenEngine:
         return NodeOutcome("emit", targets=_out_edges(model, node.id))
 
     def _dispatch_event(
-        self, node: WorkflowNode, token: WorkflowRunToken, model: WorkflowDefinitionModel
+        self,
+        node: WorkflowNode,
+        token: WorkflowRunToken,
+        model: WorkflowDefinitionModel,
+        run: WorkflowRun | None = None,
     ) -> NodeOutcome:
         data = node.data or {}
         position = data.get("position", C.EVENT_INTERMEDIATE)
@@ -885,11 +898,11 @@ class TokenEngine:
                     # The timer sweep reactivated us — the wait elapsed; move on.
                     new_data = {k: v for k, v in (token.data or {}).items() if k != "_timer_armed"}
                     return NodeOutcome("advance", targets=_out_edges(model, node.id), token_data=new_data)
-                delay = int(data.get("delay_seconds", 0) or 0)
+                delay = _resolve_delay_seconds(data, run)
                 return NodeOutcome(
                     "park",
                     wait_kind="timer",
-                    resume_at=datetime.now(UTC) + timedelta(seconds=max(0, delay)),
+                    resume_at=datetime.now(UTC) + timedelta(seconds=delay),
                     token_data={**(token.data or {}), "_timer_armed": True},
                 )
             if event_type in (C.EVENT_MESSAGE, C.EVENT_SIGNAL):
@@ -1165,3 +1178,81 @@ def _expr_context(run: WorkflowRun) -> dict[str, Any]:
         "inputs": snapshot.get("inputs") or {},
         "vars": run.variables or {},
     }
+
+
+def _resolve_call_inputs(
+    node: WorkflowNode, run: WorkflowRun, snapshot: dict[str, Any]
+) -> dict[str, Any]:
+    """The ``inputs`` a call activity hands its child run.
+
+    Starts from the parent's own inputs (so a child can still read what the parent was
+    started with), then overlays the node's ``call_inputs`` map, resolved against the
+    parent's live context. Each value may be a literal, a ``{"$ref": ...}`` envelope
+    (type preserved — important, because an integer sequence must not arrive as text) or
+    a ``{{ }}`` template.
+
+    Never raises: a malformed map degrades to the parent's inputs rather than failing the
+    run, matching how the rest of the call path treats bad authoring.
+    """
+    inherited = dict(snapshot.get("inputs") or {})
+    declared = (node.data or {}).get("call_inputs")
+    if not isinstance(declared, dict) or not declared:
+        return inherited
+    from api.services.workflow.actions import _resolve_value_map
+
+    try:
+        return {**inherited, **_resolve_value_map(declared, _expr_context(run))}
+    except Exception:  # noqa: BLE001 - bad authoring must not kill the parent run
+        return inherited
+
+
+def _resolve_one_delay(raw: Any, run: WorkflowRun | None, *, divisor: float) -> int | None:
+    """Resolve a single delay value to whole seconds, or None if it yields nothing usable.
+
+    None (rather than 0) is what lets the caller distinguish "this source did not answer"
+    from "this source said zero", which is the whole basis of the fallback chain.
+    """
+    if isinstance(raw, (dict, str)):
+        if run is None:
+            return None
+        # Local import: actions.py imports engine-adjacent modules, so a module-level
+        # import here would close a cycle.
+        from api.services.workflow.actions import _resolve_dynamic
+
+        try:
+            raw = _resolve_dynamic(raw, _expr_context(run))
+        except Exception:  # noqa: BLE001 - a bad template must not fail the run
+            return None
+    if raw is None or raw == "":
+        return None
+    try:
+        value = float(raw) / divisor
+    except (TypeError, ValueError):
+        return None
+    if value <= 0:
+        return None
+    return int(round(value))
+
+
+def _resolve_delay_seconds(data: dict[str, Any], run: WorkflowRun | None) -> int:
+    """How long a timer parks for, allowing the wait itself to come from run data.
+
+    A literal int keeps working unchanged. A ``{"$ref": "vars.q.seconds_allowed"}``
+    envelope or a ``"{{ inputs.wait }}"`` template is resolved against the run context
+    first, so a paced workflow can read each wait from a record instead of baking one
+    number into the graph (e.g. per-question quiz timers, per-segment pacing).
+
+    ``delay_ms`` is the same thing in milliseconds and WINS when it resolves to something
+    positive, so a node can wait on a duration a device just reported (the robot's
+    ``/perform`` returns the timeline's real ``duration_ms``) while keeping
+    ``delay_seconds`` as the fallback for when that field is absent — e.g. a device still
+    running older firmware. Without the two-source fallback, a missing field would resolve
+    to 0 and the workflow would charge ahead mid-sentence.
+
+    Never raises: when nothing resolves, the wait is 0 (park-and-resume immediately),
+    because failing a whole run over a malformed delay is worse than advancing early.
+    """
+    from_ms = _resolve_one_delay(data.get("delay_ms"), run, divisor=1000.0)
+    if from_ms is not None:
+        return from_ms
+    return _resolve_one_delay(data.get("delay_seconds"), run, divisor=1.0) or 0
