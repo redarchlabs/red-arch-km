@@ -10,7 +10,8 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from api.schemas.form import FormConfig
 from api.services.form_layout import collect_workflow_ids
-from api.services.view_share import share_is_live, unsupported_elements
+from api.services.form_service import FormNotFoundError
+from api.services.view_share import ViewShareError, share_is_live, unsupported_elements
 
 
 class _View:
@@ -99,6 +100,21 @@ def test_allow_list_ignores_non_workflow_buttons():
 def test_allow_list_is_empty_for_a_page_with_no_actions():
     """A read-only board grants no ability to change anything."""
     assert collect_workflow_ids(_elements([{"type": "label", "text": "Status", "variant": "heading"}])) == set()
+
+
+def test_a_disabled_workflow_is_forbidden_not_missing():
+    """The two rejections a share link can give must not look alike.
+
+    Folding "this workflow is switched off" into ``FormNotFoundError`` made a button
+    that plainly exists answer 404, which reads as a broken app — and cost an
+    afternoon of hunting for a missing workflow that was sitting right there with
+    ``enabled = false``. The status codes are the only signal the operator gets, so
+    they have to differ.
+    """
+    from api.routers.views import _ERROR_STATUS
+
+    assert _ERROR_STATUS[ViewShareError] == 403
+    assert _ERROR_STATUS[FormNotFoundError] == 404
 
 
 def test_sharing_is_off_without_a_token():
