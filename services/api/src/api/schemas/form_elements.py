@@ -50,7 +50,14 @@ def _assert_safe_href(v: str) -> str:
 FieldWidth = Literal["full", "half", "third", "quarter"]
 
 # Picklist render style (presentational only; value is still one of the options).
-FieldDisplay = Literal["dropdown", "radio"]
+# How a bound field is presented. The first two pick a picklist's input widget; the rest
+# drop the input entirely and typeset the VALUE — for a screen that is read from across a
+# room, where a read-only textarea is still a form control with a border and a resize grip
+# around a sentence nobody may edit.
+FieldDisplay = Literal["dropdown", "radio", "headline", "prose", "quote", "caption", "log"]
+
+# The display-only subset: these render as text, not as an input of any kind.
+TEXT_DISPLAYS = frozenset({"headline", "prose", "quote", "caption", "log"})
 
 # How a 1:1 related record is surfaced.
 SectionMode = Literal["inline", "modal"]
