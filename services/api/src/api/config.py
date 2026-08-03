@@ -49,6 +49,16 @@ class Settings(BaseSettings):
     # Whether to serve the public API docs (/api/v1/docs).
     # On by default; set false to hide the interactive docs in a hardened deploy.
     api_docs_enabled: bool = Field(default=True, validation_alias="API_DOCS_ENABLED")
+    # Per-token ceiling for a PUBLICLY SHARED view (/api/public/views/{token}).
+    # This one limit is shared by every device on the link, so it has to be sized for
+    # the audience, not for one client: a shared page that re-renders every 2s costs 30
+    # requests/minute PER PHONE, so a class of thirty needs ~900. The old ceiling of 120
+    # meant the FIFTH phone to scan a quiz QR started getting 429s — which reads to the
+    # room as "failed to load" on everyone's screen at once. Keep it well above
+    # (expected devices x 60000/refresh_ms); it still bounds a leaked link.
+    public_view_rate_limit_per_minute: int = Field(
+        default=1200, validation_alias="PUBLIC_VIEW_RATE_LIMIT_PER_MINUTE"
+    )
 
     # Shared infrastructure (read from unprefixed env vars)
     database_url: str = Field(default="", validation_alias="DATABASE_URL")
