@@ -188,8 +188,14 @@ class PublicViewService:
             raise ViewShareError("this page cannot run that workflow")
 
         wf = await WorkflowRepository(self._session, view.org_id).get(workflow_id)
-        if wf is None or not wf.enabled:
+        if wf is None:
             raise FormNotFoundError("workflow not found")
+        if not wf.enabled:
+            # Distinct from "not found" on purpose. Folding the two together produced a
+            # 404 on a button that plainly exists, which reads as a broken app rather
+            # than a switch someone turned off — and sent the operator hunting for a
+            # missing workflow instead of looking at the flag.
+            raise ViewShareError("this workflow is disabled")
         version = await resolve_published_version(self._session, view.org_id, wf)
 
         request = ManualRunRequest(
