@@ -318,6 +318,15 @@ export type RunWorkflowAction = {
   success_message?: string | null;
 };
 export type LinkAction = { kind: "link"; href: string; new_tab?: boolean };
+/** Copy the link rather than follow it. A relative `href` is resolved absolute
+ * against `host` (else the page's origin) first — a pasted `/views/…` is useless
+ * anywhere but this browser. Same `{token}` fill as `LinkAction`. */
+export type CopyLinkAction = {
+  kind: "copy_link";
+  href: string;
+  host?: string | null;
+  success_message?: string | null;
+};
 /** POST/GET to a saved Connection server-side; `body` templated from form values. */
 export type CallConnectionAction = {
   kind: "call_connection";
@@ -332,6 +341,7 @@ export type ButtonAction =
   | SubmitAction
   | RunWorkflowAction
   | LinkAction
+  | CopyLinkAction
   | CallConnectionAction;
 
 export interface ButtonElement extends ElementBase {

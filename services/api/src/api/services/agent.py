@@ -2727,7 +2727,12 @@ class AgentService:
                     "action": (
                         "one of: {kind:'submit'} | {kind:'run_workflow', workflow_id, "
                         "inputs:{<name>:<expression>}, confirm?, success_message?} | "
-                        "{kind:'link', href, new_tab?} | {kind:'call_connection', connection, "
+                        "{kind:'link', href, new_tab?} (new_tab opens a new window/tab) | "
+                        "{kind:'copy_link', href, host?, success_message?} (copies the link to the "
+                        "clipboard instead of following it; a relative href is resolved to an "
+                        "ABSOLUTE address first, against `host` if set, else the page's own origin — "
+                        "set `host` to the machine's LAN address when the console runs on localhost) | "
+                        "{kind:'call_connection', connection, "
                         "method?, path?, body:{<key>:<expression>}, confirm?, success_message?} "
                         "(POST straight to a saved Connection, server-side; body templated from form values)"
                     ),

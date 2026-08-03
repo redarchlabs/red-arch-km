@@ -6,8 +6,7 @@ import { useEffect, useState } from "react";
 
 import { Dialog, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import type { QrCodeElement } from "@/lib/api/forms";
-import { fillTokens } from "@/lib/forms/href";
-import { isLoopbackUrl, resolveShareUrl } from "@/lib/forms/shareUrl";
+import { isLoopbackUrl, shareTarget } from "@/lib/forms/shareUrl";
 
 interface Props {
   el: QrCodeElement;
@@ -30,9 +29,8 @@ export function QrCodeCard({ el, values, recordId, disabled }: Props) {
   const [failed, setFailed] = useState(false);
   const [copied, setCopied] = useState(false);
 
-  const filled = fillTokens(el.url ?? "", { ...values, id: recordId ?? "" });
   const origin = typeof window === "undefined" ? "" : window.location.origin;
-  const target = resolveShareUrl(filled, origin, el.host);
+  const target = shareTarget(el.url ?? "", { ...values, id: recordId ?? "" }, origin, el.host);
   const unreachable = !!target && isLoopbackUrl(target);
   const inline = el.display === "inline";
   const size = el.size ?? 320;

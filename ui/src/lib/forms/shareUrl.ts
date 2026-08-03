@@ -11,6 +11,8 @@
  * by pointing a camera at it.
  */
 
+import { fillTokens } from "./href";
+
 /** Hosts that only ever mean "the machine asking". */
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]", "::1", "0.0.0.0"]);
 
@@ -37,6 +39,24 @@ export function resolveShareUrl(url: string, origin: string, host?: string | nul
   } catch {
     return target;
   }
+}
+
+/**
+ * The address to hand to someone else: `{token}`-filled from the record,
+ * scheme-checked, then resolved absolute.
+ *
+ * Both ways a view offers a link to another device — encoding it as a QR code and
+ * copying it to the clipboard — need exactly this string, so they share it rather
+ * than each doing half of it.
+ */
+export function shareTarget(
+  template: string,
+  record: Record<string, unknown>,
+  origin: string,
+  host?: string | null,
+): string {
+  if (!(template ?? "").trim()) return "";
+  return resolveShareUrl(fillTokens(template, record), origin, host);
 }
 
 /** True when this address can only be opened on the machine that produced it. */
