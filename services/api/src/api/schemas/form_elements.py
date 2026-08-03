@@ -587,6 +587,32 @@ class LinkAction(BaseModel):
         return _assert_safe_href(v)
 
 
+class CopyLinkAction(BaseModel):
+    """Copy a link to the viewer's clipboard instead of following it — how a screen
+    hands a URL to a *person* (paste it into a chat, a message, another machine's
+    browser) when a QR code is the wrong shape for the moment.
+
+    ``href`` takes the same ``{token}`` fill and scheme check as ``LinkAction``. The
+    difference is that a relative href is resolved to an ABSOLUTE address before it
+    is copied — against ``host`` when set, else the address the page was opened at —
+    because a pasted ``/views/…`` means nothing outside this browser. That is the
+    same resolution ``qr_code`` does, and for the same reason: a console opened at
+    ``localhost`` can only produce a ``localhost`` link, which means "this machine"
+    to whoever receives it. Set ``host`` to the machine's LAN address to make the
+    copied link independent of how the console was opened."""
+
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["copy_link"] = "copy_link"
+    href: str
+    host: str | None = None  # origin to resolve a relative href against
+    success_message: str | None = None
+
+    @field_validator("href", "host")
+    @classmethod
+    def _reject_dangerous_scheme(cls, v: str | None) -> str | None:
+        return None if v is None else _assert_safe_href(v)
+
+
 class CallConnectionAction(BaseModel):
     """POST/GET to a saved workflow **Connection** straight from a button — the generic
     'external action' that avoids wrapping every call in a one-step workflow. Runs
@@ -606,7 +632,7 @@ class CallConnectionAction(BaseModel):
 
 
 ButtonAction = Annotated[
-    SubmitAction | RunWorkflowAction | LinkAction | CallConnectionAction,
+    SubmitAction | RunWorkflowAction | LinkAction | CopyLinkAction | CallConnectionAction,
     Field(discriminator="kind"),
 ]
 

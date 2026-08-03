@@ -469,6 +469,64 @@ def test_button_link_href_scheme_guarded():
         )
 
 
+def test_button_copy_link_href_and_host_scheme_guarded():
+    """A copy_link button takes the same templated relative href as a link button, plus an
+    optional host — and both are scheme-guarded, because the copied string is handed to a
+    person who will paste it somewhere that trusts it."""
+    FormConfig.model_validate(
+        {
+            "version": 2,
+            "elements": [
+                {
+                    "type": "button",
+                    "label": "Copy link",
+                    "style": "secondary",
+                    "action": {
+                        "kind": "copy_link",
+                        "href": "/views/{quiz_view_slug}/kiosk?record_id={id}",
+                        "host": "http://192.168.0.30:3000",
+                        "success_message": "Link copied",
+                    },
+                }
+            ],
+        }
+    )
+    for bad in ({"href": "javascript:alert(1)"}, {"href": "/x", "host": "data:text/html,x"}):
+        with pytest.raises(ValidationError):
+            FormConfig.model_validate(
+                {
+                    "version": 2,
+                    "elements": [
+                        {
+                            "type": "button",
+                            "label": "x",
+                            "style": "primary",
+                            "action": {"kind": "copy_link", **bad},
+                        }
+                    ],
+                }
+            )
+
+
+def test_copy_link_button_grants_no_workflow_permission():
+    """A share token's allow-list is derived from the tree, so a new action kind must not
+    accidentally widen it: copy_link starts nothing and must contribute no workflow id."""
+    cfg = FormConfig.model_validate(
+        {
+            "version": 2,
+            "elements": [
+                {
+                    "type": "button",
+                    "label": "Copy link",
+                    "style": "secondary",
+                    "action": {"kind": "copy_link", "href": "/s/abc"},
+                }
+            ],
+        }
+    )
+    assert fl.collect_workflow_ids(cfg.elements) == set()
+
+
 def test_progress_element_fetches_expr_fields_without_writing(ids, fields_by_entity, rels):
     cfg = FormConfig.model_validate(
         {

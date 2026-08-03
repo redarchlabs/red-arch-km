@@ -81,11 +81,19 @@ no-entity view.
 |---|---|---|
 | `submit` | Submit the enclosing form (default) | — |
 | `run_workflow` | Run a published workflow with templated inputs, via `POST /api/workflows/{id}/run` | `workflow_id`, `inputs` (map of expressions over form values), `confirm`, `success_message` |
-| `link` | Navigate to a view/URL; `href` supports `{token}` fill | `href`, `new_tab` |
+| `link` | Navigate to a view/URL; `href` supports `{token}` fill | `href`, `new_tab` (open a new window/tab) |
+| `copy_link` | Copy the link to the clipboard instead of following it | `href` (same `{token}` fill + scheme check as `link`), `host`, `success_message` |
 | `call_connection` | POST/GET a saved workflow **Connection** server-side, via `POST /api/workflows/connections/call` | `connection`, `method`, `path`, `body` (templated), `confirm`, `success_message` |
 
 `call_connection` runs server-side so the connection's stored secret and the workflow
 SSRF allow-list still apply — the browser never sees the base URL or secret.
+
+`copy_link` is the "hand this URL to a person" counterpart of `qr_code`, and shares its
+resolution (`shareTarget` in `ui/src/lib/forms/shareUrl.ts`): the href is `{token}`-filled,
+scheme-checked, then made **absolute** against `host` if set, else the address the page
+itself was opened at. A copied `/views/…` would be meaningless anywhere but this browser,
+and a console opened at `localhost` can only copy a `localhost` link — set `host` to the
+machine's LAN address in that case, exactly as for a QR code.
 
 **Table columns** (`TableColumn`, discriminated on `kind`): `field` (`AnchorColumn`, a field
 on the child), `related` (`RelatedColumn`, one hop across a to-one on the child; `editable`

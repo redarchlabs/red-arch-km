@@ -1323,6 +1323,7 @@ function ButtonEditor({ el, onChange }: { el: ButtonElement; onChange: (el: Butt
               onChange({ ...el, action: { kind: "run_workflow", workflow_id: "", inputs: {} } });
             else if (kind === "call_connection")
               onChange({ ...el, action: { kind: "call_connection", connection: "", method: "POST", path: "", body: {} } });
+            else if (kind === "copy_link") onChange({ ...el, action: { kind: "copy_link", href: "" } });
             else onChange({ ...el, action: { kind: "link", href: "" } });
           }}
         >
@@ -1330,6 +1331,7 @@ function ButtonEditor({ el, onChange }: { el: ButtonElement; onChange: (el: Butt
           <option value="run_workflow">Run workflow</option>
           <option value="call_connection">Call connection</option>
           <option value="link">Link / navigate</option>
+          <option value="copy_link">Copy link to clipboard</option>
         </select>
       </Row>
       {el.action.kind === "run_workflow" ? (
@@ -1346,13 +1348,56 @@ function ButtonEditor({ el, onChange }: { el: ButtonElement; onChange: (el: Butt
       ) : null}
       {el.action.kind === "call_connection" ? <CallConnectionFields el={el} onChange={onChange} /> : null}
       {el.action.kind === "link" ? (
-        <Row label="Href">
-          <input
-            className={input}
-            value={el.action.href}
-            onChange={(e) => onChange({ ...el, action: { kind: "link", href: e.target.value } })}
-          />
-        </Row>
+        <>
+          <Row label="Href">
+            <input
+              className={input}
+              value={el.action.href}
+              onChange={(e) => {
+                const action = el.action.kind === "link" ? el.action : { kind: "link" as const, href: "" };
+                onChange({ ...el, action: { ...action, href: e.target.value } });
+              }}
+            />
+          </Row>
+          <Row label="New window">
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={el.action.new_tab ?? false}
+                onChange={(e) => {
+                  const action = el.action.kind === "link" ? el.action : { kind: "link" as const, href: "" };
+                  onChange({ ...el, action: { ...action, new_tab: e.target.checked } });
+                }}
+              />
+              <span className="text-muted-foreground">Open in a new window/tab instead of leaving this page</span>
+            </label>
+          </Row>
+        </>
+      ) : null}
+      {el.action.kind === "copy_link" ? (
+        <>
+          <Row label="Href">
+            <input
+              className={input}
+              value={el.action.href}
+              onChange={(e) => {
+                const action = el.action.kind === "copy_link" ? el.action : { kind: "copy_link" as const, href: "" };
+                onChange({ ...el, action: { ...action, href: e.target.value } });
+              }}
+            />
+          </Row>
+          <Row label="Host">
+            <input
+              className={input}
+              placeholder="http://192.168.0.30:3000 — only if this page runs on localhost"
+              value={el.action.host ?? ""}
+              onChange={(e) => {
+                const action = el.action.kind === "copy_link" ? el.action : { kind: "copy_link" as const, href: "" };
+                onChange({ ...el, action: { ...action, host: e.target.value || null } });
+              }}
+            />
+          </Row>
+        </>
       ) : null}
     </div>
   );
