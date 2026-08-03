@@ -71,4 +71,39 @@ export function registerViewTools(server: McpServer, ctx: AppContext): void {
     inputSchema: { view_id: uuid, record_id: uuid.optional() },
     handler: ({ view_id, record_id }) => ctx.api.get(`/views/${view_id}/render`, { query: { record_id } }),
   });
+
+  defineTool(server, {
+    name: "km2_share_view",
+    title: "Enable (or rotate) a view's public link",
+    description:
+      "Turn on anonymous access to ONE view and return its /s/<token> URL — the link behind a QR code, " +
+      "for people with no KM2 login. Calling it again ROTATES the token and immediately breaks the old link. " +
+      "The token is returned exactly once (only its hash is stored), so capture it now — a lost link is " +
+      "replaced, never recovered. record_id PINS the view to one record: the anonymous page always resolves " +
+      "that row, so pin the live-state record (its field values may keep changing; its identity cannot). " +
+      "Anonymous callers may run ONLY the workflows this view's own element tree references, and get no " +
+      "other view, no record API, no documents and no search. Check `unsupported_elements` in the response: " +
+      "record_list / chat / report / form_ref render EMPTY on a public page, so anything the visitor must " +
+      "see has to come from the pinned record's own fields.",
+    inputSchema: {
+      view_id: uuid,
+      record_id: uuid
+        .optional()
+        .describe("Record the anonymous page is pinned to. Required for a view bound to an entity."),
+      expires_at: z
+        .string()
+        .optional()
+        .describe("ISO-8601 timestamp after which the link stops working. Omit for no expiry."),
+    },
+    handler: ({ view_id, record_id, expires_at }) =>
+      ctx.api.post(`/views/${view_id}/share`, { body: pruneUndefined({ record_id, expires_at }) }),
+  });
+
+  defineTool(server, {
+    name: "km2_unshare_view",
+    title: "Revoke a view's public link",
+    description: "Turn off anonymous access to a view. The existing /s/<token> link stops working immediately.",
+    inputSchema: { view_id: uuid },
+    handler: ({ view_id }) => ctx.api.delete(`/views/${view_id}/share`),
+  });
 }

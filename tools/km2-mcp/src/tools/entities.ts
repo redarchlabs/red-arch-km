@@ -108,6 +108,34 @@ export function registerEntityTools(server: McpServer, ctx: AppContext): void {
   });
 
   defineTool(server, {
+    name: "km2_update_entity_field",
+    title: "Update entity field",
+    description:
+      "Change a field in place (org-admin). Only the fields you pass change. " +
+      "read_access is the interesting one: 'server_only' hides the column's VALUES from members " +
+      "and from every API read, while workflows can still use it — that is how a quiz answer key, " +
+      "a grading rubric or a stored secret lives on a record nobody can read out of the UI. " +
+      "Note field_type, slug and is_unique are deliberately NOT editable here: a type change or " +
+      "rename goes through its own path.",
+    inputSchema: {
+      definition_id: uuid,
+      field_id: uuid,
+      name: z.string().min(1).max(100).optional(),
+      picklist_options: z.array(z.string()).optional(),
+      is_required: z.boolean().optional(),
+      order: z.number().int().min(0).optional(),
+      read_access: z
+        .enum(["member", "server_only"])
+        .optional()
+        .describe("Who may READ this field's values. 'member' is the default."),
+    },
+    handler: ({ definition_id, field_id, ...rest }) =>
+      ctx.api.patch(`/entity-definitions/${definition_id}/fields/${field_id}`, {
+        body: pruneUndefined(rest),
+      }),
+  });
+
+  defineTool(server, {
     name: "km2_delete_entity_field",
     title: "Delete entity field",
     description: "Drop a field (column) from an entity definition (org-admin). Destructive — data in the column is lost.",
