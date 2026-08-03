@@ -198,6 +198,48 @@ def _resolve_ref(value: Any, context: dict[str, Any]) -> Any:
     return value
 
 
+class _Missing:
+    """Sentinel: a ``$ref`` path that does not exist in the context at all.
+
+    Distinct from ``None``, which is a path that exists and holds null. The difference
+    decides whether a write means "set this field to nothing" or "I have nothing to say
+    about this field" — see :func:`_unresolved_ref_slugs`."""
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid only
+        return "<missing>"
+
+
+_MISSING = _Missing()
+
+
+def _lookup_or_missing(context: dict[str, Any], path: str) -> Any:
+    """Like :func:`_lookup`, but returns :data:`_MISSING` when a segment is absent
+    rather than collapsing "absent" and "present but null" into ``None``."""
+    cur: Any = context
+    for part in path.split("."):
+        if not isinstance(cur, dict) or part not in cur:
+            return _MISSING
+        cur = cur[part]
+    return cur
+
+
+def _unresolved_ref_slugs(values: dict[str, Any], context: dict[str, Any]) -> set[str]:
+    """The keys of ``values`` whose ``$ref`` envelope points at a path that does not exist.
+
+    A caller writing records uses this to LEAVE THOSE FIELDS ALONE instead of storing
+    NULL. Writing NULL there is silent data loss: a workflow that pushes
+    ``{"cursor": {"$ref": "inputs.n"}}`` without ``inputs.n`` would erase a stored cursor
+    it never meant to touch. Only ``$ref`` envelopes qualify — a literal ``null`` is an
+    author explicitly clearing a field, and a ``{{ }}`` template is documented to render
+    a missing token as empty text."""
+    out: set[str] = set()
+    for slug, raw in values.items():
+        is_ref = isinstance(raw, dict) and list(raw) == [_REF_KEY] and isinstance(raw[_REF_KEY], str)
+        if is_ref and _lookup_or_missing(context, raw[_REF_KEY]) is _MISSING:
+            out.add(slug)
+    return out
+
+
 def _resolve_values(values: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Resolve every value in an action's ``values`` map (literals unchanged).
 
@@ -398,14 +440,20 @@ def _resolve_record_id(ctx: ActionContext, context: dict[str, Any], *, action: s
 async def _resolve_singleton_id(
     repo: DynamicEntityRepository, ctx: ActionContext, context: dict[str, Any], mode: str
 ) -> dict[str, Any] | None:
-    """Return the record for a ``latest`` / ``first`` lookup (newest / oldest by
-    ``created_at``), honouring an optional resolved ``filters`` map. ``None`` when
-    the entity has no matching record."""
+    """Return the record for a ``latest`` / ``first`` lookup, honouring an optional
+    resolved ``filters`` map. ``None`` when the entity has no matching record.
+
+    Ordering defaults to ``created_at`` (so ``latest`` = newest, ``first`` = oldest),
+    but ``order_by`` picks any other field — which is the only way to ask for a
+    superlative rather than a most-recent row, e.g. the top scorer:
+    ``{"mode": "latest", "order_by": "score"}``. The slug is whitelisted against the
+    entity catalog by the repository, so it is not an injection surface."""
     filters = _resolve_value_map(ctx.config.get("filters", {}) or {}, context)
+    order_by = str(ctx.config.get("order_by") or "created_at")
     items, _ = await repo.list(
         filters=filters or None,
         limit=1,
-        order_by="created_at",
+        order_by=order_by,
         order_dir="desc" if mode == "latest" else "asc",
     )
     return items[0] if items else None
@@ -437,13 +485,23 @@ class UpdateRecordField:
 
 @register
 class CreateRecord:
+    """Create a record on any entity from templated/`$ref`-resolved values.
+
+    Values go through :func:`_resolve_value_map`, so a value may be a literal, a
+    ``{"$ref": "inputs.x"}`` envelope (type preserved) or a ``"{{ inputs.x }}"``
+    template (rendered to text) — the SAME rules as ``update_record``. They used to
+    diverge: create resolved only ``$ref``, so a ``{{ }}`` value was written to the
+    database verbatim as the literal string ``{{ inputs.x }}``. That failed silently,
+    which is the worst way for it to fail.
+    """
+
     type = "create_record"
 
     async def execute(self, ctx: ActionContext) -> dict[str, Any]:
         target_slug = ctx.config.get("target_slug")
         if not target_slug:
             raise ActionError("create_record requires target_slug")
-        values = _resolve_values(ctx.config.get("values", {}), _trigger_context(ctx))
+        values = _resolve_value_map(ctx.config.get("values", {}), _trigger_context(ctx))
         repo = await ctx.repo_for_slug(target_slug)
         created = await repo.create(values)
         return {"target_slug": target_slug, "created_id": str(created["id"])}
@@ -451,7 +509,7 @@ class CreateRecord:
     def simulate(self, ctx: ActionContext) -> dict[str, Any]:
         return {
             "target_slug": ctx.config.get("target_slug"),
-            "values": _resolve_values(ctx.config.get("values", {}), _trigger_context(ctx)),
+            "values": _resolve_value_map(ctx.config.get("values", {}), _trigger_context(ctx)),
         }
 
 
@@ -467,7 +525,10 @@ class GetRecord:
     Config: ``{"target_slug": "mission_state", "mode": "latest", "capture": "state"}``.
     ``mode``: ``"latest"`` (newest by created_at, the default when no ``record_id``),
     ``"first"`` (oldest), or ``"by_id"`` with ``record_id`` (literal / ``$ref`` /
-    ``{{ }}``). ``filters`` optionally narrows ``latest``/``first``. Output is the
+    ``{{ }}``). ``filters`` optionally narrows ``latest``/``first``. ``order_by``
+    re-points the ordering at any other field, which turns ``latest``/``first`` into
+    max/min — ``{"mode": "latest", "order_by": "score"}`` is the top scorer, the only
+    way to ask a single-record read for a superlative. Output is the
     record's slug-keyed fields (plus ``id``/``created_at``/``updated_at``), or ``{}``
     when no record matches — so a gateway can branch on ``{{ vars.state.id }}``.
     Read-only."""
@@ -535,6 +596,12 @@ class UpdateRecord:
             raise ActionError("update_record requires a non-empty values map or increments map")
         context = _trigger_context(ctx)
         values = _resolve_value_map(values_cfg, context) if isinstance(values_cfg, dict) else {}
+        # A `$ref` aimed at a path that isn't there means "nothing to say about this
+        # field" — writing the NULL it resolves to would erase live data (it once wiped a
+        # loop cursor mid-run and spun the workflow forever). Drop those keys; a literal
+        # null still clears a field on purpose.
+        skipped = sorted(_unresolved_ref_slugs(values_cfg, context)) if isinstance(values_cfg, dict) else []
+        values = {slug: value for slug, value in values.items() if slug not in set(skipped)}
         target_slug = ctx.config.get("target_slug")
         if target_slug:
             repo = await ctx.repo_for_slug(str(target_slug))
@@ -556,12 +623,23 @@ class UpdateRecord:
             )
             # Explicit `values` win: an author naming a field in both means to SET it.
             values = {**bumped, **values}
+        # Everything resolved to nothing: touching the row would only bump `updated_at`
+        # and fire a change event for a write that says nothing.
+        if not values:
+            return {
+                "target_slug": target_slug,
+                "record_id": str(record_id),
+                "updated": False,
+                "values": {},
+                "skipped": skipped,
+            }
         updated = await repo.update(record_id, values)
         return {
             "target_slug": target_slug,
             "record_id": str(record_id),
             "updated": updated is not None,
             "values": _jsonable(values),
+            "skipped": skipped,
         }
 
     async def _target_id(self, ctx: ActionContext, repo: DynamicEntityRepository, context: dict[str, Any]) -> uuid.UUID:

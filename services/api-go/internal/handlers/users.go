@@ -103,11 +103,25 @@ func provisionOrRelinkUser(
 		}
 	}
 
+	// Without a Clerk JWT template the default session token carries no
+	// username/email claims. Storing those raw would write '' into two UNIQUE
+	// columns: the first claimless user takes '', and every later one collides
+	// (23505) → a blanket 403 lockout. Sub-derived values are unique by
+	// construction, and the real values take over once a template is configured.
+	// Mirrors provision_user_from_claims in the Python API.
+	username, email := claims.PreferredUsername, claims.Email
+	if username == "" {
+		username = claims.Sub
+	}
+	if email == "" {
+		email = claims.Sub + "@placeholder.invalid"
+	}
+
 	profile, err := q.UpsertUserProfile(ctx, repository.UpsertUserProfileParams{
 		ID:          ToPgUUID(uuid.New()),
 		AuthSubject: claims.Sub,
-		Username:    claims.PreferredUsername,
-		Email:       claims.Email,
+		Username:    username,
+		Email:       email,
 		Description: pgtype.Text{Valid: false},
 		IsSiteAdmin: pgtype.Bool{Bool: false, Valid: true},
 	})

@@ -40,7 +40,7 @@ from api.repositories.workflow import (
 )
 from api.schemas.workflow_definition import WorkflowDefinitionModel
 from api.services.workflow.actions import ACTION_REGISTRY, ActionContext, ActionError
-from api.services.workflow.engine import TokenEngine
+from api.services.workflow.engine import MAX_RUN_STEPS, TokenEngine
 from api.services.workflow.evaluator import evaluate_graph, trigger_matches
 from api.services.workflow.schedule import is_schedule_due
 
@@ -53,7 +53,10 @@ MAX_DEPTH = 8
 # each resume re-enters the graph with a fresh ``visited`` set. This cap makes
 # such a user-authored cycle terminate (as failed) instead of resuspending
 # forever.
-MAX_RUN_STEPS = 200
+#
+# Imported from the token engine (see the import block above) rather than redeclared:
+# two copies of the same budget silently diverge, and the legacy and v2 engines must
+# fail at the same point. Tune with WORKFLOW_MAX_RUN_STEPS.
 
 
 def _as_dict(value: Any) -> dict[str, Any] | None:

@@ -9,6 +9,8 @@ access once an admin has deactivated the account. Enforcement lives in
 from __future__ import annotations
 
 import uuid
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from typing import Any
 
 import pytest
@@ -20,6 +22,17 @@ from fastapi import HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
 
 ISSUER = "https://clerk.example.com"
+
+
+@asynccontextmanager
+async def _stub_provisioning_session(_settings: Settings) -> AsyncGenerator[None]:
+    """Stand in for the short-lived provisioning transaction.
+
+    ``get_current_user`` no longer receives a request-scoped session — provisioning
+    opens (and commits) its own so its row lock cannot outlive the request. These
+    tests stub that out; the provisioning call itself is monkeypatched separately.
+    """
+    yield None
 
 
 def _settings(**overrides: Any) -> Settings:
@@ -77,10 +90,11 @@ async def test_clerk_path_rejects_inactive_user(monkeypatch: pytest.MonkeyPatch)
 
     monkeypatch.setattr(dependencies, "_verify_bearer_token", _fake_verify)
     monkeypatch.setattr(dependencies, "provision_user_from_claims", _fake_provision)
+    monkeypatch.setattr(dependencies, "auth_provisioning_session", _stub_provisioning_session)
 
     creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials="token")
     with pytest.raises(HTTPException) as exc:
-        await dependencies.get_current_user(settings=_settings(), session=None, credentials=creds)  # type: ignore[arg-type]
+        await dependencies.get_current_user(settings=_settings(), credentials=creds)
     assert exc.value.status_code == 403
     assert exc.value.detail == "Account is deactivated"
 
@@ -92,12 +106,12 @@ async def test_e2e_path_rejects_inactive_user(monkeypatch: pytest.MonkeyPatch) -
         return _profile(is_active=False)
 
     monkeypatch.setattr(dependencies, "provision_user_from_claims", _fake_provision)
+    monkeypatch.setattr(dependencies, "auth_provisioning_session", _stub_provisioning_session)
 
     settings = _settings(e2e_test_mode=True, e2e_test_secret="sekrit")
     with pytest.raises(HTTPException) as exc:
         await dependencies.get_current_user(
             settings=settings,
-            session=None,  # type: ignore[arg-type]
             credentials=None,
             x_test_user="alice:alice@e2e.local",
             x_test_secret="sekrit",
@@ -117,7 +131,8 @@ async def test_clerk_path_accepts_active_user(monkeypatch: pytest.MonkeyPatch) -
 
     monkeypatch.setattr(dependencies, "_verify_bearer_token", _fake_verify)
     monkeypatch.setattr(dependencies, "provision_user_from_claims", _fake_provision)
+    monkeypatch.setattr(dependencies, "auth_provisioning_session", _stub_provisioning_session)
 
     creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials="token")
-    user = await dependencies.get_current_user(settings=_settings(), session=None, credentials=creds)  # type: ignore[arg-type]
+    user = await dependencies.get_current_user(settings=_settings(), credentials=creds)
     assert user.profile_id == profile.id
