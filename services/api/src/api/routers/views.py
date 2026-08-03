@@ -159,8 +159,11 @@ def _rate_limit_public(token: str, settings: Annotated[Settings, Depends(get_set
     global _public_limiter
     if _public_limiter is None:
         # A kiosk re-renders on a timer, so this ceiling is per token and sized for
-        # a page that polls, not for a form that is submitted once.
-        _public_limiter = SlidingWindowLimiter(max(settings.rate_limit_per_minute, 120))
+        # a page that polls, not for a form that is submitted once. It is also shared
+        # by EVERY device on the link, so it scales with the audience: see
+        # `public_view_rate_limit_per_minute`, which replaced a flat 120 that a class
+        # of phones exhausted after the fourth one scanned the QR code.
+        _public_limiter = SlidingWindowLimiter(settings.public_view_rate_limit_per_minute)
     if not _public_limiter.allow(token):
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
