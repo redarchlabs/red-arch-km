@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -98,6 +98,13 @@ class FormConfig(BaseModel):
     # typing); it is meant for status/display pages, not data-entry forms.
     # Floor of 1s so a page can't hammer the API.
     refresh_ms: int | None = Field(default=None, ge=1000, le=3_600_000)
+    # Breathing room around the element tree on the CHROME-FREE routes (kiosk and the
+    # public share link), where the runtime is otherwise deliberately full-bleed.
+    # Full-bleed is right for a control surface that fills the screen — a crew station,
+    # a puzzle pad — and wrong for a page of prose, which ends up typeset flush against
+    # the bezel. Per view rather than global so the existing edge-to-edge kiosks keep
+    # the layout they were designed around; "none" stays the default for that reason.
+    padding: Literal["none", "comfortable", "spacious"] = "none"
 
     @model_validator(mode="before")
     @classmethod

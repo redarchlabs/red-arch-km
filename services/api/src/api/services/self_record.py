@@ -24,6 +24,35 @@ from api.repositories.dynamic_entity import DynamicEntityRepository
 IDENTITY_FIELD_SLUG = "email"
 
 
+async def resolve_latest_record_id(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    entity_definition_id: uuid.UUID,
+) -> uuid.UUID | None:
+    """Newest record in ``entity_definition_id`` by ``created_at`` — the ``record_id=latest``
+    sentinel.
+
+    For a wall display driven by a workflow, the record to show is "whichever one the
+    workflow just made", and its id is not knowable when the URL is written on a screen
+    that nobody touches again. Without this, such a page renders UNBOUND: every value
+    empty, which looks like a broken lesson rather than a missing binding.
+
+    Deliberately unfiltered — "latest" is a property of the entity, not of any one app's
+    notion of "active" — and newest-first because a workflow that opens a new run creates
+    a new row. Returns ``None`` for an empty entity, so the caller falls back to the same
+    unbound render it would have done anyway.
+    """
+    definition = await EntityDefinitionRepository(session, org_id).get(entity_definition_id)
+    if definition is None:
+        return None
+    fields = await EntityFieldRepository(session, org_id).list_for_definition(entity_definition_id)
+    # RLS fails closed without the tenant GUC, so pin it before reading records.
+    await db_scope.enter_tenant(session, org_id)
+    repo = DynamicEntityRepository(session, org_id, definition, fields)
+    items, _ = await repo.list(limit=1, order_by="created_at", order_dir="desc")
+    return uuid.UUID(str(items[0]["id"])) if items else None
+
+
 async def resolve_own_record_id(
     session: AsyncSession,
     org_id: uuid.UUID,
