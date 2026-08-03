@@ -24,6 +24,7 @@ interface Props {
 export function ShareViewCard({ view, onChange }: Props) {
   const live = !!view.public_enabled_at;
   const [recordId, setRecordId] = useState(view.public_record_id ?? "");
+  const [follow, setFollow] = useState(view.public_record_follow ?? false);
   const [created, setCreated] = useState<ViewShareCreated | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -35,12 +36,16 @@ export function ShareViewCard({ view, onChange }: Props) {
     setBusy(true);
     setError(null);
     try {
-      const result = await enableViewShare(view.id, { record_id: recordId.trim() || null });
+      const result = await enableViewShare(view.id, {
+        record_id: follow ? null : recordId.trim() || null,
+        record_follow: follow,
+      });
       setCreated(result);
       onChange({
         ...view,
         public_enabled_at: new Date().toISOString(),
         public_record_id: result.record_id,
+        public_record_follow: result.record_follow,
         public_expires_at: result.expires_at,
       });
     } catch (e: unknown) {
@@ -103,25 +108,46 @@ export function ShareViewCard({ view, onChange }: Props) {
         <p className="text-sm text-muted-foreground">
           Opens this one page to people with no KM2 login — a tablet on a shared desk, a screen on a
           wall. The link is the key: anyone who has it can see this page and use the buttons on it.
-          Nothing else in the org is reachable through it, and the record it shows is fixed when you
-          create the link.
+          Nothing else in the org is reachable through it, and the record it shows is chosen by the
+          server — either the one you pick now, or the newest one each time if you tick the option
+          below.
         </p>
 
         {!live ? (
           <div className="flex flex-wrap items-end gap-3">
             {entityBound ? (
-              <label className="flex-1 text-sm">
-                <span className="mb-1 block font-medium">Record to show</span>
-                <input
-                  className="w-full rounded-md border bg-background px-3 py-2 font-mono text-sm"
-                  placeholder="record id (uuid)"
-                  value={recordId}
-                  onChange={(e) => setRecordId(e.target.value)}
-                />
-                <span className="mt-1 block text-xs text-muted-foreground">
-                  Visitors always see this record — the link can&apos;t be edited to reach another one.
-                </span>
-              </label>
+              <div className="flex-1 space-y-2">
+                <label className="block text-sm">
+                  <span className="mb-1 block font-medium">Record to show</span>
+                  <input
+                    className="w-full rounded-md border bg-background px-3 py-2 font-mono text-sm disabled:opacity-50"
+                    placeholder="record id (uuid)"
+                    value={recordId}
+                    disabled={follow}
+                    onChange={(e) => setRecordId(e.target.value)}
+                  />
+                  <span className="mt-1 block text-xs text-muted-foreground">
+                    Visitors always see this record — the link can&apos;t be edited to reach another one.
+                  </span>
+                </label>
+                <label className="flex items-start gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    className="mt-1"
+                    checked={follow}
+                    onChange={(e) => setFollow(e.target.checked)}
+                  />
+                  <span>
+                    <span className="font-medium">Always show the newest record</span>
+                    <span className="mt-0.5 block text-xs text-muted-foreground">
+                      For a page about whatever is happening now, where each run creates a new
+                      record — a class quiz, a live session board. Without this the link keeps
+                      showing the record you picked today, which goes blank once the next one
+                      starts. The server still chooses the record; visitors still can&apos;t pick.
+                    </span>
+                  </span>
+                </label>
+              </div>
             ) : null}
             <Button type="button" onClick={() => void enable()} disabled={busy}>
               {busy ? "Working…" : "Create public link"}

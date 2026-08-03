@@ -18,6 +18,8 @@ export interface View {
    * rotated, not recovered. Null/absent means sharing is off. */
   public_enabled_at?: string | null;
   public_record_id?: string | null;
+  /** Resolve the entity's newest record per request instead of pinning one. */
+  public_record_follow?: boolean;
   public_expires_at?: string | null;
 }
 
@@ -26,6 +28,7 @@ export interface ViewShareCreated {
   token: string;
   expires_at: string | null;
   record_id: string | null;
+  record_follow: boolean;
   /** Element types on this view that need a login to fetch their own data. */
   unsupported_elements: string[];
 }
@@ -74,7 +77,7 @@ export async function getViewRender(id: string, recordId?: string): Promise<Form
  * comes back exactly once; rotating invalidates the previous link immediately. */
 export async function enableViewShare(
   id: string,
-  input: { record_id?: string | null; expires_at?: string | null },
+  input: { record_id?: string | null; expires_at?: string | null; record_follow?: boolean },
 ): Promise<ViewShareCreated> {
   return (await apiClient.post<ViewShareCreated>(`/views/${id}/share`, input)).data;
 }

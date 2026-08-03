@@ -49,6 +49,7 @@ class ViewRead(BaseModel):
     # been lost is rotated, not recovered.
     public_enabled_at: datetime | None = None
     public_record_id: uuid.UUID | None = None
+    public_record_follow: bool = False
     public_expires_at: datetime | None = None
 
 
@@ -57,10 +58,17 @@ class ViewShareRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    # The record an anonymous visitor sees. Required for an entity-bound view:
-    # without it the page would have nothing to render, and allowing the visitor
-    # to choose would turn the link into a record browser.
+    # The record an anonymous visitor sees. Required for an entity-bound view
+    # unless ``record_follow`` is set: without either, the page would have nothing
+    # to render, and allowing the visitor to choose would turn the link into a
+    # record browser.
     record_id: uuid.UUID | None = None
+    # Follow the entity's NEWEST record instead of pinning one. For a page about
+    # whatever is happening now — a class quiz whose session row is recreated every
+    # lesson — where a fixed pin goes stale as soon as the next one starts. Ignores
+    # ``record_id``; the server still chooses the row, so the link is no more
+    # powerful than a pinned one.
+    record_follow: bool = False
     expires_at: datetime | None = None
 
 
@@ -73,6 +81,7 @@ class ViewShareCreated(BaseModel):
     token: str
     expires_at: datetime | None = None
     record_id: uuid.UUID | None = None
+    record_follow: bool = False
     # Element types on this view that need a login to fetch their own data, so the
     # operator is told at enable time rather than finding an empty panel later.
     unsupported_elements: list[str] = Field(default_factory=list)

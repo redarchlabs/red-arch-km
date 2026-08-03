@@ -13,7 +13,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -42,6 +42,14 @@ class View(Base, UUIDMixin, TimestampMixin, LineageMixin):
     # The record an anonymous render is PINNED to. Without this a token would be a
     # licence to walk every record of the view's entity.
     public_record_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    # …unless the page is about "whatever is happening now" rather than one fixed
+    # thing. Then the newest record is resolved per request instead (migration 044),
+    # the same rule the authenticated ``record_id=latest`` sentinel uses. Still
+    # server-side and still scoped to this view's own entity, so the caller cannot
+    # choose a row — only the definition of "which one" changes.
+    public_record_follow: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false"), default=False
+    )
     public_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     public_enabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
