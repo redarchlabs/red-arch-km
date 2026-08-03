@@ -122,20 +122,26 @@ async def render_view(
     # other value must parse as a UUID, so a malformed id still fails validation
     # (422) exactly as before.
     resolve_me = record_id == "me"
+    # ``record_id=latest`` binds the newest record of the root entity. A wall display
+    # driven by a workflow cannot name its record in advance — the workflow creates a new
+    # one per run — and an unbound render of such a page is silently empty, which reads as
+    # a broken lesson rather than a missing binding.
+    resolve_latest = record_id == "latest"
     parsed_id: uuid.UUID | None = None
-    if record_id is not None and not resolve_me:
+    if record_id is not None and not (resolve_me or resolve_latest):
         try:
             parsed_id = uuid.UUID(record_id)
         except ValueError as exc:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="record_id must be a UUID or 'me'",
+                detail="record_id must be a UUID, 'me', or 'latest'",
             ) from exc
     try:
         return await ViewService(session, ctx.org_id).render(
             view_id,
             parsed_id,
             current_user_email=ctx.user.email if resolve_me else None,
+            resolve_latest=resolve_latest,
         )
     except FormError as exc:
         _raise_http(exc)

@@ -31,7 +31,11 @@ from api.services.form_service import (
     FormValidationError,
     _load_layout_context,
 )
-from api.services.self_record import IDENTITY_FIELD_SLUG, resolve_own_record_id
+from api.services.self_record import (
+    IDENTITY_FIELD_SLUG,
+    resolve_latest_record_id,
+    resolve_own_record_id,
+)
 
 MAX_VIEWS_PER_ORG = 200
 
@@ -136,6 +140,7 @@ class ViewService:
         record_id: uuid.UUID | None,
         *,
         current_user_email: str | None = None,
+        resolve_latest: bool = False,
     ) -> FormRenderRead:
         view = await self.get_view(view_id)
         config = FormConfig.model_validate(view.config or {})
@@ -145,6 +150,13 @@ class ViewService:
             # match / no such field falls back to an unbound render (record_id None).
             if current_user_email is not None:
                 record_id = await self._resolve_own_record_id(view.entity_definition_id, current_user_email)
+            # ``record_id=latest`` binds the newest record instead — for a display that
+            # follows whatever a workflow most recently created and whose URL is fixed on
+            # a screen nobody touches again.
+            elif resolve_latest:
+                record_id = await resolve_latest_record_id(
+                    self._session, self._org_id, view.entity_definition_id
+                )
             # Entity-bound: render exactly like a form (reuse the shared core).
             renderer = FormRenderService(self._session, self._org_id)
             # Adapt: FormRenderService expects a Form-like object with name/description/

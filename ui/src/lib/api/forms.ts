@@ -15,7 +15,19 @@ const PUBLIC_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/ap
 
 // ---- shared presentational vocabulary ----
 export type FieldWidth = "full" | "half" | "third" | "quarter";
-export type FieldDisplay = "dropdown" | "radio";
+/** `dropdown`/`radio` pick a picklist's input widget. The rest are DISPLAY-ONLY: they drop
+ * the input and typeset the value, for a screen read from across a room where a read-only
+ * textarea is still a bordered control wrapped around a sentence nobody may edit. */
+export type FieldDisplay = "dropdown" | "radio" | "headline" | "prose" | "quote" | "caption" | "log";
+
+/** The display-only subset — rendered as text, never as an input. */
+export const TEXT_DISPLAYS: ReadonlySet<string> = new Set([
+  "headline",
+  "prose",
+  "quote",
+  "caption",
+  "log",
+]);
 export type SectionMode = "inline" | "modal";
 export type ResultType = "text" | "integer" | "numeric" | "boolean" | "date" | "timestamptz";
 
@@ -492,6 +504,10 @@ export interface FormConfig {
    * on this cadence so record-bound elements follow the record as workflows change it.
    * Edited values are preserved across a refresh. Null/absent = fetch once. */
   refresh_ms?: number | null;
+  /** Breathing room around the element tree on the chrome-free routes (kiosk / public
+   * share), which are otherwise full-bleed. Absent = "none", so the edge-to-edge
+   * kiosks built before this option keep their layout. */
+  padding?: "none" | "comfortable" | "spacious" | null;
 }
 
 // ---- form entity + CRUD DTOs ----

@@ -20,6 +20,7 @@ import {
   type ReportElement,
   type SectionElement,
   type TableElement,
+  TEXT_DISPLAYS,
 } from "@/lib/api/forms";
 import { createRecord, listRecords, type EntityRecord } from "@/lib/api/entityRecords";
 import { getReport, runReport, type AggregateResult, type Visualization } from "@/lib/api/reports";
@@ -1608,6 +1609,20 @@ export function FormRenderer({
       case "field": {
         const meta = fieldMeta(catalog, scope.entityId, el.slug);
         if (!meta) return null;
+        // Display-only presentations bypass the control entirely. A read-only input is
+        // still an input — border, background, resize grip — which is the wrong object
+        // for a wall screen showing a scripture to a room.
+        if (el.display && TEXT_DISPLAYS.has(el.display)) {
+          return (
+            <div className={spanClass(el.width)}>
+              <DisplayText
+                display={el.display}
+                label={el.label ?? ""}
+                value={scope.values[el.slug]}
+              />
+            </div>
+          );
+        }
         return (
           <div className={spanClass(el.width)}>
             <FieldControl
@@ -1795,6 +1810,44 @@ export function FormRenderer({
           <figcaption className="text-center text-xs text-muted-foreground">{el.caption}</figcaption>
         ) : null}
       </figure>
+    );
+  }
+
+  /** Typeset a field's VALUE for a display screen — no input, no border, no resize grip.
+   *
+   * Sizes are deliberately large and set in `rem`, not scaled to the viewport: this is read
+   * from the back of a room, and the failure mode of a wall slide is text that is too small,
+   * never too big. An empty value renders nothing at all rather than an empty frame, so a
+   * slide with no scripture simply has no scripture on it. */
+  function DisplayText({
+    display,
+    label,
+    value,
+  }: {
+    display: string;
+    label: string;
+    value: unknown;
+  }) {
+    const text = value == null ? "" : String(value);
+    if (!text.trim()) return null;
+    const body = {
+      headline: "text-4xl font-semibold leading-tight tracking-tight text-foreground",
+      prose: "text-2xl leading-relaxed text-foreground",
+      // A scripture is quoted material and reads as such — the rule carries that, so the
+      // words themselves need no quotation marks added by the author.
+      quote: "border-l-4 border-primary/60 pl-6 text-2xl italic leading-relaxed text-foreground",
+      caption: "text-xl leading-relaxed text-muted-foreground",
+      // A transcript grows all lesson; cap it and let it scroll rather than pushing the
+      // slide off the screen it is supposed to be supporting.
+      log: "max-h-[32vh] overflow-y-auto whitespace-pre-wrap text-base leading-relaxed text-muted-foreground",
+    }[display] ?? "text-2xl leading-relaxed text-foreground";
+    return (
+      <div className="space-y-2">
+        {label ? (
+          <p className="text-xs font-medium uppercase tracking-widest text-muted-foreground">{label}</p>
+        ) : null}
+        <div className={body}>{text}</div>
+      </div>
     );
   }
 

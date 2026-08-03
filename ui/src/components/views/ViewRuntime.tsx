@@ -133,12 +133,13 @@ export function ViewRuntime({ id, kiosk = false, token }: ViewRuntimeProps) {
       // (`?record_id=`), else no record — an ad-hoc "run now". The run endpoint
       // needs a CRUD operation ("update" is the default); button `inputs` ride
       // along as `after` for workflows that reference them.
-      // `record_id=me` is a RENDER-time sentinel (the server binds the view to the
-      // caller's own record by email); the run endpoint only accepts a UUID, so we
-      // never forward the sentinel. Instead we use the id the render RESOLVED it to
-      // (`render.record_id`) so an entity-triggered button on a "me" view still runs
-      // against the caller's own record; a manual workflow ignores record_id anyway.
-      const pageRecordId = recordId === "me" ? (render?.record_id ?? null) : recordId;
+      // `me` and `latest` are RENDER-time sentinels (the server binds the view to the
+      // caller's own record, or to the newest one); the run endpoint only accepts a
+      // UUID, so we never forward either. Instead we use the id the render RESOLVED it
+      // to (`render.record_id`) so an entity-triggered button on such a view still runs
+      // against the right record; a manual workflow ignores record_id anyway.
+      const isSentinel = recordId === "me" || recordId === "latest";
+      const pageRecordId = isSentinel ? (render?.record_id ?? null) : recordId;
       const target = rowRecordId ?? pageRecordId ?? null;
       // Pass the button values as BOTH `after` (entity-triggered workflows that
       // reference after.*) and `inputs` (manual-trigger workflows whose declared
@@ -180,7 +181,9 @@ export function ViewRuntime({ id, kiosk = false, token }: ViewRuntimeProps) {
             </p>
           </div>
         ) : null}
-        <FormRenderer render={render} mode="fill" onRunWorkflow={handleRunWorkflow} />
+        <div className={KIOSK_PADDING[render.config.padding ?? "none"]}>
+          <FormRenderer render={render} mode="fill" onRunWorkflow={handleRunWorkflow} />
+        </div>
       </div>
     );
   }
@@ -216,6 +219,17 @@ export function ViewRuntime({ id, kiosk = false, token }: ViewRuntimeProps) {
     </div>
   );
 }
+
+/** Inset for the element tree on the chrome-free routes. Full-bleed is the default
+ * because a control surface meant to fill a screen (a crew station, a puzzle pad) was
+ * designed against the edges; a page of prose needs the opposite, or it is typeset hard
+ * against the bezel with nowhere for the eye to rest. `max-w` matters as much as the
+ * inset: text running the full width of a wall display is what actually hurts to read. */
+const KIOSK_PADDING: Record<"none" | "comfortable" | "spacious", string> = {
+  none: "",
+  comfortable: "mx-auto max-w-5xl px-8 py-10",
+  spacious: "mx-auto max-w-4xl px-12 py-16",
+};
 
 /** The only chrome a kiosk keeps: a way back into the app and a browser-fullscreen
  * toggle. Deliberately faint and in the corner — visible to an adult who goes
