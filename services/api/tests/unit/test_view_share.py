@@ -117,6 +117,57 @@ def test_a_disabled_workflow_is_forbidden_not_missing():
     assert _ERROR_STATUS[FormNotFoundError] == 404
 
 
+class _BoundView:
+    """Just the columns the record resolution reads."""
+
+    def __init__(self, *, follow, pinned=None, entity=None, org=None):
+        self.public_record_follow = follow
+        self.public_record_id = pinned
+        self.entity_definition_id = entity
+        self.org_id = org or uuid.uuid4()
+
+
+def _service_resolving(monkeypatch, resolved):
+    """A PublicViewService whose 'newest record' lookup is stubbed to `resolved`."""
+    from api.services import view_share as mod
+
+    async def _fake(session, org_id, entity_definition_id):
+        return resolved
+
+    monkeypatch.setattr(mod, "resolve_latest_record_id", _fake)
+    return mod.PublicViewService(session=None)
+
+
+@pytest.mark.asyncio
+async def test_pinned_share_ignores_newer_records(monkeypatch):
+    """A pinned link must keep meaning the row it was made for. If a newer record
+    could pull it along, every existing share would silently change what it points
+    at the first time anyone added a record."""
+    pinned, newer = uuid.uuid4(), uuid.uuid4()
+    svc = _service_resolving(monkeypatch, newer)
+    view = _BoundView(follow=False, pinned=pinned, entity=uuid.uuid4())
+    assert await svc._record_id(view) == pinned
+
+
+@pytest.mark.asyncio
+async def test_follow_share_tracks_the_newest_record(monkeypatch):
+    """The whole point: a class quiz link made during one lesson has to render the
+    NEXT lesson's session, because starting a lesson creates a new row."""
+    stale, current = uuid.uuid4(), uuid.uuid4()
+    svc = _service_resolving(monkeypatch, current)
+    # A stale id left over from a previous pinned enable must not win.
+    view = _BoundView(follow=True, pinned=stale, entity=uuid.uuid4())
+    assert await svc._record_id(view) == current
+
+
+@pytest.mark.asyncio
+async def test_follow_on_a_standalone_view_binds_nothing(monkeypatch):
+    """Follow needs an entity to follow. A standalone view renders unbound anyway,
+    so this is a no-op rather than an error the visitor would see."""
+    svc = _service_resolving(monkeypatch, uuid.uuid4())
+    assert await svc._record_id(_BoundView(follow=True, entity=None)) is None
+
+
 def test_sharing_is_off_without_a_token():
     assert share_is_live(_View(token=None)) is False
 

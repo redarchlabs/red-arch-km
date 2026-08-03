@@ -12,8 +12,14 @@ The security model, in full:
 * **The token is the credential.** 32 bytes of entropy, shown once, stored only as
   a SHA-256 hash — a database read cannot recover a working link. Anyone holding
   the link has the access, so it is shared like a door key, not a password.
-* **The record is pinned.** An anonymous render resolves the record captured when
-  sharing was enabled. A token cannot be pointed at another row.
+* **The record is fixed by the server.** An anonymous render resolves either the
+  record captured when sharing was enabled, or — in ``public_record_follow`` mode
+  — the entity's newest record, recomputed per request. Which record is decided
+  from the view's own row either way; nothing is read from the request, so a token
+  cannot be pointed at another row. Follow mode exists because a page about
+  "whatever is happening now" (a class quiz, where each lesson creates a new
+  session) would otherwise go stale the moment the next one starts, and fail by
+  rendering a dead row's empty fields — indistinguishable from a broken page.
 * **Workflows are bounded by the page.** The only workflows an anonymous caller
   may start are the ones the view's own element tree references. That set is
   derived from the config at request time, so it cannot drift: remove a button
@@ -47,6 +53,7 @@ from api.schemas.workflow import ManualRunRequest, ManualRunResult
 from api.services import form_token
 from api.services.form_layout import collect_workflow_ids
 from api.services.form_service import FormNotFoundError, FormValidationError
+from api.services.self_record import resolve_latest_record_id
 from api.services.view_service import ViewService
 
 # Elements that fetch from authenticated endpoints of their own accord. They render
@@ -112,17 +119,26 @@ class ViewShareAdminService:
         *,
         record_id: uuid.UUID | None,
         expires_at: datetime | None,
+        record_follow: bool = False,
     ) -> tuple[View, str]:
         """Turn sharing on (or rotate an existing link) and return the raw token.
 
         Rotating is the same call: a fresh token replaces the old one, which stops
         working immediately. That is the recovery path for a link that has been
         shared too widely.
+
+        ``record_follow`` chooses which record the link is about for its whole life:
+        a fixed ``record_id`` for a page about one thing, or the entity's newest
+        record per request for a page about whatever is happening now. They are
+        mutually exclusive — storing both would leave a stale id sitting behind a
+        link that ignores it, which is exactly the confusion this option exists to
+        remove.
         """
         view = await self._get(view_id)
         raw, token_hash = form_token.generate_token()
         view.public_token_hash = token_hash
-        view.public_record_id = record_id
+        view.public_record_follow = record_follow
+        view.public_record_id = None if record_follow else record_id
         view.public_expires_at = expires_at
         view.public_enabled_at = datetime.now(UTC)
         await self._session.flush()
@@ -132,6 +148,7 @@ class ViewShareAdminService:
         view = await self._get(view_id)
         view.public_token_hash = None
         view.public_record_id = None
+        view.public_record_follow = False
         view.public_expires_at = None
         view.public_enabled_at = None
         await self._session.flush()
@@ -160,11 +177,27 @@ class PublicViewService:
         await db_scope.enter_tenant(self._session, view.org_id)
         return view
 
+    async def _record_id(self, view: View) -> uuid.UUID | None:
+        """Which record this link is about, right now.
+
+        Either the id captured at enable time, or — in follow mode — the entity's
+        newest record resolved fresh on every request. Both are decided here on the
+        server from the view's own row; neither reads anything from the caller, so
+        the token still cannot be walked onto a record of the sharer's choosing.
+        """
+        if not view.public_record_follow:
+            return view.public_record_id
+        if view.entity_definition_id is None:
+            # Follow means nothing without an entity to follow. A standalone view
+            # renders unbound anyway, so this is not an error — just no record.
+            return None
+        return await resolve_latest_record_id(self._session, view.org_id, view.entity_definition_id)
+
     async def render(self, raw_token: str) -> FormRenderRead:
         view = await self._resolve(raw_token)
-        # The pinned record only — `record_id` is never taken from the request, so
+        # The resolved record only — `record_id` is never taken from the request, so
         # the link cannot be walked onto another row.
-        render = await ViewService(self._session, view.org_id).render(view.id, view.public_record_id)
+        render = await ViewService(self._session, view.org_id).render(view.id, await self._record_id(view))
         return _trim_catalog(render)
 
     async def run_workflow(
@@ -200,7 +233,11 @@ class PublicViewService:
 
         request = ManualRunRequest(
             operation="update",
-            record_id=view.public_record_id,
+            # Resolved the same way the render was, so a button acts on the record the
+            # page is showing. Pinned mode is unchanged; follow mode means the join
+            # button on a class quiz targets THIS lesson rather than the one that
+            # happened to be open when the link was made.
+            record_id=await self._record_id(view),
             after=after or {},
             inputs=inputs or {},
         )
