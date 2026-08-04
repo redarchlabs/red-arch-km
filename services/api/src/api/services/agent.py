@@ -2738,6 +2738,28 @@ class AgentService:
                     ),
                     "note": "Use size 'large'/'xl' for a view presented on a tablet or wall display.",
                 },
+                "countdown": {
+                    "required": ["type"],
+                    "optional": [
+                        "label",
+                        "until_field",
+                        "from_field",
+                        "seconds",
+                        "seconds_field",
+                        "done_text",
+                        "show_bar",
+                        "width",
+                    ],
+                    "use": (
+                        "A live 'time left' clock over a deadline carried on the RECORD. Usual "
+                        "pairing: from_field (a timestamp a workflow stamps with {{ now }} when it "
+                        "opens the question) + seconds (or seconds_field to take the duration from "
+                        "the record). until_field is an absolute deadline and wins over the pair. "
+                        "With no deadline resolvable it renders NOTHING, so it can sit on a page "
+                        "between questions with no visible_when gate. Display-only — it never closes "
+                        "anything; the workflow does."
+                    ),
+                },
                 "puzzle_pad": {
                     "required": ["type", "kind (choices|keypad|sequence|wires|sort|color)"],
                     "optional": [
@@ -2748,6 +2770,8 @@ class AgentService:
                         "prompt_field",
                         "hint",
                         "hint_field",
+                        "answer_field",
+                        "lock_after_submit",
                         "on_complete",
                         "submit_label",
                         "show_hint",
@@ -2781,6 +2805,15 @@ class AgentService:
                         "an answer field the view does NOT name. sequence/wires/sort/color must be "
                         "sent their target to be drawable, so the pad grades locally and reports "
                         "`solved`; trust that like a player's word, not an exam result."
+                    ),
+                    "reveal": (
+                        "The tapped tile stays marked, so the device goes on showing what it sent. "
+                        "answer_field names a record field the pad reads ONLY to reveal the answer "
+                        "afterwards: it must be EMPTY while answering is open and written by the "
+                        "workflow that closes the question (a denormalised 'revealed answer' column). "
+                        "Pointing it at a field that always holds the answer leaks it to every device "
+                        "the moment the pad is drawn. lock_after_submit keeps the pad locked after "
+                        "one tap until the puzzle changes."
                     ),
                     "on_complete": (
                         "{kind:'run_workflow', workflow_id, inputs:{<name>:<expression>}} where "

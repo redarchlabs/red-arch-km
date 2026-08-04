@@ -641,6 +641,69 @@ def test_puzzle_pad_declares_the_fields_it_reads(ids, fields_by_entity, rels):
     assert b.root.write_slugs == set()
 
 
+def test_puzzle_pad_declares_its_reveal_field(ids, fields_by_entity, rels):
+    """The answer field is read like any other source — it must be fetched, or the
+    reveal never arrives on the device. Reads only; the pad writes nothing."""
+    fields_by_entity[ids["root"]] |= {"revealed_answer"}
+    cfg = FormConfig.model_validate(
+        {
+            "version": 2,
+            "elements": [
+                {
+                    "type": "puzzle_pad",
+                    "kind": "choices",
+                    "spec": {"options": [{"value": "A"}, {"value": "B"}]},
+                    "answer_field": "revealed_answer",
+                    "lock_after_submit": True,
+                }
+            ],
+        }
+    )
+    fl.validate(cfg.elements, ids["root"], fields_by_entity, rels)  # no raise
+    b = fl.flatten(cfg.elements, rels)
+    assert b.root.display_slugs == ["revealed_answer"]
+    assert b.root.write_slugs == set()
+
+
+def test_countdown_declares_its_deadline_fields(ids, fields_by_entity, rels):
+    """A clock with nothing fetched to count against would render as no clock at all."""
+    fields_by_entity[ids["root"]] |= {"opened_at", "allowed"}
+    cfg = FormConfig.model_validate(
+        {
+            "version": 2,
+            "elements": [
+                {
+                    "type": "countdown",
+                    "label": "Time left",
+                    "from_field": "opened_at",
+                    "seconds_field": "allowed",
+                    "seconds": 20,
+                }
+            ],
+        }
+    )
+    fl.validate(cfg.elements, ids["root"], fields_by_entity, rels)  # no raise
+    b = fl.flatten(cfg.elements, rels)
+    assert set(b.root.display_slugs) == {"opened_at", "allowed"}
+    assert b.root.write_slugs == set()
+
+
+def test_countdown_rejects_an_unknown_field(ids, fields_by_entity, rels):
+    """A typo'd slug fails at save time, not as a clock that never appears."""
+    cfg = FormConfig.model_validate(
+        {"version": 2, "elements": [{"type": "countdown", "until_field": "nope"}]}
+    )
+    with pytest.raises(LayoutError):
+        fl.validate(cfg.elements, ids["root"], fields_by_entity, rels)
+
+
+def test_countdown_with_no_fields_binds_nothing(ids, fields_by_entity, rels):
+    """Valid in a standalone view: an unbound countdown simply draws nothing."""
+    cfg = FormConfig.model_validate({"version": 2, "elements": [{"type": "countdown", "seconds": 20}]})
+    fl.validate(cfg.elements, ids["root"], fields_by_entity, rels)  # no raise
+    assert fl.flatten(cfg.elements, rels).root.display_slugs == []
+
+
 def test_puzzle_pad_with_an_inline_spec_binds_nothing(ids, fields_by_entity, rels):
     """A fixed puzzle names no fields, so it is valid in a standalone view."""
     cfg = FormConfig.model_validate(

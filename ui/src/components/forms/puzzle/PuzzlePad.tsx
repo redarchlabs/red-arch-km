@@ -66,9 +66,16 @@ export function PuzzlePad({ el, values, disabled, onComplete }: PuzzlePadNodePro
   const prompt = text(el.prompt_field, el.prompt);
   const hint = text(el.hint_field, el.hint);
   const submitLabel = el.submit_label?.trim() || "Transmit";
+  // The answer, if the record is currently telling us — blank means "not yet",
+  // which is the state the field must be in for as long as the question is live.
+  const correct = text(el.answer_field, null) || null;
 
   const [showHint, setShowHint] = useState(false);
   const [sent, setSent] = useState(false);
+  // What this person sent. Held here rather than in the kind-specific pad so it
+  // survives that pad's own resets, and so it clears on exactly the same signal
+  // as everything else: a new puzzle.
+  const [picked, setPicked] = useState<string | null>(null);
   const attemptsRef = useRef(0);
   const startedAtRef = useRef(Date.now());
   const lockRef = useRef<number | null>(null);
@@ -82,6 +89,7 @@ export function PuzzlePad({ el, values, disabled, onComplete }: PuzzlePadNodePro
     startedAtRef.current = Date.now();
     setShowHint(false);
     setSent(false);
+    setPicked(null);
   }, [puzzleKey]);
 
   useEffect(
@@ -91,10 +99,15 @@ export function PuzzlePad({ el, values, disabled, onComplete }: PuzzlePadNodePro
     [],
   );
 
+  // Locked for good: either the author asked for one answer only, or the answer is
+  // now on screen and there is nothing left to decide.
+  const settled = (el.lock_after_submit === true && picked != null) || correct != null;
+
   const submit = ({ solved, answer }: { solved: boolean | null; answer: string }) => {
-    if (disabled || sent) return;
+    if (disabled || sent || settled) return;
     attemptsRef.current += 1;
     setSent(true);
+    setPicked(answer);
     lockRef.current = window.setTimeout(() => setSent(false), SENT_LOCK_MS);
     onComplete({
       solved,
@@ -104,7 +117,7 @@ export function PuzzlePad({ el, values, disabled, onComplete }: PuzzlePadNodePro
     });
   };
 
-  const padProps = { disabled: disabled || sent, submitLabel, submit };
+  const padProps = { disabled: disabled || sent || settled, submitLabel, submit, picked, correct };
 
   let body;
   if (!parsed.ok) {
@@ -148,6 +161,33 @@ export function PuzzlePad({ el, values, disabled, onComplete }: PuzzlePadNodePro
       ) : null}
 
       {body}
+
+      {picked != null || correct != null ? (
+        // Says in words what the tiles say in colour. Worth the duplication: this
+        // is read on a phone at arm's length, and "you picked B, the answer was C"
+        // is the whole point of the screen once answering has closed.
+        <p
+          className={`rounded-2xl px-4 py-3 text-center text-lg font-semibold ${
+            correct == null
+              ? "bg-primary/10 text-primary"
+              : picked === correct
+                ? "bg-green-500/10 text-green-700 dark:text-green-400"
+                : "bg-destructive/10 text-destructive"
+          }`}
+        >
+          {correct == null ? (
+            <>You answered {picked}</>
+          ) : picked === correct ? (
+            <>Correct — the answer was {correct}</>
+          ) : picked == null ? (
+            <>The answer was {correct}</>
+          ) : (
+            <>
+              You answered {picked} — the answer was {correct}
+            </>
+          )}
+        </p>
+      ) : null}
 
       {hint && el.show_hint !== false ? (
         <div className="text-center">
