@@ -193,7 +193,10 @@ async def enable_view_share(
     """
     try:
         view, raw = await ViewShareAdminService(session, ctx.org_id).enable(
-            view_id, record_id=body.record_id, expires_at=body.expires_at
+            view_id,
+            record_id=body.record_id,
+            expires_at=body.expires_at,
+            record_follow=body.record_follow,
         )
     except FormError as exc:
         _raise_http(exc)
@@ -203,6 +206,7 @@ async def enable_view_share(
         token=raw,
         expires_at=view.public_expires_at,
         record_id=view.public_record_id,
+        record_follow=view.public_record_follow,
         unsupported_elements=unsupported_elements(view.config or {}),
     )
 

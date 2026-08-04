@@ -53,13 +53,17 @@ export function PadTile({
   children: ReactNode;
   onClick?: () => void;
   disabled?: boolean;
-  state?: "idle" | "selected" | "done" | "muted";
+  state?: "idle" | "selected" | "done" | "wrong" | "muted";
   className?: string;
 } & Omit<React.HTMLAttributes<HTMLButtonElement>, "children" | "onClick">) {
   const states: Record<string, string> = {
     idle: "border-2 border-border bg-card hover:border-primary/60 hover:bg-accent",
     selected: "border-2 border-primary bg-primary/10 ring-4 ring-primary/20",
     done: "border-2 border-green-500 bg-green-500/10",
+    // Paired with `done` for showing a marked answer. Never the only signal that a
+    // tile is wrong — the icon beside it says so too, because red-vs-green alone is
+    // exactly the distinction the most common colour blindness erases.
+    wrong: "border-2 border-destructive bg-destructive/10",
     muted: "border-2 border-dashed border-border bg-muted/40 text-muted-foreground",
   };
   return (

@@ -273,6 +273,34 @@ they report what was picked and a workflow grades it, so keep the answer field
 out of the view. The other kinds have to be sent their target in order to be
 drawn at all, so the pad grades those itself; treat \`solved\` as a player's word,
 which is right for a game and wrong for an exam.
+
+**Showing the answer afterwards.** The tile someone taps stays marked as theirs,
+so a phone goes on showing what it sent. Point **Reveal answer from field** at a
+field that is *empty while answering is open* and filled once it closes — the
+workflow that closes the question writes it — and the pad then marks the right
+answer, marks a wrong pick, and says both in words. Never point it at a field
+that always holds the answer: that hands it to every device the moment the
+puzzle is drawn. **One answer only** locks the pad after the first tap, until
+the puzzle itself changes.
+`,
+  ),
+  countdown: topic(
+    "Countdown element",
+    `
+A live **time left** clock, counting down to a deadline that lives on the record.
+
+- **Started at (field)** + **Seconds allowed** — the usual pairing: a workflow
+  stamps the start (\`{{ now }}\`) when it opens the question, and the element adds
+  the duration. **Seconds from field** takes that duration from the record instead,
+  so each question can have its own.
+- **Deadline (field)** — an absolute timestamp to count down *to*, if the record
+  already carries one. It wins over the pair above.
+- **When time is up** — what replaces the number at zero.
+
+With no deadline on the record it draws **nothing**, so it can sit on a page
+between questions without needing a *visible when* gate. It is display-only: it
+never closes anything, it only shows how long is left, so a device with a wonky
+clock costs you a cosmetic glitch and nothing more.
 `,
   ),
   form_ref: topic(
