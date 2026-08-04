@@ -96,7 +96,15 @@ class Workflow(Base, UUIDMixin, TimestampMixin, LineageMixin):
     entity_definition_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("entity_definitions.id", ondelete="CASCADE"), index=True, nullable=True
     )
-    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Created ON. This defaulted to False, and the result was a flag nobody set and
+    # only one code path enforced: authors built workflows through the designer and
+    # the agent tools, ran them happily from a console (which never checks it), and
+    # then discovered months later that the one caller which DOES check — an
+    # anonymous share link — had been rejecting them all along. A flag whose default
+    # contradicts every author's intent is a trap, not a safety feature. Turning a
+    # workflow off stays available and now means something; it is just no longer
+    # where everyone starts.
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     # When true, an entity-change trigger runs INLINE in the request that mutated
     # the record (right after the write) instead of waiting for the beat sweep —
     # for latency-sensitive reactions (e.g. a robot announcing a state change).

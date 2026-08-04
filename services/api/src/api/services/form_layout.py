@@ -60,13 +60,21 @@ def _puzzle_pad_slugs(el: Any) -> list[str]:
     text in a puzzle (``{1}``, ``{Red}``) is not mistaken for a binding and
     rejected. The client fills tokens with the identical pattern.
     """
-    names = ("kind_field", "spec_field", "prompt_field", "hint_field")
+    names = ("kind_field", "spec_field", "prompt_field", "hint_field", "answer_field")
     out = [slug for slug in (getattr(el, name, None) for name in names) if isinstance(slug, str) and slug]
     spec = getattr(el, "spec", None)
     if spec:
         out.extend(_SPEC_TOKEN_RE.findall(json.dumps(spec)))
     # Preserve order, drop duplicates — a slug named twice must be fetched once.
     return list(dict.fromkeys(out))
+
+
+def _countdown_slugs(el: Any) -> list[str]:
+    """Record fields a ``countdown`` reads its deadline from — the clock has nothing
+    to count against unless these are fetched."""
+    names = ("until_field", "from_field", "seconds_field")
+    slugs = (getattr(el, name, None) for name in names)
+    return list(dict.fromkeys(s for s in slugs if isinstance(s, str) and s))
 
 
 def _expr_var_slugs(expr: Any) -> list[str]:
@@ -263,6 +271,9 @@ def _validate_element(
     elif etype == "puzzle_pad":
         for slug in _puzzle_pad_slugs(el):
             _require_field(slug, ctx, fields_by_entity)
+    elif etype == "countdown":
+        for slug in _countdown_slugs(el):
+            _require_field(slug, ctx, fields_by_entity)
     elif etype == "qr_code":
         # The url may carry `{slug}` placeholders filled from the record, so a
         # typo'd slug fails here rather than encoding a broken link into a QR
@@ -451,6 +462,10 @@ def flatten(elements: list[Any], rels: dict[uuid.UUID, RelInfo]) -> Bindings:
             # Display-only, like progress: declare the fields the pad reads its
             # kind/spec/prompt/hint from so build_render fetches them.
             for slug in _puzzle_pad_slugs(el):
+                declare(slug)
+        elif etype == "countdown":
+            # Display-only; declare the deadline fields so build_render fetches them.
+            for slug in _countdown_slugs(el):
                 declare(slug)
         elif etype == "qr_code":
             # Declare the url's `{slug}` tokens so they are fetched — an unfilled

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { isLoopbackUrl, resolveShareUrl } from "./shareUrl";
+import { isLoopbackUrl, resolveShareUrl, shareTarget } from "./shareUrl";
 
 describe("resolveShareUrl", () => {
   it("makes a relative view link absolute against the page's own origin", () => {
@@ -42,6 +42,32 @@ describe("resolveShareUrl", () => {
 
   it("falls back to the raw url when there is no origin to resolve against", () => {
     expect(resolveShareUrl("/views/abc", "")).toBe("/views/abc");
+  });
+});
+
+describe("shareTarget", () => {
+  it("fills record tokens and then makes the result absolute", () => {
+    // The two steps a QR code and a copy_link button both need, in that order:
+    // a template is useless absolute, and a filled relative url is useless off-device.
+    expect(
+      shareTarget("/views/{view_slug}/kiosk?record_id={id}", { view_slug: "lesson", id: "42" }, "http://192.168.0.30:3000"),
+    ).toBe("http://192.168.0.30:3000/views/lesson/kiosk?record_id=42");
+  });
+
+  it("prefers the configured host, so a console on localhost still copies a reachable link", () => {
+    expect(shareTarget("/s/{token}", { token: "abc" }, "http://localhost:3000", "http://192.168.0.30:3000")).toBe(
+      "http://192.168.0.30:3000/s/abc",
+    );
+  });
+
+  it("neutralises a dangerous scheme before it can reach the clipboard", () => {
+    expect(shareTarget("javascript:alert(1)", {}, "http://192.168.0.30:3000")).toBe(
+      "http://192.168.0.30:3000/#",
+    );
+  });
+
+  it("returns empty for an empty template, so callers can say 'no link' instead of copying the origin", () => {
+    expect(shareTarget("", {}, "http://192.168.0.30:3000")).toBe("");
   });
 });
 

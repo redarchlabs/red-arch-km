@@ -156,6 +156,23 @@ export interface ProgressElement extends ElementBase {
   width?: FieldWidth | null;
 }
 
+/** A live "time left" clock, counting down to a deadline that lives on the record.
+ * The deadline is either absolute (`until_field`) or a start plus a duration
+ * (`from_field` + `seconds`/`seconds_field`). Display-only: it reads the record and
+ * ticks in the browser, and nothing about it decides when time is actually up —
+ * that is the workflow's business. See the Python schema for the clock-skew note. */
+export interface CountdownElement extends ElementBase {
+  type: "countdown";
+  label?: string | null;
+  until_field?: string | null;
+  from_field?: string | null;
+  seconds?: number | null;
+  seconds_field?: string | null;
+  done_text?: string | null;
+  show_bar?: boolean;
+  width?: FieldWidth | null;
+}
+
 /** One slide in a deck: optional title, Markdown `body`, optional image, optional
  * video. A direct `video_url` (mp4/webm) with `require_video` (default true) blocks
  * advancing past the slide until the learner watches it through. */
@@ -318,6 +335,15 @@ export type RunWorkflowAction = {
   success_message?: string | null;
 };
 export type LinkAction = { kind: "link"; href: string; new_tab?: boolean };
+/** Copy the link rather than follow it. A relative `href` is resolved absolute
+ * against `host` (else the page's origin) first — a pasted `/views/…` is useless
+ * anywhere but this browser. Same `{token}` fill as `LinkAction`. */
+export type CopyLinkAction = {
+  kind: "copy_link";
+  href: string;
+  host?: string | null;
+  success_message?: string | null;
+};
 /** POST/GET to a saved Connection server-side; `body` templated from form values. */
 export type CallConnectionAction = {
   kind: "call_connection";
@@ -332,6 +358,7 @@ export type ButtonAction =
   | SubmitAction
   | RunWorkflowAction
   | LinkAction
+  | CopyLinkAction
   | CallConnectionAction;
 
 export interface ButtonElement extends ElementBase {
@@ -360,6 +387,12 @@ export interface PuzzlePadElement extends ElementBase {
   prompt_field?: string | null;
   hint?: string | null;
   hint_field?: string | null;
+  /** Record field holding the correct value, read only to REVEAL it afterwards.
+   * Empty while the question is live; whatever writes the record fills it once
+   * answering has closed. See the Python schema for why that ordering matters. */
+  answer_field?: string | null;
+  /** Keep the pad locked after one submission, until the puzzle itself changes. */
+  lock_after_submit?: boolean;
   on_complete?: RunWorkflowAction | null;
   submit_label?: string;
   show_hint?: boolean;
@@ -482,6 +515,7 @@ export type FormElement =
   | ImageElement
   | QrCodeElement
   | ProgressElement
+  | CountdownElement
   | SlidesElement
   | ReportElement
   | RecordListElement

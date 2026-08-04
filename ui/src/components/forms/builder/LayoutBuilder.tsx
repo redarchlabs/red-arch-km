@@ -10,6 +10,7 @@ import { listReports } from "@/lib/api/reports";
 import type {
   ButtonElement,
   CalculatedElement,
+  CountdownElement,
   FieldElement,
   FormElement,
   LabelElement,
@@ -165,6 +166,8 @@ function ElementEditor({
       return <ImageEditor el={el} onChange={onChange} />;
     case "qr_code":
       return <QrCodeEditor el={el} onChange={onChange} />;
+    case "countdown":
+      return <CountdownEditor el={el} onChange={onChange} />;
     case "calculated":
       return <CalculatedEditor el={el} fields={fieldsOf(ctx, entityId)} onChange={onChange} />;
     case "input":
@@ -791,6 +794,68 @@ function ImageEditor({ el, onChange }: { el: ImageEl; onChange: (el: FormElement
   );
 }
 
+function CountdownEditor({ el, onChange }: { el: CountdownElement; onChange: (el: FormElement) => void }) {
+  return (
+    <div className="space-y-1.5">
+      <Row label="Label">
+        <input
+          className={input}
+          placeholder="Time left"
+          value={el.label ?? ""}
+          onChange={(e) => onChange({ ...el, label: e.target.value || null })}
+        />
+      </Row>
+      <Row label="Started at (field)">
+        <input
+          className={input}
+          placeholder="e.g. question_opened_at"
+          value={el.from_field ?? ""}
+          onChange={(e) => onChange({ ...el, from_field: e.target.value || null })}
+        />
+      </Row>
+      <Row label="Seconds allowed">
+        <input
+          className={input}
+          type="number"
+          value={el.seconds ?? ""}
+          onChange={(e) => onChange({ ...el, seconds: Number(e.target.value) || null })}
+        />
+      </Row>
+      <Row label="Seconds from field">
+        <input
+          className={input}
+          placeholder="(optional) overrides the number above"
+          value={el.seconds_field ?? ""}
+          onChange={(e) => onChange({ ...el, seconds_field: e.target.value || null })}
+        />
+      </Row>
+      <Row label="Deadline (field)">
+        <input
+          className={input}
+          placeholder="(optional) a timestamp to count down TO"
+          value={el.until_field ?? ""}
+          onChange={(e) => onChange({ ...el, until_field: e.target.value || null })}
+        />
+      </Row>
+      <Row label="When time is up">
+        <input
+          className={input}
+          placeholder="Time's up"
+          value={el.done_text ?? ""}
+          onChange={(e) => onChange({ ...el, done_text: e.target.value || null })}
+        />
+      </Row>
+      <Row label="Show bar">
+        <input
+          type="checkbox"
+          checked={el.show_bar !== false}
+          onChange={(e) => onChange({ ...el, show_bar: e.target.checked })}
+        />
+      </Row>
+    </div>
+  );
+}
+
 function QrCodeEditor({ el, onChange }: { el: QrCodeElement; onChange: (el: FormElement) => void }) {
   return (
     <div className="space-y-1.5">
@@ -1323,6 +1388,7 @@ function ButtonEditor({ el, onChange }: { el: ButtonElement; onChange: (el: Butt
               onChange({ ...el, action: { kind: "run_workflow", workflow_id: "", inputs: {} } });
             else if (kind === "call_connection")
               onChange({ ...el, action: { kind: "call_connection", connection: "", method: "POST", path: "", body: {} } });
+            else if (kind === "copy_link") onChange({ ...el, action: { kind: "copy_link", href: "" } });
             else onChange({ ...el, action: { kind: "link", href: "" } });
           }}
         >
@@ -1330,6 +1396,7 @@ function ButtonEditor({ el, onChange }: { el: ButtonElement; onChange: (el: Butt
           <option value="run_workflow">Run workflow</option>
           <option value="call_connection">Call connection</option>
           <option value="link">Link / navigate</option>
+          <option value="copy_link">Copy link to clipboard</option>
         </select>
       </Row>
       {el.action.kind === "run_workflow" ? (
@@ -1346,13 +1413,56 @@ function ButtonEditor({ el, onChange }: { el: ButtonElement; onChange: (el: Butt
       ) : null}
       {el.action.kind === "call_connection" ? <CallConnectionFields el={el} onChange={onChange} /> : null}
       {el.action.kind === "link" ? (
-        <Row label="Href">
-          <input
-            className={input}
-            value={el.action.href}
-            onChange={(e) => onChange({ ...el, action: { kind: "link", href: e.target.value } })}
-          />
-        </Row>
+        <>
+          <Row label="Href">
+            <input
+              className={input}
+              value={el.action.href}
+              onChange={(e) => {
+                const action = el.action.kind === "link" ? el.action : { kind: "link" as const, href: "" };
+                onChange({ ...el, action: { ...action, href: e.target.value } });
+              }}
+            />
+          </Row>
+          <Row label="New window">
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={el.action.new_tab ?? false}
+                onChange={(e) => {
+                  const action = el.action.kind === "link" ? el.action : { kind: "link" as const, href: "" };
+                  onChange({ ...el, action: { ...action, new_tab: e.target.checked } });
+                }}
+              />
+              <span className="text-muted-foreground">Open in a new window/tab instead of leaving this page</span>
+            </label>
+          </Row>
+        </>
+      ) : null}
+      {el.action.kind === "copy_link" ? (
+        <>
+          <Row label="Href">
+            <input
+              className={input}
+              value={el.action.href}
+              onChange={(e) => {
+                const action = el.action.kind === "copy_link" ? el.action : { kind: "copy_link" as const, href: "" };
+                onChange({ ...el, action: { ...action, href: e.target.value } });
+              }}
+            />
+          </Row>
+          <Row label="Host">
+            <input
+              className={input}
+              placeholder="http://192.168.0.30:3000 — only if this page runs on localhost"
+              value={el.action.host ?? ""}
+              onChange={(e) => {
+                const action = el.action.kind === "copy_link" ? el.action : { kind: "copy_link" as const, href: "" };
+                onChange({ ...el, action: { ...action, host: e.target.value || null } });
+              }}
+            />
+          </Row>
+        </>
       ) : null}
     </div>
   );
@@ -1494,6 +1604,21 @@ function PuzzlePadEditor({
           placeholder="(optional) e.g. hint"
           value={el.hint_field ?? ""}
           onChange={(e) => onChange({ ...el, hint_field: e.target.value || null })}
+        />
+      </Row>
+      <Row label="Reveal answer from field">
+        <input
+          className={input}
+          placeholder="(optional) field holding the answer, filled AFTER answering closes"
+          value={el.answer_field ?? ""}
+          onChange={(e) => onChange({ ...el, answer_field: e.target.value || null })}
+        />
+      </Row>
+      <Row label="One answer only">
+        <input
+          type="checkbox"
+          checked={el.lock_after_submit === true}
+          onChange={(e) => onChange({ ...el, lock_after_submit: e.target.checked })}
         />
       </Row>
       <Row label="Send label">

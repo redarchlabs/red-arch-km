@@ -469,6 +469,64 @@ def test_button_link_href_scheme_guarded():
         )
 
 
+def test_button_copy_link_href_and_host_scheme_guarded():
+    """A copy_link button takes the same templated relative href as a link button, plus an
+    optional host — and both are scheme-guarded, because the copied string is handed to a
+    person who will paste it somewhere that trusts it."""
+    FormConfig.model_validate(
+        {
+            "version": 2,
+            "elements": [
+                {
+                    "type": "button",
+                    "label": "Copy link",
+                    "style": "secondary",
+                    "action": {
+                        "kind": "copy_link",
+                        "href": "/views/{quiz_view_slug}/kiosk?record_id={id}",
+                        "host": "http://192.168.0.30:3000",
+                        "success_message": "Link copied",
+                    },
+                }
+            ],
+        }
+    )
+    for bad in ({"href": "javascript:alert(1)"}, {"href": "/x", "host": "data:text/html,x"}):
+        with pytest.raises(ValidationError):
+            FormConfig.model_validate(
+                {
+                    "version": 2,
+                    "elements": [
+                        {
+                            "type": "button",
+                            "label": "x",
+                            "style": "primary",
+                            "action": {"kind": "copy_link", **bad},
+                        }
+                    ],
+                }
+            )
+
+
+def test_copy_link_button_grants_no_workflow_permission():
+    """A share token's allow-list is derived from the tree, so a new action kind must not
+    accidentally widen it: copy_link starts nothing and must contribute no workflow id."""
+    cfg = FormConfig.model_validate(
+        {
+            "version": 2,
+            "elements": [
+                {
+                    "type": "button",
+                    "label": "Copy link",
+                    "style": "secondary",
+                    "action": {"kind": "copy_link", "href": "/s/abc"},
+                }
+            ],
+        }
+    )
+    assert fl.collect_workflow_ids(cfg.elements) == set()
+
+
 def test_progress_element_fetches_expr_fields_without_writing(ids, fields_by_entity, rels):
     cfg = FormConfig.model_validate(
         {
@@ -581,6 +639,69 @@ def test_puzzle_pad_declares_the_fields_it_reads(ids, fields_by_entity, rels):
     b = fl.flatten(cfg.elements, rels)
     assert set(b.root.display_slugs) == {"kind", "spec", "prompt", "hint"}
     assert b.root.write_slugs == set()
+
+
+def test_puzzle_pad_declares_its_reveal_field(ids, fields_by_entity, rels):
+    """The answer field is read like any other source — it must be fetched, or the
+    reveal never arrives on the device. Reads only; the pad writes nothing."""
+    fields_by_entity[ids["root"]] |= {"revealed_answer"}
+    cfg = FormConfig.model_validate(
+        {
+            "version": 2,
+            "elements": [
+                {
+                    "type": "puzzle_pad",
+                    "kind": "choices",
+                    "spec": {"options": [{"value": "A"}, {"value": "B"}]},
+                    "answer_field": "revealed_answer",
+                    "lock_after_submit": True,
+                }
+            ],
+        }
+    )
+    fl.validate(cfg.elements, ids["root"], fields_by_entity, rels)  # no raise
+    b = fl.flatten(cfg.elements, rels)
+    assert b.root.display_slugs == ["revealed_answer"]
+    assert b.root.write_slugs == set()
+
+
+def test_countdown_declares_its_deadline_fields(ids, fields_by_entity, rels):
+    """A clock with nothing fetched to count against would render as no clock at all."""
+    fields_by_entity[ids["root"]] |= {"opened_at", "allowed"}
+    cfg = FormConfig.model_validate(
+        {
+            "version": 2,
+            "elements": [
+                {
+                    "type": "countdown",
+                    "label": "Time left",
+                    "from_field": "opened_at",
+                    "seconds_field": "allowed",
+                    "seconds": 20,
+                }
+            ],
+        }
+    )
+    fl.validate(cfg.elements, ids["root"], fields_by_entity, rels)  # no raise
+    b = fl.flatten(cfg.elements, rels)
+    assert set(b.root.display_slugs) == {"opened_at", "allowed"}
+    assert b.root.write_slugs == set()
+
+
+def test_countdown_rejects_an_unknown_field(ids, fields_by_entity, rels):
+    """A typo'd slug fails at save time, not as a clock that never appears."""
+    cfg = FormConfig.model_validate(
+        {"version": 2, "elements": [{"type": "countdown", "until_field": "nope"}]}
+    )
+    with pytest.raises(LayoutError):
+        fl.validate(cfg.elements, ids["root"], fields_by_entity, rels)
+
+
+def test_countdown_with_no_fields_binds_nothing(ids, fields_by_entity, rels):
+    """Valid in a standalone view: an unbound countdown simply draws nothing."""
+    cfg = FormConfig.model_validate({"version": 2, "elements": [{"type": "countdown", "seconds": 20}]})
+    fl.validate(cfg.elements, ids["root"], fields_by_entity, rels)  # no raise
+    assert fl.flatten(cfg.elements, rels).root.display_slugs == []
 
 
 def test_puzzle_pad_with_an_inline_spec_binds_nothing(ids, fields_by_entity, rels):

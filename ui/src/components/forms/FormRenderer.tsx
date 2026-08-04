@@ -30,11 +30,13 @@ import { ReportChart } from "@/components/reports/ReportChart";
 import { Dialog, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { buildCatalog, fieldMeta, relatedEntityId } from "@/lib/forms/catalog";
 import { fillTokens } from "@/lib/forms/href";
+import { shareTarget } from "@/lib/forms/shareUrl";
 import { evaluate } from "@/lib/forms/jsonLogic";
 import { mergeServerValues, sameValue } from "@/lib/forms/mergeValues";
 import { displayLiveValue, formatLiveValue, readJsonPointer } from "@/lib/forms/liveValue";
 import { useSpeechRecognition } from "@/lib/speech/useSpeechRecognition";
 
+import { CountdownNode } from "./CountdownNode";
 import { FieldControl } from "./FieldControl";
 import { QrCodeCard } from "./QrCodeCard";
 import { PuzzlePad } from "./puzzle/PuzzlePad";
@@ -1557,8 +1559,33 @@ export function FormRenderer({
         // Fill `{token}` placeholders from the record's values (`{id}` = the bound
         // record id) so a button can route per-record, then scheme-check the result.
         const href = fillTokens(btn.action.href, { ...values, id: render.record_id ?? "" });
-        if (btn.action.new_tab) window.open(href, "_blank");
+        // `noopener` so a link out to somewhere else can't reach back through
+        // `window.opener` and renavigate the console that opened it.
+        if (btn.action.new_tab) window.open(href, "_blank", "noopener,noreferrer");
         else window.location.href = href;
+      }
+    } else if (btn.action.kind === "copy_link") {
+      const action = btn.action;
+      // Resolved absolute, not just filled: this link is going somewhere off this
+      // browser, so `/views/…` has to become a real address first.
+      const target = shareTarget(
+        action.href,
+        { ...values, id: render.record_id ?? "" },
+        typeof window === "undefined" ? "" : window.location.origin,
+        action.host,
+      );
+      if (!target) {
+        toast.error("No link configured");
+        return;
+      }
+      try {
+        await navigator.clipboard.writeText(target);
+        toast.success(action.success_message ?? "Link copied");
+      } catch {
+        // Clipboard access is refused outside a secure context (plain http on a
+        // LAN address — exactly how these consoles run), so say what to do rather
+        // than failing silently.
+        toast.error(`Couldn't copy automatically — the link is ${target}`);
       }
     }
   };
@@ -1646,6 +1673,12 @@ export function FormRenderer({
         return <div className={spanClass(el.width)}>{CalculatedNode({ el, scope })}</div>;
       case "progress":
         return <div className={spanClass(el.width)}>{ProgressNode({ el, scope })}</div>;
+      case "countdown":
+        return (
+          <div className={spanClass(el.width)}>
+            <CountdownNode el={el} values={scope.values} />
+          </div>
+        );
       case "input":
         return (
           <div className={spanClass(el.width)}>
