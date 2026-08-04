@@ -1,5 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import os from "node:os";
+import path from "node:path";
 import { loadConfig } from "../src/config.js";
 
 const KEYS = [
@@ -53,6 +55,25 @@ test("env overrides win and trailing slashes are trimmed", () => {
       assert.equal(cfg.orgIdOverride, "org-xyz");
     },
   );
+});
+
+test("USER_DATA_DIR expands a leading ~/ but leaves other paths alone", () => {
+  const home = os.homedir();
+  withEnv({ KM2_USER_DATA_DIR: "~/.km2-mcp/profile-x" }, () => {
+    assert.equal(loadConfig().userDataDir, path.join(home, ".km2-mcp", "profile-x"));
+  });
+  withEnv({ KM2_USER_DATA_DIR: "~" }, () => {
+    assert.equal(loadConfig().userDataDir, home);
+  });
+  // Absolute and relative paths are untouched, and a ~ that is not the whole
+  // first segment is an ordinary filename character.
+  for (const p of ["/var/tmp/km2", "./profile", "/tmp/a~b"]) {
+    withEnv({ KM2_USER_DATA_DIR: p }, () => assert.equal(loadConfig().userDataDir, p));
+  }
+  // Unset still falls back to the documented default.
+  withEnv({}, () => {
+    assert.equal(loadConfig().userDataDir, path.join(home, ".km2-mcp", "profile"));
+  });
 });
 
 test("HEADLESS accepts truthy variants", () => {
