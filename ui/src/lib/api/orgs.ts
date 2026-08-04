@@ -2,27 +2,27 @@ import type { Org } from "@/types";
 
 import apiClient from "./client";
 
-/**
- * All-zero UUID sentinel understood by `PATCH /api/orgs/{id}` to CLEAR the
- * home view. Omitting `home_view_id` (or sending undefined) means "no change";
- * a real UUID sets it; this sentinel clears it.
- */
-export const NIL_UUID = "00000000-0000-0000-0000-000000000000";
-
 export interface OrgCreateInput {
   name: string;
   description?: string | null;
   use_knowledge_graph?: boolean;
 }
 
+/** Site-admin org fields. The home view lives on {@link OrgSettingsInput}. */
 export interface OrgUpdateInput {
   name?: string;
   description?: string | null;
   use_knowledge_graph?: boolean;
-  /** Real UUID sets the home view; `NIL_UUID` clears it; omit for no change. */
-  home_view_id?: string | null;
   /** Model id pins the org's LLM; empty string clears to the platform default; omit for no change. */
   default_llm_model?: string;
+}
+
+/**
+ * Org-admin-writable settings (`PATCH /api/orgs/{id}/settings`). Replacement
+ * semantics, not patch semantics: `null` clears the org's home view.
+ */
+export interface OrgSettingsInput {
+  home_view_id: string | null;
 }
 
 /** Model ids an org can be pinned to, plus the platform default. */
@@ -57,6 +57,12 @@ export async function listLlmModels(): Promise<LlmModelCatalog> {
 
 export async function updateOrg(id: string, input: OrgUpdateInput): Promise<Org> {
   const response = await apiClient.patch<Org>(`/orgs/${id}`, input);
+  return response.data;
+}
+
+/** Org-admin path: requires an org-admin membership in the org, not site admin. */
+export async function updateOrgSettings(id: string, input: OrgSettingsInput): Promise<Org> {
+  const response = await apiClient.patch<Org>(`/orgs/${id}/settings`, input);
   return response.data;
 }
 

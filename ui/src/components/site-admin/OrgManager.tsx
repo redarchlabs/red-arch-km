@@ -21,16 +21,14 @@ import {
   deleteOrg,
   listLlmModels,
   listOrgs,
-  NIL_UUID,
   updateOrg,
   type LlmModelCatalog,
   type OrgUpdateInput,
 } from "@/lib/api/orgs";
-import { listViews, type View } from "@/lib/api/views";
 import type { Org } from "@/types";
 
 export function OrgManager() {
-  const { refresh, currentOrgId } = useOrg();
+  const { refresh } = useOrg();
   const [orgs, setOrgs] = useState<Org[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -40,11 +38,9 @@ export function OrgManager() {
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
-  const [editHomeViewId, setEditHomeViewId] = useState("");
   const [editLlmModel, setEditLlmModel] = useState("");
-  // Views of the *current* org: the views API is scoped to the X-Org-ID header,
-  // so the Home view selector can only be offered for the current org's row.
-  const [views, setViews] = useState<View[]>([]);
+  // The org's home view is NOT edited here: it points at a view the org itself
+  // authored, so org admins set it under Admin → General (PATCH /orgs/{id}/settings).
   // Global model catalog (platform default + OPENAI_MODEL_ROUTES ids), so the
   // AI-model selector works on any org's row. Failures leave it null and the
   // selector falls back to a free-text input.
@@ -84,28 +80,6 @@ export function OrgManager() {
     };
   }, []);
 
-  // Load the current org's views to populate the Home view selector. Scoped to
-  // the current org because listViews() reads the X-Org-ID header; failures just
-  // leave the list empty (the selector still offers "(none)").
-  useEffect(() => {
-    if (!currentOrgId) {
-      setViews([]);
-      return;
-    }
-    let cancelled = false;
-    void (async () => {
-      try {
-        const v = await listViews();
-        if (!cancelled) setViews(v);
-      } catch {
-        if (!cancelled) setViews([]);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [currentOrgId]);
-
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
     const name = newName.trim();
@@ -128,18 +102,13 @@ export function OrgManager() {
   const saveEdit = async (org: Org) => {
     const trimmed = editName.trim();
     const nameChanged = trimmed.length > 0 && trimmed !== org.name;
-    // The home view can only be edited on the current org (see `views` above).
-    const isCurrent = org.id === currentOrgId;
-    const homeChanged = isCurrent && editHomeViewId !== (org.home_view_id ?? "");
     const modelChanged = editLlmModel.trim() !== (org.default_llm_model ?? "");
-    if (!nameChanged && !homeChanged && !modelChanged) {
+    if (!nameChanged && !modelChanged) {
       setEditingId(null);
       return;
     }
     const input: OrgUpdateInput = {};
     if (nameChanged) input.name = trimmed;
-    // Empty selection clears the home view via the NIL_UUID sentinel.
-    if (homeChanged) input.home_view_id = editHomeViewId || NIL_UUID;
     // Empty string clears the pin back to the platform default.
     if (modelChanged) input.default_llm_model = editLlmModel.trim();
     try {
@@ -229,25 +198,6 @@ export function OrgManager() {
                         </Button>
                       </div>
                       <label className="block text-xs text-muted-foreground">
-                        Home view
-                        {org.id === currentOrgId ? (
-                          <select
-                            className="mt-1 h-8 w-full max-w-xs rounded-md border bg-background px-2 text-sm text-foreground"
-                            value={editHomeViewId}
-                            onChange={(e) => setEditHomeViewId(e.target.value)}
-                          >
-                            <option value="">(none)</option>
-                            {views.map((v) => (
-                              <option key={v.id} value={v.id}>
-                                {v.name}
-                              </option>
-                            ))}
-                          </select>
-                        ) : (
-                          <span className="mt-1 block">Switch to this org to set its home view.</span>
-                        )}
-                      </label>
-                      <label className="block text-xs text-muted-foreground">
                         AI model
                         {llmCatalog ? (
                           <select
@@ -303,7 +253,6 @@ export function OrgManager() {
                         onClick={() => {
                           setEditingId(org.id);
                           setEditName(org.name);
-                          setEditHomeViewId(org.home_view_id ?? "");
                           setEditLlmModel(org.default_llm_model ?? "");
                         }}
                         aria-label={`Edit ${org.name}`}
