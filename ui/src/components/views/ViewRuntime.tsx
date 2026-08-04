@@ -225,10 +225,13 @@ export function ViewRuntime({ id, kiosk = false, token }: ViewRuntimeProps) {
  * designed against the edges; a page of prose needs the opposite, or it is typeset hard
  * against the bezel with nowhere for the eye to rest. `max-w` matters as much as the
  * inset: text running the full width of a wall display is what actually hurts to read. */
+/** Insets are per-breakpoint, not flat: the same `px-12` that gives a wall display
+ * room to breathe eats a sixth of a phone's width, and these pages are opened on
+ * both. Small screens get an inset that still reads as margin and no more. */
 const KIOSK_PADDING: Record<"none" | "comfortable" | "spacious", string> = {
   none: "",
-  comfortable: "mx-auto max-w-5xl px-8 py-10",
-  spacious: "mx-auto max-w-4xl px-12 py-16",
+  comfortable: "mx-auto max-w-5xl px-4 py-6 sm:px-8 sm:py-10",
+  spacious: "mx-auto max-w-4xl px-5 py-8 sm:px-12 sm:py-16",
 };
 
 /** The only chrome a kiosk keeps: a way back into the app and a browser-fullscreen

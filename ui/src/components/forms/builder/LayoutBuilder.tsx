@@ -10,6 +10,7 @@ import { listReports } from "@/lib/api/reports";
 import type {
   ButtonElement,
   CalculatedElement,
+  CountdownElement,
   FieldElement,
   FormElement,
   LabelElement,
@@ -165,6 +166,8 @@ function ElementEditor({
       return <ImageEditor el={el} onChange={onChange} />;
     case "qr_code":
       return <QrCodeEditor el={el} onChange={onChange} />;
+    case "countdown":
+      return <CountdownEditor el={el} onChange={onChange} />;
     case "calculated":
       return <CalculatedEditor el={el} fields={fieldsOf(ctx, entityId)} onChange={onChange} />;
     case "input":
@@ -785,6 +788,68 @@ function ImageEditor({ el, onChange }: { el: ImageEl; onChange: (el: FormElement
           type="number"
           value={el.max_height ?? ""}
           onChange={(e) => onChange({ ...el, max_height: Number(e.target.value) || null })}
+        />
+      </Row>
+    </div>
+  );
+}
+
+function CountdownEditor({ el, onChange }: { el: CountdownElement; onChange: (el: FormElement) => void }) {
+  return (
+    <div className="space-y-1.5">
+      <Row label="Label">
+        <input
+          className={input}
+          placeholder="Time left"
+          value={el.label ?? ""}
+          onChange={(e) => onChange({ ...el, label: e.target.value || null })}
+        />
+      </Row>
+      <Row label="Started at (field)">
+        <input
+          className={input}
+          placeholder="e.g. question_opened_at"
+          value={el.from_field ?? ""}
+          onChange={(e) => onChange({ ...el, from_field: e.target.value || null })}
+        />
+      </Row>
+      <Row label="Seconds allowed">
+        <input
+          className={input}
+          type="number"
+          value={el.seconds ?? ""}
+          onChange={(e) => onChange({ ...el, seconds: Number(e.target.value) || null })}
+        />
+      </Row>
+      <Row label="Seconds from field">
+        <input
+          className={input}
+          placeholder="(optional) overrides the number above"
+          value={el.seconds_field ?? ""}
+          onChange={(e) => onChange({ ...el, seconds_field: e.target.value || null })}
+        />
+      </Row>
+      <Row label="Deadline (field)">
+        <input
+          className={input}
+          placeholder="(optional) a timestamp to count down TO"
+          value={el.until_field ?? ""}
+          onChange={(e) => onChange({ ...el, until_field: e.target.value || null })}
+        />
+      </Row>
+      <Row label="When time is up">
+        <input
+          className={input}
+          placeholder="Time's up"
+          value={el.done_text ?? ""}
+          onChange={(e) => onChange({ ...el, done_text: e.target.value || null })}
+        />
+      </Row>
+      <Row label="Show bar">
+        <input
+          type="checkbox"
+          checked={el.show_bar !== false}
+          onChange={(e) => onChange({ ...el, show_bar: e.target.checked })}
         />
       </Row>
     </div>
@@ -1539,6 +1604,21 @@ function PuzzlePadEditor({
           placeholder="(optional) e.g. hint"
           value={el.hint_field ?? ""}
           onChange={(e) => onChange({ ...el, hint_field: e.target.value || null })}
+        />
+      </Row>
+      <Row label="Reveal answer from field">
+        <input
+          className={input}
+          placeholder="(optional) field holding the answer, filled AFTER answering closes"
+          value={el.answer_field ?? ""}
+          onChange={(e) => onChange({ ...el, answer_field: e.target.value || null })}
+        />
+      </Row>
+      <Row label="One answer only">
+        <input
+          type="checkbox"
+          checked={el.lock_after_submit === true}
+          onChange={(e) => onChange({ ...el, lock_after_submit: e.target.checked })}
         />
       </Row>
       <Row label="Send label">

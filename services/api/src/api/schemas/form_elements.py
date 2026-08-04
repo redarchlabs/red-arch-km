@@ -269,6 +269,37 @@ class ProgressElement(_Element):
     width: FieldWidth | None = None
 
 
+class CountdownElement(_Element):
+    """A live **time left** clock, counting down to a deadline carried on the record.
+
+    Display-only, and deliberately so: nothing here decides when time is actually
+    up. A workflow opened the question and a workflow closes it; this only draws
+    how long is left, which is why it is safe to run off the viewer's own clock.
+    A device whose clock is badly wrong shows a full bar or a finished one rather
+    than a nonsense figure — the value is clamped to the span either way.
+
+    Two ways to say when time runs out, because a record may naturally carry
+    either. ``until_field`` is an absolute deadline. ``from_field`` plus a duration
+    (``seconds``, or ``seconds_field`` to take it from the record) is a start time
+    the countdown adds to — the friendlier form for a workflow, which can stamp
+    ``{{ now }}`` into a field but cannot do date arithmetic. The absolute form
+    wins if both resolve.
+
+    With no deadline on the record the element draws NOTHING, so a page can leave
+    it in place between questions instead of gating it behind a ``visible_when``.
+    """
+
+    type: Literal["countdown"] = "countdown"
+    label: str | None = None
+    until_field: str | None = None  # record field: the deadline itself
+    from_field: str | None = None  # record field: when the clock started
+    seconds: int | None = None  # duration added to from_field; also the bar's scale
+    seconds_field: str | None = None  # record field holding that duration
+    done_text: str | None = None  # shown once the deadline passes (default "Time's up")
+    show_bar: bool = True
+    width: FieldWidth | None = None
+
+
 class Slide(BaseModel):
     """One slide in a deck: an optional title, a Markdown ``body``, an optional
     image, and an optional video. Rendered as a single presentation page by the
@@ -713,6 +744,19 @@ class PuzzlePadElement(_Element):
     hint: str | None = None
     hint_field: str | None = None
 
+    # The correct value, read from the record for the sole purpose of SHOWING it
+    # once it no longer matters. This does not weaken the rule above: the field is
+    # expected to be empty for as long as answering is open, and whatever closes
+    # the question fills it in. Naming a field that always holds the answer would
+    # hand it to every device the moment the puzzle is drawn — the honest use is a
+    # denormalised "revealed answer" column a workflow writes at reveal time. Blank
+    # means "not yet", and the pad stays neutral.
+    answer_field: str | None = None
+    # One answer only: after a submission the pad stays locked until the puzzle
+    # itself changes. Off by default — a practice pad should be re-playable — and
+    # on for anything where a second tap would be a second entry in someone's log.
+    lock_after_submit: bool = False
+
     # Run when the person finishes. Optional so a pad can be dropped into a page
     # purely to be played with (a practice pad that records nothing).
     on_complete: RunWorkflowAction | None = None
@@ -847,6 +891,7 @@ FormElement = Annotated[
     | ImageElement
     | QrCodeElement
     | ProgressElement
+    | CountdownElement
     | SlidesElement
     | ReportElement
     | RecordListElement

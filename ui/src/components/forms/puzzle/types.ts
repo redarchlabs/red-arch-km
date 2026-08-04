@@ -23,4 +23,11 @@ export interface PadProps<S extends PuzzleSpec = PuzzleSpec> {
   /** Label for the confirm control on pads that have one. */
   submitLabel: string;
   submit: (result: { solved: boolean | null; answer: string }) => void;
+  /** What this person last sent, so a pad can go on showing their own choice
+   * instead of resetting to a blank slate the moment it is disabled. */
+  picked?: string | null;
+  /** The correct value, once the shell has been told it (see `answer_field` on
+   * the element). Null for as long as the answer is not public — which is most
+   * of the time, and always while a question is still open. */
+  correct?: string | null;
 }

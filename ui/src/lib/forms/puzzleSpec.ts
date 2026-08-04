@@ -211,10 +211,24 @@ export function parsePuzzleSpec(kind: PuzzleKind, raw: unknown): ParseResult {
   }
 }
 
+/** Label keys an author may write. An entry carrying one of these is making a
+ * claim about its own text, which matters when the text is a `{token}`. */
+const LABEL_KEYS = ["label", "text", "name", "title"] as const;
+
 function parseChoices(obj: Record<string, unknown>): ParseResult {
   const options: ChoiceOption[] = [];
   for (const entry of asArray(obj.options).slice(0, MAX_ITEMS)) {
     const label = labelOf(entry, "label");
+    // An entry that ASKED for a label and got nothing is an option this record
+    // does not have — a `{option_d}` on a true/false question. Drop it, rather
+    // than falling back to the value and drawing an empty tile labelled "D".
+    // An entry with no label key at all is the `["Red", "Blue"]` shorthand and
+    // still resolves to its own value below.
+    const claimsLabel =
+      entry != null &&
+      typeof entry === "object" &&
+      LABEL_KEYS.some((k) => k in (entry as Record<string, unknown>));
+    if (claimsLabel && !label) continue;
     // The VALUE is what a workflow grades against, so it must survive verbatim.
     // Falling back to the label keeps `["Red", "Blue"]` a valid shorthand.
     const rawValue =

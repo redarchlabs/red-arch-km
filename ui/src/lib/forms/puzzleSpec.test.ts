@@ -319,3 +319,50 @@ describe("fillSpecTokens", () => {
     expect(JSON.parse(filled).options[0].label).toBe("");
   });
 });
+
+describe("parseChoices with per-record labels", () => {
+  const spec = JSON.stringify({
+    options: [
+      { value: "A", label: "{option_a}" },
+      { value: "B", label: "{option_b}" },
+      { value: "C", label: "{option_c}" },
+      { value: "D", label: "{option_d}" },
+    ],
+    columns: 1,
+  });
+
+  it("drops the options this record doesn't have", () => {
+    // A true/false question filling a four-option pad: C and D resolve to
+    // nothing and must not become blank tiles labelled "C" and "D".
+    const filled = fillSpecTokens(spec, { option_a: "True", option_b: "False" });
+    const out = parsePuzzleSpec("choices", filled);
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect(out.spec).toMatchObject({
+      options: [
+        { value: "A", label: "True" },
+        { value: "B", label: "False" },
+      ],
+    });
+  });
+
+  it("keeps every option a record does have", () => {
+    const filled = fillSpecTokens(spec, {
+      option_a: "Passover",
+      option_b: "Purim",
+      option_c: "Tabernacles",
+      option_d: "Hanukkah",
+    });
+    const out = parsePuzzleSpec("choices", filled);
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect(out.spec.kind === "choices" && out.spec.options).toHaveLength(4);
+  });
+
+  it("still treats a bare string as its own label", () => {
+    const out = parsePuzzleSpec("choices", { options: ["Red", "Blue"] });
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect(out.spec).toMatchObject({ options: [{ value: "Red", label: "Red" }, { value: "Blue", label: "Blue" }] });
+  });
+});

@@ -36,6 +36,7 @@ import { mergeServerValues, sameValue } from "@/lib/forms/mergeValues";
 import { displayLiveValue, formatLiveValue, readJsonPointer } from "@/lib/forms/liveValue";
 import { useSpeechRecognition } from "@/lib/speech/useSpeechRecognition";
 
+import { CountdownNode } from "./CountdownNode";
 import { FieldControl } from "./FieldControl";
 import { QrCodeCard } from "./QrCodeCard";
 import { PuzzlePad } from "./puzzle/PuzzlePad";
@@ -1672,6 +1673,12 @@ export function FormRenderer({
         return <div className={spanClass(el.width)}>{CalculatedNode({ el, scope })}</div>;
       case "progress":
         return <div className={spanClass(el.width)}>{ProgressNode({ el, scope })}</div>;
+      case "countdown":
+        return (
+          <div className={spanClass(el.width)}>
+            <CountdownNode el={el} values={scope.values} />
+          </div>
+        );
       case "input":
         return (
           <div className={spanClass(el.width)}>
