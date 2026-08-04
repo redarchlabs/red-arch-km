@@ -9,6 +9,7 @@ import type { HelpTopic } from "@/lib/help";
 const topic = (title: string, body: string): HelpTopic => ({ prefix: "", title, body });
 
 type AdminTabKey =
+  | "general"
   | "regions"
   | "departments"
   | "roles"
@@ -39,6 +40,18 @@ To grant a *person* access to specific values, use the **Members** tab.
 );
 
 export const ADMIN_TAB_HELP: Record<AdminTabKey, HelpTopic> = {
+  general: topic(
+    "General settings",
+    `
+Settings that apply to **this organization** as a whole.
+
+- **Home view** — the view members land on, and where the sidebar **Home** item
+  goes. Pick any view this org has built; choose *(none)* to use the default
+  landing page instead.
+
+Only **organization admins** can change these.
+`,
+  ),
   regions: DIMENSION_HELP,
   departments: DIMENSION_HELP,
   roles: DIMENSION_HELP,
