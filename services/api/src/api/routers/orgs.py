@@ -11,14 +11,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth.dependencies import (
     CurrentUser,
+    OrgContext,
     get_current_user,
+    require_org_admin,
     require_site_admin,
 )
 from api.config import Settings, get_settings
 from api.dependencies import get_db
 from api.repositories.org import OrgRepository
+from api.repositories.view import ViewRepository
 from api.schemas.common import PaginatedResponse, PaginationParams, make_page
-from api.schemas.org import OrgCreate, OrgRead, OrgUpdate
+from api.schemas.org import OrgCreate, OrgRead, OrgSettingsUpdate, OrgUpdate
 from api.services.brain_client import BrainAPIClient
 from api.services.crypto import encrypt_secret
 from api.services.openai_client import model_routes
@@ -132,13 +135,52 @@ async def update_org(
         description=body.description,
         use_knowledge_graph=body.use_knowledge_graph,
         openai_api_key=encrypted_key,
-        # None = no change; the all-zero UUID sentinel clears it; any other value
-        # sets it. The repo interprets the sentinel (mirrors the openai_api_key
-        # "empty string clears" convention on this same endpoint).
-        home_view_id=body.home_view_id,
         # None = no change; empty string clears back to the platform default.
         default_llm_model=body.default_llm_model,
     )
+    return OrgRead.model_validate(org)
+
+
+@router.patch("/{org_id}/settings", response_model=OrgRead)
+async def update_org_settings(
+    org_id: uuid.UUID,
+    body: OrgSettingsUpdate,
+    ctx: Annotated[OrgContext, Depends(require_org_admin)],
+    session: Annotated[AsyncSession, Depends(get_db)],
+) -> OrgRead:
+    """Org settings an **org admin** owns — currently the home (landing) view.
+
+    Split out from ``PATCH /orgs/{org_id}`` (site admin only) because the home
+    view points at a view the org itself authored: choosing it is a tenant
+    decision, not a platform one. Tenancy/cost fields stay on the site-admin
+    endpoint.
+
+    Like every org-admin route the caller's privileges come from the X-Org-ID
+    header (``require_org_admin``); the path id must agree with it so a stale
+    tab can't write settings to a different org than the one it is showing.
+    """
+    if org_id != ctx.org_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Path organization does not match the active organization",
+        )
+
+    repo = OrgRepository(session)
+    org = await repo.get(org_id)
+    if org is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Org not found")
+
+    # orgs.home_view_id has no FK (cross-schema, see docs/DATABASE.md), so the
+    # ownership check is ours to make: without it an org admin could point their
+    # landing screen at another tenant's view id.
+    if body.home_view_id is not None and await ViewRepository(session, org_id).get(body.home_view_id) is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="home_view_id does not reference a view in this organization",
+        )
+
+    # Replacement semantics: null/omitted clears the home view (OrgSettingsUpdate).
+    org = await repo.set_home_view(org, body.home_view_id)
     return OrgRead.model_validate(org)
 
 

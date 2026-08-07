@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { ApiKeysManager } from "@/components/admin/ApiKeysManager";
 import { AttributeManager } from "@/components/admin/AttributeManager";
 import { DimensionManager } from "@/components/admin/DimensionManager";
+import { GeneralSettingsManager } from "@/components/admin/GeneralSettingsManager";
 import { MembershipManager } from "@/components/admin/MembershipManager";
 import { TagManager } from "@/components/admin/TagManager";
 import { ImportExportConsole } from "@/components/import-export/ImportExportConsole";
@@ -15,6 +16,7 @@ import type { DimensionKind } from "@/lib/api/dimensions";
 import { cn } from "@/lib/utils";
 
 type AdminTab =
+  | "general"
   | "regions"
   | "departments"
   | "roles"
@@ -43,7 +45,9 @@ const TABS: ReadonlyArray<{ key: AdminTab; label: string }> = [
   { key: "import_export", label: "Import / Export" },
 ];
 
-// API-key management is org-admin only, so its tab is appended conditionally.
+// Org settings (home view) and API-key management are org-admin only, so their
+// tabs are added conditionally. The backend enforces this too.
+const GENERAL_TAB = { key: "general", label: "General" } as const;
 const API_TAB = { key: "api", label: "API & Keys" } as const;
 
 function isDimension(key: AdminTab): key is DimensionKind {
@@ -54,8 +58,9 @@ export default function AdminPage() {
   const [active, setActive] = useState<AdminTab>("regions");
   const { isOrgAdmin } = useOrg();
 
-  // The API tab is only offered to org admins (the backend also enforces this).
-  const tabs = isOrgAdmin ? [...TABS, API_TAB] : TABS;
+  // The General and API tabs are only offered to org admins (the backend also
+  // enforces this).
+  const tabs = isOrgAdmin ? [GENERAL_TAB, ...TABS, API_TAB] : TABS;
 
   // Show help for the active tab (clears when leaving the page).
   const setHelp = useHelpOverride();
@@ -93,6 +98,7 @@ export default function AdminPage() {
         ))}
       </div>
 
+      {active === "general" ? <GeneralSettingsManager /> : null}
       {isDimension(active) ? (
         <DimensionManager key={active} kind={active} label={DIMENSION_LABELS[active]} />
       ) : null}

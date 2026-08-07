@@ -83,7 +83,9 @@ in `services/api/src/api/services/setup_token.py` and `routers/setup.py` (`/api/
 ### Organizations (`orgs`)
 
 `OrgManager.tsx`. Lists every org on the instance and lets a site admin create, rename,
-delete, and set an org's Home view. See [Create-org wizard](#create-org-wizard). Delete is
+delete, and pin an org's AI model. The **Home view** is deliberately *not* here — it
+points at a view the org itself authored, so org admins set it under **Admin → General**
+(`PATCH /api/orgs/{org_id}/settings`). See [Create-org wizard](#create-org-wizard). Delete is
 guarded by a type-the-name confirmation dialog because it is destructive and cross-store
 (PostgreSQL cascade + Qdrant + Neo4j).
 Backing endpoints: `GET/POST/PATCH/DELETE /api/orgs` (`routers/orgs.py`).
@@ -201,7 +203,8 @@ the `/api/admin` prefix; org and setup routes are shown with their full prefix.
 | GET | `/api/orgs/` | List orgs (site admin sees all; others see their own). |
 | POST | `/api/orgs/` | Create an org + init brain-api tenant. |
 | GET | `/api/orgs/{org_id}` | Get one org (site admin or member). |
-| PATCH | `/api/orgs/{org_id}` | Rename / set home view / set per-org OpenAI key. |
+| PATCH | `/api/orgs/{org_id}` | Rename / set per-org OpenAI key / pin the org's LLM model. |
+| PATCH | `/api/orgs/{org_id}/settings` | **Org admin, not site admin** — set/clear the org's home view. |
 | DELETE | `/api/orgs/{org_id}` | Delete org; cascades PostgreSQL + Qdrant + Neo4j. |
 | GET | `/api/setup/status` | **Unauthenticated** — whether the instance needs first-run setup. |
 | POST | `/api/setup/claim` | Signed-in user + log token → become the first site admin. |
