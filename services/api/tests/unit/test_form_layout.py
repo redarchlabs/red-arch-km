@@ -1014,7 +1014,5 @@ def test_record_list_columns_are_optional_and_additive():
     assert el.columns[0].slug == "status"
     assert el.columns[0].badge_map == {"Active": "success"}
     # Absent on an existing config — the key is genuinely optional.
-    plain = FormConfig.model_validate(
-        {"version": 2, "elements": [{"type": "record_list", "entity": "employee"}]}
-    )
+    plain = FormConfig.model_validate({"version": 2, "elements": [{"type": "record_list", "entity": "employee"}]})
     assert plain.elements[0].columns == []
