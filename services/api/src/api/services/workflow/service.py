@@ -36,6 +36,10 @@ class WorkflowConflictError(WorkflowError):
     """409 (e.g. editing a published version in place)."""
 
 
+class WorkflowPublishError(WorkflowError):
+    """422: the version cannot be published (agent-task preflight failed)."""
+
+
 async def _unsupported_repo(*_args: Any, **_kwargs: Any) -> Any:  # pragma: no cover - guard
     raise RuntimeError("record repositories are not available during dry-run")
 
@@ -81,6 +85,7 @@ class WorkflowService:
         version = await self._versions.get(version_id)
         if version is None or version.workflow_id != workflow_id:
             raise WorkflowNotFoundError("version not found")
+        await self._preflight_agent_tasks(workflow_id, version.definition)
         version.status = "published"
         version.published_at = func.now()
         # Archive the previously-active version and point the workflow at this one.
@@ -95,6 +100,48 @@ class WorkflowService:
         # lazy-loads it OUTSIDE the async greenlet → MissingGreenlet → 500.
         await self._session.refresh(version, ["published_at"])
         return version
+
+    async def _preflight_agent_tasks(self, workflow_id: uuid.UUID, definition: dict[str, Any] | None) -> None:
+        """Publish-time gate for agent tasks only (other graphs publish exactly as
+        before): the structural rules must be clean AND the referenced agents must
+        be real, enabled operators that consented to this workflow. Failing at
+        publish beats failing silently at 2am in a run."""
+        from api.schemas.workflow_definition import WorkflowDefinitionModel
+        from api.services.workflow import compat
+        from api.services.workflow import constants as C
+        from api.services.workflow.validation import validate_definition
+
+        try:
+            model = compat.normalize(WorkflowDefinitionModel.parse(definition))
+        except Exception:  # noqa: BLE001 - malformed graphs keep their existing publish behavior
+            return
+        agent_nodes = [n for n in model.nodes if n.type == C.NODE_TASK and n.task_type == C.TASK_AGENT]
+        if not agent_nodes:
+            return
+
+        agent_issues = [
+            i for i in validate_definition(definition) if i.severity == "error" and i.code.startswith("agent-task")
+        ]
+        if agent_issues:
+            raise WorkflowPublishError("; ".join(i.message for i in agent_issues))
+
+        from api.repositories.agent import AgentRepository
+
+        agents = AgentRepository(self._session, self._org_id)
+        for node in agent_nodes:
+            agent = await agents.get(uuid.UUID(str(node.data.get("agent_id"))))
+            if agent is None or not agent.enabled:
+                raise WorkflowPublishError(f"agent task {node.id!r}: agent missing or disabled")
+            if agent.kind != "operator":
+                raise WorkflowPublishError(
+                    f"agent task {node.id!r}: agent {agent.name!r} is a {agent.kind} — only operators are assignable"
+                )
+            invocable = [str(w) for w in (agent.workflow_invocable or [])]
+            if "*" not in invocable and str(workflow_id) not in invocable:
+                raise WorkflowPublishError(
+                    f"agent task {node.id!r}: agent {agent.name!r} has not opted in to this workflow "
+                    "(set workflow_invocable on the agent)"
+                )
 
     # --- monitoring ---
     async def runs(self, workflow_id: uuid.UUID, *, limit: int = 50) -> list[Any]:

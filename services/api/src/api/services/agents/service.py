@@ -77,6 +77,7 @@ class AgentService:
             grants=data.grants.model_dump(),
             mcp_server_ids=_ids_to_str(data.mcp_server_ids),
             workflow_allowlist=_ids_to_str(data.workflow_allowlist),
+            workflow_invocable=[str(w) for w in data.workflow_invocable],
         )
         return await self._repo.create(agent)
 

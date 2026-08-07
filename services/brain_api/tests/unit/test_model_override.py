@@ -169,9 +169,7 @@ class TestVectorChatModelOverride:
             fake_openai.return_value.chat.completions.create.return_value = iter([])
             service = SearchService(mock_stores, fake_settings)
             list(
-                service.vector_chat_stream(
-                    tenant_id="t1", query="hello", model="qwen3-30b", use_knowledge_graph=False
-                )
+                service.vector_chat_stream(tenant_id="t1", query="hello", model="qwen3-30b", use_knowledge_graph=False)
             )
         call = fake_openai.return_value.chat.completions.create.call_args
         assert call.kwargs["model"] == "qwen3-30b"

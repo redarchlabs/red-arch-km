@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.models.agent_run import AgentApproval, AgentNotification
 from api.repositories.agent_inbox import AgentApprovalRepository, AgentNotificationRepository
 from api.repositories.agent_run import AgentRunRepository
+from api.services.agents import lifecycle
 
 
 class ApprovalError(Exception):
@@ -50,11 +51,21 @@ class ApprovalService:
         approval = await self._get(approval_id)
         if approval.status != "pending":
             return approval
+
+        run = await self._runs.get_run(approval.run_id)
+        if run is not None and run.status in ("done", "error", "cancelled", "escalated"):
+            # The run ended (cancelled/timed out) while the ask was pending — a late
+            # approval must NOT re-queue it and re-execute the parked side effects.
+            approval.status = "voided"
+            approval.decided_by_profile_id = decided_by
+            approval.decided_at = _now()
+            await self._session.flush()
+            return approval
+
         approval.status = "approved"
         approval.decided_by_profile_id = decided_by
         approval.decided_at = _now()
 
-        run = await self._runs.get_run(approval.run_id)
         if run is not None and run.status == "waiting":
             run_input = dict(run.input or {})
             resume = dict(run_input.get("resume") or {"messages": [], "pending": [], "approved": []})
@@ -79,7 +90,9 @@ class ApprovalService:
 
         run = await self._runs.get_run(approval.run_id)
         if run is not None and run.status == "waiting":
-            await self._runs.finalize_run(run, status="error", error=f"approval denied: {approval.tool_name}")
+            await lifecycle.finalize_run(
+                self._session, self._org_id, run, status="error", error=f"approval denied: {approval.tool_name}"
+            )
         await self._session.flush()
         return approval
 

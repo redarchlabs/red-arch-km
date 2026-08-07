@@ -71,6 +71,10 @@ TOKEN_WAIT_KINDS = (
     "subprocess",
     "event_based",
     "retry",
+    # Parked on a queued/running AgentRun (correlation_key = agent run id).
+    # Deliberately NOT signalable by the human complete-task endpoint — only the
+    # agent lifecycle's wire-back (or the reconciliation sweep) resumes it.
+    "agent",
 )
 
 
@@ -291,11 +295,12 @@ class WorkflowRunToken(Base):
         PrimaryKeyConstraint("id", "created_at"),
         # Claim scan: ORDER BY seq over just the active tokens (Merge Append).
         Index("ix_wf_tokens_active", "seq", postgresql_where=text("status = 'active'")),
-        # Timer sweep: due parked tokens (timer / boundary timer / retry).
+        # Timer sweep: due parked tokens (timer / boundary timer / retry / armed
+        # agent-task SLA).
         Index(
             "ix_wf_tokens_timer",
             "resume_at",
-            postgresql_where=text("status = 'waiting' AND wait_kind IN ('timer','boundary','retry')"),
+            postgresql_where=text("status = 'waiting' AND wait_kind IN ('timer','boundary','retry','agent')"),
         ),
         # Correlation sweep: wake a receive/user token by its correlation key.
         Index(

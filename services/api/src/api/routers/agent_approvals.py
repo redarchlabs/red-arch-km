@@ -30,7 +30,36 @@ async def list_approvals(
     session: Annotated[AsyncSession, Depends(get_tenant_db)],
 ) -> list[ApprovalRead]:
     approvals = await ApprovalService(session, ctx.org_id).list_pending()
-    return [ApprovalRead.model_validate(a) for a in approvals]
+    # One batch query maps each parked run to the workflow it blocks (if any),
+    # so an approval row can deep-link to /workflows/{wf}/runs?run={run}.
+    links: dict[uuid.UUID, tuple[uuid.UUID, uuid.UUID | None]] = {}
+    run_ids = {a.run_id for a in approvals}
+    if run_ids:
+        from sqlalchemy import select
+
+        from api.models.agent_run import AgentRun
+
+        rows = await session.execute(
+            select(AgentRun.id, AgentRun.workflow_run_id, AgentRun.input).where(
+                AgentRun.id.in_(run_ids), AgentRun.workflow_run_id.is_not(None)
+            )
+        )
+        for rid, wf_run_id, run_input in rows.all():
+            raw = ((run_input or {}).get("workflow") or {}).get("workflow_id")
+            try:
+                wf_id = uuid.UUID(str(raw)) if raw else None
+            except ValueError:
+                wf_id = None
+            links[rid] = (wf_run_id, wf_id)
+    return [
+        ApprovalRead.model_validate(a).model_copy(
+            update={
+                "workflow_run_id": links.get(a.run_id, (None, None))[0],
+                "workflow_id": links.get(a.run_id, (None, None))[1],
+            }
+        )
+        for a in approvals
+    ]
 
 
 @router.post("/approvals/{approval_id}/approve", response_model=ApprovalRead)

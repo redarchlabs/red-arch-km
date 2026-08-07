@@ -590,8 +590,9 @@ class UpdateRecord:
 
     async def execute(self, ctx: ActionContext) -> dict[str, Any]:
         values_cfg = ctx.config.get("values")
-        increments_cfg = ctx.config.get("increments")
-        has_increments = isinstance(increments_cfg, dict) and bool(increments_cfg)
+        raw_increments = ctx.config.get("increments")
+        increments_cfg: dict[str, Any] = raw_increments if isinstance(raw_increments, dict) else {}
+        has_increments = bool(increments_cfg)
         if (not isinstance(values_cfg, dict) or not values_cfg) and not has_increments:
             raise ActionError("update_record requires a non-empty values map or increments map")
         context = _trigger_context(ctx)
@@ -660,9 +661,7 @@ class UpdateRecord:
             "values": _jsonable(_resolve_value_map(ctx.config.get("values", {}) or {}, _trigger_context(ctx))),
             # Deltas are relative to live data the dry run deliberately doesn't read, so
             # report what WOULD be applied rather than a fabricated result.
-            "increments": _jsonable(
-                _resolve_value_map(ctx.config.get("increments", {}) or {}, _trigger_context(ctx))
-            ),
+            "increments": _jsonable(_resolve_value_map(ctx.config.get("increments", {}) or {}, _trigger_context(ctx))),
         }
 
 

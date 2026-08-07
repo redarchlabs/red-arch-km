@@ -61,5 +61,10 @@ class Agent(Base, UUIDMixin, TimestampMixin, LineageMixin):
     mcp_server_ids: Mapped[list] = mapped_column(JSONB, default=list)
     # Specific workflow ids this agent may run (list of ids as str); empty = none.
     workflow_allowlist: Mapped[list] = mapped_column(JSONB, default=list)
+    # Consent mirror of workflow_allowlist: which workflows may bind THIS agent to
+    # an agent_task node (list of workflow ids as str, or ["*"]). Empty = none —
+    # a workflow author cannot borrow an agent's authority without the agent
+    # (admin) opting in on the agent side too.
+    workflow_invocable: Mapped[list] = mapped_column(JSONB, default=list)
 
     org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True)

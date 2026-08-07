@@ -285,6 +285,30 @@ function checkLoops(nodes: NormNode[], adj: Adjacency, issues: Issue[]): void {
   }
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Mirror of the backend's `_check_agent_tasks`: agent steps must fail loudly. */
+function checkAgentTasks(nodes: NormNode[], authoredV2: boolean, issues: Issue[]): void {
+  for (const n of nodes) {
+    if (n.type !== NODE_TASK || n.data.task_type !== "agent") continue;
+    if (!authoredV2) {
+      issues.push({ severity: "error", code: "agent-task-v1", message: `Agent task ${JSON.stringify(n.id)} requires a schema_version 2 graph (the token engine).`, nodeId: n.id });
+    }
+    if (!UUID_RE.test(String(n.data.agent_id ?? ""))) {
+      issues.push({ severity: "error", code: "agent-task-no-agent", message: `Agent task ${JSON.stringify(n.id)} must reference an agent by id.`, nodeId: n.id });
+    }
+    if (!String(n.data.task ?? "").trim()) {
+      issues.push({ severity: "error", code: "agent-task-no-task", message: `Agent task ${JSON.stringify(n.id)} needs a task prompt for the agent.`, nodeId: n.id });
+    }
+    const hasErrorBoundary = nodes.some(
+      (b) => isBoundary(b) && b.data.attached_to === n.id && b.data.event_type === "error",
+    );
+    if (!hasErrorBoundary) {
+      issues.push({ severity: "error", code: "agent-task-no-escalation", message: `Agent task ${JSON.stringify(n.id)} must have an error boundary event attached — escalation/failure needs somewhere to go, or a misconfigured agent reads as success.`, nodeId: n.id });
+    }
+  }
+}
+
 function checkEndPresence(nodes: NormNode[], issues: Issue[]): void {
   const hasEnd = nodes.some((n) => n.type === NODE_EVENT && n.data.position === "end");
   if (!hasEnd) {
@@ -365,6 +389,7 @@ export function validateGraph(def: WorkflowDefinition | null | undefined): Issue
   checkBoundaryEvents(nodes, issues);
   checkEventBasedGateways(nodes, adj, issues);
   checkLoops(nodes, adj, issues);
+  checkAgentTasks(nodes, authoredV2, issues);
   if (authoredV2) checkEndPresence(nodes, issues);
   return issues;
 }
