@@ -25,12 +25,13 @@ from api.config import Settings
 from api.models.agent_run import AgentApproval, AgentRun
 from api.repositories.agent import AgentRepository
 from api.repositories.agent_run import AgentRunRepository
+from api.services.agents import lifecycle
 from api.services.agents.authority import available_tools
 from api.services.agents.llm.keys import resolve_provider_key
 from api.services.agents.llm.provider import LLMProvider, ToolCallRequest
 from api.services.agents.notify import create_notification
 from api.services.agents.prompts import build_system_prompt
-from api.services.agents.runtime import RunParked, run_agent_loop
+from api.services.agents.runtime import RunCancelled, RunParked, run_agent_loop
 from api.services.agents.tools.loader import load_agent_tools
 from api.services.agents.tools.spec import ToolContext, ToolSpec
 from api.services.agents.work_order_service import WorkOrderService
@@ -51,6 +52,9 @@ class AgentRunExecutor:
         per-run backstop even if application-level org_id scoping had a bug.
         """
         await db_scope.enter_bypass(session)
+        reclaimed = await self._reclaim_stale(session, limit)
+        await session.commit()
+        await db_scope.enter_bypass(session)
         reminded = await self._backstop(session, limit)
         await session.commit()
         await db_scope.enter_bypass(session)
@@ -70,7 +74,44 @@ class AgentRunExecutor:
                 await self._mark_error(session, org_id, run_id)
                 await session.commit()
                 errors += 1
-        return {"claimed": len(claimed), "executed": executed, "errors": errors, "reminded": reminded}
+        return {
+            "claimed": len(claimed),
+            "executed": executed,
+            "errors": errors,
+            "reminded": reminded,
+            "reclaimed": reclaimed,
+        }
+
+    async def _reclaim_stale(self, session: AsyncSession, limit: int) -> int:
+        """Lease recovery: a ``running`` run whose heartbeat went stale was orphaned
+        by a dead worker (deploy, OOM). Requeue it once; a second expiry means the
+        task itself is the problem — finalize as error so a linked workflow token
+        escalates instead of waiting forever."""
+        cutoff = datetime.now(UTC) - timedelta(seconds=self._settings.agent_run_lease_ttl_seconds)
+        rows = (
+            (
+                await session.execute(
+                    select(AgentRun)
+                    .where(AgentRun.status == "running", AgentRun.last_activity_at < cutoff)
+                    .order_by(AgentRun.last_activity_at)
+                    .limit(limit)
+                    .with_for_update(skip_locked=True)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for run in rows:
+            attempts = int((run.input or {}).get("_lease_requeues") or 0) if isinstance(run.input, dict) else 0
+            if attempts >= 1:
+                await lifecycle.finalize_run(
+                    session, run.org_id, run, status="error", error="worker lost (lease expired twice)"
+                )
+                continue
+            run.input = {**(run.input or {}), "_lease_requeues": attempts + 1}
+            run.status = "queued"
+            run.last_activity_at = datetime.now(UTC)
+        return len(rows)
 
     async def _backstop(self, session: AsyncSession, limit: int) -> int:
         """Re-bubble runs that have been ``waiting`` longer than the escalation
@@ -126,8 +167,8 @@ class AgentRunExecutor:
 
     async def _mark_error(self, session: AsyncSession, org_id: uuid.UUID, run_id: uuid.UUID) -> None:
         run = await AgentRunRepository(session, org_id).get_run(run_id)
-        if run is not None and run.status in ("running", "queued"):
-            await AgentRunRepository(session, org_id).finalize_run(run, status="error", error="execution failed")
+        if run is not None:
+            await lifecycle.finalize_run(session, org_id, run, status="error", error="execution failed")
 
     async def _execute_one(self, session: AsyncSession, org_id: uuid.UUID, run_id: uuid.UUID) -> None:
         run_repo = AgentRunRepository(session, org_id)
@@ -136,11 +177,13 @@ class AgentRunExecutor:
             return
         agent = await AgentRepository(session, org_id).get(run.agent_id) if run.agent_id else None
         if agent is None or not agent.enabled:
-            await run_repo.finalize_run(run, status="error", error="agent missing or disabled")
+            await lifecycle.finalize_run(session, org_id, run, status="error", error="agent missing or disabled")
             return
         key = await resolve_provider_key(session, org_id, agent.provider, self._settings)
         if not key:
-            await run_repo.finalize_run(run, status="error", error=f"no key for provider {agent.provider}")
+            await lifecycle.finalize_run(
+                session, org_id, run, status="error", error=f"no key for provider {agent.provider}"
+            )
             return
 
         ctx = ToolContext(
@@ -182,6 +225,11 @@ class AgentRunExecutor:
         async def emit(event: dict[str, Any]) -> None:
             await self._persist_event(run_repo, run.id, event)
 
+        async def continue_check() -> bool:
+            # Column select bypasses the identity map; READ COMMITTED sees an
+            # external cancel as soon as it commits.
+            return await run_repo.current_status(run.id) == "running"
+
         try:
             result = await run_agent_loop(
                 provider=LLMProvider(api_key=key),
@@ -197,7 +245,13 @@ class AgentRunExecutor:
                 approval_strategy=self._make_strategy(session, org_id, run, approved_names),
                 resume_tool_calls=resume_tool_calls,
                 autonomy=autonomy,
+                continue_check=continue_check,
             )
+        except RunCancelled:
+            # The canceller owns the terminal state; committing here persists the
+            # transcript steps of the turns that DID run, nothing else.
+            logger.info("agent run %s cancelled externally; stopping without finalize", run.id)
+            return
         except RunParked as parked:
             run.input = {
                 **(run.input or {}),
@@ -225,14 +279,17 @@ class AgentRunExecutor:
         if isinstance(run.input, dict) and "resume" in run.input:
             run.input = {k: v for k, v in run.input.items() if k != "resume"}
         await run_repo.add_step(run.id, kind="assistant", content={"content": result.final_content})
-        await run_repo.finalize_run(
+        won = await lifecycle.finalize_run(
+            session,
+            org_id,
             run,
             status="done",
             prompt_tokens=result.prompt_tokens,
             completion_tokens=result.completion_tokens,
             total_tokens=result.total_tokens,
         )
-        await self._signal_parent(session, org_id, run, agent.name, result.final_content)
+        if won:
+            await self._signal_parent(session, org_id, run, agent.name, result.final_content)
 
     def _make_strategy(self, session: AsyncSession, org_id: uuid.UUID, run: AgentRun, approved_names: set[str]):
         """Approval strategy: auto-approve already-approved tools; otherwise record an
@@ -267,6 +324,10 @@ class AgentRunExecutor:
 
     async def _persist_event(self, run_repo: AgentRunRepository, run_id: uuid.UUID, event: dict) -> None:
         kind = event.get("type")
+        if kind in ("tool_call", "tool_result", "usage"):
+            # Lease heartbeat: at least once per turn (usage) and per tool round-trip,
+            # so long multi-turn runs never look orphaned to _reclaim_stale.
+            await run_repo.heartbeat(run_id)
         if kind == "tool_call":
             await run_repo.add_step(
                 run_id, kind="tool_call", name=event.get("name"), content={"arguments": event.get("arguments")}

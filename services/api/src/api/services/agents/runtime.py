@@ -36,6 +36,15 @@ logger = logging.getLogger(__name__)
 Emit = Callable[[dict[str, Any]], Awaitable[None]]
 # (spec, arguments) -> approved? ; may raise RunParked to suspend the run.
 ApprovalStrategy = Callable[[ToolSpec, dict[str, Any]], Awaitable[bool]]
+# () -> keep going? False when the run was cancelled externally.
+ContinueCheck = Callable[[], Awaitable[bool]]
+
+
+class RunCancelled(Exception):  # noqa: N818 - a control signal, not an error condition
+    """Raised inside the loop when the run was cancelled by an external actor
+    (workflow timeout/termination, admin). The caller must NOT finalize the run —
+    the canceller already owns its terminal state — and must take no further side
+    effects on its behalf."""
 
 
 class RunParked(Exception):  # noqa: N818 - a control signal, not an error condition
@@ -102,6 +111,7 @@ async def run_agent_loop(
     approval_strategy: ApprovalStrategy = _approve_inline,
     resume_tool_calls: list[ToolCallRequest] | None = None,
     autonomy: str = "high_touch",
+    continue_check: ContinueCheck | None = None,
 ) -> RunResult:
     """Drive ``agent`` to quiescence. ``messages`` already includes the system prompt.
 
@@ -115,6 +125,8 @@ async def run_agent_loop(
     pending = resume_tool_calls
 
     for _iteration in range(max_iterations):
+        if continue_check is not None and not await continue_check():
+            raise RunCancelled
         if pending is not None:
             tool_calls = pending
             pending = None
@@ -141,6 +153,10 @@ async def run_agent_loop(
 
         # Phase 1: authority-gate every call BEFORE any executes (parks cleanly).
         plans = await _gate_tools(agent, tool_calls, specs_by_name, emit, approval_strategy, messages, autonomy)
+        # A cancel that landed during the (possibly long) stream must stop the run
+        # before any of this batch's side effects execute.
+        if continue_check is not None and not await continue_check():
+            raise RunCancelled
         # Phase 2: execute (or return the pre-set deny/error output).
         for tc, spec, preset in plans:
             result.tool_calls += 1

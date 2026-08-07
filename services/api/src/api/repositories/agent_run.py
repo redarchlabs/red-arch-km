@@ -9,10 +9,13 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.models.agent_run import AgentRun, AgentRunStep
+from api.models.agent_run import AgentApproval, AgentRun, AgentRunStep
+
+# States a run can still be moved out of; terminal states are immutable.
+NONTERMINAL_STATUSES = ("queued", "running", "waiting")
 
 
 def _now() -> datetime:
@@ -118,16 +121,83 @@ class AgentRunRepository:
         prompt_tokens: int = 0,
         completion_tokens: int = 0,
         total_tokens: int = 0,
-    ) -> AgentRun:
-        run.status = status
-        run.error = error
-        run.prompt_tokens = prompt_tokens
-        run.completion_tokens = completion_tokens
-        run.total_tokens = total_tokens
-        run.finished_at = _now()
-        run.last_activity_at = _now()
+    ) -> bool:
+        """Compare-and-set terminal transition.
+
+        Only a run still in a non-terminal state can be finalized; a run that was
+        cancelled/timed out by another actor stays as that actor left it. Returns
+        whether THIS call won the transition — on ``False`` the caller must take no
+        further side effects on the run's behalf (no wire-back, no parent signal).
+        """
+        # Flush pending ORM changes (e.g. cleared resume state) before the raw
+        # UPDATE so they aren't flushed later on top of the terminal row.
         await self._session.flush()
-        return run
+        result = await self._session.execute(
+            update(AgentRun)
+            .where(
+                AgentRun.id == run.id,
+                AgentRun.org_id == self._org_id,
+                AgentRun.status.in_(NONTERMINAL_STATUSES),
+            )
+            .values(
+                status=status,
+                error=error,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=total_tokens,
+                wait_kind=None,
+                finished_at=_now(),
+                last_activity_at=_now(),
+            )
+        )
+        won = (result.rowcount or 0) > 0
+        await self._session.refresh(run)
+        return won
+
+    async def cancel_run(self, run_id: uuid.UUID, *, reason: str) -> bool:
+        """Conditionally cancel a non-terminal run and void its pending approvals.
+
+        Safe against the executor: its own terminal write is the same conditional
+        UPDATE, so exactly one side wins; the cooperative check in the loop stops a
+        mid-flight run within one turn.
+        """
+        result = await self._session.execute(
+            update(AgentRun)
+            .where(
+                AgentRun.id == run_id,
+                AgentRun.org_id == self._org_id,
+                AgentRun.status.in_(NONTERMINAL_STATUSES),
+            )
+            .values(status="cancelled", error=reason, wait_kind=None, finished_at=_now(), last_activity_at=_now())
+        )
+        won = (result.rowcount or 0) > 0
+        if won:
+            await self._session.execute(
+                update(AgentApproval)
+                .where(
+                    AgentApproval.run_id == run_id,
+                    AgentApproval.org_id == self._org_id,
+                    AgentApproval.status == "pending",
+                )
+                .values(status="voided", decided_at=_now())
+            )
+        return won
+
+    async def current_status(self, run_id: uuid.UUID) -> str | None:
+        """The run's committed status, bypassing the ORM identity map — the
+        cooperative-cancellation read (READ COMMITTED sees external commits)."""
+        result = await self._session.execute(
+            select(AgentRun.status).where(AgentRun.id == run_id, AgentRun.org_id == self._org_id)
+        )
+        return result.scalar_one_or_none()
+
+    async def heartbeat(self, run_id: uuid.UUID) -> None:
+        """Bump the lease heartbeat without touching ORM state."""
+        await self._session.execute(
+            update(AgentRun)
+            .where(AgentRun.id == run_id, AgentRun.org_id == self._org_id, AgentRun.status == "running")
+            .values(last_activity_at=_now())
+        )
 
     async def mark_waiting(self, run: AgentRun, wait_kind: str) -> AgentRun:
         run.status = "waiting"

@@ -107,6 +107,9 @@ class Settings(BaseSettings):
     agent_max_iterations: int = Field(default=32, validation_alias="AGENT_MAX_ITERATIONS")
     agent_run_concurrency: int = Field(default=4, validation_alias="AGENT_RUN_CONCURRENCY")
     agent_escalation_timeout_seconds: int = Field(default=2700, validation_alias="AGENT_ESCALATION_TIMEOUT_SECONDS")
+    # A claimed run whose heartbeat is older than this is presumed orphaned by a dead
+    # worker: requeued once, then finalized as an error.
+    agent_run_lease_ttl_seconds: int = Field(default=600, validation_alias="AGENT_RUN_LEASE_TTL_SECONDS")
     agent_supervisor_idle_seconds: int = Field(default=1200, validation_alias="AGENT_SUPERVISOR_IDLE_SECONDS")
     # Default recipient for bubbled escalations/approvals when no org admin email
     # resolves; empty means fall back to the org admins only.
