@@ -353,6 +353,76 @@ class TestReconciliation:
         assert healed == 0
 
 
+class TestReviewSampling:
+    async def test_completed_step_at_100pct_creates_review_notification(self, admin_session: AsyncSession) -> None:
+        org, agent, workflow, run, definition = await _seed(admin_session)
+        for n in definition["nodes"]:
+            if n["id"] == "a1":
+                n["data"]["review_sample_pct"] = 100
+        # The redrive loads the PUBLISHED version's definition — persist the
+        # sampling config there, not just in the local dict.
+        import json as _json
+
+        await admin_session.execute(
+            text("UPDATE workflow_versions SET definition = cast(:d AS jsonb) WHERE id = :id"),
+            {"d": _json.dumps(definition), "id": run.workflow_version_id},
+        )
+        await admin_session.commit()
+        await set_tenant(admin_session, str(org.id))
+        run = await _reload_run(admin_session, run)
+        await _drive(admin_session, run, definition)
+        agent_run = await _agent_run(admin_session, org.id, run.id)
+        agent_run.output = {"category": "tech"}
+        await lifecycle.finalize_run(admin_session, org.id, agent_run, status="done")
+        await admin_session.commit()
+
+        await set_tenant(admin_session, str(org.id))
+        fresh = await _reload_run(admin_session, run)
+        await _redrive(admin_session, fresh)
+
+        from api.models.agent_run import AgentNotification
+
+        reviews = (
+            (
+                await admin_session.execute(
+                    select(AgentNotification).where(
+                        AgentNotification.org_id == org.id, AgentNotification.kind == "review"
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(reviews) == 1
+        assert "a1" in reviews[0].title
+        assert str(agent_run.id) in (reviews[0].body or "")
+
+    async def test_zero_pct_samples_nothing(self, admin_session: AsyncSession) -> None:
+        org, agent, workflow, run, definition = await _seed(admin_session)
+        await _drive(admin_session, run, definition)
+        agent_run = await _agent_run(admin_session, org.id, run.id)
+        agent_run.output = {"category": "billing"}
+        await lifecycle.finalize_run(admin_session, org.id, agent_run, status="done")
+        await admin_session.commit()
+        await set_tenant(admin_session, str(org.id))
+        await _redrive(admin_session, await _reload_run(admin_session, run))
+
+        from api.models.agent_run import AgentNotification
+
+        count = (
+            (
+                await admin_session.execute(
+                    select(AgentNotification).where(
+                        AgentNotification.org_id == org.id, AgentNotification.kind == "review"
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert count == []
+
+
 class TestCancellationPropagation:
     async def test_failed_workflow_run_cancels_linked_agent_runs(self, admin_session: AsyncSession) -> None:
         org, agent, workflow, run, definition = await _seed(admin_session)

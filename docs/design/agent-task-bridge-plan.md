@@ -1,5 +1,13 @@
 # Implementation Plan: `agent` Task — the Workflow ↔ Agent Bridge
 
+> **Status (2026-08-07, branch `feat/agent-task-bridge`):** Phases 0 and 1 are
+> BUILT and tested (hardening `97317bf`, engine bridge `64a6d0d`, UI `6898046`),
+> plus Phase 3's code component (`review_sample_pct` sampling → org-admin review
+> notifications). Phase 2 (form-link draft values) and the review
+> entity/reports (org config) remain; the interim shadow pattern below needs no
+> new mechanism. Full test coverage: 22 bridge unit + 16 bridge integration +
+> 15 hardening tests; UI 593 green, tsc/eslint/ruff/mypy clean on touched files.
+
 **Goal.** A BPMN workflow step can be assigned to an agent from the org roster: the step
 enqueues an `AgentRun`, the token parks, the existing agent executor drives the run under
 its normal authority/approval machinery, and the run's terminal state resumes the token —
@@ -278,7 +286,21 @@ already displays, and the dual record lands in the phase-3 review entity.
 Escalation payload contract from 1.6 (`vars.<capture>_escalation`: partial output, last
 assistant message, reason) is the context handoff shadow mode builds on.
 
+### Interim shadow pattern (available today, zero new mechanism)
+
+Author the graph as: `agent task (capture=draft)` → `update_record` mapping
+`{{ vars.draft.* }}` into ordinary record fields → `send_form`/user task whose
+form displays those fields. The human sees the agent's draft in the form,
+edits, submits. Both versions exist (the agent's draft is on the record + the
+step output snapshot; the human's edit is the submission).
+
 ## Phase 3 — Reviews & the autonomy dial
+
+> **Sampling is BUILT**: agent-task node config `review_sample_pct` (0–100,
+> designer field) routes that share of *completed* steps to an org-admin
+> `review` notification carrying `{workflow_run_id, node_id, agent_run_id,
+> result}`. Deterministic (agent-run-id hash), never fails the step. The
+> review *entity* + acceptance-rate reports are org config per the design.
 
 `agent_task_review` entity (snapshots `{agent_run_id, agent_id, status, cost}` — no live
 join to prunable tables) + reports: acceptance rate, escalation rate, turnaround

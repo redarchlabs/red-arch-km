@@ -190,6 +190,25 @@ export function AgentTaskFields({
         <span className="text-xs text-muted-foreground">(off by default: un-approved outbound queries)</span>
       </label>
 
+      <div>
+        <label className="text-xs font-medium text-muted-foreground">Review sample %</label>
+        <Input
+          type="number"
+          min={0}
+          max={100}
+          value={String((data.review_sample_pct as number | undefined) ?? 0)}
+          onChange={(e) => {
+            const v = Math.max(0, Math.min(100, Number(e.target.value) || 0));
+            patch({ review_sample_pct: v > 0 ? v : undefined });
+          }}
+          className="mt-1 w-24"
+        />
+        <p className="mt-1 text-xs text-muted-foreground">
+          Route this % of completed steps to the org-admin review queue — the evidence base for
+          dialing autonomy up (or down).
+        </p>
+      </div>
+
       <p className="rounded-md bg-muted/60 p-2 text-xs text-muted-foreground">
         Attach an <b>error boundary</b> for escalation/failure (required to publish) and a{" "}
         <b>timer boundary</b> as the SLA — when it fires, the agent run is cancelled and the flow
