@@ -8,8 +8,28 @@ import { useOrg } from "@/context/OrgContext";
 import { cn } from "@/lib/utils";
 
 export function OrgSwitcher() {
-  const { orgs, currentOrg, setCurrentOrgId, isSiteAdmin } = useOrg();
+  const { orgs, currentOrg, setCurrentOrgId, isSiteAdmin, isLoading, error, refresh } = useOrg();
   const [open, setOpen] = useState(false);
+
+  if (orgs.length === 0 && isLoading) {
+    return <div className="text-sm text-muted-foreground">Loading organizations…</div>;
+  }
+
+  // An unknown org list is not an empty one — say so, and offer the retry.
+  // Reporting "No organizations" for a failed load is what made a transient
+  // stall look like a permissions problem.
+  if (orgs.length === 0 && error) {
+    return (
+      <button
+        type="button"
+        onClick={() => void refresh()}
+        title={error}
+        className="text-sm font-medium text-destructive hover:underline"
+      >
+        Couldn&apos;t load organizations — retry
+      </button>
+    );
+  }
 
   if (orgs.length === 0) {
     return isSiteAdmin ? (
