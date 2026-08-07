@@ -63,18 +63,20 @@ jobs:
       - name: Write backend .env
         env:
           E2E_TEST_SECRET: ${{ secrets.E2E_TEST_SECRET }}
-        # POSTGRES_PASSWORD must be set explicitly. .env.example ships it as an
-        # empty placeholder with a trailing `# REQUIRED: ...` comment, and the two
-        # parsers that read this file disagree about that line: compose keeps the
-        # comment text as the value (so Postgres inits with it), while make's
-        # `include .env` strips it and gets "" — so `make migrate` then failed
-        # auth as "redarch". Appending wins in both parsers.
+        # .env.example ships every credential blank for a human to fill in, and
+        # compose hard-requires these three (`${VAR:?...}`), so CI has to generate
+        # them. They are throwaway values for an ephemeral container set that is
+        # never reachable from outside the runner. Appending overrides the blank
+        # placeholder in both parsers that read this file (compose --env-file and
+        # the Makefile's `include .env`).
         run: |
           cp .env.example .env 2>/dev/null || touch .env
           {
             echo "API_E2E_TEST_MODE=true"
             echo "API_E2E_TEST_SECRET=${E2E_TEST_SECRET}"
             echo "POSTGRES_PASSWORD=e2e_ci_$(openssl rand -hex 12)"
+            echo "NEO4J_PASSWORD=e2e_ci_$(openssl rand -hex 12)"
+            echo "STORAGE_SECRET_KEY=e2e_ci_$(openssl rand -hex 12)"
           } >> .env
 
       # --- Infra + API on :8000 (compose pulls in postgres+redis via depends_on).
