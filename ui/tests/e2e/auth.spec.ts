@@ -18,10 +18,12 @@ test.describe("Authentication Flow", () => {
     await loginPage.expectPageTitle();
   });
 
-  test("root redirects to the Clerk sign-in page", async ({ page }) => {
+  test("a protected route redirects to the Clerk sign-in page", async ({ page }) => {
+    // Not `/` — that is a public landing page for logged-out visitors (see
+    // middleware's isPublicRoute); /documents is behind auth.protect().
     const loginPage = new LoginPage(page);
-    await page.goto("/");
-    await page.waitForLoadState("domcontentloaded");
+    await page.goto("/documents");
+    await page.waitForURL(/login|sign-in|clerk|auth/i, { timeout: 15_000 });
     const isAtLogin = await loginPage.isAtLoginPage();
     expect(isAtLogin).toBe(true);
   });
