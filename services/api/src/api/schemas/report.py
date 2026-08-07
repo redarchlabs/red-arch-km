@@ -107,7 +107,7 @@ class ReportRunResult(AggregateResult):
     returning a plain :class:`AggregateResult` — the builder already holds the
     viz it is editing."""
 
-    viz: Visualization | None = None
+    viz: Visualization
 
 
 class ReportRunRequest(BaseModel):

@@ -130,9 +130,10 @@ export async function deleteReport(reportId: string): Promise<void> {
 }
 
 /** A saved report's run response: the rows plus the report's own viz spec, so a
- * dashboard element can draw in one round trip. `viz` is absent from ad-hoc runs. */
+ * dashboard element can draw in one round trip. (Ad-hoc runs return a plain
+ * `AggregateResult` — the report builder already holds the viz it is editing.) */
 export interface ReportRunResult extends AggregateResult {
-  viz?: Visualization | null;
+  viz: Visualization;
 }
 
 /** Run a saved report, optionally with dashboard filter/limit overrides. */

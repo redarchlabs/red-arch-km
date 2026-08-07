@@ -25,7 +25,7 @@ import {
   TEXT_DISPLAYS,
 } from "@/lib/api/forms";
 import { createRecord, listRecords, type EntityRecord } from "@/lib/api/entityRecords";
-import { getReport, runReport, type AggregateResult, type Visualization } from "@/lib/api/reports";
+import { runReport, type AggregateResult, type Visualization } from "@/lib/api/reports";
 import { formatValue } from "@/components/reports/ReportChart";
 import { streamRunTokens } from "@/lib/api/runStream";
 import { callConnection, runWorkflow } from "@/lib/api/workflows";
@@ -706,7 +706,6 @@ function ReportNode({ el }: { el: ReportElement }) {
     // A poll tick that returns identical data skips setState entirely, so a live
     // dashboard doesn't redraw its charts for nothing.
     let lastJson: string | null = null;
-    let vizLoaded = false;
     const base = el.poll_ms ? Math.max(1000, el.poll_ms) : 0;
 
     const fetchOnce = async () => {
@@ -719,21 +718,12 @@ function ReportNode({ el }: { el: ReportElement }) {
         if (!alive) return;
         failures = 0;
         setError(null);
-        if (res.viz) {
-          vizLoaded = true;
-        } else if (!vizLoaded) {
-          // Older API without viz-in-run: fetch the spec separately, once.
-          const report = await getReport(el.report_id);
-          if (!alive) return;
-          setViz(report.viz);
-          vizLoaded = true;
-        }
         const json = JSON.stringify(res);
         if (json === lastJson) return;
         lastJson = json;
         const { viz: nextViz, ...rows } = res;
         setResult(rows);
-        if (nextViz) setViz(nextViz);
+        setViz(nextViz);
       } catch {
         if (!alive) return;
         failures += 1;
