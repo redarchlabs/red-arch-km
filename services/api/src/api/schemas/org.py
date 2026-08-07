@@ -36,12 +36,20 @@ class OrgSettingsUpdate(BaseModel):
 
     Deliberately much narrower than :class:`OrgUpdate`: tenancy and cost fields
     (name, knowledge-graph provisioning, per-org API key, LLM pin) stay
-    site-admin only. Unlike OrgUpdate this is a *replacement* payload — the
-    field is single, so an omitted or null ``home_view_id`` clears the home view
-    rather than meaning "no change", and no sentinel value is needed.
+    site-admin only.
+
+    Per-field PATCH semantics, keyed on ``model_fields_set``: an OMITTED field is
+    "no change", while an explicit ``null`` clears that setting. (This carried
+    plain replacement semantics while ``home_view_id`` was the only field; with
+    more than one, replacement would mean the home-view form silently wiped
+    branding every time it saved.)
     """
 
     home_view_id: uuid.UUID | None = None
+    # A `#rrggbb` accent for branded pages. Validated here rather than trusted:
+    # the value reaches a CSS custom property, so anything but a hex triple has
+    # no business being stored.
+    accent_color: str | None = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
 
 
 class OrgRead(BaseModel):
@@ -53,6 +61,10 @@ class OrgRead(BaseModel):
     use_knowledge_graph: bool
     home_view_id: uuid.UUID | None = None
     default_llm_model: str | None = None
+    accent_color: str | None = None
+    # Whether a logo has been uploaded — the asset itself is served from its own
+    # route, so the client needs the flag, not the storage key.
+    has_logo: bool = False
 
 
 class DimensionCreate(BaseModel):

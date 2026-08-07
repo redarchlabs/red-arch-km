@@ -12,6 +12,11 @@ interface OrgSummary {
   is_admin: boolean;
   /** Optional per-org landing view; drives the sidebar "Home" nav item. */
   home_view_id?: string | null;
+  /** Branding for the chrome-free view routes (kiosk); `#rrggbb` accent and
+   * whether a logo exists. A shared page can't use these — it has no session —
+   * so its branding rides in the render payload instead. */
+  accent_color?: string | null;
+  has_logo?: boolean;
 }
 
 interface OrgState {

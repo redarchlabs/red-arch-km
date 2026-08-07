@@ -47,8 +47,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api import db_scope
 from api.config import Settings
 from api.models.view import View
+from api.repositories.org import OrgRepository
 from api.repositories.view import ViewRepository
-from api.schemas.form import FormRenderRead
+from api.schemas.form import FormRenderRead, OrgBrandingRead
 from api.schemas.workflow import ManualRunRequest, ManualRunResult
 from api.services import form_token
 from api.services.form_layout import collect_workflow_ids
@@ -123,6 +124,7 @@ class ViewShareAdminService:
         record_id: uuid.UUID | None,
         expires_at: datetime | None,
         record_follow: bool = False,
+        show_branding: bool = False,
     ) -> tuple[View, str]:
         """Turn sharing on (or rotate an existing link) and return the raw token.
 
@@ -144,6 +146,7 @@ class ViewShareAdminService:
         view.public_record_id = None if record_follow else record_id
         view.public_expires_at = expires_at
         view.public_enabled_at = datetime.now(UTC)
+        view.public_show_branding = show_branding
         await self._session.flush()
         return view, raw
 
@@ -154,6 +157,7 @@ class ViewShareAdminService:
         view.public_record_follow = False
         view.public_expires_at = None
         view.public_enabled_at = None
+        view.public_show_branding = False
         await self._session.flush()
         return view
 
@@ -201,7 +205,34 @@ class PublicViewService:
         # The resolved record only — `record_id` is never taken from the request, so
         # the link cannot be walked onto another row.
         render = await ViewService(self._session, view.org_id).render(view.id, await self._record_id(view))
-        return _trim_catalog(render)
+        trimmed = _trim_catalog(render)
+        # Org identity rides along ONLY when this link opted in. Off (the default)
+        # the page stays anonymous chrome, which is what a link that can be
+        # forwarded anywhere should be by default.
+        if view.public_show_branding:
+            org = await OrgRepository(self._session).get(view.org_id)
+            if org is not None:
+                trimmed.branding = OrgBrandingRead(
+                    org_name=org.name,
+                    accent_color=org.accent_color,
+                    has_logo=bool(org.logo_object_key),
+                )
+        return trimmed
+
+    async def logo(self, raw_token: str) -> tuple[str, uuid.UUID]:
+        """The stored logo key for a branded share link.
+
+        Behind the token (not the org id) so it inherits the link's own lifetime
+        and rate limit, and so a link with branding switched off cannot be used to
+        read the org's logo anyway.
+        """
+        view = await self._resolve(raw_token)
+        if not view.public_show_branding:
+            raise ViewShareError("this link does not show branding")
+        org = await OrgRepository(self._session).get(view.org_id)
+        if org is None or not org.logo_object_key:
+            raise FormNotFoundError("no logo")
+        return org.logo_object_key, view.org_id
 
     async def run_workflow(
         self,

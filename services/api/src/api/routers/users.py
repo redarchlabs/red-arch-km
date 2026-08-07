@@ -58,6 +58,8 @@ async def get_me(
                 name=o.name,
                 is_admin=o.id in admin_org_ids,
                 home_view_id=str(o.home_view_id) if o.home_view_id else None,
+                accent_color=o.accent_color,
+                has_logo=bool(o.logo_object_key),
             )
             for o in orgs
         ],
