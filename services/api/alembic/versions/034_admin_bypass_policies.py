@@ -90,21 +90,25 @@ $$;
 # implicit; the app now connects as the non-owner km_app, so make the function
 # SECURITY DEFINER (runs as its owner = the migration/admin role that owns the
 # tables). search_path is pinned per the SECURITY DEFINER hardening guideline.
-_DEFINER_ON = """
-ALTER FUNCTION workflow_ensure_partitions(int) SECURITY DEFINER;
-ALTER FUNCTION workflow_ensure_partitions(int) SET search_path = public, pg_temp;
-"""
-_DEFINER_OFF = """
-ALTER FUNCTION workflow_ensure_partitions(int) SECURITY INVOKER;
-ALTER FUNCTION workflow_ensure_partitions(int) RESET search_path;
-"""
+#
+# One statement per op.execute: env.py migrates over asyncpg, whose SQLAlchemy
+# dialect sends every statement as a prepared statement, and Postgres rejects
+# multiple commands in one of those ("cannot insert multiple commands into a
+# prepared statement"). A DO $$ ... $$ block is a single command and so is fine
+# above; a bare sequence of ALTERs is not.
+_DEFINER_SECURITY = "ALTER FUNCTION workflow_ensure_partitions(int) SECURITY DEFINER"
+_DEFINER_SEARCH_PATH = "ALTER FUNCTION workflow_ensure_partitions(int) SET search_path = public, pg_temp"
+_INVOKER_SECURITY = "ALTER FUNCTION workflow_ensure_partitions(int) SECURITY INVOKER"
+_INVOKER_SEARCH_PATH = "ALTER FUNCTION workflow_ensure_partitions(int) RESET search_path"
 
 
 def upgrade() -> None:
     op.execute(_APPLY)
-    op.execute(_DEFINER_ON)
+    op.execute(_DEFINER_SECURITY)
+    op.execute(_DEFINER_SEARCH_PATH)
 
 
 def downgrade() -> None:
-    op.execute(_DEFINER_OFF)
+    op.execute(_INVOKER_SECURITY)
+    op.execute(_INVOKER_SEARCH_PATH)
     op.execute(_DROP)

@@ -8,16 +8,24 @@ import { expect, test } from "@playwright/test";
  */
 
 test.describe("app boot", () => {
-  test("root redirects to login when unauthenticated", async ({ page }) => {
+  test("root serves the public landing page when unauthenticated", async ({ page }) => {
+    // `/` is deliberately public (middleware's isPublicRoute): a logged-out
+    // visitor gets the marketing landing, and only a signed-in one is redirected
+    // to /documents by the root route handler. Asserting the landing here keeps
+    // the pair honest — the next test is what proves the gate still bites.
     await page.goto("/");
+    await page.waitForLoadState("domcontentloaded");
+    expect(page.url()).not.toMatch(/\/documents(\b|\/|$)/);
+  });
+
+  test("a protected route redirects to login when unauthenticated", async ({ page }) => {
+    await page.goto("/documents");
     // Auth-gating runs in two layers: clerkMiddleware on the server
-    // (src/middleware.ts — auth.protect() on every route except /login and
-    // /sign-up) and the client-side (authenticated)/layout gate
-    // (router.replace("/login") when !isAuthenticated). The root path first
-    // performs its app-level redirect to /documents, then the auth gate bounces
-    // the unauthenticated visitor to /login. That client redirect fires AFTER
-    // Clerk initializes, so we must wait for the URL to SETTLE — sampling it at
-    // "domcontentloaded" catches the transient /documents state mid-hydration.
+    // (src/middleware.ts — auth.protect() on every route outside isPublicRoute)
+    // and the client-side (authenticated)/layout gate (router.replace("/login")
+    // when !isAuthenticated). The client redirect fires AFTER Clerk initializes,
+    // so we must wait for the URL to SETTLE — sampling it at "domcontentloaded"
+    // catches the transient /documents state mid-hydration.
     await page.waitForURL(/login|clerk|accounts|auth/i, { timeout: 15_000 });
     // Discrimination: this test must FAIL when the auth state is wrong, not
     // always-pass. Two guards enforce that:
