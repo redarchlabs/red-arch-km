@@ -54,6 +54,9 @@ export default function ViewsPage() {
         name: name.trim(),
         slug: slugify(name),
         entity_definition_id: entityId || null,
+        // Kiosk/share pages render edge-to-edge; start new views with breathing
+        // room instead of the backend's legacy-preserving "none" default.
+        config: { version: 2, elements: [], padding: "comfortable" },
       });
       setName("");
       await load();

@@ -49,6 +49,10 @@ export interface FieldElement extends ElementBase {
   label?: string | null;
   required?: boolean | null;
   read_only?: boolean;
+  /** Views render fields as read-only readouts by default; `true` opts this
+   * field back into an input there (edits can feed workflow-button inputs).
+   * Ignored on forms. */
+  editable?: boolean | null;
   help_text?: string | null;
   placeholder?: string | null;
   width?: FieldWidth | null;

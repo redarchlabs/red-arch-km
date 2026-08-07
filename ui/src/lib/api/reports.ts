@@ -129,12 +129,18 @@ export async function deleteReport(reportId: string): Promise<void> {
   await apiClient.delete(`/reports/${reportId}`);
 }
 
+/** A saved report's run response: the rows plus the report's own viz spec, so a
+ * dashboard element can draw in one round trip. `viz` is absent from ad-hoc runs. */
+export interface ReportRunResult extends AggregateResult {
+  viz?: Visualization | null;
+}
+
 /** Run a saved report, optionally with dashboard filter/limit overrides. */
 export async function runReport(
   reportId: string,
   overrides?: { extra_filters?: FilterSpec[]; limit?: number },
-): Promise<AggregateResult> {
-  const res = await apiClient.post<AggregateResult>(`/reports/${reportId}/run`, overrides ?? {});
+): Promise<ReportRunResult> {
+  const res = await apiClient.post<ReportRunResult>(`/reports/${reportId}/run`, overrides ?? {});
   return res.data;
 }
 
