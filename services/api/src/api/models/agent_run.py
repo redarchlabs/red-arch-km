@@ -35,7 +35,8 @@ AGENT_STEP_KINDS = (
     "approval_required",
     "error",
 )
-AGENT_APPROVAL_STATUSES = ("pending", "approved", "denied")
+# "voided": the run was cancelled/finalized while the ask was still pending.
+AGENT_APPROVAL_STATUSES = ("pending", "approved", "denied", "voided")
 AGENT_NOTIFICATION_KINDS = ("escalation", "approval", "review", "done")
 AGENT_NOTIFICATION_STATUSES = ("unread", "read", "resolved")
 
