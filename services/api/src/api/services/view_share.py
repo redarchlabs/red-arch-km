@@ -59,7 +59,10 @@ from api.services.view_service import ViewService
 # Elements that fetch from authenticated endpoints of their own accord. They render
 # but stay empty on an anonymous page, so the authoring UI can warn instead of the
 # operator discovering it in front of an audience.
-PUBLIC_UNSUPPORTED_ELEMENTS = ("record_list", "chat", "report", "form_ref")
+# ``stat`` joins the list for the same reason as ``report``: it reads a saved
+# report through the authenticated reports endpoint. (``card`` is pure layout and
+# needs no entry — the walk below recurses through any container generically.)
+PUBLIC_UNSUPPORTED_ELEMENTS = ("record_list", "chat", "report", "stat", "form_ref")
 
 
 class ViewShareError(FormValidationError):

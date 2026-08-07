@@ -18,12 +18,15 @@ import {
   type PuzzlePadElement,
   type RecordListElement,
   type ReportElement,
+  type RecordListColumn,
   type SectionElement,
+  type StatElement,
   type TableElement,
   TEXT_DISPLAYS,
 } from "@/lib/api/forms";
 import { createRecord, listRecords, type EntityRecord } from "@/lib/api/entityRecords";
 import { getReport, runReport, type AggregateResult, type Visualization } from "@/lib/api/reports";
+import { formatValue } from "@/components/reports/ReportChart";
 import { streamRunTokens } from "@/lib/api/runStream";
 import { callConnection, runWorkflow } from "@/lib/api/workflows";
 import { Markdown } from "@/components/common/Markdown";
@@ -421,14 +424,21 @@ function RecordListNode({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [el.entity, el.limit, el.sort_by, el.sort_dir, el.poll_ms, filtersKey]);
 
-  // Columns: the explicit field list, else the field slugs on the first row
-  // (excluding base columns) so an unconfigured board still shows something.
+  // Columns: the explicit field list PLUS any column configured for presentation
+  // only (additive, so `columns` never has to restate `fields`), else the field
+  // slugs on the first row so an unconfigured board still shows something.
+  const configured = el.columns ?? [];
+  const declared = [
+    ...(el.fields ?? []),
+    ...configured.map((c) => c.slug).filter((s) => !(el.fields ?? []).includes(s)),
+  ];
   const columns =
-    el.fields && el.fields.length > 0
-      ? el.fields
+    declared.length > 0
+      ? declared
       : rows && rows[0]
         ? Object.keys(rows[0]).filter((k) => !["id", "created_at", "updated_at", "org_id"].includes(k))
         : [];
+  const colConfig = new Map<string, RecordListColumn>(configured.map((c) => [c.slug, c]));
 
   const runRow = async (row: EntityRecord) => {
     if (!el.row_workflow_id || !onRunWorkflow) return;
@@ -450,10 +460,43 @@ function RecordListNode({
   };
 
   // Right-align a column when its values are numbers — scanning figures down a
-  // ragged left edge is what makes a table look homemade.
+  // ragged left edge is what makes a table look homemade. An explicit `align`
+  // on the column config wins.
   const numericCols = new Set(
     columns.filter((c) => (rows ?? []).some((r) => typeof r[c] === "number")),
   );
+  const alignOf = (c: string): string => {
+    const explicit = colConfig.get(c)?.align;
+    if (explicit === "right") return "text-right";
+    if (explicit === "center") return "text-center";
+    if (explicit === "left") return "text-left";
+    return numericCols.has(c) ? "text-right" : "text-left";
+  };
+
+  /** Draw one cell per its column config; `auto` keeps the type-driven default. */
+  const renderCell = (col: string, raw: unknown): ReactNode => {
+    const cfg = colConfig.get(col);
+    const fmt = cfg?.format ?? "auto";
+    if (fmt === "badge") {
+      const text = formatCell(raw);
+      if (text === "—") return text;
+      const tone = cfg?.badge_map?.[String(raw)] ?? "neutral";
+      return (
+        <span
+          className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
+            BADGE_TONES[tone] ?? BADGE_TONES.neutral
+          }`}
+        >
+          {text}
+        </span>
+      );
+    }
+    if (fmt === "code") {
+      return <span className="font-mono text-xs">{formatCell(raw)}</span>;
+    }
+    if (fmt === "text") return raw == null ? "—" : String(raw);
+    return formatCell(raw);
+  };
 
   return (
     <ViewCard title={el.label} flush>
@@ -478,11 +521,8 @@ function RecordListNode({
             <thead className="border-b bg-muted/50">
               <tr>
                 {columns.map((c) => (
-                  <th
-                    key={c}
-                    className={`px-3 py-2 font-medium ${numericCols.has(c) ? "text-right" : "text-left"}`}
-                  >
-                    {humanizeSlug(c)}
+                  <th key={c} className={`px-3 py-2 font-medium ${alignOf(c)}`}>
+                    {colConfig.get(c)?.label ?? humanizeSlug(c)}
                   </th>
                 ))}
                 {el.row_link_template ? <th className="w-24 px-3 py-2" /> : null}
@@ -498,9 +538,9 @@ function RecordListNode({
                   {columns.map((c) => (
                     <td
                       key={c}
-                      className={`px-3 py-2 ${numericCols.has(c) ? "text-right tabular-nums" : ""}`}
+                      className={`px-3 py-2 ${alignOf(c)} ${numericCols.has(c) ? "tabular-nums" : ""}`}
                     >
-                      {formatCell(row[c])}
+                      {renderCell(c, row[c])}
                     </td>
                   ))}
                   {el.row_link_template ? (
@@ -532,6 +572,118 @@ function RecordListNode({
         </div>
       )}
     </ViewCard>
+  );
+}
+
+/** Badge tones for a record-list column rendered as a status pill. Fixed set,
+ * from the theme's own tokens — a status board shouldn't invent colors. */
+const BADGE_TONES: Record<string, string> = {
+  neutral: "bg-muted text-muted-foreground",
+  success: "bg-success/12 text-success",
+  warning: "bg-warning/12 text-warning",
+  destructive: "bg-destructive/12 text-destructive",
+  info: "bg-primary/12 text-primary",
+};
+
+/** A KPI tile: one big number over a label. Reads a saved report (the same data
+ * path as the report element) so there is no second way to compute a metric. */
+function StatNode({ el }: { el: StatElement }) {
+  const [result, setResult] = useState<AggregateResult | null>(null);
+  const [viz, setViz] = useState<Visualization | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    if (!el.report_id) return;
+    let alive = true;
+    let timer: number | undefined;
+    let failures = 0;
+    let lastJson: string | null = null;
+    const base = el.poll_ms ? Math.max(1000, el.poll_ms) : 0;
+
+    const fetchOnce = async () => {
+      if (typeof document !== "undefined" && document.hidden) return;
+      try {
+        const res = await runReport(el.report_id);
+        if (!alive) return;
+        failures = 0;
+        setFailed(false);
+        const json = JSON.stringify(res);
+        if (json === lastJson) return;
+        lastJson = json;
+        const { viz: nextViz, ...rows } = res;
+        setResult(rows);
+        if (nextViz) setViz(nextViz);
+      } catch {
+        if (!alive) return;
+        failures += 1;
+        setFailed(true);
+      }
+    };
+    const loop = async () => {
+      await fetchOnce();
+      if (!alive || !base) return;
+      timer = window.setTimeout(loop, Math.min(base * 2 ** Math.min(failures, 5), 30_000));
+    };
+    void loop();
+    const onVisible = () => {
+      if (base && alive && !document.hidden) {
+        if (timer) window.clearTimeout(timer);
+        void loop();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      alive = false;
+      if (timer) window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [el.report_id, el.poll_ms]);
+
+  // Sum the metric across rows, exactly as the report's own metric tile does.
+  const metric = viz?.series[0] ?? result?.metrics[0];
+  const value =
+    result && metric ? result.rows.reduce((sum, r) => sum + (Number(r[metric]) || 0), 0) : null;
+  const compareKey = viz?.compare_to;
+  const compare =
+    result && compareKey
+      ? result.rows.reduce((sum, r) => sum + (Number(r[compareKey]) || 0), 0)
+      : null;
+  const delta = compare != null && compare !== 0 && value != null
+      ? ((value - compare) / Math.abs(compare)) * 100
+      : null;
+  const up = delta != null && delta >= 0;
+  // "Good" is a property of the metric, not the direction: headcount rising is
+  // not inherently good news, so `neutral` colors the delta like body text.
+  const trend = el.trend ?? "up_is_good";
+  const deltaTone =
+    trend === "neutral"
+      ? "text-muted-foreground"
+      : (up && trend === "up_is_good") || (!up && trend === "down_is_good")
+        ? "text-success"
+        : "text-destructive";
+
+  return (
+    <div className="rounded-lg border bg-background p-4 shadow-sm">
+      {el.label ? (
+        <p className="truncate text-xs font-medium uppercase tracking-wide text-muted-foreground">
+          {el.label}
+        </p>
+      ) : null}
+      {failed && value == null ? (
+        <p className="mt-1 text-sm text-destructive">Unavailable</p>
+      ) : value == null ? (
+        <Skeleton className="mt-1.5 h-9 w-24" />
+      ) : (
+        <p className="mt-1 truncate text-3xl font-bold leading-tight tabular-nums text-foreground">
+          {formatValue(value, viz?.number_format ?? "plain", viz?.unit, viz?.precision)}
+        </p>
+      )}
+      {delta != null ? (
+        <p className={`mt-1 text-sm ${deltaTone}`}>
+          {up ? "▲" : "▼"} {Math.abs(delta).toFixed(1)}% vs prior
+        </p>
+      ) : null}
+    </div>
   );
 }
 
@@ -1990,6 +2142,14 @@ export function FormRenderer({
             </ElementErrorBoundary>
           </div>
         );
+      case "stat":
+        return (
+          <div className={spanClass(el.width)}>
+            <ElementErrorBoundary>
+              <StatNode el={el} />
+            </ElementErrorBoundary>
+          </div>
+        );
       case "record_list":
         return (
           <div className={spanClass(el.width)}>
@@ -2067,6 +2227,32 @@ export function FormRenderer({
             </legend>
             {collapsed ? null : renderList(el.elements, scope)}
           </fieldset>
+        );
+      }
+      case "card": {
+        const accent: Record<string, string> = {
+          none: "",
+          primary: "border-t-2 border-t-primary",
+          success: "border-t-2 border-t-success",
+          warning: "border-t-2 border-t-warning",
+          destructive: "border-t-2 border-t-destructive",
+        };
+        return (
+          <section
+            className={`sm:col-span-12 overflow-hidden rounded-lg border bg-background shadow-sm ${
+              accent[el.accent ?? "none"] ?? ""
+            }`}
+          >
+            {el.title || el.subtitle ? (
+              <header className="border-b px-4 py-3">
+                {el.title ? <h3 className="text-sm font-semibold">{el.title}</h3> : null}
+                {el.subtitle ? (
+                  <p className="mt-0.5 text-xs text-muted-foreground">{el.subtitle}</p>
+                ) : null}
+              </header>
+            ) : null}
+            <div className="p-4">{renderList(el.elements as FormElement[], scope)}</div>
+          </section>
         );
       }
       case "tab_group":

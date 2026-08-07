@@ -880,3 +880,152 @@ def test_qr_code_size_is_bounded():
     ).elements[0].size == 320
     with pytest.raises(ValidationError):
         FormConfig.model_validate({"version": 2, "elements": [{"type": "qr_code", "url": "/x", "size": 40}]})
+
+
+# ------------------------------------------------------------------ #
+# `card` container + the consolidated tree walkers
+#
+# Every walker now shares `container_child_lists`, so these guard the property
+# that made the consolidation worth doing: a NEW container type is understood by
+# all of them at once. The share allow-list case is the one with teeth — a
+# container a walker doesn't know about silently fails its buttons closed on an
+# anonymous page, where the button is still visibly sitting there.
+# ------------------------------------------------------------------ #
+def test_card_is_a_layout_container_that_binds_its_children(ids, fields_by_entity, rels):
+    """A card holds the parent's entity scope, so its fields bind to the root."""
+    cfg = FormConfig.model_validate(
+        {
+            "version": 2,
+            "elements": [
+                {
+                    "type": "card",
+                    "title": "Order",
+                    "elements": [{"type": "field", "slug": "name"}],
+                }
+            ],
+        }
+    )
+    fl.validate(cfg.elements, ids["root"], fields_by_entity, rels)
+    bindings = fl.flatten(cfg.elements, rels)
+    assert "name" in bindings.root.display_slugs
+    assert "name" in bindings.root.write_slugs
+
+
+def test_card_rejects_an_unknown_field(ids, fields_by_entity, rels):
+    """Validation descends into a card rather than skipping past it."""
+    cfg = FormConfig.model_validate(
+        {
+            "version": 2,
+            "elements": [{"type": "card", "elements": [{"type": "field", "slug": "nope"}]}],
+        }
+    )
+    with pytest.raises(LayoutError):
+        fl.validate(cfg.elements, ids["root"], fields_by_entity, rels)
+
+
+def _run_workflow_button(workflow_id):
+    return {
+        "type": "button",
+        "label": "Go",
+        "style": "primary",
+        "action": {"kind": "run_workflow", "workflow_id": str(workflow_id), "inputs": {}},
+    }
+
+
+def test_workflow_allow_list_reaches_a_button_inside_a_card():
+    """The anonymous-share allow-list is derived from this walk."""
+    wf = uuid.uuid4()
+    cfg = FormConfig.model_validate(
+        {"version": 2, "elements": [{"type": "card", "elements": [_run_workflow_button(wf)]}]}
+    )
+    assert fl.collect_workflow_ids(cfg.elements) == {wf}
+
+
+def test_workflow_allow_list_reaches_a_button_nested_in_a_card_in_a_column():
+    """Containers compose; the walk has to survive the nesting authors actually use."""
+    wf = uuid.uuid4()
+    cfg = FormConfig.model_validate(
+        {
+            "version": 2,
+            "elements": [
+                {
+                    "type": "columns",
+                    "columns": [
+                        {
+                            "span": 6,
+                            "elements": [{"type": "card", "elements": [_run_workflow_button(wf)]}],
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+    assert fl.collect_workflow_ids(cfg.elements) == {wf}
+
+
+def test_relationship_ids_are_collected_through_a_card(ids):
+    """A section inside a card must still be bulk-loaded, or its fields render empty."""
+    cfg = FormConfig.model_validate(
+        {
+            "version": 2,
+            "elements": [
+                {
+                    "type": "card",
+                    "elements": [
+                        {
+                            "type": "section",
+                            "relationship_id": str(ids["rel_1to1"]),
+                            "mode": "inline",
+                            "elements": [{"type": "field", "slug": "product_name"}],
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+    assert fl.collect_relationship_ids(cfg.elements) == {ids["rel_1to1"]}
+
+
+def test_stat_is_unbound_like_report(ids, fields_by_entity, rels):
+    """A stat reads a saved report, not the view's record — valid standalone."""
+    cfg = FormConfig.model_validate(
+        {
+            "version": 2,
+            "elements": [{"type": "stat", "report_id": str(uuid.uuid4()), "label": "Headcount"}],
+        }
+    )
+    fl.validate(cfg.elements, ids["root"], fields_by_entity, rels)
+    assert fl.flatten(cfg.elements, rels).root.display_slugs == []
+
+
+def test_record_list_columns_are_optional_and_additive():
+    """`fields` alone keeps working; `columns` adds presentation without replacing it."""
+    cfg = FormConfig.model_validate(
+        {
+            "version": 2,
+            "elements": [
+                {
+                    "type": "record_list",
+                    "entity": "employee",
+                    "fields": ["first_name"],
+                    "columns": [
+                        {
+                            "slug": "status",
+                            "label": "State",
+                            "format": "badge",
+                            "badge_map": {"Active": "success"},
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+    el = cfg.elements[0]
+    assert el.fields == ["first_name"]
+    assert el.columns[0].slug == "status"
+    assert el.columns[0].badge_map == {"Active": "success"}
+    # Absent on an existing config — the key is genuinely optional.
+    plain = FormConfig.model_validate(
+        {"version": 2, "elements": [{"type": "record_list", "entity": "employee"}]}
+    )
+    assert plain.elements[0].columns == []

@@ -26,7 +26,12 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
-from api.schemas.form_elements import MAX_TREE_DEPTH, tree_depth
+from api.schemas.form_elements import (
+    MAX_TREE_DEPTH,
+    container_child_lists,
+    iter_elements,
+    tree_depth,
+)
 
 # ``{token}`` placeholders in a link column's ``href_template``. ``{id}`` is the
 # row record id; any other token is an anchor field slug whose value must be
@@ -124,7 +129,10 @@ def collect_workflow_ids(elements: list[Any]) -> set[uuid.UUID]:
             with contextlib.suppress(ValueError):
                 out.add(uuid.UUID(value))
 
-    def visit(el: Any) -> None:
+    # Traversal comes from the shared walker, so a new container type can never
+    # hide a button from this allow-list (which would fail its workflow closed
+    # on a shared page).
+    for el, _depth in iter_elements(elements):
         etype = getattr(el, "type", None)
         action = getattr(el, "action", None)
         if action is not None and getattr(action, "kind", None) == "run_workflow":
@@ -137,24 +145,6 @@ def collect_workflow_ids(elements: list[Any]) -> set[uuid.UUID]:
             add(getattr(el, "row_workflow_id", None))
         elif etype == "chat":
             add(getattr(el, "answer_workflow_id", None))
-        elif etype == "tab_group":
-            for tab in el.tabs:
-                for child in tab.elements:
-                    visit(child)
-        elif etype == "accordion":
-            for pane in el.panes:
-                for child in pane.elements:
-                    visit(child)
-        elif etype == "columns":
-            for col in el.columns:
-                for child in col.elements:
-                    visit(child)
-        elif etype in ("panel", "section", "block"):
-            for child in el.elements:
-                visit(child)
-
-    for e in elements:
-        visit(e)
     return out
 
 
@@ -174,39 +164,19 @@ def collect_relationship_ids(elements: list[Any]) -> set[uuid.UUID]:
     blocks, and table ``related`` columns) — so the caller can bulk-load them."""
     out: set[uuid.UUID] = set()
 
-    def visit(el: Any) -> None:
+    for el, _depth in iter_elements(elements):
         etype = getattr(el, "type", None)
         if etype == "section":
             out.add(el.relationship_id)
-            for child in el.elements:
-                visit(child)
         elif etype == "block":
             out.add(el.anchor_relationship_id)
-            for child in el.elements:
-                visit(child)
         elif etype == "table":
+            # A table's children are columns, not elements — the shared walker
+            # doesn't descend into them, so read them here.
             out.add(el.anchor_relationship_id)
             for col in el.columns:
                 if getattr(col, "kind", None) == "related":
                     out.add(col.relationship_id)
-        elif etype == "tab_group":
-            for tab in el.tabs:
-                for child in tab.elements:
-                    visit(child)
-        elif etype == "accordion":
-            for pane in el.panes:
-                for child in pane.elements:
-                    visit(child)
-        elif etype == "columns":
-            for col in el.columns:
-                for child in col.elements:
-                    visit(child)
-        elif etype == "panel":
-            for child in el.elements:
-                visit(child)
-
-    for e in elements:
-        visit(e)
     return out
 
 
@@ -291,6 +261,7 @@ def _validate_element(
         "slides",
         "chat",
         "report",
+        "stat",
         "record_list",
     ):
         return  # presentational / unbound — nothing to bind at this entity level
@@ -319,7 +290,7 @@ def _validate_element(
     elif etype == "columns":
         for col in el.columns:
             _validate_list(col.elements, ctx, fields_by_entity, rels)
-    elif etype == "panel":
+    elif etype in ("panel", "card"):
         _validate_list(el.elements, ctx, fields_by_entity, rels)
     else:  # pragma: no cover - the discriminated union forbids other types
         raise LayoutError(f"unknown element type {etype!r}")
@@ -510,21 +481,13 @@ def flatten(elements: list[Any], rels: dict[uuid.UUID, RelInfo]) -> Bindings:
                     sort_dir=el.sort_dir,
                 )
             )
-        elif etype == "tab_group":
-            for tab in el.tabs:
-                for child in tab.elements:
+        else:
+            # Layout containers only: section/block/table are handled above and
+            # own their children's (re-scoped) bindings, so descending into them
+            # here would bind their fields against the wrong entity.
+            for children in container_child_lists(el, layout_only=True):
+                for child in children:
                     visit(child)
-        elif etype == "accordion":
-            for pane in el.panes:
-                for child in pane.elements:
-                    visit(child)
-        elif etype == "columns":
-            for col in el.columns:
-                for child in col.elements:
-                    visit(child)
-        elif etype == "panel":
-            for child in el.elements:
-                visit(child)
         # label/button: no data binding
 
     for e in elements:
