@@ -783,6 +783,7 @@ class TokenEngine:
                 if k not in ("_completed", "_completion_output", "_armed", "_agent_run_id")
             }
             await self._finish_agent_step(run, node, token, status="succeeded", output=output)
+            await self._maybe_sample_review(run, node, output)
             variables = None
             capture = node.data.get("capture")
             if isinstance(capture, str) and capture:
@@ -926,6 +927,47 @@ class TokenEngine:
                 token_data={**parked_data, "_armed": True},
             )
         return NodeOutcome("park", wait_kind="agent", correlation_key=str(agent_run.id), token_data=parked_data)
+
+    async def _maybe_sample_review(self, run: WorkflowRun, node: WorkflowNode, output: dict[str, Any]) -> None:
+        """Autonomy-dial evidence: route ``review_sample_pct``% of COMPLETED agent
+        steps to the org-admin review queue. Sampling hashes the agent run id
+        (deterministic — replayable in tests, no engine randomness), and the
+        notification snapshots the output so the review survives retention."""
+        try:
+            pct = int(node.data.get("review_sample_pct") or 0)
+        except (TypeError, ValueError):
+            pct = 0
+        if pct <= 0:
+            return
+        raw_run_id = output.get("agent_run_id")
+        try:
+            agent_run_id = uuid.UUID(str(raw_run_id))
+        except (TypeError, ValueError):
+            return
+        if pct < 100 and agent_run_id.int % 100 >= pct:
+            return
+        from api.services.agents.notify import create_notification
+
+        try:
+            await create_notification(
+                self._session,
+                run.org_id,
+                kind="review",
+                title=f"Sampled for review: agent step {node.id}",
+                body=json.dumps(
+                    {
+                        "workflow_run_id": str(run.id),
+                        "node_id": node.id,
+                        "agent_run_id": str(agent_run_id),
+                        "result": output.get("result") or {},
+                    },
+                    default=str,
+                )[:2000],
+                run_id=agent_run_id,
+                recipient_role="org_admin",
+            )
+        except Exception:  # noqa: BLE001 - a review sample must never fail the step
+            logger.exception("agent step review sampling failed (run=%s node=%s)", run.id, node.id)
 
     def _agent_failure_outcome(
         self,
