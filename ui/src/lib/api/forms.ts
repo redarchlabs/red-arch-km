@@ -587,6 +587,17 @@ export interface FormConfig {
    * share), which are otherwise full-bleed. Absent = "none", so the edge-to-edge
    * kiosks built before this option keep their layout. */
   padding?: "none" | "comfortable" | "spacious" | null;
+  /** Pin the palette this view renders in instead of following the viewer's
+   * theme. Applied to the view's own wrapper, never to `<html>`. */
+  theme?: "light" | "dark" | "redarch" | null;
+}
+
+/** Org identity for a chrome-free page. Present only on an anonymous share
+ * render whose link opted into branding. */
+export interface OrgBranding {
+  org_name: string;
+  accent_color?: string | null;
+  has_logo?: boolean;
 }
 
 // ---- form entity + CRUD DTOs ----
@@ -668,6 +679,8 @@ export interface FormRender {
   relationships: RelationshipMeta[];
   values: Record<string, unknown>;
   related: Record<string, { values?: Record<string, unknown>; rows?: Record<string, unknown>[] }>;
+  /** Set only on an anonymous share render whose link opted into branding. */
+  branding?: OrgBranding | null;
 }
 export interface FormSubmit {
   values: Record<string, unknown>;

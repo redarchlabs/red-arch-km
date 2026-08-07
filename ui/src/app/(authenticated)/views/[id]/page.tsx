@@ -38,6 +38,8 @@ export default function ViewBuilderPage({ params }: { params: Promise<{ id: stri
   const [refreshMs, setRefreshMs] = useState<number | null>(null);
   // Kiosk/share page inset. Same round-trip reasoning as refreshMs.
   const [padding, setPadding] = useState<"none" | "comfortable" | "spacious">("none");
+  // Pinned palette for the chrome-free routes; null follows the viewer's theme.
+  const [theme, setTheme] = useState<"light" | "dark" | "redarch" | null>(null);
   const [allEntities, setAllEntities] = useState<EntityDefinition[]>([]);
   const [allRels, setAllRels] = useState<EntityRelationship[]>([]);
   const [forms, setForms] = useState<{ id: string; name: string }[]>([]);
@@ -56,6 +58,7 @@ export default function ViewBuilderPage({ params }: { params: Promise<{ id: stri
       setElements(v.config.elements ?? []);
       setRefreshMs(v.config.refresh_ms ?? null);
       setPadding(v.config.padding ?? "none");
+      setTheme(v.config.theme ?? null);
       const [all, fs] = await Promise.all([
         listEntities().catch(() => []),
         listForms().catch(() => []),
@@ -86,7 +89,7 @@ export default function ViewBuilderPage({ params }: { params: Promise<{ id: stri
       // survive the save (the backend schema forbids unknown keys, so anything
       // stored is safe to echo back). The editor-managed keys override.
       const updated = await updateView(id, {
-        config: { ...view?.config, version: 2, elements, refresh_ms: refreshMs, padding },
+        config: { ...view?.config, version: 2, elements, refresh_ms: refreshMs, padding, theme },
       });
       setView(updated);
       setSaved(true);
@@ -191,6 +194,22 @@ export default function ViewBuilderPage({ params }: { params: Promise<{ id: stri
                 <option value="spacious">Spacious</option>
               </select>
               <span className="text-xs">breathing room on kiosk & shared pages</span>
+            </label>
+            <label className="flex items-center gap-2 text-sm text-muted-foreground">
+              Theme
+              <select
+                className="rounded-md border bg-background px-2 py-1 text-sm"
+                value={theme ?? ""}
+                onChange={(e) =>
+                  setTheme((e.target.value || null) as "light" | "dark" | "redarch" | null)
+                }
+              >
+                <option value="">Follow the viewer&apos;s theme</option>
+                <option value="light">Light</option>
+                <option value="dark">Dark</option>
+                <option value="redarch">Red Arch</option>
+              </select>
+              <span className="text-xs">pins the palette on kiosk &amp; shared pages</span>
             </label>
           </div>
           <LayoutBuilder

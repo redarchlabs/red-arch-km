@@ -11,6 +11,14 @@ from api.models.org import Org
 from api.models.user import UserOrgMembership
 
 
+class _Unset:
+    """Sentinel distinguishing "field not passed" from an explicit ``None``,
+    which for these nullable columns means "clear it"."""
+
+
+UNSET = _Unset()
+
+
 class OrgRepository:
     """Org queries that span tenants (no RLS scoping)."""
 
@@ -119,5 +127,25 @@ class OrgRepository:
         the column has no FK (see docs/DATABASE.md).
         """
         org.home_view_id = view_id
+        await self._session.flush()
+        return org
+
+    async def set_branding(
+        self,
+        org: Org,
+        *,
+        accent_color: str | None | _Unset = UNSET,
+        logo_object_key: str | None | _Unset = UNSET,
+    ) -> Org:
+        """Write the org-admin branding fields, leaving unpassed ones alone.
+
+        ``UNSET`` (the default) means "no change" while an explicit ``None``
+        clears — so the settings form can save the accent without also wiping a
+        logo it wasn't editing.
+        """
+        if not isinstance(accent_color, _Unset):
+            org.accent_color = accent_color
+        if not isinstance(logo_object_key, _Unset):
+            org.logo_object_key = logo_object_key
         await self._session.flush()
         return org

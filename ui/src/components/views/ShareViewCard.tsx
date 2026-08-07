@@ -25,6 +25,7 @@ export function ShareViewCard({ view, onChange }: Props) {
   const live = !!view.public_enabled_at;
   const [recordId, setRecordId] = useState(view.public_record_id ?? "");
   const [follow, setFollow] = useState(view.public_record_follow ?? false);
+  const [showBranding, setShowBranding] = useState(false);
   const [created, setCreated] = useState<ViewShareCreated | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -39,6 +40,7 @@ export function ShareViewCard({ view, onChange }: Props) {
       const result = await enableViewShare(view.id, {
         record_id: follow ? null : recordId.trim() || null,
         record_follow: follow,
+        show_branding: showBranding,
       });
       setCreated(result);
       onChange({
@@ -149,6 +151,23 @@ export function ShareViewCard({ view, onChange }: Props) {
                 </label>
               </div>
             ) : null}
+            <label className="flex items-start gap-2 text-sm">
+              <input
+                type="checkbox"
+                className="mt-1"
+                checked={showBranding}
+                onChange={(e) => setShowBranding(e.target.checked)}
+              />
+              <span>
+                <span className="font-medium">Show your organization&apos;s name and logo</span>
+                <span className="mt-0.5 block text-xs text-muted-foreground">
+                  Off by default. A share link can be forwarded anywhere, so putting your
+                  organization&apos;s identity on the page is a disclosure worth choosing —
+                  right for a public sign-up board, wrong for a link you&apos;d rather not have
+                  traced back.
+                </span>
+              </span>
+            </label>
             <Button type="button" onClick={() => void enable()} disabled={busy}>
               {busy ? "Working…" : "Create public link"}
             </Button>

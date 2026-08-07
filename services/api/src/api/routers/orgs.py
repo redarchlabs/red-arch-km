@@ -6,7 +6,7 @@ import logging
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth.dependencies import (
@@ -25,9 +25,21 @@ from api.schemas.org import OrgCreate, OrgRead, OrgSettingsUpdate, OrgUpdate
 from api.services.brain_client import BrainAPIClient
 from api.services.crypto import encrypt_secret
 from api.services.openai_client import model_routes
+from api.services.storage import StorageClient
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+# A logo is drawn into an <img> on a kiosk/share page. Raster + SVG would be the
+# obvious set, but SVG is script-capable and this asset is served to anonymous
+# visitors, so it is deliberately excluded.
+_LOGO_CONTENT_TYPES = {
+    "image/png": "png",
+    "image/jpeg": "jpg",
+    "image/webp": "webp",
+}
+# Generous for a logo, small enough that the upload path can stay in memory.
+_LOGO_MAX_BYTES = 2 * 1024 * 1024
 
 
 @router.get("/", response_model=PaginatedResponse[OrgRead])
@@ -179,9 +191,115 @@ async def update_org_settings(
             detail="home_view_id does not reference a view in this organization",
         )
 
-    # Replacement semantics: null/omitted clears the home view (OrgSettingsUpdate).
-    org = await repo.set_home_view(org, body.home_view_id)
+    # Per-field semantics (OrgSettingsUpdate): only what the caller actually sent
+    # is written, so the home-view form doesn't clear branding and vice versa.
+    sent = body.model_fields_set
+    if "home_view_id" in sent:
+        org = await repo.set_home_view(org, body.home_view_id)
+    if "accent_color" in sent:
+        org = await repo.set_branding(org, accent_color=body.accent_color)
     return OrgRead.model_validate(org)
+
+
+@router.put("/{org_id}/settings/logo", response_model=OrgRead)
+async def upload_org_logo(
+    org_id: uuid.UUID,
+    ctx: Annotated[OrgContext, Depends(require_org_admin)],
+    session: Annotated[AsyncSession, Depends(get_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
+    file: Annotated[UploadFile, File()],
+) -> OrgRead:
+    """Upload the org's logo (org admin). Replaces any previous one.
+
+    Stored under a per-org key in object storage rather than served from a public
+    bucket path, so the anonymous share route can decide for itself whether a
+    given link is allowed to show it.
+    """
+    if org_id != ctx.org_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Path organization does not match the active organization",
+        )
+    ext = _LOGO_CONTENT_TYPES.get((file.content_type or "").lower())
+    if ext is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Logo must be a PNG, JPEG or WebP image",
+        )
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Empty file")
+    if len(data) > _LOGO_MAX_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"Logo must be under {_LOGO_MAX_BYTES // (1024 * 1024)}MB",
+        )
+
+    repo = OrgRepository(session)
+    org = await repo.get(org_id)
+    if org is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Org not found")
+
+    key = f"{org_id}/branding/logo.{ext}"
+    StorageClient(settings).put_object(key, data, file.content_type or "application/octet-stream")
+    org = await repo.set_branding(org, logo_object_key=key)
+    return OrgRead.model_validate(org)
+
+
+@router.delete("/{org_id}/settings/logo", response_model=OrgRead)
+async def delete_org_logo(
+    org_id: uuid.UUID,
+    ctx: Annotated[OrgContext, Depends(require_org_admin)],
+    session: Annotated[AsyncSession, Depends(get_db)],
+) -> OrgRead:
+    """Clear the org's logo. The stored object is left in place — harmless, and
+    it keeps a mis-click from destroying the only copy of an asset."""
+    if org_id != ctx.org_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Path organization does not match the active organization",
+        )
+    repo = OrgRepository(session)
+    org = await repo.get(org_id)
+    if org is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Org not found")
+    org = await repo.set_branding(org, logo_object_key=None)
+    return OrgRead.model_validate(org)
+
+
+@router.get("/{org_id}/settings/logo")
+async def get_org_logo(
+    org_id: uuid.UUID,
+    ctx: Annotated[OrgContext, Depends(require_org_admin)],
+    session: Annotated[AsyncSession, Depends(get_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> Response:
+    """The org's logo, for the settings screen and the authenticated kiosk route.
+    (Anonymous share pages fetch theirs through the token-scoped public route.)"""
+    if org_id != ctx.org_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Path organization does not match the active organization",
+        )
+    org = await OrgRepository(session).get(org_id)
+    if org is None or not org.logo_object_key:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No logo")
+    return _logo_response(settings, org.logo_object_key)
+
+
+def _logo_response(settings: Settings, key: str) -> Response:
+    """Stream a stored logo. Shared by the authenticated and public routes so
+    both answer with identical bytes, content type and caching."""
+    try:
+        data = StorageClient(settings).get_object(key)
+    except Exception as exc:  # storage outage / key vanished
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No logo") from exc
+    ext = key.rsplit(".", 1)[-1].lower()
+    content_type = {"png": "image/png", "jpg": "image/jpeg", "webp": "image/webp"}.get(ext, "image/png")
+    # Cached hard: a kiosk re-polls its page for hours and must not re-fetch the
+    # logo each time (on the public route that would also burn the token's rate
+    # budget, which real devices have exhausted before).
+    return Response(content=data, media_type=content_type, headers={"Cache-Control": "public, max-age=3600"})
 
 
 @router.delete("/{org_id}", status_code=status.HTTP_204_NO_CONTENT)

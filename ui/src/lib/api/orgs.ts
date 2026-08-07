@@ -18,11 +18,26 @@ export interface OrgUpdateInput {
 }
 
 /**
- * Org-admin-writable settings (`PATCH /api/orgs/{id}/settings`). Replacement
- * semantics, not patch semantics: `null` clears the org's home view.
+ * Org-admin-writable settings (`PATCH /api/orgs/{id}/settings`). Per-field patch
+ * semantics: an omitted key is "no change", an explicit `null` clears that one
+ * setting. (So saving the home view no longer wipes branding, and vice versa.)
  */
 export interface OrgSettingsInput {
-  home_view_id: string | null;
+  home_view_id?: string | null;
+  /** `#rrggbb`, or null to clear back to the theme's own primary. */
+  accent_color?: string | null;
+}
+
+/** Upload the org's logo (org admin). Replaces any previous one. */
+export async function uploadOrgLogo(id: string, file: File): Promise<Org> {
+  const body = new FormData();
+  body.append("file", file);
+  return (await apiClient.put<Org>(`/orgs/${id}/settings/logo`, body)).data;
+}
+
+/** Clear the org's logo. */
+export async function deleteOrgLogo(id: string): Promise<Org> {
+  return (await apiClient.delete<Org>(`/orgs/${id}/settings/logo`)).data;
 }
 
 /** Model ids an org can be pinned to, plus the platform default. */
