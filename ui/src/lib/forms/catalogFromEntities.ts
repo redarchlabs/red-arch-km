@@ -76,6 +76,7 @@ function relationshipMeta(
         el.columns.forEach((c) => c.elements.forEach(visit));
         break;
       case "panel":
+      case "card":
         el.elements.forEach(visit);
         break;
       default:

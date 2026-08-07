@@ -597,8 +597,11 @@ class MigrationImporter:
                 out.record("failed")
                 summary.errors.append(f"form {slug!r}: entity not in bundle")
                 continue
-            config = self._config(form, summary)
             try:
+                # Inside the try: an element type this environment doesn't know
+                # raises ValidationError, and one unrecognized element should cost
+                # that resource, not abort the whole import.
+                config = self._config(form, summary)
                 if found is not None and strategy is CollisionStrategy.OVERWRITE:
                     updated = await service.update_form(
                         found.id, FormUpdate(name=form["name"], description=form.get("description"), config=config)
@@ -624,7 +627,7 @@ class MigrationImporter:
                 existing[new_slug] = created
                 self._ids.put("forms", form["id"], created.id)
                 out.record("created" if found is None else "renamed")
-            except FormError as exc:
+            except (FormError, ValidationError) as exc:
                 out.record("failed")
                 summary.errors.append(f"form {slug!r}: {exc}")
 
@@ -727,8 +730,10 @@ class MigrationImporter:
                 out.record("failed")
                 summary.errors.append(f"view {slug!r}: entity not in bundle")
                 continue
-            config = self._config(view, summary)
             try:
+                # Inside the try, same reasoning as forms above: an unknown
+                # element type costs this view, not the entire import.
+                config = self._config(view, summary)
                 if found is not None and strategy is CollisionStrategy.OVERWRITE:
                     updated = await service.update_view(
                         found.id, ViewUpdate(name=view["name"], description=view.get("description"), config=config)
@@ -754,7 +759,7 @@ class MigrationImporter:
                 existing[new_slug] = created
                 self._ids.put("views", view["id"], created.id)
                 out.record("created" if found is None else "renamed")
-            except FormError as exc:
+            except (FormError, ValidationError) as exc:
                 out.record("failed")
                 summary.errors.append(f"view {slug!r}: {exc}")
 

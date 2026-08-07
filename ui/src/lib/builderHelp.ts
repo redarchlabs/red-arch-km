@@ -387,6 +387,34 @@ A **titled, bordered container** that visually groups related elements.
 - **Nested elements** — whatever you want grouped inside the box.
 `,
   ),
+  card: topic(
+    "Card element",
+    `
+A **dashboard tile** — a titled surface that groups whatever you put inside it.
+
+Like a panel it keeps the same record scope as its parent; the difference is
+treatment. A card matches the frame that reports and record lists draw for
+themselves, so a dashboard built from cards reads as one set of surfaces.
+
+- **Title / subtitle** — the tile heading.
+- **Accent** — an optional colored top rule, drawn from the theme's own colors.
+`,
+  ),
+  stat: topic(
+    "Stat tile",
+    `
+One **big number with a label** — the KPI row across the top of a dashboard.
+
+A stat reads a **saved report**, the same as the Report element, so build the
+report first (a report whose result is a single number). The report's own
+settings decide how the number is formatted; if it defines a comparison metric,
+the tile shows the change as a delta.
+
+- **Label** — what the number is.
+- **Trend** — which direction reads as good, for the delta's color. Choose
+  *neutral* when neither direction is inherently good news (headcount, say).
+`,
+  ),
 };
 
 /** Help for a builder element kind (stable reference per kind). */

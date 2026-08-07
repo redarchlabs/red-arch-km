@@ -213,6 +213,29 @@ export interface ReportElement extends ElementBase {
   width?: FieldWidth | null;
 }
 
+/** A KPI tile backed by a saved report (same data path as `report`). */
+export interface StatElement extends ElementBase {
+  type: "stat";
+  report_id: string;
+  label?: string | null;
+  icon?: string | null;
+  trend?: "up_is_good" | "down_is_good" | "neutral";
+  poll_ms?: number | null;
+  width?: FieldWidth | null;
+}
+
+export type ColumnFormat = "auto" | "text" | "number" | "date" | "datetime" | "badge" | "code";
+export type BadgeTone = "neutral" | "success" | "warning" | "destructive" | "info";
+
+/** Presentation for one `record_list` column (mirrors backend `RecordListColumn`). */
+export interface RecordListColumn {
+  slug: string;
+  label?: string | null;
+  align?: "left" | "right" | "center" | null;
+  format?: ColumnFormat;
+  badge_map?: Record<string, BadgeTone>;
+}
+
 /** One server-side filter on a `record_list` (mirrors backend `RecordListFilter`).
  * A `value` of `"@me"` on a relation field scopes the board to the caller's own
  * records (resolved server-side, like `record_id=me`). */
@@ -229,6 +252,8 @@ export interface RecordListElement extends ElementBase {
   entity: string;
   label?: string | null;
   fields?: string[];
+  /** Optional per-column presentation; additive to `fields`. */
+  columns?: RecordListColumn[];
   /** Server-side row filters, ANDed. `value: "@me"` on a relation → caller's own rows. */
   filters?: RecordListFilterConfig[];
   sort_by?: string | null;
@@ -496,6 +521,16 @@ export interface PanelElement extends ElementBase {
   elements: FormElement[];
 }
 
+/** A dashboard tile: a titled, bordered surface grouping its children. Same
+ * entity scope as its parent (pure layout, like `panel`). */
+export interface CardElement extends ElementBase {
+  type: "card";
+  title?: string | null;
+  subtitle?: string | null;
+  accent?: "none" | "primary" | "success" | "warning" | "destructive";
+  elements: FormElement[];
+}
+
 export interface AccordionPane {
   label: string;
   elements: FormElement[];
@@ -526,6 +561,7 @@ export type FormElement =
   | CountdownElement
   | SlidesElement
   | ReportElement
+  | StatElement
   | RecordListElement
   | ChatElement
   | ButtonElement
@@ -536,6 +572,7 @@ export type FormElement =
   | BlockElement
   | TabGroupElement
   | PanelElement
+  | CardElement
   | AccordionElement
   | ColumnsElement;
 

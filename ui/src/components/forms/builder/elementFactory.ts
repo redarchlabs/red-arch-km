@@ -24,7 +24,7 @@ export const LEAF_KINDS: PaletteKind[] = [
   "button",
 ];
 export const DATA_KINDS: PaletteKind[] = ["section", "table", "block"];
-export const LAYOUT_KINDS: PaletteKind[] = ["tab_group", "panel", "accordion", "columns"];
+export const LAYOUT_KINDS: PaletteKind[] = ["tab_group", "panel", "card", "accordion", "columns"];
 // Palette for the view builder: no entity-bound leaves, plus embedded forms. `input`,
 // `live_value`, `progress` and `record_list` are unbound, so they're valid in standalone views too.
 export const VIEW_KINDS: PaletteKind[] = [
@@ -36,6 +36,7 @@ export const VIEW_KINDS: PaletteKind[] = [
   "progress",
   "countdown",
   "slides",
+  "stat",
   "report",
   "record_list",
   "chat",
@@ -56,6 +57,7 @@ export const KIND_LABELS: Record<PaletteKind, string> = {
   progress: "Progress bar",
   countdown: "Countdown / time left",
   slides: "Slide deck",
+  stat: "Stat tile (KPI number)",
   report: "Report / chart",
   record_list: "Record list / status board",
   chat: "Chat",
@@ -67,6 +69,7 @@ export const KIND_LABELS: Record<PaletteKind, string> = {
   block: "Repeating block (1:M)",
   tab_group: "Tabs",
   panel: "Panel",
+  card: "Card (dashboard tile)",
   accordion: "Accordion",
   columns: "Columns",
 };
@@ -125,6 +128,8 @@ export function newElement(kind: PaletteKind): FormElement {
         label: "Slides",
         slides: [{ title: "Slide 1", body: "Slide content (Markdown)." }],
       };
+    case "stat":
+      return { id, type: "stat", report_id: "", label: "Metric", trend: "up_is_good", width: "quarter" };
     case "report":
       return { id, type: "report", report_id: "", title: "Report", height: 320 };
     case "record_list":
@@ -196,6 +201,8 @@ export function newElement(kind: PaletteKind): FormElement {
       return { id, type: "tab_group", tabs: [{ label: "Tab 1", elements: [] }] };
     case "panel":
       return { id, type: "panel", title: "Panel", elements: [] };
+    case "card":
+      return { id, type: "card", title: "Card", subtitle: null, accent: "none", elements: [] };
     case "accordion":
       return { id, type: "accordion", panes: [{ label: "Section 1", elements: [] }] };
     case "columns":
