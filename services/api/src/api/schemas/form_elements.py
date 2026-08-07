@@ -119,6 +119,10 @@ class LabelElement(_Element):
     type: Literal["label"] = "label"
     text: str = ""
     variant: Literal["heading", "subheading", "paragraph", "divider"] = "paragraph"
+    # Wall-display typesetting (matches the field element's text displays): a
+    # standalone dashboard can headline a screen without binding an entity field.
+    # Overrides ``variant`` when set.
+    display: Literal["headline", "prose", "quote", "caption"] | None = None
     width: FieldWidth | None = None
 
 
@@ -881,6 +885,9 @@ class ChatElement(_Element):
     voice: ChatVoice | None = None  # optional mic input (talk to the robot)
     poll_ms: int = 1500
     placeholder: str = "Message the robot…"
+    # Panel height: a wall display wants a tall transcript, a control strip a short
+    # one. ``fill`` sizes to the viewport (for a chat that IS the screen).
+    height: Literal["sm", "md", "lg", "fill"] = "md"
     width: FieldWidth | None = None
 
 

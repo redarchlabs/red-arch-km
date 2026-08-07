@@ -63,6 +63,8 @@ export interface LabelElement extends ElementBase {
   type: "label";
   text: string;
   variant: "heading" | "subheading" | "paragraph" | "divider";
+  /** Wall-display typesetting; overrides `variant` when set. */
+  display?: "headline" | "prose" | "quote" | "caption" | null;
   width?: FieldWidth | null;
 }
 
@@ -327,6 +329,8 @@ export interface ChatElement extends ElementBase {
   voice?: ChatVoice | null;
   poll_ms?: number;
   placeholder?: string;
+  /** Panel height; `fill` sizes to the viewport for a chat that IS the screen. */
+  height?: "sm" | "md" | "lg" | "fill";
   width?: FieldWidth | null;
 }
 
