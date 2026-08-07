@@ -56,9 +56,7 @@ class Settings(BaseSettings):
     # meant the FIFTH phone to scan a quiz QR started getting 429s — which reads to the
     # room as "failed to load" on everyone's screen at once. Keep it well above
     # (expected devices x 60000/refresh_ms); it still bounds a leaked link.
-    public_view_rate_limit_per_minute: int = Field(
-        default=1200, validation_alias="PUBLIC_VIEW_RATE_LIMIT_PER_MINUTE"
-    )
+    public_view_rate_limit_per_minute: int = Field(default=1200, validation_alias="PUBLIC_VIEW_RATE_LIMIT_PER_MINUTE")
 
     # Shared infrastructure (read from unprefixed env vars)
     database_url: str = Field(default="", validation_alias="DATABASE_URL")

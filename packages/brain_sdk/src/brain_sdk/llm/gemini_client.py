@@ -6,6 +6,8 @@ runs without it unless a Gemini client is actually constructed.
 
 from __future__ import annotations
 
+from typing import Any
+
 from brain_sdk.llm.protocol import LLMMessage
 
 
@@ -18,8 +20,9 @@ class GeminiLLMClient:
         except ImportError as exc:  # pragma: no cover - exercised only without the extra
             msg = "google-generativeai SDK not installed; add it to use a Gemini LLM client"
             raise RuntimeError(msg) from exc
-        genai.configure(api_key=api_key)
-        self._genai = genai
+        genai.configure(api_key=api_key)  # type: ignore[attr-defined]
+        # The SDK's stubs under-declare its exports, so keep the handle untyped.
+        self._genai: Any = genai
         self._model = model
 
     @property
