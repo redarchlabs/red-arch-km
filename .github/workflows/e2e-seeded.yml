@@ -83,6 +83,18 @@ jobs:
       - name: Start infra + API
         run: docker compose --env-file .env -f docker/docker-compose.yml up -d --build api
 
+      # A container that never goes healthy fails `up` with only "is unhealthy" —
+      # the reason is in its own log, which nothing else in this job surfaces.
+      - name: Dump container logs on failure
+        if: failure()
+        run: |
+          docker compose --env-file .env -f docker/docker-compose.yml ps -a || true
+          for svc in postgres redis api; do
+            echo "::group::$svc"
+            docker compose --env-file .env -f docker/docker-compose.yml logs --no-color --tail=100 "$svc" || true
+            echo "::endgroup::"
+          done
+
       - uses: astral-sh/setup-uv@v4
         with:
           version: "latest"
