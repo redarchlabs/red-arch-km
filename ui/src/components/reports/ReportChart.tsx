@@ -571,13 +571,37 @@ function PieChart({ result, viz, height = 320 }: ChartProps) {
           a phone or a half-width dashboard slot. */}
       <svg
         viewBox={`0 0 ${height} ${height}`}
-        className="h-auto w-full"
-        style={{ maxWidth: height }}
+        width="100%"
+        // A square aspect ratio + a max width: the pie keeps its designed size
+        // when there is room and scales down instead of overflowing a phone or a
+        // half-width slot. (Sizing it purely with `h-auto w-full` collapsed it to
+        // nothing as a flex item — the legend showed and the chart did not.)
+        style={{ maxWidth: height, aspectRatio: "1 / 1" }}
         role="img"
         aria-label="pie chart"
       >
         {values.map((v, i) => {
           const frac = Math.max(0, v) / total;
+          const fill = colorFor.get(categories[i]) ?? PALETTE[0];
+          // A slice covering the whole circle has identical start and end points,
+          // and an SVG arc between two identical points draws NOTHING — which is
+          // why a single-category pie rendered as an empty box with a legend.
+          // Draw the full circle (or ring) directly instead.
+          if (frac >= 0.9999) {
+            return inner ? (
+              <circle
+                key={i}
+                cx={cx}
+                cy={cy}
+                r={(r + inner) / 2}
+                fill="none"
+                stroke={fill}
+                strokeWidth={r - inner}
+              />
+            ) : (
+              <circle key={i} cx={cx} cy={cy} r={r} fill={fill} />
+            );
+          }
           const a1 = angle;
           const a2 = angle + frac * Math.PI * 2;
           angle = a2;
@@ -586,7 +610,7 @@ function PieChart({ result, viz, height = 320 }: ChartProps) {
           const d = inner
             ? `M ${p(r, a1)} A ${r} ${r} 0 ${large} 1 ${p(r, a2)} L ${p(inner, a2)} A ${inner} ${inner} 0 ${large} 0 ${p(inner, a1)} Z`
             : `M ${cx} ${cy} L ${p(r, a1)} A ${r} ${r} 0 ${large} 1 ${p(r, a2)} Z`;
-          return <path key={i} d={d} fill={colorFor.get(categories[i]) ?? PALETTE[0]} />;
+          return <path key={i} d={d} fill={fill} />;
         })}
       </svg>
       <div className="flex flex-col gap-1 text-xs text-muted-foreground">
