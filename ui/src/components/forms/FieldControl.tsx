@@ -74,7 +74,8 @@ export function FieldControl({
         return (
           <input
             type="number"
-            className={inputClass}
+            // A number is a short value; a full-width control implies an essay.
+            className={`${inputClass} max-w-56`}
             required={required}
             disabled={readOnly}
             placeholder={placeholder}
@@ -86,7 +87,7 @@ export function FieldControl({
         return (
           <input
             type="date"
-            className={inputClass}
+            className={`${inputClass} max-w-56`}
             required={required}
             disabled={readOnly}
             value={str.slice(0, 10)}
@@ -97,7 +98,7 @@ export function FieldControl({
         return (
           <input
             type="datetime-local"
-            className={inputClass}
+            className={`${inputClass} max-w-64`}
             required={required}
             disabled={readOnly}
             value={str}

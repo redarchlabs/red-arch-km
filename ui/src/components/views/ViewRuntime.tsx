@@ -6,7 +6,6 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { FormRenderer } from "@/components/forms/FormRenderer";
-import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { getApiErrorMessage } from "@/lib/api/errors";
 import type { FormRender } from "@/lib/api/forms";
@@ -199,7 +198,9 @@ export function ViewRuntime({ id, kiosk = false, token }: ViewRuntimeProps) {
   }
 
   return (
-    <div className="space-y-6">
+    // `max-w`: on an ultrawide monitor an unconstrained view typesets its text
+    // and stretches its tables edge to edge, which is what actually hurts.
+    <div className="mx-auto max-w-7xl space-y-6">
       {/* No page title here: each view supplies its own heading in its element
           tree, so echoing the internal view name (e.g. "Course Player") above it
           is redundant. Keep only a back affordance. */}
@@ -220,12 +221,10 @@ export function ViewRuntime({ id, kiosk = false, token }: ViewRuntimeProps) {
         </Link>
       </div>
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
-      {notice ? <p className="text-sm text-green-600">{notice}</p> : null}
-      <Card>
-        <CardContent className="pt-6">
-          <FormRenderer render={render} mode="fill" viewContext onRunWorkflow={handleRunWorkflow} />
-        </CardContent>
-      </Card>
+      {notice ? <p className="text-sm text-success">{notice}</p> : null}
+      {/* No outer Card: data elements now carry their own card frames, and a
+          card-inside-a-card double border read as clutter. */}
+      <FormRenderer render={render} mode="fill" viewContext onRunWorkflow={handleRunWorkflow} />
     </div>
   );
 }
