@@ -18,6 +18,7 @@ import { WorkflowDesigner } from "@/components/workflows/designer/WorkflowDesign
 import { useDesignerStore } from "@/components/workflows/designer/store";
 import { normalizeForSave, starterGraph, toDefinition, toReactFlow } from "@/components/workflows/graphSerde";
 import { hasErrors, validateGraph, type Issue } from "@/components/workflows/validation";
+import { listAgents, type Agent } from "@/lib/api/agents";
 import { listConnections, type Connection } from "@/lib/api/connections";
 import { listEntities, type EntityDefinition, type EntityField } from "@/lib/api/entities";
 import { getApiErrorMessage } from "@/lib/api/errors";
@@ -44,6 +45,7 @@ export default function WorkflowDesignPage() {
   const [entities, setEntities] = useState<EntityDefinition[]>([]);
   const [forms, setForms] = useState<Form[]>([]);
   const [connections, setConnections] = useState<Connection[]>([]);
+  const [agents, setAgents] = useState<Agent[]>([]);
   const [baseVersion, setBaseVersion] = useState<WorkflowVersion | null>(null);
   const [savedVersion, setSavedVersion] = useState<WorkflowVersion | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -84,6 +86,10 @@ export default function WorkflowDesignPage() {
       const loadedConnections = await listConnections().catch(() => []);
       if (reqId !== loadReq.current) return;
       setConnections(loadedConnections);
+      // Agents power the agent task's assignee picker; same soft-fail policy.
+      const loadedAgents = await listAgents().catch(() => []);
+      if (reqId !== loadReq.current) return;
+      setAgents(loadedAgents);
       // Entities power the field pickers in the inspector and test panel (own
       // entity) and the create_record target picker (all entities). A failure
       // here shouldn't block editing, so fall back to free-form input.
@@ -227,6 +233,8 @@ export default function WorkflowDesignPage() {
         entities={entities}
         forms={forms}
         connections={connections}
+        agents={agents}
+        workflowId={id}
         onChangeData={updateNodeData}
         onDelete={deleteNode}
       />

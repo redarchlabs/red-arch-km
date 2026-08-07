@@ -49,6 +49,7 @@ export function AgentDialog({ editing, providers, agents, workflows, onClose, on
     initial?.grants?.approval_required?.includes("run_workflow") ?? false,
   );
   const [allowlist, setAllowlist] = useState<string[]>(initial?.workflow_allowlist ?? []);
+  const [invocable, setInvocable] = useState<string[]>(initial?.workflow_invocable ?? []);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -71,6 +72,7 @@ export function AgentDialog({ editing, providers, agents, workflows, onClose, on
       approval_required: approveWorkflows ? ["run_workflow"] : [],
     },
     workflow_allowlist: allowlist,
+    workflow_invocable: invocable,
   });
 
   const save = async () => {
@@ -93,6 +95,9 @@ export function AgentDialog({ editing, providers, agents, workflows, onClose, on
 
   const toggleWorkflow = (id: string) =>
     setAllowlist((prev) => (prev.includes(id) ? prev.filter((w) => w !== id) : [...prev, id]));
+
+  const toggleInvocable = (id: string) =>
+    setInvocable((prev) => (prev.includes(id) ? prev.filter((w) => w !== id) : [...prev, id]));
 
   return (
     <Dialog open onClose={onClose}>
@@ -214,6 +219,42 @@ export function AgentDialog({ editing, providers, agents, workflows, onClose, on
                 ))}
               </div>
             )}
+          </fieldset>
+        ) : null}
+
+        {kind === "operator" ? (
+          <fieldset className="rounded-md border p-2 text-sm">
+            <legend className="px-1 text-xs text-muted-foreground">
+              Workflow steps may assign this agent
+            </legend>
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={invocable.includes("*")}
+                onChange={() => toggleInvocable("*")}
+              />
+              Any workflow
+            </label>
+            {invocable.includes("*") ? null : workflows.length === 0 ? (
+              <p className="text-muted-foreground">No workflows yet.</p>
+            ) : (
+              <div className="mt-1 max-h-32 space-y-1 overflow-y-auto">
+                {workflows.map((w) => (
+                  <label key={w.id} className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={invocable.includes(w.id)}
+                      onChange={() => toggleInvocable(w.id)}
+                    />
+                    {w.name}
+                  </label>
+                ))}
+              </div>
+            )}
+            <p className="mt-1 text-xs text-muted-foreground">
+              An agent task in a workflow can only run this agent if it is opted in here —
+              publishing is blocked otherwise.
+            </p>
           </fieldset>
         ) : null}
 

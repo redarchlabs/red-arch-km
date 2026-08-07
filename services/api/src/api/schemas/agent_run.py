@@ -28,6 +28,11 @@ class AgentRunRead(BaseModel):
     started_at: datetime | None
     finished_at: datetime | None
     created_at: datetime
+    # Workflow agent_task linkage (None for console/schedule/delegation runs).
+    workflow_run_id: uuid.UUID | None = None
+    workflow_node_id: str | None = None
+    # The schema-validated complete_task object.
+    output: dict | None = None
 
 
 class AgentRunStepRead(BaseModel):
@@ -53,6 +58,11 @@ class ApprovalRead(BaseModel):
     status: str
     decided_at: datetime | None
     created_at: datetime
+    # Populated by the list endpoint when the parked run belongs to a workflow
+    # step, so the inbox can deep-link to the workflow run it is blocking
+    # (/workflows/{workflow_id}/runs?run={workflow_run_id}).
+    workflow_run_id: uuid.UUID | None = None
+    workflow_id: uuid.UUID | None = None
 
 
 class NotificationRead(BaseModel):
