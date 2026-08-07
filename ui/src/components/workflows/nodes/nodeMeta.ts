@@ -12,6 +12,7 @@
 import { Position } from "@xyflow/react";
 import {
   Bolt,
+  Bot,
   Circle,
   Clock,
   Cog,
@@ -56,9 +57,14 @@ export const TASK_TYPES = [
   "call",
   "subProcess",
   "manual",
+  "agent",
 ] as const;
 export type TaskType = (typeof TASK_TYPES)[number];
-/** Wait-state task types park a token until an external signal. */
+/**
+ * Wait-state task types park a token until an external signal. `agent` parks
+ * too but is deliberately NOT here (mirrors constants.py): it has its own
+ * dispatch branch and only the agent lifecycle may resume it.
+ */
 export const WAIT_TASK_TYPES: readonly TaskType[] = ["user", "receive", "call", "subProcess", "manual"];
 
 // gateway_type (on a `gateway` node)
@@ -320,6 +326,7 @@ export const TASK_LABELS: Record<TaskType, string> = {
   call: "Call",
   subProcess: "Sub-process",
   manual: "Manual",
+  agent: "Agent",
 };
 
 export const TASK_ICONS: Record<TaskType, LucideIcon> = {
@@ -332,6 +339,7 @@ export const TASK_ICONS: Record<TaskType, LucideIcon> = {
   call: PhoneCall,
   subProcess: SquarePlus,
   manual: Hand,
+  agent: Bot,
 };
 
 export const GATEWAY_LABELS: Record<GatewayType, string> = {

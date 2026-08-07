@@ -45,6 +45,10 @@ class ToolSpec:
     side_effecting: bool = False
     # Read tools every agent gets regardless of grants (still kind-gated).
     always_allowed: bool = False
+    # Terminal tools end the run (raise RunFinished). The loop orders them LAST
+    # within a turn's batch so a "complete + one more write" turn executes the
+    # write before the run ends, never after.
+    terminal: bool = False
 
     def openai_schema(self) -> dict[str, Any]:
         """Render as an OpenAI/LiteLLM function-tool definition."""

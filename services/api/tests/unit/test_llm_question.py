@@ -52,9 +52,7 @@ async def test_returns_a_complete_storable_question() -> None:
 @pytest.mark.asyncio
 async def test_audience_and_style_reach_the_prompt() -> None:
     client = _FakeClient(_GOOD)
-    await generate_question(
-        client, "m", topic="orbits", audience="a 9th-grade physics class", style="ship's computer"
-    )
+    await generate_question(client, "m", topic="orbits", audience="a 9th-grade physics class", style="ship's computer")
     user = client.kwargs["messages"][1]["content"]
     assert "a 9th-grade physics class" in user and "ship's computer" in user
 

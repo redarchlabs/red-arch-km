@@ -46,6 +46,9 @@ class AgentBase(BaseModel):
     grants: AgentGrants = Field(default_factory=AgentGrants)
     mcp_server_ids: list[uuid.UUID] = Field(default_factory=list)
     workflow_allowlist: list[uuid.UUID] = Field(default_factory=list)
+    # Consent mirror of workflow_allowlist: which workflows may bind this agent
+    # to an agent_task step (workflow ids as strings, or ["*"]).
+    workflow_invocable: list[str] = Field(default_factory=list)
 
 
 class AgentCreate(AgentBase):
@@ -71,6 +74,7 @@ class AgentUpdate(BaseModel):
     grants: AgentGrants | None = None
     mcp_server_ids: list[uuid.UUID] | None = None
     workflow_allowlist: list[uuid.UUID] | None = None
+    workflow_invocable: list[str] | None = None
 
 
 class AgentRead(BaseModel):
@@ -92,6 +96,7 @@ class AgentRead(BaseModel):
     grants: dict
     mcp_server_ids: list[uuid.UUID]
     workflow_allowlist: list[uuid.UUID]
+    workflow_invocable: list[str]
     created_at: datetime
     updated_at: datetime
 

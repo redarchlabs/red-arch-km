@@ -277,7 +277,16 @@ async def advance_workflow_tokens(
             )
             resumed = await engine.resume_due_tokens(limit=limit)
             await session.commit()
-            totals = {"reactivated": resumed.get("reactivated", 0), "claimed": 0, "advanced": 0}
+            # Crash backstop for the agent bridge: tokens whose linked AgentRun is
+            # terminal but whose wire-back never landed get stamped + reactivated
+            # here, so a lost signal degrades to sweep latency, never a hang.
+            from api import db_scope
+            from api.services.workflow import agent_bridge
+
+            await db_scope.enter_bypass(session)
+            reconciled = await agent_bridge.reconcile_agent_tokens(session, limit=limit)
+            await session.commit()
+            totals = {"reactivated": resumed.get("reactivated", 0) + reconciled, "claimed": 0, "advanced": 0}
             # Bounded drain: keep advancing until a pass claims nothing (or we hit
             # the pass cap, leaving the rest for the next tick).
             for _ in range(20):

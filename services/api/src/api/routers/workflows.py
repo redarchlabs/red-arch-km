@@ -59,6 +59,7 @@ from api.services.workflow.permissions import can_run
 from api.services.workflow.service import (
     WorkflowConflictError,
     WorkflowNotFoundError,
+    WorkflowPublishError,
     WorkflowService,
 )
 from api.services.workflow.stream import channel_for, is_valid_token, sse_frames
@@ -70,6 +71,7 @@ logger = logging.getLogger(__name__)
 _ERROR_STATUS: dict[type[Exception], int] = {
     WorkflowNotFoundError: status.HTTP_404_NOT_FOUND,
     WorkflowConflictError: status.HTTP_409_CONFLICT,
+    WorkflowPublishError: status.HTTP_422_UNPROCESSABLE_ENTITY,
 }
 
 
@@ -441,7 +443,7 @@ async def publish_version(
     service = WorkflowService(session, ctx.org_id)
     try:
         version = await service.publish(workflow_id, version_id)
-    except (WorkflowNotFoundError, WorkflowConflictError) as exc:
+    except (WorkflowNotFoundError, WorkflowConflictError, WorkflowPublishError) as exc:
         _raise(exc)
     return WorkflowVersionRead.model_validate(version)
 

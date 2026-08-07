@@ -352,10 +352,43 @@ elapses. (Delay is the legacy form of a **timer** event.)
 );
 
 // --------------------------------------------------------------------------- //
+// Agent task
+// --------------------------------------------------------------------------- //
+const AGENT_TASK_HELP = topic(
+  "Agent task",
+  `
+Hands this step to an **AI agent from your org's roster**. The run parks while
+the agent works (search knowledge, read/write records — whatever its grants
+allow) and resumes when it **completes the step with structured output** or
+**escalates to a human**.
+
+- **Agent** — an enabled *operator* that has opted in to this workflow (set
+  "workflow steps may assign this agent" on the agent). Publishing is blocked
+  otherwise.
+- **Task** — the instructions, with \`{{after.*}}\` / \`{{inputs.*}}\` /
+  \`{{vars.*}}\` templating. Record text is treated as **data, not
+  instructions**, but avoid interpolating sensitive fields.
+- **Structured output** — the fields the agent must return via
+  \`complete_task\`. Downstream nodes read them as \`{{vars.<capture>.<field>}}\`.
+  Use enums/limits: this output can feed privileged record writes.
+
+**Required:** attach an **error boundary** — the escalation/failure path
+(catch code \`escalated\` separately from \`failed\` if you want). Attach a
+**timer boundary** as the SLA: when it fires, the agent run is **cancelled**
+and the flow takes the timer path instead.
+
+If the agent's grants require approval for a tool, the run (and this step)
+pauses until you approve or deny — right from the run monitor. Retry is
+deliberately unavailable: failures always route to your boundary.
+`,
+);
+
+// --------------------------------------------------------------------------- //
 // Resolution
 // --------------------------------------------------------------------------- //
 function taskHelp(node: HelpNode): HelpTopic {
   const taskType: TaskType = resolveTaskType(node);
+  if (taskType === "agent") return AGENT_TASK_HELP;
   if (taskType === "script") return SCRIPT_HELP;
   if (taskType === "businessRule") return BUSINESS_RULE_HELP;
   if (WAIT_TASK_TYPES.includes(taskType)) {

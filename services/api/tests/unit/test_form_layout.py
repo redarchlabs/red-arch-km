@@ -422,9 +422,7 @@ def test_image_element_is_unbound_and_scheme_guarded(ids, fields_by_entity, rels
     assert not b.containers
 
     with pytest.raises(ValidationError):
-        FormConfig.model_validate(
-            {"version": 2, "elements": [{"type": "image", "url": "javascript:alert(1)"}]}
-        )
+        FormConfig.model_validate({"version": 2, "elements": [{"type": "image", "url": "javascript:alert(1)"}]})
 
 
 def test_view_refresh_ms_round_trips_and_is_bounded():
@@ -690,9 +688,7 @@ def test_countdown_declares_its_deadline_fields(ids, fields_by_entity, rels):
 
 def test_countdown_rejects_an_unknown_field(ids, fields_by_entity, rels):
     """A typo'd slug fails at save time, not as a clock that never appears."""
-    cfg = FormConfig.model_validate(
-        {"version": 2, "elements": [{"type": "countdown", "until_field": "nope"}]}
-    )
+    cfg = FormConfig.model_validate({"version": 2, "elements": [{"type": "countdown", "until_field": "nope"}]})
     with pytest.raises(LayoutError):
         fl.validate(cfg.elements, ids["root"], fields_by_entity, rels)
 
@@ -747,9 +743,7 @@ def test_puzzle_pad_inside_a_section_follows_the_related_record(ids, fields_by_e
                     "type": "section",
                     "relationship_id": str(ids["rel_1to1"]),
                     "mode": "inline",
-                    "elements": [
-                        {"type": "puzzle_pad", "kind": "choices", "kind_field": "kind", "spec_field": "spec"}
-                    ],
+                    "elements": [{"type": "puzzle_pad", "kind": "choices", "kind_field": "kind", "spec_field": "spec"}],
                 }
             ],
         }
@@ -763,9 +757,7 @@ def test_puzzle_pad_inside_a_section_follows_the_related_record(ids, fields_by_e
 def test_puzzle_pad_rejects_an_unknown_kind():
     """`kind` picks the interaction; an unrecognised one would render nothing."""
     with pytest.raises(ValidationError):
-        FormConfig.model_validate(
-            {"version": 2, "elements": [{"type": "puzzle_pad", "kind": "crossword"}]}
-        )
+        FormConfig.model_validate({"version": 2, "elements": [{"type": "puzzle_pad", "kind": "crossword"}]})
 
 
 def test_button_size_defaults_and_round_trips():
@@ -782,9 +774,7 @@ def test_button_size_defaults_and_round_trips():
     )
     assert [el.size for el in cfg.elements] == ["default", "xl"]
     with pytest.raises(ValidationError):
-        FormConfig.model_validate(
-            {"version": 2, "elements": [{"type": "button", "label": "X", "size": "enormous"}]}
-        )
+        FormConfig.model_validate({"version": 2, "elements": [{"type": "button", "label": "X", "size": "enormous"}]})
 
 
 def test_puzzle_pad_inline_spec_tokens_are_declared(ids, fields_by_entity, rels):
@@ -859,9 +849,7 @@ def test_qr_code_is_unbound_but_declares_its_url_tokens(ids, fields_by_entity, r
 
 
 def test_qr_code_rejects_an_unknown_url_token(ids, fields_by_entity, rels):
-    cfg = FormConfig.model_validate(
-        {"version": 2, "elements": [{"type": "qr_code", "url": "/x?c={nope}"}]}
-    )
+    cfg = FormConfig.model_validate({"version": 2, "elements": [{"type": "qr_code", "url": "/x?c={nope}"}]})
     with pytest.raises(LayoutError):
         fl.validate(cfg.elements, ids["root"], fields_by_entity, rels)
 
@@ -875,9 +863,10 @@ def test_qr_code_url_and_host_are_scheme_guarded():
 
 def test_qr_code_size_is_bounded():
     """A stored size drives an <img> box; unbounded values make a page unusable."""
-    assert FormConfig.model_validate(
-        {"version": 2, "elements": [{"type": "qr_code", "url": "/x"}]}
-    ).elements[0].size == 320
+    assert (
+        FormConfig.model_validate({"version": 2, "elements": [{"type": "qr_code", "url": "/x"}]}).elements[0].size
+        == 320
+    )
     with pytest.raises(ValidationError):
         FormConfig.model_validate({"version": 2, "elements": [{"type": "qr_code", "url": "/x", "size": 40}]})
 
