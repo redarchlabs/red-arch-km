@@ -78,6 +78,7 @@ def validate_definition(
     _check_boundary_events(model, issues)
     _check_event_based_gateways(model, out_edges, issues)
     _check_loops(model, out_edges, issues)
+    _check_agent_tasks(model, authored_v2, issues)
     if authored_v2:
         _check_end_presence(model, issues)
     return issues
@@ -245,6 +246,66 @@ def _check_boundary_events(model: WorkflowDefinitionModel, issues: list[Issue]) 
                     "warning",
                     "boundary-nonactivity",
                     f"Boundary event {node.id!r} should attach to a task, not a {host.type!r}.",
+                    node_id=node.id,
+                )
+            )
+
+
+def _check_agent_tasks(model: WorkflowDefinitionModel, authored_v2: bool, issues: list[Issue]) -> None:
+    """agent tasks are v2/token-engine-only and must fail loudly, never silently:
+    an unwired escalation path would turn "agent has no API key" into a workflow
+    that reads as succeeded, so the error boundary is required (hard error)."""
+    import uuid as _uuid
+
+    for node in model.nodes:
+        if node.type != C.NODE_TASK or node.task_type != C.TASK_AGENT:
+            continue
+        if not authored_v2:
+            issues.append(
+                Issue(
+                    "error",
+                    "agent-task-v1",
+                    f"Agent task {node.id!r} requires a schema_version 2 graph (the token engine).",
+                    node_id=node.id,
+                )
+            )
+        try:
+            _uuid.UUID(str(node.data.get("agent_id")))
+        except (ValueError, TypeError):
+            issues.append(
+                Issue(
+                    "error",
+                    "agent-task-no-agent",
+                    f"Agent task {node.id!r} must reference an agent by id.",
+                    node_id=node.id,
+                )
+            )
+        if not str(node.data.get("task") or "").strip():
+            issues.append(
+                Issue(
+                    "error",
+                    "agent-task-no-task",
+                    f"Agent task {node.id!r} needs a task prompt for the agent.",
+                    node_id=node.id,
+                )
+            )
+        boundary = next(
+            (
+                b
+                for b in model.nodes
+                if _is_boundary(b)
+                and b.data.get("attached_to") == node.id
+                and b.data.get("event_type") == C.EVENT_ERROR
+            ),
+            None,
+        )
+        if boundary is None:
+            issues.append(
+                Issue(
+                    "error",
+                    "agent-task-no-escalation",
+                    f"Agent task {node.id!r} must have an error boundary event attached — "
+                    "escalation/failure needs somewhere to go, or a misconfigured agent reads as success.",
                     node_id=node.id,
                 )
             )

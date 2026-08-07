@@ -43,6 +43,9 @@ TASK_RECEIVE = "receive"
 TASK_CALL = "call"
 TASK_SUBPROCESS = "subProcess"
 TASK_MANUAL = "manual"
+# An org-roster agent completes this step: the token parks on a queued AgentRun
+# and the run's terminal state resumes it (see engine._dispatch_agent). v2-only.
+TASK_AGENT = "agent"
 TASK_TYPES = frozenset(
     {
         TASK_SERVICE,
@@ -54,11 +57,15 @@ TASK_TYPES = frozenset(
         TASK_CALL,
         TASK_SUBPROCESS,
         TASK_MANUAL,
+        TASK_AGENT,
     }
 )
 # Wait-state task types park a token until an external signal (timer / user
 # completion / correlated message / child-run finish); the rest are synchronous
 # jobs. The engine needs this classification from the node type + task_type.
+# TASK_AGENT parks too but has its own dispatch branch (enqueue-once idempotency,
+# agent-only wire-back) — it is deliberately NOT in this set so the generic
+# wait-task branch can never handle it.
 WAIT_TASK_TYPES = frozenset({TASK_USER, TASK_RECEIVE, TASK_CALL, TASK_SUBPROCESS, TASK_MANUAL})
 
 # --- gateway_type (``data.gateway_type`` on a ``gateway`` node) ------------- #
