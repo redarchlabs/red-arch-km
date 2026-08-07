@@ -21,6 +21,19 @@ function envBool(name: string, fallback: boolean): boolean {
   return /^(1|true|yes|on)$/i.test(v);
 }
 
+/**
+ * Expand a leading `~/` to the user's home directory.
+ *
+ * The MCP client hands env values through verbatim (no shell), so a config
+ * written as `~/.km2-mcp/profile` would otherwise become a literal `~`
+ * directory next to wherever the server happened to be started. Only a leading
+ * `~/` is expanded — `~user` is not, and a `~` elsewhere in the path is a legal
+ * filename character.
+ */
+function expandHome(p: string): string {
+  return p === "~" || p.startsWith("~/") ? path.join(os.homedir(), p.slice(1)) : p;
+}
+
 function envInt(name: string, fallback: number): number {
   const v = process.env[name];
   if (v === undefined || v === "") return fallback;
@@ -60,7 +73,7 @@ export function loadConfig(): Config {
     clerkJwtTemplate: process.env.KM2_CLERK_JWT_TEMPLATE || undefined,
     orgStorageKey: env("KM2_ORG_STORAGE_KEY", "redarch:currentOrgId"),
     orgIdOverride: process.env.KM2_ORG_ID || undefined,
-    userDataDir: env("KM2_USER_DATA_DIR", path.join(os.homedir(), ".km2-mcp", "profile")),
+    userDataDir: expandHome(env("KM2_USER_DATA_DIR", path.join(os.homedir(), ".km2-mcp", "profile"))),
     browserChannel: process.env.KM2_BROWSER_CHANNEL || undefined,
     headless: envBool("KM2_HEADLESS", false),
     loginTimeoutMs: envInt("KM2_LOGIN_TIMEOUT_MS", 180_000),

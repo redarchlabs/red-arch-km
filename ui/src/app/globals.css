@@ -1,6 +1,15 @@
 @import "tailwindcss";
 
 /*
+ * The app switches themes by stamping data-theme on <html> (see ThemeContext),
+ * so `dark:` utilities must key off that attribute — not the OS-level
+ * prefers-color-scheme media query Tailwind v4 defaults to. The :where() form
+ * matches the root element itself as well as descendants, without adding
+ * specificity.
+ */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+/*
  * Theme tokens. The @theme block registers the variables with Tailwind v4
  * (utility classes reference them via var(...) at use-site), with LIGHT as
  * the default palette. The [data-theme] blocks below override the variables
@@ -23,6 +32,21 @@
   --color-accent: #f4f4f5;
   --color-accent-foreground: #18181b;
   --color-ring: #18181b;
+  /* Status text colors for positive/cautionary readouts (metric deltas, live
+     badges, countdown warnings). Each theme block below re-tunes them for its
+     background so call sites never need a dark: pair. */
+  --color-success: #15803d;
+  --color-warning: #b45309;
+  /* Chart series palette — data-driven colors can't be static utility classes,
+     so ReportChart reads these via var(). Re-tuned per theme below. */
+  --color-chart-1: #2563eb;
+  --color-chart-2: #16a34a;
+  --color-chart-3: #ea580c;
+  --color-chart-4: #9333ea;
+  --color-chart-5: #dc2626;
+  --color-chart-6: #0891b2;
+  --color-chart-7: #ca8a04;
+  --color-chart-8: #db2777;
 
   --radius-sm: 0.25rem;
   --radius-md: 0.375rem;
@@ -43,6 +67,18 @@
   --color-accent: #27272a;
   --color-accent-foreground: #fafafa;
   --color-ring: #d4d4d8;
+  --color-success: #4ade80;
+  --color-warning: #fcd34d;
+  /* Brighter steps of the same hues — the light palette's 600-weight colors
+     lose saturation against near-black. */
+  --color-chart-1: #3b82f6;
+  --color-chart-2: #22c55e;
+  --color-chart-3: #f97316;
+  --color-chart-4: #a855f7;
+  --color-chart-5: #ef4444;
+  --color-chart-6: #06b6d4;
+  --color-chart-7: #eab308;
+  --color-chart-8: #ec4899;
 }
 
 /*
@@ -71,6 +107,19 @@
   --color-accent: #fbe3c4;
   --color-accent-foreground: #7c3f0d;
   --color-ring: #c2410c;
+  /* Deepened for the cream background, same ≥4.5:1 reasoning as above. */
+  --color-success: #166534;
+  --color-warning: #92400e;
+  /* Brand orange leads; the rest are deepened a step so they hold against
+     the warm cream canvas instead of washing out. */
+  --color-chart-1: #c2410c;
+  --color-chart-2: #15803d;
+  --color-chart-3: #1d4ed8;
+  --color-chart-4: #7e22ce;
+  --color-chart-5: #b91c1c;
+  --color-chart-6: #0e7490;
+  --color-chart-7: #a16207;
+  --color-chart-8: #be185d;
 }
 
 html, body {

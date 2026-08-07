@@ -23,6 +23,7 @@ from api.schemas.report import (
     ReportCreate,
     ReportRead,
     ReportRunRequest,
+    ReportRunResult,
     ReportUpdate,
 )
 from api.services.form_service import (
@@ -121,13 +122,13 @@ async def run_adhoc(
         _raise_http(exc)
 
 
-@router.post("/{report_id}/run", response_model=AggregateResult)
+@router.post("/{report_id}/run", response_model=ReportRunResult)
 async def run_report(
     report_id: uuid.UUID,
     ctx: Annotated[OrgContext, Depends(require_org_access)],
     session: Annotated[AsyncSession, Depends(get_tenant_db)],
     body: ReportRunRequest | None = None,
-) -> AggregateResult:
+) -> ReportRunResult:
     """Run a saved report, optionally with dashboard filter/limit overrides."""
     try:
         return await ReportService(session, ctx.org_id).run_report(report_id, body)

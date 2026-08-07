@@ -6,7 +6,9 @@
       "env": {
         "KM2_APP_URL": "http://localhost:3000",
         "KM2_API_URL": "http://localhost:8000/api",
-        "KM2_BROWSER_CHANNEL": "chrome"
+        "KM2_BROWSER_CHANNEL": "chrome",
+        "KM2_CLERK_JWT_TEMPLATE": "redarch-km",
+        "KM2_USER_DATA_DIR": "~/.km2-mcp/profile-lesson"
       }
     }
   }

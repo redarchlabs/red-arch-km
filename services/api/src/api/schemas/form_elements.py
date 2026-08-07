@@ -102,6 +102,11 @@ class FieldElement(_Element):
     label: str | None = None
     required: bool | None = None  # override the entity field's own requiredness
     read_only: bool = False  # render prefilled + non-editable; never written back
+    # Views render fields as read-only value readouts by default (a view shows
+    # data). ``editable=True`` opts a field back into an input there — e.g. a
+    # console where the edited value feeds a workflow button's inputs. Forms
+    # ignore this; their fields are editable unless ``read_only``.
+    editable: bool | None = None
     help_text: str | None = None
     placeholder: str | None = None
     width: FieldWidth | None = None
@@ -114,6 +119,10 @@ class LabelElement(_Element):
     type: Literal["label"] = "label"
     text: str = ""
     variant: Literal["heading", "subheading", "paragraph", "divider"] = "paragraph"
+    # Wall-display typesetting (matches the field element's text displays): a
+    # standalone dashboard can headline a screen without binding an entity field.
+    # Overrides ``variant`` when set.
+    display: Literal["headline", "prose", "quote", "caption"] | None = None
     width: FieldWidth | None = None
 
 
@@ -356,6 +365,50 @@ class ReportElement(_Element):
     width: FieldWidth | None = None
 
 
+class StatElement(_Element):
+    """A KPI tile: one big number with a label, the dashboard idiom a view
+    previously had to fake with a ``report`` in ``metric`` mode.
+
+    Deliberately backed by the SAME data path as ``report`` — a saved report's
+    run response — rather than a third way to compute a number. ``report_id``
+    supplies the value (its ``viz`` decides formatting, and ``compare_to``
+    yields the delta); this element only decides how the tile reads."""
+
+    type: Literal["stat"] = "stat"
+    report_id: uuid.UUID
+    label: str | None = None
+    # A lucide icon name (e.g. "users", "trending-up"), rendered beside the
+    # value. Unknown names simply render no icon.
+    icon: str | None = Field(default=None, max_length=40)
+    # Which direction reads as good, for the delta's color. ``neutral`` colors
+    # it like body text — a headcount going up is not inherently good news.
+    trend: Literal["up_is_good", "down_is_good", "neutral"] = "up_is_good"
+    poll_ms: int | None = None
+    width: FieldWidth | None = None
+
+
+class RecordListColumn(BaseModel):
+    """Presentation for one ``record_list`` column.
+
+    Purely how a value is DRAWN — which rows/values are fetched stays with the
+    element's ``fields``/``filters``. Absent keys fall back to the humanized
+    slug, an inferred alignment, and automatic value formatting."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    slug: str
+    label: str | None = None
+    align: Literal["left", "right", "center"] | None = None
+    # ``badge`` renders the value as a pill (status columns); ``code`` uses a
+    # monospace face (ids, keys). ``auto`` keeps the type-driven default.
+    format: Literal["auto", "text", "number", "date", "datetime", "badge", "code"] = "auto"
+    # Value → badge tone, for ``format="badge"``. Values with no entry get the
+    # neutral tone, so a new status value degrades quietly instead of vanishing.
+    badge_map: dict[str, Literal["neutral", "success", "warning", "destructive", "info"]] = Field(
+        default_factory=dict
+    )
+
+
 class RecordListFilter(BaseModel):
     """One server-side filter narrowing a ``record_list``'s rows.
 
@@ -391,6 +444,10 @@ class RecordListElement(_Element):
     entity: str  # entity slug to read records from
     label: str | None = None
     fields: list[str] = Field(default_factory=list)  # field slugs as columns; empty = every field
+    # Optional per-column presentation (labels, alignment, formatting, badges).
+    # Additive to ``fields``: a column listed here is fetched even if ``fields``
+    # omits it, and ``fields`` alone still works unchanged.
+    columns: list[RecordListColumn] = Field(default_factory=list)
     filters: list[RecordListFilter] = Field(default_factory=list)  # server-side row filters (ANDed)
     sort_by: str | None = None  # field slug or base column; defaults to created_at
     sort_dir: Literal["asc", "desc"] = "desc"
@@ -536,6 +593,25 @@ class PanelElement(_Element):
     title: str | None = None
     collapsible: bool = False
     collapsed: bool = False  # initial state when collapsible
+    elements: list[FormElement] = Field(default_factory=list)
+
+
+class CardElement(_Element):
+    """A presentational card: a titled, bordered surface grouping its children.
+
+    Same entity scope as its parent (pure layout, like ``panel``) — the
+    difference is intent and treatment. ``panel`` is a form fieldset; a card is
+    the dashboard tile a view is composed from, and it matches the frame the
+    data elements (record lists, reports) draw for themselves, so a dashboard
+    reads as one set of surfaces."""
+
+    type: Literal["card"] = "card"
+    title: str | None = None
+    subtitle: str | None = None
+    # A colored top rule — the one bit of per-card emphasis, chosen from the
+    # theme's own tokens rather than a free-form color, so cards can't drift
+    # out of the palette.
+    accent: Literal["none", "primary", "success", "warning", "destructive"] = "none"
     elements: list[FormElement] = Field(default_factory=list)
 
 
@@ -876,6 +952,9 @@ class ChatElement(_Element):
     voice: ChatVoice | None = None  # optional mic input (talk to the robot)
     poll_ms: int = 1500
     placeholder: str = "Message the robot…"
+    # Panel height: a wall display wants a tall transcript, a control strip a short
+    # one. ``fill`` sizes to the viewport (for a chat that IS the screen).
+    height: Literal["sm", "md", "lg", "fill"] = "md"
     width: FieldWidth | None = None
 
 
@@ -894,6 +973,7 @@ FormElement = Annotated[
     | CountdownElement
     | SlidesElement
     | ReportElement
+    | StatElement
     | RecordListElement
     | ChatElement
     | ButtonElement
@@ -904,6 +984,7 @@ FormElement = Annotated[
     | BlockElement
     | TabGroupElement
     | PanelElement
+    | CardElement
     | AccordionElement
     | ColumnsElement,
     Field(discriminator="type"),
@@ -913,6 +994,7 @@ FormElement = Annotated[
 Tab.model_rebuild()
 TabGroupElement.model_rebuild()
 PanelElement.model_rebuild()
+CardElement.model_rebuild()
 AccordionPane.model_rebuild()
 AccordionElement.model_rebuild()
 ColumnDef.model_rebuild()
@@ -925,28 +1007,51 @@ BlockElement.model_rebuild()
 MAX_TREE_DEPTH = 8
 
 
-def iter_elements(elements: list[Any]):
+# Containers holding a plain ``elements`` list. Layout containers keep their
+# children in the SAME entity scope as the parent; scoped containers re-bind
+# their children to a related entity, so walkers that follow one entity scope
+# must not descend into them.
+LAYOUT_ELEMENT_CONTAINERS = ("panel", "card")
+SCOPED_ELEMENT_CONTAINERS = ("section", "block")
+
+
+def container_child_lists(el: Any, *, layout_only: bool = False) -> list[list[Any]]:
+    """Every child element list a container node holds.
+
+    The ONE place that knows how each container stores its children — every
+    tree walker in the codebase goes through here, so a new container type is
+    added once rather than in each walker (miss one and buttons inside it drop
+    out of the anonymous-share allow-list, or its fields silently render empty).
+
+    ``layout_only`` skips the containers that re-scope their children to another
+    entity, for callers that walk a single entity scope (see ``flatten``).
+    """
+    etype = getattr(el, "type", None)
+    if etype == "tab_group":
+        return [tab.elements for tab in el.tabs]
+    if etype == "accordion":
+        return [pane.elements for pane in el.panes]
+    if etype == "columns":
+        return [col.elements for col in el.columns]
+    if etype in LAYOUT_ELEMENT_CONTAINERS:
+        return [el.elements]
+    if not layout_only and etype in SCOPED_ELEMENT_CONTAINERS:
+        return [el.elements]
+    return []
+
+
+def iter_elements(elements: list[Any], *, layout_only: bool = False):
     """Depth-first walk yielding ``(element, depth)`` for every node in a tree.
 
     Descends into every container's children (tabs, panes, columns, panels,
-    sections, blocks). Used by validation + rendering to visit all leaves.
+    cards, sections, blocks). Used by validation + rendering to visit all leaves.
     """
 
     def _walk(items: list[Any], depth: int):
         for el in items:
             yield el, depth
-            etype = getattr(el, "type", None)
-            if etype == "tab_group":
-                for tab in el.tabs:
-                    yield from _walk(tab.elements, depth + 1)
-            elif etype == "accordion":
-                for pane in el.panes:
-                    yield from _walk(pane.elements, depth + 1)
-            elif etype == "columns":
-                for col in el.columns:
-                    yield from _walk(col.elements, depth + 1)
-            elif etype in ("panel", "section", "block"):
-                yield from _walk(el.elements, depth + 1)
+            for children in container_child_lists(el, layout_only=layout_only):
+                yield from _walk(children, depth + 1)
 
     yield from _walk(elements, 0)
 

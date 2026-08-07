@@ -105,6 +105,13 @@ class FormConfig(BaseModel):
     # the bezel. Per view rather than global so the existing edge-to-edge kiosks keep
     # the layout they were designed around; "none" stays the default for that reason.
     padding: Literal["none", "comfortable", "spacious"] = "none"
+    # Pin the palette this view renders in, rather than inheriting whatever theme
+    # the viewer's browser last used. That inheritance is wrong precisely where it
+    # matters most: an anonymous share link opens in a stranger's browser, and a
+    # wall display should look the same every morning. NULL keeps today's
+    # behaviour (follow the viewer's theme). Applied to the view's own wrapper —
+    # never to <html>, and never written to the visitor's stored preference.
+    theme: Literal["light", "dark", "redarch"] | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -219,6 +226,17 @@ class RelationshipMeta(BaseModel):
     name: str
 
 
+class OrgBrandingRead(BaseModel):
+    """The org identity a branded page draws: a name, an optional accent, and
+    whether a logo exists (fetched from its own route, never inlined here)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    org_name: str
+    accent_color: str | None = None
+    has_logo: bool = False
+
+
 class FormRenderRead(BaseModel):
     """Everything a renderer needs: the authoring tree, a resolved field catalog
     for every entity it touches, relationship targets, and prefilled values."""
@@ -240,6 +258,10 @@ class FormRenderRead(BaseModel):
     values: dict[str, Any] = Field(default_factory=dict)  # prefilled root values
     # relationship_id -> {"values": {...}} (1:1) or {"rows": [{...}]} (1:M)
     related: dict[str, Any] = Field(default_factory=dict)
+    # Org identity for a chrome-free page. Populated ONLY by the anonymous share
+    # route, and only for a link whose admin opted in — an authenticated kiosk
+    # already knows its org, so it reads branding from the session instead.
+    branding: OrgBrandingRead | None = None
 
 
 class FormSubmit(BaseModel):

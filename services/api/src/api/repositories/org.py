@@ -10,8 +10,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.models.org import Org
 from api.models.user import UserOrgMembership
 
-# All-zero UUID used as the "clear" sentinel on update (None means "no change").
-_NIL_UUID = uuid.UUID(int=0)
+
+class _Unset:
+    """Sentinel distinguishing "field not passed" from an explicit ``None``,
+    which for these nullable columns means "clear it"."""
+
+
+UNSET = _Unset()
 
 
 class OrgRepository:
@@ -92,7 +97,6 @@ class OrgRepository:
         description: str | None = None,
         use_knowledge_graph: bool | None = None,
         openai_api_key: str | None = None,
-        home_view_id: uuid.UUID | None = None,
         default_llm_model: str | None = None,
     ) -> Org:
         if name is not None:
@@ -101,10 +105,6 @@ class OrgRepository:
             org.description = description
         if use_knowledge_graph is not None:
             org.use_knowledge_graph = use_knowledge_graph
-        if home_view_id is not None:
-            # None = no change (handled above). The all-zero UUID sentinel clears
-            # the home view; any other value sets it.
-            org.home_view_id = None if home_view_id == _NIL_UUID else home_view_id
         if openai_api_key is not None:
             # Stored as-is: the caller (router) is responsible for encrypting the
             # value before it reaches here (services/crypto.py). An empty string
@@ -114,5 +114,38 @@ class OrgRepository:
             # Same convention as openai_api_key: empty string clears back to the
             # platform default, any other value pins the org to that model id.
             org.default_llm_model = default_llm_model.strip() or None
+        await self._session.flush()
+        return org
+
+    async def set_home_view(self, org: Org, view_id: uuid.UUID | None) -> Org:
+        """Set the org's landing view, or clear it with ``None``.
+
+        Separate from :meth:`update` because it is written by a different
+        caller with different privileges: the org-admin settings endpoint, not
+        the site-admin org editor. Callers are responsible for checking that
+        ``view_id`` belongs to this org (see routers/orgs.update_org_settings) —
+        the column has no FK (see docs/DATABASE.md).
+        """
+        org.home_view_id = view_id
+        await self._session.flush()
+        return org
+
+    async def set_branding(
+        self,
+        org: Org,
+        *,
+        accent_color: str | None | _Unset = UNSET,
+        logo_object_key: str | None | _Unset = UNSET,
+    ) -> Org:
+        """Write the org-admin branding fields, leaving unpassed ones alone.
+
+        ``UNSET`` (the default) means "no change" while an explicit ``None``
+        clears — so the settings form can save the accent without also wiping a
+        logo it wasn't editing.
+        """
+        if not isinstance(accent_color, _Unset):
+            org.accent_color = accent_color
+        if not isinstance(logo_object_key, _Unset):
+            org.logo_object_key = logo_object_key
         await self._session.flush()
         return org

@@ -10,7 +10,7 @@ from __future__ import annotations
 import uuid
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth.dependencies import OrgContext, require_org_access, require_org_admin
@@ -197,6 +197,7 @@ async def enable_view_share(
             record_id=body.record_id,
             expires_at=body.expires_at,
             record_follow=body.record_follow,
+            show_branding=body.show_branding,
         )
     except FormError as exc:
         _raise_http(exc)
@@ -239,6 +240,26 @@ async def public_render_view(
         return await PublicViewService(session).render(token)
     except FormError as exc:
         _raise_http(exc)
+
+
+@public_router.get("/{token}/branding/logo", dependencies=[Depends(_rate_limit_public)])
+async def public_view_logo(
+    token: str,
+    session: Annotated[AsyncSession, Depends(get_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> Response:
+    """The org logo for a branded share link.
+
+    Keyed by the token, so it reuses the link's own rate limit and lifetime — and
+    a link that never opted into branding cannot be used to read the logo at all.
+    """
+    from api.routers.orgs import _logo_response
+
+    try:
+        key, _org_id = await PublicViewService(session).logo(token)
+    except FormError as exc:
+        _raise_http(exc)
+    return _logo_response(settings, key)
 
 
 @public_router.post(

@@ -25,6 +25,7 @@ export function ShareViewCard({ view, onChange }: Props) {
   const live = !!view.public_enabled_at;
   const [recordId, setRecordId] = useState(view.public_record_id ?? "");
   const [follow, setFollow] = useState(view.public_record_follow ?? false);
+  const [showBranding, setShowBranding] = useState(false);
   const [created, setCreated] = useState<ViewShareCreated | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -39,6 +40,7 @@ export function ShareViewCard({ view, onChange }: Props) {
       const result = await enableViewShare(view.id, {
         record_id: follow ? null : recordId.trim() || null,
         record_follow: follow,
+        show_branding: showBranding,
       });
       setCreated(result);
       onChange({
@@ -87,7 +89,7 @@ export function ShareViewCard({ view, onChange }: Props) {
             <h2 className="text-lg font-semibold">Anonymous access</h2>
             <span
               className={`rounded-full px-2 py-0.5 text-xs font-medium ${
-                live ? "bg-amber-500/15 text-amber-700 dark:text-amber-300" : "bg-muted text-muted-foreground"
+                live ? "bg-warning/15 text-warning" : "bg-muted text-muted-foreground"
               }`}
             >
               {live ? "On — anyone with the link" : "Off"}
@@ -149,6 +151,23 @@ export function ShareViewCard({ view, onChange }: Props) {
                 </label>
               </div>
             ) : null}
+            <label className="flex items-start gap-2 text-sm">
+              <input
+                type="checkbox"
+                className="mt-1"
+                checked={showBranding}
+                onChange={(e) => setShowBranding(e.target.checked)}
+              />
+              <span>
+                <span className="font-medium">Show your organization&apos;s name and logo</span>
+                <span className="mt-0.5 block text-xs text-muted-foreground">
+                  Off by default. A share link can be forwarded anywhere, so putting your
+                  organization&apos;s identity on the page is a disclosure worth choosing —
+                  right for a public sign-up board, wrong for a link you&apos;d rather not have
+                  traced back.
+                </span>
+              </span>
+            </label>
             <Button type="button" onClick={() => void enable()} disabled={busy}>
               {busy ? "Working…" : "Create public link"}
             </Button>
@@ -170,7 +189,7 @@ export function ShareViewCard({ view, onChange }: Props) {
               <span className="truncate">{created.url}</span>
             </button>
             {created.unsupported_elements.length ? (
-              <p className="flex items-start gap-2 text-xs text-amber-700 dark:text-amber-300">
+              <p className="flex items-start gap-2 text-xs text-warning">
                 <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" />
                 <span>
                   This view uses {created.unsupported_elements.join(", ")}, which load their own data

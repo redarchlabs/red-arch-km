@@ -171,7 +171,7 @@ export function PuzzlePad({ el, values, disabled, onComplete }: PuzzlePadNodePro
             correct == null
               ? "bg-primary/10 text-primary"
               : picked === correct
-                ? "bg-green-500/10 text-green-700 dark:text-green-400"
+                ? "bg-success/10 text-success"
                 : "bg-destructive/10 text-destructive"
           }`}
         >
@@ -192,7 +192,7 @@ export function PuzzlePad({ el, values, disabled, onComplete }: PuzzlePadNodePro
       {hint && el.show_hint !== false ? (
         <div className="text-center">
           {showHint ? (
-            <p className="inline-flex items-start gap-2 rounded-2xl bg-amber-500/10 px-4 py-3 text-left text-base text-amber-700 dark:text-amber-300">
+            <p className="inline-flex items-start gap-2 rounded-2xl bg-warning/10 px-4 py-3 text-left text-base text-warning">
               <Lightbulb className="mt-0.5 h-5 w-5 shrink-0" />
               {hint}
             </p>

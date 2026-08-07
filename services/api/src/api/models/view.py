@@ -52,6 +52,12 @@ class View(Base, UUIDMixin, TimestampMixin, LineageMixin):
     )
     public_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     public_enabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Whether this link shows the org's logo/name. Naming the org on a link that
+    # can be forwarded anywhere is a disclosure the admin has to choose, so it is
+    # per-link and defaults OFF (migration 046).
+    public_show_branding: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false"), default=False
+    )
 
     org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True)
     org: Mapped[Org] = relationship()
