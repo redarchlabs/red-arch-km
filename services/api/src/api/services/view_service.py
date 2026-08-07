@@ -154,9 +154,7 @@ class ViewService:
             # follows whatever a workflow most recently created and whose URL is fixed on
             # a screen nobody touches again.
             elif resolve_latest:
-                record_id = await resolve_latest_record_id(
-                    self._session, self._org_id, view.entity_definition_id
-                )
+                record_id = await resolve_latest_record_id(self._session, self._org_id, view.entity_definition_id)
             # Entity-bound: render exactly like a form (reuse the shared core).
             renderer = FormRenderService(self._session, self._org_id)
             # Adapt: FormRenderService expects a Form-like object with name/description/

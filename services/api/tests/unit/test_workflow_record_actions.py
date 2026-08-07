@@ -475,7 +475,9 @@ class TestUpdateRecordIncrements:
         rid = uuid.uuid4()
         repo = FakeRepo([{"id": rid, "level": Decimal("2.5")}])
         handler = ACTION_REGISTRY["update_record"]
-        await handler.execute(_ctx({"target_slug": "s", "record_id": str(rid), "increments": {"level": 0.25}}, repo=repo))
+        await handler.execute(
+            _ctx({"target_slug": "s", "record_id": str(rid), "increments": {"level": 0.25}}, repo=repo)
+        )
         assert repo.update_calls[0][1] == {"level": 2.75}
 
 

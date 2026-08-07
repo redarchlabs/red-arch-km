@@ -118,10 +118,14 @@ async def test_create_record_action_copies_field_from_trigger(
     await cust_repo.create({"first_name": "Jeremy"})
     await admin_session.commit()
 
-    counters = await WorkflowDispatchService(admin_session).process_pending()
+    await WorkflowDispatchService(admin_session).process_pending()
     await admin_session.commit()
-    assert counters["runs"] == 1
-    assert counters["actions"] == 1
+
+    # process_pending sweeps every org, so its counters also see events other
+    # tests left pending — assert on this org's runs instead.
+    runs = await WorkflowRunRepository(admin_session, org.id).list_for_workflow(workflow.id)
+    assert len(runs) == 1
+    assert runs[0].status == "succeeded"
 
     # A Patient was created with first_name copied from the trigger, last_name literal.
     await set_tenant(admin_session, str(org.id))
@@ -175,13 +179,8 @@ async def test_workflow_fires_and_runs_action(admin_session: AsyncSession, sessi
 
     # --- dispatch ---
     dispatcher = WorkflowDispatchService(admin_session)
-    counters = await dispatcher.process_pending()
+    await dispatcher.process_pending()
     await admin_session.commit()
-
-    # The update event fired one run with one action; the create event did not
-    # match (trigger operations = ["update"]).
-    assert counters["runs"] == 1
-    assert counters["actions"] == 1
 
     # The action mutated the record.
     await set_tenant(admin_session, str(org.id))
@@ -189,7 +188,8 @@ async def test_workflow_fires_and_runs_action(admin_session: AsyncSession, sessi
     assert fresh is not None
     assert fresh["title"] == "DONE"
 
-    # Run + step are recorded for monitoring.
+    # Run + step are recorded for monitoring. Exactly one run: the update event
+    # fired, the create event did not match (trigger operations = ["update"]).
     run_repo = WorkflowRunRepository(admin_session, org.id)
     runs = await run_repo.list_for_workflow(workflow.id)
     assert len(runs) == 1

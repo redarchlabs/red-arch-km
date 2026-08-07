@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { WorkflowDefinition } from "@/lib/api/workflows";
+import type { GraphEdge, GraphNode, WorkflowDefinition } from "@/lib/api/workflows";
 
 import { hasErrors, validateGraph, type Issue } from "./validation";
 
@@ -314,5 +314,64 @@ describe("validateGraph", () => {
 
   it("null definition is malformed, not a crash", () => {
     expect(hasErrors(validateGraph(null))).toBe(true);
+  });
+});
+
+// Mirrors the backend agent-task rules (tests/unit/test_workflow_validation_agent.py).
+describe("agent task validation", () => {
+  const AGENT_ID = "0f9a2d34-1b2c-4d5e-8f90-abcdef123456";
+
+  function agentGraph(opts: { agentId?: string | null; task?: string; boundary?: boolean } = {}): WorkflowDefinition {
+    const { agentId = AGENT_ID, task = "Do it", boundary = true } = opts;
+    const nodes: GraphNode[] = [
+      { id: "start", type: "trigger", position: { x: 0, y: 0 }, data: {} },
+      {
+        id: "a1",
+        type: "task",
+        position: { x: 0, y: 0 },
+        data: { task_type: "agent", agent_id: agentId ?? undefined, task, output_schema: { category: { type: "string" } } },
+      },
+      { id: "end1", type: "event", position: { x: 0, y: 0 }, data: { position: "end", event_type: "none" } },
+    ];
+    const edges: GraphEdge[] = [
+      { id: "e1", source: "start", target: "a1" },
+      { id: "e2", source: "a1", target: "end1" },
+    ];
+    if (boundary) {
+      nodes.push({
+        id: "berr",
+        type: "event",
+        position: { x: 0, y: 0 },
+        data: { position: "boundary", event_type: "error", attached_to: "a1" },
+      });
+      nodes.push({ id: "end2", type: "event", position: { x: 0, y: 0 }, data: { position: "end", event_type: "none" } });
+      edges.push({ id: "e3", source: "berr", target: "end2" });
+    }
+    return { schema_version: 2, nodes, edges };
+  }
+
+  function agentCodes(defn: WorkflowDefinition): Set<string> {
+    return new Set(
+      validateGraph(defn)
+        .filter((i) => i.severity === "error" && i.code.startsWith("agent-task"))
+        .map((i) => i.code),
+    );
+  }
+
+  it("clean agent graph has no agent issues", () => {
+    expect(agentCodes(agentGraph())).toEqual(new Set());
+  });
+
+  it("missing or non-uuid agent id is an error", () => {
+    expect(agentCodes(agentGraph({ agentId: null })).has("agent-task-no-agent")).toBe(true);
+    expect(agentCodes(agentGraph({ agentId: "triage-bot" })).has("agent-task-no-agent")).toBe(true);
+  });
+
+  it("empty task prompt is an error", () => {
+    expect(agentCodes(agentGraph({ task: "   " })).has("agent-task-no-task")).toBe(true);
+  });
+
+  it("missing error boundary is an error", () => {
+    expect(agentCodes(agentGraph({ boundary: false })).has("agent-task-no-escalation")).toBe(true);
   });
 });

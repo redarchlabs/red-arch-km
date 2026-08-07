@@ -6,6 +6,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { AgentRunPanel } from "@/components/workflows/AgentRunPanel";
 import { RunOverlayCanvas } from "@/components/workflows/RunOverlayCanvas";
 import { ACTIVE_STATUSES, StatusPill, duration } from "@/components/workflows/runStatus";
 import { UserTaskActions } from "@/components/workflows/UserTaskActions";
@@ -190,6 +191,17 @@ function RunRow({
   const [loadingSteps, setLoadingSteps] = useState(false);
   const [showDiagram, setShowDiagram] = useState(false);
 
+  // A waiting run parked on an agent step shows the agent panel (live transcript
+  // + inline approval), NOT the human approve/reject buttons — an agent park is
+  // not signalable by a person, and rendering those buttons would just 409.
+  const agentStep = (steps ?? []).find(
+    (s) => s.action_type === "agent" && (s.status === "running" || s.status === "pending"),
+  );
+  const agentRunId =
+    agentStep && typeof (agentStep.output as Record<string, unknown> | null)?.agent_run_id === "string"
+      ? String((agentStep.output as Record<string, unknown>).agent_run_id)
+      : null;
+
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
@@ -244,7 +256,11 @@ function RunRow({
           <td />
           <td colSpan={4} className="px-3 py-2">
             {run.error ? <p className="mb-2 text-xs text-destructive">Error: {run.error}</p> : null}
-            {run.status === "waiting" ? (
+            {run.status === "waiting" && agentRunId ? (
+              <div className="mb-2">
+                <AgentRunPanel agentRunId={agentRunId} onActed={onActed} />
+              </div>
+            ) : run.status === "waiting" && steps !== null ? (
               <div className="mb-2 rounded-md border border-violet-500/30 bg-violet-500/10 p-2">
                 <p className="mb-1.5 text-xs font-medium text-violet-700 dark:text-violet-300">
                   Parked awaiting a human task — approve or reject to advance the run.

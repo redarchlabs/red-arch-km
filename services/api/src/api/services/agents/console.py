@@ -22,6 +22,7 @@ from api import db_scope
 from api.config import Settings
 from api.repositories.agent import AgentRepository
 from api.repositories.agent_run import AgentRunRepository
+from api.services.agents import lifecycle
 from api.services.agents.authority import available_tools
 from api.services.agents.llm.keys import resolve_provider_key
 from api.services.agents.llm.provider import LLMProvider
@@ -129,7 +130,9 @@ class AgentConsoleService:
                         max_tokens=params.get("max_tokens"),
                     )
                     await run_repo.add_step(run.id, kind="assistant", content={"content": result.final_content})
-                    await run_repo.finalize_run(
+                    await lifecycle.finalize_run(
+                        session,
+                        self._org_id,
                         run,
                         status="done",
                         prompt_tokens=result.prompt_tokens,
@@ -143,7 +146,7 @@ class AgentConsoleService:
                     await db_scope.enter_tenant(session, self._org_id)  # rollback reset SET LOCAL
                     failed = await run_repo.get_run(run.id)
                     if failed is not None:
-                        await run_repo.finalize_run(failed, status="error", error=str(exc))
+                        await lifecycle.finalize_run(session, self._org_id, failed, status="error", error=str(exc))
                         await session.commit()
                     await emit({"type": "error", "error": str(exc)})
         except Exception as exc:  # noqa: BLE001 - never break the SSE contract

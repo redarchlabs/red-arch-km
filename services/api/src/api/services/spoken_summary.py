@@ -32,8 +32,8 @@ _DEFAULT_INSTRUCTION = (
     "You turn source text into a short, natural reply spoken out loud by a friendly "
     "assistant. Be precise and factual: use ONLY the information in the provided text and "
     "never invent details. Prefer the SPECIFICS the text gives you — names, numbers, "
-    "classes, values — over general statements about them: say \"the Magellan carries 10 to "
-    "12\" rather than \"crew sizes vary by ship\". When the question covers several items, "
+    'classes, values — over general statements about them: say "the Magellan carries 10 to '
+    '12" rather than "crew sizes vary by ship". When the question covers several items, '
     "name each one with its own detail instead of describing them collectively; a few short "
     "sentences are fine. Only generalise when the text truly lacks the specifics. "
     "Reply in the SAME LANGUAGE the question is asked in, even when the source text is in "
