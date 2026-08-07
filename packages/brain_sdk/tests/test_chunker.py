@@ -171,13 +171,16 @@ class TestNavigationalChunks:
         """Found live: 01-ollie-conduct-rules ends with "## Related knowledge" and a SINGLE
         link, and a 2-link floor left it indexed. Nothing in a heading-plus-link chunk can
         answer a question, so the link count is not what makes it noise."""
-        assert is_navigational_chunk("## Related knowledge - [Ollie's identity](00-ollie-identity.md)",
-                                     "Conduct Rules › Related knowledge")
+        assert is_navigational_chunk(
+            "## Related knowledge - [Ollie's identity](00-ollie-identity.md)", "Conduct Rules › Related knowledge"
+        )
 
     def test_prose_citing_one_document_is_still_kept(self) -> None:
         """…and the residue rule, not the link count, is what protects real content."""
-        text = ("## Overview  The centre runs five-hour missions for school groups through the "
-                "autumn term; see [pricing](70-pricing.md) before booking a date.")
+        text = (
+            "## Overview  The centre runs five-hour missions for school groups through the "
+            "autumn term; see [pricing](70-pricing.md) before booking a date."
+        )
         assert not is_navigational_chunk(text, "Overview")
 
     def test_content_section_named_like_navigation_is_kept(self) -> None:

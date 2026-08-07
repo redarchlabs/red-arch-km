@@ -21,8 +21,12 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from api.models.base import Base, TimestampMixin, UUIDMixin
 
-AGENT_RUN_STATUSES = ("queued", "running", "waiting", "done", "error", "cancelled")
-AGENT_RUN_TRIGGERS = ("manual", "work_order", "delegation", "schedule")
+# "escalated": the agent deliberately handed the task back (workflow-triggered
+# runs route this to the step's error boundary, distinct from infrastructure
+# "error"). "cancelled": an external actor (workflow timeout/termination, admin)
+# ended the run; the executor's cooperative check stops it within one turn.
+AGENT_RUN_STATUSES = ("queued", "running", "waiting", "done", "error", "cancelled", "escalated")
+AGENT_RUN_TRIGGERS = ("manual", "work_order", "delegation", "schedule", "workflow")
 AGENT_WAIT_KINDS = ("delegation", "approval", "escalation")
 AGENT_STEP_KINDS = (
     "user",
@@ -35,7 +39,8 @@ AGENT_STEP_KINDS = (
     "approval_required",
     "error",
 )
-AGENT_APPROVAL_STATUSES = ("pending", "approved", "denied")
+# "voided": the run was cancelled/finalized while the ask was still pending.
+AGENT_APPROVAL_STATUSES = ("pending", "approved", "denied", "voided")
 AGENT_NOTIFICATION_KINDS = ("escalation", "approval", "review", "done")
 AGENT_NOTIFICATION_STATUSES = ("unread", "read", "resolved")
 
@@ -77,6 +82,18 @@ class AgentRun(Base, UUIDMixin, TimestampMixin):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # Drives the supervisor-idle escalation backstop.
     last_activity_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # ---- workflow agent_task linkage (soft references — workflow_runs/tokens are
+    # RANGE-partitioned with composite PKs, so a DB FK is impossible and retention
+    # partition-drops must not cascade here). *_created_at pins every lookup to one
+    # partition. The full linkage (incl. token created_at + capture) also travels
+    # in ``input["workflow"]``; these columns exist for indexing + joins.
+    workflow_run_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    workflow_run_created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    workflow_node_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    workflow_token_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    # The schema-validated complete_task object (NOT overloaded into ``input``).
+    output: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True)
 

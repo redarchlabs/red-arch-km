@@ -95,17 +95,20 @@ async def test_v2_workflow_runs_via_outbox_dispatch(admin_session: AsyncSession,
     await repo.update(uuid.UUID(str(created["id"])), {"status": "closed"})
     await admin_session.commit()
 
-    counters = await WorkflowDispatchService(admin_session).process_pending()
+    await WorkflowDispatchService(admin_session).process_pending()
     await admin_session.commit()
-    assert counters["runs"] == 1
 
     # The token-engine task mutated the record.
     await set_tenant(admin_session, str(org.id))
     fresh = await repo.get(uuid.UUID(str(created["id"])))
     assert fresh["title"] == "DONE-V2"
 
+    # process_pending sweeps every org, so its counters also see events other
+    # tests left pending — assert on this org's runs instead.
     run_repo = WorkflowRunRepository(admin_session, org.id)
-    run = (await run_repo.list_for_workflow(workflow.id))[0]
+    runs = await run_repo.list_for_workflow(workflow.id)
+    assert len(runs) == 1
+    run = runs[0]
     assert run.status == "succeeded"
     # It really went through the token engine (tokens exist for the run).
     tokens = await WorkflowTokenRepository(admin_session, org.id).list_for_run(run.id)

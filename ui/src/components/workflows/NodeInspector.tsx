@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { ACTION_CONFIG_FIELDS, ACTION_LABELS, ACTION_TYPES } from "@/components/workflows/actionTypes";
+import { AgentTaskFields } from "@/components/workflows/AgentTaskFields";
 import { CasesEditor, type CaseItem } from "@/components/workflows/CasesEditor";
 import { ConditionEditor } from "@/components/workflows/ConditionEditor";
 import { DecisionTableEditor } from "@/components/workflows/DecisionTableEditor";
@@ -35,6 +36,7 @@ import {
   type RetryPolicy,
 } from "@/components/workflows/retryPolicy";
 import { TransformEditor } from "@/components/workflows/TransformEditor";
+import type { Agent } from "@/lib/api/agents";
 import type { Connection } from "@/lib/api/connections";
 import type { EntityDefinition, EntityField } from "@/lib/api/entities";
 import type { Form } from "@/lib/api/forms";
@@ -51,6 +53,10 @@ interface NodeInspectorProps {
   forms?: Form[];
   /** Org connections (picker for the http_request action's authenticated call). */
   connections?: Connection[];
+  /** Org agent roster (picker for the agent task's assignee). */
+  agents?: Agent[];
+  /** This workflow's id (agent-consent hint on the agent task panel). */
+  workflowId?: string;
   onChangeData: (id: string, data: Record<string, unknown>) => void;
   onDelete: (id: string) => void;
 }
@@ -58,7 +64,7 @@ interface NodeInspectorProps {
 const OPERATIONS = ["create", "update", "delete"] as const;
 const selectClass = "h-9 w-full rounded-md border bg-background px-2 text-sm";
 
-export function NodeInspector({ node, nodes, fields, entities, forms, connections, onChangeData, onDelete }: NodeInspectorProps) {
+export function NodeInspector({ node, nodes, fields, entities, forms, connections, agents, workflowId, onChangeData, onDelete }: NodeInspectorProps) {
   if (!node) {
     return (
       <div className="rounded-lg border bg-card p-4 text-sm text-muted-foreground">
@@ -109,6 +115,8 @@ export function NodeInspector({ node, nodes, fields, entities, forms, connection
           entities={entities}
           forms={forms}
           connections={connections}
+          agents={agents}
+          workflowId={workflowId}
           triggerFields={fields}
         />
       ) : node.type === "gateway" ? (
@@ -139,6 +147,8 @@ function TaskFields({
   entities,
   forms,
   connections,
+  agents,
+  workflowId,
   triggerFields,
 }: {
   nodeId: string;
@@ -149,6 +159,8 @@ function TaskFields({
   entities?: EntityDefinition[];
   forms?: Form[];
   connections?: Connection[];
+  agents?: Agent[];
+  workflowId?: string;
   triggerFields?: EntityField[];
 }) {
   const taskType = ((data.task_type as string | undefined) ?? "service") as TaskType;
@@ -169,7 +181,9 @@ function TaskFields({
           ))}
         </select>
       </div>
-      {isWait ? (
+      {taskType === "agent" ? (
+        <AgentTaskFields key={nodeId} data={data} patch={patch} agents={agents} workflowId={workflowId} />
+      ) : isWait ? (
         <>
           <p className="text-xs text-muted-foreground">
             A wait-state task — the run parks here until an external signal (a user completes it, a
@@ -195,9 +209,10 @@ function TaskFields({
           triggerFields={triggerFields}
         />
       )}
-      {/* Script tasks always succeed and advance (pure, side-effect-free), so
-          retry / continue-on-failure have nothing to act on — hide them there. */}
-      {taskType === "script" ? null : (
+      {/* Script tasks always succeed and advance (pure, side-effect-free); agent
+          tasks are retry-exempt by design (replaying a half-completed agentic
+          run duplicates side effects — failures route to the error boundary). */}
+      {taskType === "script" || taskType === "agent" ? null : (
         <RetryFields data={data} onReplace={(next) => onChangeData(nodeId, next)} />
       )}
     </div>

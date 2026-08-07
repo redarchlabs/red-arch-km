@@ -35,6 +35,8 @@ export interface Agent {
   grants: AgentGrants;
   mcp_server_ids: string[];
   workflow_allowlist: string[];
+  /** Which workflows may bind this agent to an agent_task step (ids, or ["*"]). */
+  workflow_invocable: string[];
   created_at: string;
   updated_at: string;
 }
@@ -65,6 +67,7 @@ export interface AgentCreateInput {
   grants?: AgentGrants;
   mcp_server_ids?: string[];
   workflow_allowlist?: string[];
+  workflow_invocable?: string[];
 }
 
 export type AgentUpdateInput = Partial<Omit<AgentCreateInput, "name">>;
@@ -85,10 +88,36 @@ export interface AgentRun {
   started_at: string | null;
   finished_at: string | null;
   created_at: string;
+  /** Workflow agent_task linkage (null for console/schedule/delegation runs). */
+  workflow_run_id: string | null;
+  workflow_node_id: string | null;
+  /** The schema-validated complete_task object. */
+  output: Record<string, unknown> | null;
+}
+
+export interface AgentRunStep {
+  id: string;
+  run_id: string;
+  seq: number;
+  kind: string;
+  name: string | null;
+  content: Record<string, unknown>;
+  tokens: number | null;
+  created_at: string;
 }
 
 export async function listAgents(): Promise<Agent[]> {
   return (await apiClient.get<Agent[]>("/agents/")).data;
+}
+
+export async function getAgentRun(runId: string): Promise<AgentRun> {
+  return (await apiClient.get<AgentRun>(`/agents/runs/${runId}`)).data;
+}
+
+/** Transcript of a (possibly background) agent run — powers the workflow run
+ * monitor's inline "what is the agent doing" view. */
+export async function listAgentRunSteps(runId: string): Promise<AgentRunStep[]> {
+  return (await apiClient.get<AgentRunStep[]>(`/agents/runs/${runId}/steps`)).data;
 }
 
 export async function getAgent(id: string): Promise<Agent> {
@@ -131,6 +160,10 @@ export interface Approval {
   status: string;
   decided_at: string | null;
   created_at: string;
+  /** Set when the parked run is a workflow agent_task step — deep-link target
+   * (/workflows/{workflow_id}/runs?run={workflow_run_id}). */
+  workflow_run_id: string | null;
+  workflow_id: string | null;
 }
 
 export interface Notification {

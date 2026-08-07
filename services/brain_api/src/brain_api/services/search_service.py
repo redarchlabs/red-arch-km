@@ -561,9 +561,7 @@ class SearchService:
         chat_history: list[dict[str, str]],
         context: str,
     ) -> list[dict[str, str]]:
-        messages: list[dict[str, str]] = [
-            {"role": "system", "content": f"{_RAG_SYSTEM_PROMPT}\n{current_date_line()}"}
-        ]
+        messages: list[dict[str, str]] = [{"role": "system", "content": f"{_RAG_SYSTEM_PROMPT}\n{current_date_line()}"}]
 
         # Clamp history to last 10 turns to control context size
         for turn in chat_history[-10:]:
