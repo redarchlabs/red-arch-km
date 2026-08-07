@@ -101,7 +101,15 @@ export function Sidebar({ open, onClose }: SidebarProps) {
             className="h-6 w-8 rounded-sm object-cover"
           />
         ) : null}
-        <span className="min-w-0 flex-1 truncate font-semibold">Red Arch Knowledge Manager</span>
+        {/* Wraps to two lines rather than truncating: the full product name
+            does not fit the w-56 rail at base size, so a single line would be
+            permanently clipped. Two lines of text-sm still clear the h-14. */}
+        <span
+          className="min-w-0 flex-1 text-sm font-semibold leading-tight"
+          title="Red Arch Knowledge Manager"
+        >
+          Red Arch Knowledge Manager
+        </span>
         {/* Close affordance only shown in the mobile drawer. */}
         <button
           type="button"
