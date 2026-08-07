@@ -2,6 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 
+import { getApiErrorMessage } from "@/lib/api/errors";
 import { fetchMe } from "@/lib/api/users";
 
 import { useAuth } from "./AuthContext";
@@ -27,6 +28,9 @@ interface OrgState {
   /** True if the user administers the current org (site admins: always true). */
   isOrgAdmin: boolean;
   isLoading: boolean;
+  /** Why the last load failed, or null. Non-null means "unknown", NOT "empty":
+   * consumers must not render an empty-state for a list they never received. */
+  error: string | null;
   setCurrentOrgId: (id: string) => void;
   refresh: () => Promise<void>;
 }
@@ -41,12 +45,14 @@ export function OrgProvider({ children }: { children: ReactNode }) {
   const [currentOrgId, setCurrentOrgIdState] = useState<string | null>(null);
   const [isSiteAdmin, setIsSiteAdmin] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     if (!isAuthenticated) {
       setIsLoading(false);
       return;
     }
+    setError(null);
     try {
       const me = await fetchMe();
       setOrgs(me.orgs);
@@ -74,6 +80,12 @@ export function OrgProvider({ children }: { children: ReactNode }) {
           // drives the UI; org-scoped calls may 400 until storage works.
         }
       }
+    } catch (e: unknown) {
+      // Swallowing this used to leave the switcher stuck on "No organizations"
+      // for the rest of the session — indistinguishable from a user who really
+      // has none, and with no way to retry. Keep whatever orgs we already have:
+      // a failed *refresh* must not blank a working list.
+      setError(getApiErrorMessage(e, "Could not load your organizations"));
     } finally {
       setIsLoading(false);
     }
@@ -92,6 +104,7 @@ export function OrgProvider({ children }: { children: ReactNode }) {
       setOrgs([]);
       setCurrentOrgIdState(null);
       setIsSiteAdmin(false);
+      setError(null);
       setIsLoading(false);
       return;
     }
@@ -112,7 +125,17 @@ export function OrgProvider({ children }: { children: ReactNode }) {
 
   return (
     <OrgContext.Provider
-      value={{ orgs, currentOrgId, currentOrg, isSiteAdmin, isOrgAdmin, isLoading, setCurrentOrgId, refresh }}
+      value={{
+        orgs,
+        currentOrgId,
+        currentOrg,
+        isSiteAdmin,
+        isOrgAdmin,
+        isLoading,
+        error,
+        setCurrentOrgId,
+        refresh,
+      }}
     >
       {children}
     </OrgContext.Provider>
