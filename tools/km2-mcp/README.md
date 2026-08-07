@@ -68,7 +68,7 @@ All optional — the defaults target a local dev stack. **No secrets here.**
 | `KM2_CLERK_JWT_TEMPLATE` | *(unset)* | Mirror `NEXT_PUBLIC_CLERK_JWT_TEMPLATE` if the app sets one |
 | `KM2_ORG_ID` | *(unset)* | Hard override for `X-Org-ID` (wins over the app's active org) |
 | `KM2_ORG_STORAGE_KEY` | `redarch:currentOrgId` | localStorage key the app stores the active org under |
-| `KM2_USER_DATA_DIR` | `~/.km2-mcp/profile` | Persistent browser profile (holds the Clerk session) |
+| `KM2_USER_DATA_DIR` | `~/.km2-mcp/profile` | Persistent browser profile (holds the Clerk session). A leading `~/` is expanded — the value is not shell-evaluated, so write `~/…`, not `$HOME/…` |
 | `KM2_BROWSER_CHANNEL` | `chrome` (in repo `.mcp.json`) | Browser to drive (`chrome`/`msedge`); real Chrome avoids IdP bot-detection. Unset = bundled Chromium |
 | `KM2_HEADLESS` | `false` | Run headless. Keep `false` for interactive login |
 | `KM2_LOGIN_TIMEOUT_MS` | `180000` | How long `km2_login` waits for you to finish signing in |
