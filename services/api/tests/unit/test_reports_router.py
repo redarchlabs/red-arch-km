@@ -96,8 +96,16 @@ class TestErrorMapping:
 class TestRun:
     async def test_run_report_ok(self) -> None:
         svc = MagicMock()
+        # A saved report's run carries the report's own viz alongside the rows, so
+        # a dashboard element draws in one round trip rather than two.
         svc.run_report = AsyncMock(
-            return_value={"group_by": [], "metrics": ["count"], "rows": [{"count": 3}], "row_count": 1}
+            return_value={
+                "group_by": [],
+                "metrics": ["count"],
+                "rows": [{"count": 3}],
+                "row_count": 1,
+                "viz": {"type": "bar", "series": ["count"]},
+            }
         )
         with patch.object(reports, "ReportService", return_value=svc):
             async with _client(_app()) as client:

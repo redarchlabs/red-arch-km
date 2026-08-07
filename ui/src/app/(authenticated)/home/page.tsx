@@ -42,7 +42,7 @@ export default function HomePage() {
       </div>
       <h1 className="text-lg font-semibold">No Default View Configured</h1>
       <p className="max-w-md text-sm text-muted-foreground">
-        An administrator can set this org&apos;s home view in Site Admin &rarr; org settings.
+        An organization admin can set this org&apos;s home view in Admin &rarr; General.
       </p>
     </div>
   );

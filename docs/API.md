@@ -106,7 +106,8 @@ Router `orgs.py`. Org membership is checked inside the handlers for read routes.
 | GET | `/api/orgs` | List orgs the caller can access (paginated) | Clerk (any user) |
 | POST | `/api/orgs` | Create an org | Site admin |
 | GET | `/api/orgs/{org_id}` | Org details | Clerk (member of that org) |
-| PATCH | `/api/orgs/{org_id}` | Update org | Site admin |
+| PATCH | `/api/orgs/{org_id}` | Update org (name, description, OpenAI key, LLM pin) | Site admin |
+| PATCH | `/api/orgs/{org_id}/settings` | Set/clear the org's home view | Org admin (X-Org-ID must match) |
 | DELETE | `/api/orgs/{org_id}` | Delete org (cascades to all tenant data) | Site admin |
 
 ### Users and memberships

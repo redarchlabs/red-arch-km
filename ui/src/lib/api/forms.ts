@@ -49,6 +49,10 @@ export interface FieldElement extends ElementBase {
   label?: string | null;
   required?: boolean | null;
   read_only?: boolean;
+  /** Views render fields as read-only readouts by default; `true` opts this
+   * field back into an input there (edits can feed workflow-button inputs).
+   * Ignored on forms. */
+  editable?: boolean | null;
   help_text?: string | null;
   placeholder?: string | null;
   width?: FieldWidth | null;
@@ -59,6 +63,8 @@ export interface LabelElement extends ElementBase {
   type: "label";
   text: string;
   variant: "heading" | "subheading" | "paragraph" | "divider";
+  /** Wall-display typesetting; overrides `variant` when set. */
+  display?: "headline" | "prose" | "quote" | "caption" | null;
   width?: FieldWidth | null;
 }
 
@@ -207,6 +213,29 @@ export interface ReportElement extends ElementBase {
   width?: FieldWidth | null;
 }
 
+/** A KPI tile backed by a saved report (same data path as `report`). */
+export interface StatElement extends ElementBase {
+  type: "stat";
+  report_id: string;
+  label?: string | null;
+  icon?: string | null;
+  trend?: "up_is_good" | "down_is_good" | "neutral";
+  poll_ms?: number | null;
+  width?: FieldWidth | null;
+}
+
+export type ColumnFormat = "auto" | "text" | "number" | "date" | "datetime" | "badge" | "code";
+export type BadgeTone = "neutral" | "success" | "warning" | "destructive" | "info";
+
+/** Presentation for one `record_list` column (mirrors backend `RecordListColumn`). */
+export interface RecordListColumn {
+  slug: string;
+  label?: string | null;
+  align?: "left" | "right" | "center" | null;
+  format?: ColumnFormat;
+  badge_map?: Record<string, BadgeTone>;
+}
+
 /** One server-side filter on a `record_list` (mirrors backend `RecordListFilter`).
  * A `value` of `"@me"` on a relation field scopes the board to the caller's own
  * records (resolved server-side, like `record_id=me`). */
@@ -223,6 +252,8 @@ export interface RecordListElement extends ElementBase {
   entity: string;
   label?: string | null;
   fields?: string[];
+  /** Optional per-column presentation; additive to `fields`. */
+  columns?: RecordListColumn[];
   /** Server-side row filters, ANDed. `value: "@me"` on a relation → caller's own rows. */
   filters?: RecordListFilterConfig[];
   sort_by?: string | null;
@@ -323,6 +354,8 @@ export interface ChatElement extends ElementBase {
   voice?: ChatVoice | null;
   poll_ms?: number;
   placeholder?: string;
+  /** Panel height; `fill` sizes to the viewport for a chat that IS the screen. */
+  height?: "sm" | "md" | "lg" | "fill";
   width?: FieldWidth | null;
 }
 
@@ -488,6 +521,16 @@ export interface PanelElement extends ElementBase {
   elements: FormElement[];
 }
 
+/** A dashboard tile: a titled, bordered surface grouping its children. Same
+ * entity scope as its parent (pure layout, like `panel`). */
+export interface CardElement extends ElementBase {
+  type: "card";
+  title?: string | null;
+  subtitle?: string | null;
+  accent?: "none" | "primary" | "success" | "warning" | "destructive";
+  elements: FormElement[];
+}
+
 export interface AccordionPane {
   label: string;
   elements: FormElement[];
@@ -518,6 +561,7 @@ export type FormElement =
   | CountdownElement
   | SlidesElement
   | ReportElement
+  | StatElement
   | RecordListElement
   | ChatElement
   | ButtonElement
@@ -528,6 +572,7 @@ export type FormElement =
   | BlockElement
   | TabGroupElement
   | PanelElement
+  | CardElement
   | AccordionElement
   | ColumnsElement;
 
@@ -542,6 +587,17 @@ export interface FormConfig {
    * share), which are otherwise full-bleed. Absent = "none", so the edge-to-edge
    * kiosks built before this option keep their layout. */
   padding?: "none" | "comfortable" | "spacious" | null;
+  /** Pin the palette this view renders in instead of following the viewer's
+   * theme. Applied to the view's own wrapper, never to `<html>`. */
+  theme?: "light" | "dark" | "redarch" | null;
+}
+
+/** Org identity for a chrome-free page. Present only on an anonymous share
+ * render whose link opted into branding. */
+export interface OrgBranding {
+  org_name: string;
+  accent_color?: string | null;
+  has_logo?: boolean;
 }
 
 // ---- form entity + CRUD DTOs ----
@@ -623,6 +679,8 @@ export interface FormRender {
   relationships: RelationshipMeta[];
   values: Record<string, unknown>;
   related: Record<string, { values?: Record<string, unknown>; rows?: Record<string, unknown>[] }>;
+  /** Set only on an anonymous share render whose link opted into branding. */
+  branding?: OrgBranding | null;
 }
 export interface FormSubmit {
   values: Record<string, unknown>;

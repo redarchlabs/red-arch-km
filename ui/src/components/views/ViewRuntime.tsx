@@ -3,15 +3,18 @@
 import { ArrowLeft, Maximize, Minimize, X } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { FormRenderer } from "@/components/forms/FormRenderer";
-import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useOrg } from "@/context/OrgContext";
 import { getApiErrorMessage } from "@/lib/api/errors";
-import type { FormRender } from "@/lib/api/forms";
+import type { FormRender, OrgBranding } from "@/lib/api/forms";
 import { getPublicViewRender, getViewRender, runPublicViewWorkflow } from "@/lib/api/views";
 import { runWorkflow } from "@/lib/api/workflows";
+
+/** Logos are <img> sources, not axios calls, so they need the absolute API base. */
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
 
 interface ViewRuntimeProps {
   /** The view's id. Ignored when `token` is set — a shared page is identified
@@ -47,6 +50,9 @@ export function ViewRuntime({ id, kiosk = false, token }: ViewRuntimeProps) {
   const queryRecordId = useSearchParams().get("record_id") ?? undefined;
   const recordId = token ? undefined : queryRecordId;
   const shared = !!token;
+  // Present for a signed-in kiosk; null for an anonymous visitor (the provider
+  // lives in the root layout, so this is safe on the shared route too).
+  const { currentOrg } = useOrg();
   const fetchRender = useCallback(
     () => (token ? getPublicViewRender(token) : getViewRender(id, recordId)),
     [token, id, recordId],
@@ -56,12 +62,18 @@ export function ViewRuntime({ id, kiosk = false, token }: ViewRuntimeProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // Serialized form of the last render we committed to state. Kiosk pages poll
+  // for hours; when a tick returns identical data, skipping setRender keeps the
+  // whole element tree from re-rendering for nothing.
+  const lastRenderJson = useRef<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      setRender(await fetchRender());
+      const next = await fetchRender();
+      lastRenderJson.current = JSON.stringify(next);
+      setRender(next);
     } catch (e: unknown) {
       setError(getApiErrorMessage(e, "Failed to load view"));
     } finally {
@@ -88,7 +100,11 @@ export function ViewRuntime({ id, kiosk = false, token }: ViewRuntimeProps) {
       if (typeof document !== "undefined" && document.hidden) return;
       void fetchRender()
         .then((next) => {
-          if (alive) setRender(next);
+          if (!alive) return;
+          const json = JSON.stringify(next);
+          if (json === lastRenderJson.current) return; // unchanged — no re-render
+          lastRenderJson.current = json;
+          setRender(next);
         })
         .catch(() => {
           /* keep the last good render */
@@ -152,6 +168,24 @@ export function ViewRuntime({ id, kiosk = false, token }: ViewRuntimeProps) {
     }
   };
 
+  // Branding source differs by mode. A shared page has no session, so its org
+  // identity rides in the render payload (and only when the link opted in); an
+  // authenticated kiosk already knows its org, so it reads the context.
+  const branding: OrgBranding | null = shared
+    ? (render?.branding ?? null)
+    : kiosk && currentOrg
+      ? {
+          org_name: currentOrg.name,
+          accent_color: currentOrg.accent_color ?? null,
+          has_logo: currentOrg.has_logo ?? false,
+        }
+      : null;
+  const logoSrc = !branding?.has_logo
+    ? null
+    : shared
+      ? `${API_BASE}/public/views/${token}/branding/logo`
+      : `${API_BASE}/orgs/${currentOrg?.id}/settings/logo`;
+
   if (loading) return <Skeleton className={kiosk || shared ? "h-screen w-full" : "h-96 w-full"} />;
   if (!render)
     return (
@@ -165,11 +199,25 @@ export function ViewRuntime({ id, kiosk = false, token }: ViewRuntimeProps) {
     // is the entire screen. Errors/notices float rather than reflowing the layout,
     // so a workflow failure never shifts a control out from under a finger.
     return (
-      <div className="relative min-h-screen w-full">
+      <div
+        className="relative min-h-screen w-full bg-background text-foreground"
+        // A pinned theme scopes to this wrapper — never <html>, and never written
+        // to the visitor's stored preference. A shared link opens in a stranger's
+        // browser; inheriting whatever theme it last used is exactly the wrong
+        // default for a page whose look was designed.
+        data-theme={render.config.theme ?? undefined}
+        // The org accent overrides the theme's primary for this subtree only.
+        style={
+          branding?.accent_color
+            ? ({ "--color-primary": branding.accent_color } as React.CSSProperties)
+            : undefined
+        }
+      >
         {/* A shared page gets no way "back into the app" — there is no app for
             an anonymous visitor to return to, and offering one only invites a
             confusing sign-in wall. It keeps the fullscreen toggle. */}
         <KioskControls id={id} recordId={recordId} exitHref={shared ? null : undefined} />
+        {branding ? <BrandHeader branding={branding} logoSrc={logoSrc} /> : null}
         {error || notice ? (
           <div className="pointer-events-none fixed inset-x-0 top-0 z-40 flex justify-center p-2">
             <p
@@ -182,14 +230,16 @@ export function ViewRuntime({ id, kiosk = false, token }: ViewRuntimeProps) {
           </div>
         ) : null}
         <div className={KIOSK_PADDING[render.config.padding ?? "none"]}>
-          <FormRenderer render={render} mode="fill" onRunWorkflow={handleRunWorkflow} />
+          <FormRenderer render={render} mode="fill" viewContext onRunWorkflow={handleRunWorkflow} />
         </div>
       </div>
     );
   }
 
   return (
-    <div className="space-y-6">
+    // `max-w`: on an ultrawide monitor an unconstrained view typesets its text
+    // and stretches its tables edge to edge, which is what actually hurts.
+    <div className="mx-auto max-w-7xl space-y-6">
       {/* No page title here: each view supplies its own heading in its element
           tree, so echoing the internal view name (e.g. "Course Player") above it
           is redundant. Keep only a back affordance. */}
@@ -210,13 +260,29 @@ export function ViewRuntime({ id, kiosk = false, token }: ViewRuntimeProps) {
         </Link>
       </div>
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
-      {notice ? <p className="text-sm text-green-600">{notice}</p> : null}
-      <Card>
-        <CardContent className="pt-6">
-          <FormRenderer render={render} mode="fill" onRunWorkflow={handleRunWorkflow} />
-        </CardContent>
-      </Card>
+      {notice ? <p className="text-sm text-success">{notice}</p> : null}
+      {/* No outer Card: data elements now carry their own card frames, and a
+          card-inside-a-card double border read as clutter. */}
+      <FormRenderer render={render} mode="fill" viewContext onRunWorkflow={handleRunWorkflow} />
     </div>
+  );
+}
+
+/** The slim identity strip a branded kiosk / shared page carries.
+ *
+ * Deliberately small and quiet: it says whose page this is, and then gets out of
+ * the way of the view — which is the actual content, often on a wall display. */
+function BrandHeader({ branding, logoSrc }: { branding: OrgBranding; logoSrc: string | null }) {
+  return (
+    <header className="flex items-center gap-3 border-b bg-background/80 px-4 py-2.5 backdrop-blur">
+      {logoSrc ? (
+        /* Served from the API (token-scoped on a shared page), so next/image's
+           build-time domain allow-list can't cover it. */
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={logoSrc} alt="" className="h-7 w-auto max-w-40 object-contain" />
+      ) : null}
+      <span className="truncate text-sm font-semibold">{branding.org_name}</span>
+    </header>
   );
 }
 

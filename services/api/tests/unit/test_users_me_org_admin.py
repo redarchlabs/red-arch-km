@@ -25,10 +25,21 @@ PROFILE_ID = uuid.uuid4()
 
 
 class _Org:
-    def __init__(self, org_id: uuid.UUID, name: str, home_view_id: uuid.UUID | None = None) -> None:
+    def __init__(
+        self,
+        org_id: uuid.UUID,
+        name: str,
+        home_view_id: uuid.UUID | None = None,
+        accent_color: str | None = None,
+        logo_object_key: str | None = None,
+    ) -> None:
         self.id = org_id
         self.name = name
         self.home_view_id = home_view_id
+        # Branding travels on /users/me so the kiosk route can brand itself from
+        # the session; the stub mirrors the model's shape.
+        self.accent_color = accent_color
+        self.logo_object_key = logo_object_key
 
 
 def _user(*, is_site_admin: bool) -> CurrentUser:

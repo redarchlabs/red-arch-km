@@ -105,7 +105,9 @@ export default function FormBuilderPage({ params }: { params: Promise<{ id: stri
     setSaved(false);
     setError(null);
     try {
-      const updated = await updateForm(id, { config: { version: 2, elements } });
+      // Spread the loaded config so page-level keys this editor doesn't manage
+      // (refresh_ms, padding, …) survive the save; editor-managed keys override.
+      const updated = await updateForm(id, { config: { ...form?.config, version: 2, elements } });
       setForm(updated);
       setSaved(true);
     } catch (e: unknown) {

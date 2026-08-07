@@ -14,6 +14,10 @@ export interface Org {
    * inference via OPENAI_MODEL_ROUTES); null = platform default.
    */
   default_llm_model?: string | null;
+  /** `#rrggbb` accent applied on branded (kiosk / shared) view pages. */
+  accent_color?: string | null;
+  /** Whether a logo has been uploaded; the asset itself is served from its own route. */
+  has_logo?: boolean;
 }
 
 export interface UserProfile {

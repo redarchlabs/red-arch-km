@@ -70,6 +70,10 @@ class ViewShareRequest(BaseModel):
     # powerful than a pinned one.
     record_follow: bool = False
     expires_at: datetime | None = None
+    # Show the org's logo/name on the shared page. OFF by default: a share link
+    # can be forwarded anywhere, so naming the org that owns the page is a
+    # disclosure the admin opts into rather than inherits.
+    show_branding: bool = False
 
 
 class ViewShareCreated(BaseModel):

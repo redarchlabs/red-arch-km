@@ -1,7 +1,7 @@
 "use client";
 
-import { ChevronRight, Maximize2, Mic, Plus, Trash2, X } from "lucide-react";
-import { Fragment, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { ChevronRight, Inbox, Loader2, Maximize2, Mic, Plus, Trash2, TriangleAlert } from "lucide-react";
+import { Component, Fragment, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import {
@@ -18,16 +18,22 @@ import {
   type PuzzlePadElement,
   type RecordListElement,
   type ReportElement,
+  type RecordListColumn,
   type SectionElement,
+  type StatElement,
   type TableElement,
   TEXT_DISPLAYS,
 } from "@/lib/api/forms";
 import { createRecord, listRecords, type EntityRecord } from "@/lib/api/entityRecords";
-import { getReport, runReport, type AggregateResult, type Visualization } from "@/lib/api/reports";
+import { runReport, type AggregateResult, type Visualization } from "@/lib/api/reports";
+import { formatValue } from "@/components/reports/ReportChart";
 import { streamRunTokens } from "@/lib/api/runStream";
 import { callConnection, runWorkflow } from "@/lib/api/workflows";
+import { Markdown } from "@/components/common/Markdown";
 import { ReportChart } from "@/components/reports/ReportChart";
 import { Dialog, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
 import { buildCatalog, fieldMeta, relatedEntityId } from "@/lib/forms/catalog";
 import { fillTokens } from "@/lib/forms/href";
 import { shareTarget } from "@/lib/forms/shareUrl";
@@ -65,6 +71,11 @@ export interface FormRendererProps {
   defaultSubmitLabel?: string;
   /** Page-controlled error to show above the footer submit button. */
   error?: string | null;
+  /** Rendering a VIEW (a display surface) rather than a form. Entity-bound
+   * `field` elements default to a read-only value readout — a view shows data;
+   * an editable input on a wall display reads as unfinished. A field opts back
+   * in with `editable: true` (e.g. a console where edits feed a workflow button). */
+  viewContext?: boolean;
 }
 
 type Values = Record<string, unknown>;
@@ -83,6 +94,23 @@ const SPAN: Record<string, string> = {
   half: "sm:col-span-6",
   third: "sm:col-span-4",
   quarter: "sm:col-span-3",
+};
+
+/** Static 1–12 span classes for the columns container. Tailwind only ships
+ * classes it can see at build time, so these cannot be computed strings. */
+const COLSPAN: Record<number, string> = {
+  1: "sm:col-span-1",
+  2: "sm:col-span-2",
+  3: "sm:col-span-3",
+  4: "sm:col-span-4",
+  5: "sm:col-span-5",
+  6: "sm:col-span-6",
+  7: "sm:col-span-7",
+  8: "sm:col-span-8",
+  9: "sm:col-span-9",
+  10: "sm:col-span-10",
+  11: "sm:col-span-11",
+  12: "sm:col-span-12",
 };
 function spanClass(width?: string | null): string {
   return SPAN[width ?? "full"] ?? "sm:col-span-12";
@@ -129,25 +157,59 @@ function LiveValueNode({ el }: { el: LiveValueElement }) {
       return;
     }
     let alive = true;
+    let timer: number | undefined;
+    let failures = 0;
+    let ctrl: AbortController | null = null;
+    const base = Math.max(200, el.poll_ms ?? 1000);
+
     const tick = async () => {
+      // A hidden tab doesn't poll — these can run at 5 Hz against a device on
+      // the local network, and nobody is looking.
+      if (typeof document !== "undefined" && document.hidden) return;
+      ctrl = new AbortController();
       try {
-        const res = await fetch(el.url, { headers: { Accept: "application/json" } });
+        const res = await fetch(el.url, {
+          headers: { Accept: "application/json" },
+          signal: ctrl.signal,
+        });
         const json: unknown = await res.json();
         const picked = readJsonPointer(json, el.json_pointer);
         if (!alive) return;
+        failures = 0;
         setOk(true);
         setValue(formatLiveValue(picked));
       } catch {
         if (!alive) return;
+        failures += 1;
         setOk(false);
         setValue("unreachable");
       }
     };
-    void tick();
-    const id = window.setInterval(tick, Math.max(200, el.poll_ms ?? 1000));
+
+    // Recursive setTimeout: one request finishes before the next is scheduled, so a
+    // slow device can't pile up overlapping fetches. Failures back off (capped ~30s)
+    // instead of hammering an unreachable endpoint at full speed.
+    const loop = async () => {
+      await tick();
+      if (!alive) return;
+      const delay = Math.min(base * 2 ** Math.min(failures, 5), 30_000);
+      timer = window.setTimeout(loop, delay);
+    };
+    void loop();
+
+    const onVisible = () => {
+      if (alive && !document.hidden) {
+        if (timer) window.clearTimeout(timer);
+        void loop();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisible);
+
     return () => {
       alive = false;
-      window.clearInterval(id);
+      ctrl?.abort();
+      if (timer) window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, [el.url, el.json_pointer, el.poll_ms]);
 
@@ -168,11 +230,101 @@ function LiveValueNode({ el }: { el: LiveValueElement }) {
   );
 }
 
+/** ISO date / datetime strings as the API emits them — the only string shapes we
+ * risk reformatting. Anything else passes through verbatim. */
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2})?(\.\d+)?(Z|[+-]\d{2}:?\d{2})?)?$/;
+
 function formatCell(value: unknown): string {
   if (value == null) return "—";
   if (typeof value === "boolean") return value ? "Yes" : "No";
+  if (typeof value === "number") {
+    return Number.isInteger(value)
+      ? value.toLocaleString()
+      : value.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  }
   if (typeof value === "object") return JSON.stringify(value);
-  return String(value);
+  const s = String(value);
+  if (ISO_DATE_RE.test(s)) {
+    const d = new Date(s);
+    if (!Number.isNaN(d.getTime())) {
+      return s.length <= 10
+        ? d.toLocaleDateString(undefined, { dateStyle: "medium" })
+        : d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+    }
+  }
+  return s;
+}
+
+/** `employee_number` → `Employee Number` — a raw field slug is developer-speak,
+ * and it's what an unconfigured column header would otherwise print. */
+function humanizeSlug(slug: string): string {
+  return slug.replace(/[_-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+/** Chat panel heights. `fill` is for a chat that IS the screen (a kiosk answer
+ * station): viewport-relative with a floor so it never collapses. */
+const CHAT_HEIGHT: Record<string, string> = {
+  sm: "h-72",
+  md: "h-96",
+  lg: "h-[34rem]",
+  fill: "h-[calc(100vh-10rem)] min-h-96",
+};
+
+/** Wall-display typesetting for the label element — the same ramp DisplayText
+ * gives entity-bound fields, so a standalone dashboard can headline a screen. */
+const LABEL_DISPLAY_CLASSES: Record<string, string> = {
+  headline: "text-4xl font-semibold leading-tight tracking-tight text-foreground",
+  prose: "text-2xl leading-relaxed text-foreground",
+  quote: "border-l-4 border-primary/60 pl-6 text-2xl italic leading-relaxed text-foreground",
+  caption: "text-xl leading-relaxed text-muted-foreground",
+};
+
+/** The one frame data elements (record lists, reports, chat) share, so a dashboard
+ * reads as a set of matched cards instead of three ad-hoc borders. */
+function ViewCard({
+  title,
+  actions,
+  flush = false,
+  children,
+}: {
+  title?: string | null;
+  actions?: ReactNode;
+  flush?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <section className="overflow-hidden rounded-lg border bg-background shadow-sm">
+      {title || actions ? (
+        <header className="flex items-center justify-between gap-2 border-b px-4 py-2.5">
+          {title ? <h3 className="truncate text-sm font-semibold">{title}</h3> : <span />}
+          {actions}
+        </header>
+      ) : null}
+      <div className={flush ? "" : "p-4"}>{children}</div>
+    </section>
+  );
+}
+
+/** Catches a render error in one element so it can't blank the whole page — a
+ * kiosk screen with one broken chart should lose the chart, not the mission.
+ * Deliberately latching (no auto-reset): under `refresh_ms` polling, a
+ * deterministic throw would otherwise re-crash at poll frequency forever. */
+class ElementErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+  render() {
+    if (this.state.failed) {
+      return (
+        <div className="flex items-center gap-2 rounded-lg border border-destructive/40 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+          <TriangleAlert className="h-4 w-4 shrink-0" />
+          This element hit an error. The rest of the page is unaffected.
+        </div>
+      );
+    }
+    return this.props.children;
+  }
 }
 
 /** Read-only "status board": lists an entity's records (newest-first or by
@@ -204,6 +356,9 @@ function RecordListNode({
     let alive = true;
     let timer: number | undefined;
     let failures = 0;
+    // Serialized last-committed rows: a poll tick that returns identical data
+    // skips setRows, so a live board doesn't re-render the table for nothing.
+    let lastJson: string | null = null;
     // poll_ms turns the board live; 0 => fetch once.
     const base = el.poll_ms ? Math.max(500, el.poll_ms) : 0;
     // Author-declared server-side filters (ANDed). `@me` resolves to the caller's
@@ -227,7 +382,11 @@ function RecordListNode({
         if (!alive) return;
         failures = 0;
         setError(false);
-        setRows(res.items);
+        const json = JSON.stringify(res.items);
+        if (json !== lastJson) {
+          lastJson = json;
+          setRows(res.items);
+        }
       } catch {
         if (!alive) return;
         failures += 1;
@@ -265,14 +424,21 @@ function RecordListNode({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [el.entity, el.limit, el.sort_by, el.sort_dir, el.poll_ms, filtersKey]);
 
-  // Columns: the explicit field list, else the field slugs on the first row
-  // (excluding base columns) so an unconfigured board still shows something.
+  // Columns: the explicit field list PLUS any column configured for presentation
+  // only (additive, so `columns` never has to restate `fields`), else the field
+  // slugs on the first row so an unconfigured board still shows something.
+  const configured = el.columns ?? [];
+  const declared = [
+    ...(el.fields ?? []),
+    ...configured.map((c) => c.slug).filter((s) => !(el.fields ?? []).includes(s)),
+  ];
   const columns =
-    el.fields && el.fields.length > 0
-      ? el.fields
+    declared.length > 0
+      ? declared
       : rows && rows[0]
         ? Object.keys(rows[0]).filter((k) => !["id", "created_at", "updated_at", "org_id"].includes(k))
         : [];
+  const colConfig = new Map<string, RecordListColumn>(configured.map((c) => [c.slug, c]));
 
   const runRow = async (row: EntityRecord) => {
     if (!el.row_workflow_id || !onRunWorkflow) return;
@@ -293,25 +459,70 @@ function RecordListNode({
     }
   };
 
+  // Right-align a column when its values are numbers — scanning figures down a
+  // ragged left edge is what makes a table look homemade. An explicit `align`
+  // on the column config wins.
+  const numericCols = new Set(
+    columns.filter((c) => (rows ?? []).some((r) => typeof r[c] === "number")),
+  );
+  const alignOf = (c: string): string => {
+    const explicit = colConfig.get(c)?.align;
+    if (explicit === "right") return "text-right";
+    if (explicit === "center") return "text-center";
+    if (explicit === "left") return "text-left";
+    return numericCols.has(c) ? "text-right" : "text-left";
+  };
+
+  /** Draw one cell per its column config; `auto` keeps the type-driven default. */
+  const renderCell = (col: string, raw: unknown): ReactNode => {
+    const cfg = colConfig.get(col);
+    const fmt = cfg?.format ?? "auto";
+    if (fmt === "badge") {
+      const text = formatCell(raw);
+      if (text === "—") return text;
+      const tone = cfg?.badge_map?.[String(raw)] ?? "neutral";
+      return (
+        <span
+          className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
+            BADGE_TONES[tone] ?? BADGE_TONES.neutral
+          }`}
+        >
+          {text}
+        </span>
+      );
+    }
+    if (fmt === "code") {
+      return <span className="font-mono text-xs">{formatCell(raw)}</span>;
+    }
+    if (fmt === "text") return raw == null ? "—" : String(raw);
+    return formatCell(raw);
+  };
+
   return (
-    <div>
-      {el.label ? <label className="mb-1 block text-sm font-medium">{el.label}</label> : null}
+    <ViewCard title={el.label} flush>
       {error ? (
-        <div className="rounded-md border bg-muted/40 px-3 py-2 text-sm text-destructive">
-          Unable to load records.
+        <div className="px-4 py-3 text-sm text-destructive">Unable to load records.</div>
+      ) : rows == null ? (
+        // Initial load only — background re-polls swap data in place (or not at
+        // all, when a tick returns identical rows), never back to this skeleton.
+        <div className="space-y-2 p-4">
+          <Skeleton className="h-8 w-full" />
+          <Skeleton className="h-8 w-full" />
+          <Skeleton className="h-8 w-2/3" />
         </div>
-      ) : rows && rows.length === 0 ? (
-        <div className="rounded-md border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
-          {el.empty_text ?? "No records yet."}
+      ) : rows.length === 0 ? (
+        <div className="flex flex-col items-center gap-2 px-4 py-8 text-center">
+          <Inbox className="h-8 w-8 text-muted-foreground/50" />
+          <p className="text-sm text-muted-foreground">{el.empty_text ?? "No records yet."}</p>
         </div>
       ) : (
-        <div className="overflow-x-auto rounded-md border">
+        <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="border-b bg-muted/50">
               <tr>
                 {columns.map((c) => (
-                  <th key={c} className="px-3 py-2 text-left font-medium">
-                    {c}
+                  <th key={c} className={`px-3 py-2 font-medium ${alignOf(c)}`}>
+                    {colConfig.get(c)?.label ?? humanizeSlug(c)}
                   </th>
                 ))}
                 {el.row_link_template ? <th className="w-24 px-3 py-2" /> : null}
@@ -319,11 +530,17 @@ function RecordListNode({
               </tr>
             </thead>
             <tbody>
-              {(rows ?? []).map((row) => (
-                <tr key={String(row.id)} className="border-b last:border-0">
+              {rows.map((row) => (
+                <tr
+                  key={String(row.id)}
+                  className="border-b transition-colors last:border-0 hover:bg-muted/40"
+                >
                   {columns.map((c) => (
-                    <td key={c} className="px-3 py-2">
-                      {formatCell(row[c])}
+                    <td
+                      key={c}
+                      className={`px-3 py-2 ${alignOf(c)} ${numericCols.has(c) ? "tabular-nums" : ""}`}
+                    >
+                      {renderCell(c, row[c])}
                     </td>
                   ))}
                   {el.row_link_template ? (
@@ -354,6 +571,118 @@ function RecordListNode({
           </table>
         </div>
       )}
+    </ViewCard>
+  );
+}
+
+/** Badge tones for a record-list column rendered as a status pill. Fixed set,
+ * from the theme's own tokens — a status board shouldn't invent colors. */
+const BADGE_TONES: Record<string, string> = {
+  neutral: "bg-muted text-muted-foreground",
+  success: "bg-success/12 text-success",
+  warning: "bg-warning/12 text-warning",
+  destructive: "bg-destructive/12 text-destructive",
+  info: "bg-primary/12 text-primary",
+};
+
+/** A KPI tile: one big number over a label. Reads a saved report (the same data
+ * path as the report element) so there is no second way to compute a metric. */
+function StatNode({ el }: { el: StatElement }) {
+  const [result, setResult] = useState<AggregateResult | null>(null);
+  const [viz, setViz] = useState<Visualization | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    if (!el.report_id) return;
+    let alive = true;
+    let timer: number | undefined;
+    let failures = 0;
+    let lastJson: string | null = null;
+    const base = el.poll_ms ? Math.max(1000, el.poll_ms) : 0;
+
+    const fetchOnce = async () => {
+      if (typeof document !== "undefined" && document.hidden) return;
+      try {
+        const res = await runReport(el.report_id);
+        if (!alive) return;
+        failures = 0;
+        setFailed(false);
+        const json = JSON.stringify(res);
+        if (json === lastJson) return;
+        lastJson = json;
+        const { viz: nextViz, ...rows } = res;
+        setResult(rows);
+        if (nextViz) setViz(nextViz);
+      } catch {
+        if (!alive) return;
+        failures += 1;
+        setFailed(true);
+      }
+    };
+    const loop = async () => {
+      await fetchOnce();
+      if (!alive || !base) return;
+      timer = window.setTimeout(loop, Math.min(base * 2 ** Math.min(failures, 5), 30_000));
+    };
+    void loop();
+    const onVisible = () => {
+      if (base && alive && !document.hidden) {
+        if (timer) window.clearTimeout(timer);
+        void loop();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      alive = false;
+      if (timer) window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [el.report_id, el.poll_ms]);
+
+  // Sum the metric across rows, exactly as the report's own metric tile does.
+  const metric = viz?.series[0] ?? result?.metrics[0];
+  const value =
+    result && metric ? result.rows.reduce((sum, r) => sum + (Number(r[metric]) || 0), 0) : null;
+  const compareKey = viz?.compare_to;
+  const compare =
+    result && compareKey
+      ? result.rows.reduce((sum, r) => sum + (Number(r[compareKey]) || 0), 0)
+      : null;
+  const delta = compare != null && compare !== 0 && value != null
+      ? ((value - compare) / Math.abs(compare)) * 100
+      : null;
+  const up = delta != null && delta >= 0;
+  // "Good" is a property of the metric, not the direction: headcount rising is
+  // not inherently good news, so `neutral` colors the delta like body text.
+  const trend = el.trend ?? "up_is_good";
+  const deltaTone =
+    trend === "neutral"
+      ? "text-muted-foreground"
+      : (up && trend === "up_is_good") || (!up && trend === "down_is_good")
+        ? "text-success"
+        : "text-destructive";
+
+  return (
+    <div className="rounded-lg border bg-background p-4 shadow-sm">
+      {el.label ? (
+        <p className="truncate text-xs font-medium uppercase tracking-wide text-muted-foreground">
+          {el.label}
+        </p>
+      ) : null}
+      {failed && value == null ? (
+        <p className="mt-1 text-sm text-destructive">Unavailable</p>
+      ) : value == null ? (
+        <Skeleton className="mt-1.5 h-9 w-24" />
+      ) : (
+        <p className="mt-1 truncate text-3xl font-bold leading-tight tabular-nums text-foreground">
+          {formatValue(value, viz?.number_format ?? "plain", viz?.unit, viz?.precision)}
+        </p>
+      )}
+      {delta != null ? (
+        <p className={`mt-1 text-sm ${deltaTone}`}>
+          {up ? "▲" : "▼"} {Math.abs(delta).toFixed(1)}% vs prior
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -372,43 +701,61 @@ function ReportNode({ el }: { el: ReportElement }) {
       return;
     }
     let alive = true;
-    const tick = async () => {
+    let timer: number | undefined;
+    let failures = 0;
+    // A poll tick that returns identical data skips setState entirely, so a live
+    // dashboard doesn't redraw its charts for nothing.
+    let lastJson: string | null = null;
+    const base = el.poll_ms ? Math.max(1000, el.poll_ms) : 0;
+
+    const fetchOnce = async () => {
+      // Pause while the tab is hidden — don't recompute aggregates no one sees.
+      if (typeof document !== "undefined" && document.hidden) return;
       try {
-        // The run response carries the aggregate rows; the report's viz is fetched
-        // once alongside so the chart knows how to draw. We read viz from the report.
+        // One round trip: the run response carries the rows AND the report's viz
+        // spec so the chart knows how to draw.
         const res = await runReport(el.report_id);
         if (!alive) return;
-        setResult(res);
+        failures = 0;
         setError(null);
+        const json = JSON.stringify(res);
+        if (json === lastJson) return;
+        lastJson = json;
+        const { viz: nextViz, ...rows } = res;
+        setResult(rows);
+        setViz(nextViz);
       } catch {
         if (!alive) return;
+        failures += 1;
         setError("Unable to load report.");
       }
     };
-    void tick();
-    const interval = el.poll_ms ? window.setInterval(tick, Math.max(1000, el.poll_ms)) : undefined;
+
+    // Recursive setTimeout (not setInterval): one run completes before the next is
+    // scheduled, so slow aggregates can't overlap or land out of order. Consecutive
+    // failures back off exponentially (capped ~30s).
+    const loop = async () => {
+      await fetchOnce();
+      if (!alive || !base) return;
+      const delay = Math.min(base * 2 ** Math.min(failures, 5), 30_000);
+      timer = window.setTimeout(loop, delay);
+    };
+    void loop();
+
+    const onVisible = () => {
+      if (base && alive && !document.hidden) {
+        if (timer) window.clearTimeout(timer);
+        void loop();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisible);
+
     return () => {
       alive = false;
-      if (interval) window.clearInterval(interval);
+      if (timer) window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, [el.report_id, el.poll_ms]);
-
-  // The report's viz spec lives on the saved report; fetch it once.
-  useEffect(() => {
-    if (!el.report_id) return;
-    let alive = true;
-    void (async () => {
-      try {
-        const report = await getReport(el.report_id);
-        if (alive) setViz(report.viz);
-      } catch {
-        /* the chart waits on viz below; a run error already surfaces separately */
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [el.report_id]);
 
   // Wait for BOTH the data and the viz spec so a pie/metric/table report doesn't
   // briefly flash as the bar-chart fallback. Only a fully-loaded report is
@@ -419,14 +766,15 @@ function ReportNode({ el }: { el: ReportElement }) {
     ) : result && viz ? (
       <ReportChart result={result} viz={viz} height={height} />
     ) : (
-      <div className="px-1 py-2 text-sm text-muted-foreground">Loading…</div>
+      // Initial load only; once data is on screen, quiet re-polls swap it in place.
+      <Skeleton className="h-40 w-full" />
     );
   const ready = !error && Boolean(result && viz);
 
   return (
     <>
       <div
-        className={`group relative rounded-md border p-3 ${
+        className={`group relative overflow-hidden rounded-lg border bg-background shadow-sm ${
           ready ? "cursor-zoom-in transition-colors hover:border-primary/50" : ""
         }`}
         role={ready ? "button" : undefined}
@@ -444,11 +792,13 @@ function ReportNode({ el }: { el: ReportElement }) {
             : undefined
         }
       >
-        {el.title ? <div className="mb-2 text-sm font-medium">{el.title}</div> : null}
-        {ready ? (
-          <Maximize2 className="pointer-events-none absolute right-2 top-2 h-3.5 w-3.5 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+        {el.title ? (
+          <div className="border-b px-4 py-2.5 text-sm font-semibold">{el.title}</div>
         ) : null}
-        {body(el.height ?? 320)}
+        {ready ? (
+          <Maximize2 className="pointer-events-none absolute right-3 top-3 h-3.5 w-3.5 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+        ) : null}
+        <div className="p-4">{body(el.height ?? 320)}</div>
       </div>
       {expanded ? (
         <Dialog open={expanded} onClose={() => setExpanded(false)} className="max-w-5xl">
@@ -692,6 +1042,10 @@ function ChatNode({ el, preview }: { el: ChatElement; preview: boolean }) {
   useEffect(() => {
     if (preview || !conversationId) return;
     let alive = true;
+    // Serialized last-committed transcript: an unchanged poll skips the state
+    // updates below entirely (the answered-detection only ever transitions when
+    // the rows change, so skipping it on identical ticks is safe).
+    let lastJson: string | null = null;
     const tick = async () => {
       try {
         const res = await listRecords(msgEntity, { limit: 100 });
@@ -699,6 +1053,9 @@ function ChatNode({ el, preview }: { el: ChatElement; preview: boolean }) {
         const rows = res.items
           .filter((r) => String(r[relSlug] ?? "") === conversationId)
           .sort((a, b) => String(a.created_at ?? "").localeCompare(String(b.created_at ?? "")));
+        const json = JSON.stringify(rows);
+        if (json === lastJson) return;
+        lastJson = json;
         setMessages(rows);
         // The robot has answered once the newest turn is no longer the person's;
         // clearing here (rather than on the run promise) makes the reply and the
@@ -1090,7 +1447,9 @@ function ChatNode({ el, preview }: { el: ChatElement; preview: boolean }) {
   const micArmed = voiceMode === "always_on" && alwaysOnEngaged; // intends to listen
 
   return (
-    <div className="flex h-96 flex-col rounded-lg border bg-background">
+    <div
+      className={`flex flex-col rounded-lg border bg-background shadow-sm ${CHAT_HEIGHT[el.height ?? "md"] ?? CHAT_HEIGHT.md}`}
+    >
       <div className="flex items-center justify-between border-b px-3 py-2">
         <span className="text-sm font-semibold">{el.title ?? "Chat"}</span>
         <button
@@ -1149,11 +1508,19 @@ function ChatNode({ el, preview }: { el: ChatElement; preview: boolean }) {
             return (
               <div key={m.id} className={`flex flex-col ${isPerson ? "items-end" : "items-start"}`}>
                 <div
-                  className={`max-w-[80%] whitespace-pre-wrap break-words rounded-2xl px-3 py-2 text-sm ${
-                    isPerson ? "bg-primary text-primary-foreground" : "bg-muted"
+                  className={`max-w-[80%] break-words rounded-2xl px-3 py-2 text-sm ${
+                    isPerson ? "whitespace-pre-wrap bg-primary text-primary-foreground" : "bg-muted"
                   }`}
                 >
-                  {String(m[textField] ?? "")}
+                  {isPerson ? (
+                    String(m[textField] ?? "")
+                  ) : (
+                    // The robot's replies are LLM output — render their markdown
+                    // (lists, bold, code) instead of showing raw asterisks. The
+                    // shared component sanitizes; images are stripped because this
+                    // is model/record data, not authored content.
+                    <Markdown content={String(m[textField] ?? "")} stripImages />
+                  )}
                 </div>
                 {!isPerson && took != null ? (
                   <span className="mt-0.5 px-1 text-[11px] tabular-nums text-muted-foreground">
@@ -1275,8 +1642,8 @@ function ChatNode({ el, preview }: { el: ChatElement; preview: boolean }) {
             <Mic className="h-4 w-4" />
           </button>
         ) : null}
-        <input
-          className="w-full rounded-md border bg-background px-3 py-2 text-sm disabled:opacity-60"
+        <Input
+          className="w-full"
           placeholder={micActive ? "Listening…" : el.placeholder ?? "Message the robot…"}
           value={micActive && voiceInterim && !isSelfEcho(voiceInterim, lastRobotSpokenRef.current) ? voiceInterim : input}
           disabled={preview || sending || micActive}
@@ -1438,6 +1805,7 @@ export function FormRenderer({
   submitting = false,
   defaultSubmitLabel,
   error,
+  viewContext = false,
 }: FormRendererProps) {
   const catalog = useMemo(() => buildCatalog(render), [render]);
   const preview = mode === "preview";
@@ -1529,7 +1897,22 @@ export function FormRenderer({
     return { values, related: outRelated };
   };
 
+  // The id of the button whose action is currently in flight — its own spinner
+  // feedback, so pressing "Run Onboarding" visibly does something at the button
+  // rather than only in a floating notice somewhere else on the page.
+  const [busyButton, setBusyButton] = useState<string | null>(null);
+
   const runButton = async (btn: ButtonElement) => {
+    const busyKey = btn.id ?? btn.label;
+    setBusyButton(busyKey);
+    try {
+      await runButtonAction(btn);
+    } finally {
+      setBusyButton((prev) => (prev === busyKey ? null : prev));
+    }
+  };
+
+  const runButtonAction = async (btn: ButtonElement) => {
     if (btn.action.kind === "submit") {
       await onSubmit?.(buildPayload());
     } else if (btn.action.kind === "run_workflow") {
@@ -1650,6 +2033,22 @@ export function FormRenderer({
             </div>
           );
         }
+        // On a view, a field is a readout unless the author opted it back into
+        // editing: label + value, not a bordered input pretending to be a form.
+        if (viewContext && el.editable !== true) {
+          const text = formatCell(scope.values[el.slug]);
+          return (
+            <div className={spanClass(el.width)}>
+              {(el.label ?? meta.label) ? (
+                <p className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  {el.label ?? meta.label}
+                </p>
+              ) : null}
+              <div className="whitespace-pre-wrap text-sm text-foreground">{text}</div>
+              {el.help_text ? <p className="mt-1 text-xs text-muted-foreground">{el.help_text}</p> : null}
+            </div>
+          );
+        }
         return (
           <div className={spanClass(el.width)}>
             <FieldControl
@@ -1728,19 +2127,33 @@ export function FormRenderer({
       case "report":
         return (
           <div className={spanClass(el.width)}>
-            <ReportNode el={el} />
+            <ElementErrorBoundary>
+              <ReportNode el={el} />
+            </ElementErrorBoundary>
+          </div>
+        );
+      case "stat":
+        return (
+          <div className={spanClass(el.width)}>
+            <ElementErrorBoundary>
+              <StatNode el={el} />
+            </ElementErrorBoundary>
           </div>
         );
       case "record_list":
         return (
-          <div className="sm:col-span-12">
-            <RecordListNode el={el} onRunWorkflow={onRunWorkflow} scopeValues={scope.values} />
+          <div className={spanClass(el.width)}>
+            <ElementErrorBoundary>
+              <RecordListNode el={el} onRunWorkflow={onRunWorkflow} scopeValues={scope.values} />
+            </ElementErrorBoundary>
           </div>
         );
       case "chat":
         return (
           <div className="sm:col-span-12">
-            <ChatNode el={el} preview={preview} />
+            <ElementErrorBoundary>
+              <ChatNode el={el} preview={preview} />
+            </ElementErrorBoundary>
           </div>
         );
       case "button":
@@ -1753,20 +2166,26 @@ export function FormRenderer({
           </div>
         );
       case "columns": {
+        // Class-based spans, not an inline gridColumn style: an inline style
+        // applies at ALL widths, which in the phone-size single-column grid
+        // generated implicit columns instead of stacking. `sm:` classes stack
+        // below the breakpoint for free. Rounding remainder goes to the last
+        // column so ratios that don't divide 12 evenly can't leave a gutter.
         const totalSpan = el.columns.reduce((s, c) => s + Math.max(1, c.span), 0) || 1;
+        const spans = el.columns.map((c) =>
+          Math.min(12, Math.max(1, Math.round((Math.max(1, c.span) / totalSpan) * 12))),
+        );
+        const overflow = spans.reduce((a, b) => a + b, 0) - 12;
+        const adjusted = spans.map((s, i) =>
+          i === spans.length - 1 ? Math.min(12, Math.max(1, s - overflow)) : s,
+        );
         return (
-          <div className="sm:col-span-12 grid grid-cols-1 gap-4" style={{ gridTemplateColumns: undefined }}>
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-12">
-              {el.columns.map((col, ci) => (
-                <div
-                  key={ci}
-                  className="min-w-0 sm:col-auto"
-                  style={{ gridColumn: `span ${Math.round((Math.max(1, col.span) / totalSpan) * 12)} / span ${Math.round((Math.max(1, col.span) / totalSpan) * 12)}` }}
-                >
-                  {renderList(col.elements, scope)}
-                </div>
-              ))}
-            </div>
+          <div className="sm:col-span-12 grid grid-cols-1 gap-4 sm:grid-cols-12">
+            {el.columns.map((col, ci) => (
+              <div key={ci} className={`min-w-0 ${COLSPAN[adjusted[ci]] ?? "sm:col-span-12"}`}>
+                {renderList(col.elements, scope)}
+              </div>
+            ))}
           </div>
         );
       }
@@ -1800,6 +2219,32 @@ export function FormRenderer({
           </fieldset>
         );
       }
+      case "card": {
+        const accent: Record<string, string> = {
+          none: "",
+          primary: "border-t-2 border-t-primary",
+          success: "border-t-2 border-t-success",
+          warning: "border-t-2 border-t-warning",
+          destructive: "border-t-2 border-t-destructive",
+        };
+        return (
+          <section
+            className={`sm:col-span-12 overflow-hidden rounded-lg border bg-background shadow-sm ${
+              accent[el.accent ?? "none"] ?? ""
+            }`}
+          >
+            {el.title || el.subtitle ? (
+              <header className="border-b px-4 py-3">
+                {el.title ? <h3 className="text-sm font-semibold">{el.title}</h3> : null}
+                {el.subtitle ? (
+                  <p className="mt-0.5 text-xs text-muted-foreground">{el.subtitle}</p>
+                ) : null}
+              </header>
+            ) : null}
+            <div className="p-4">{renderList(el.elements as FormElement[], scope)}</div>
+          </section>
+        );
+      }
       case "tab_group":
         return TabGroupNode({ el, scope });
       case "accordion":
@@ -1817,10 +2262,18 @@ export function FormRenderer({
 
   function LabelNode({ el }: { el: Extract<FormElement, { type: "label" }> }) {
     if (el.variant === "divider") return <hr className="my-2 border-t" />;
+    // Wall-display typesetting — same ramp as the field element's DisplayText,
+    // but available to standalone views with no entity to bind.
+    if (el.display && LABEL_DISPLAY_CLASSES[el.display])
+      return <div className={LABEL_DISPLAY_CLASSES[el.display]}>{el.text}</div>;
+    // A page heading has to outrank the card titles beneath it; the old text-lg
+    // was card-title size, which flattened the whole hierarchy.
     if (el.variant === "heading")
-      return <h2 className="border-b pb-1 text-lg font-semibold">{el.text}</h2>;
-    if (el.variant === "subheading") return <h3 className="text-base font-semibold">{el.text}</h3>;
-    return <p className="text-sm text-muted-foreground">{el.text}</p>;
+      return <h2 className="text-2xl font-semibold tracking-tight">{el.text}</h2>;
+    if (el.variant === "subheading") return <h3 className="text-lg font-semibold">{el.text}</h3>;
+    // Body copy is content, not chrome: foreground color (muted was punishing
+    // whole paragraphs), and markdown so authors get bold/links/lists.
+    return <Markdown content={el.text} stripImages className="leading-relaxed" />;
   }
 
   /** A display-only picture. The `url` is token-filled from the enclosing scope's
@@ -1953,13 +2406,22 @@ export function FormRenderer({
       large: "min-h-14 rounded-xl px-6 py-3 text-lg",
       xl: "min-h-20 rounded-2xl px-8 py-4 text-2xl",
     };
+    const busy = busyButton === (el.id ?? el.label);
+    const spinner: Record<string, string> = {
+      default: "h-4 w-4",
+      large: "h-5 w-5",
+      xl: "h-6 w-6",
+    };
     return (
       <button
         type={el.action.kind === "submit" ? "submit" : "button"}
-        disabled={preview || submitting}
+        disabled={preview || submitting || busy}
         onClick={el.action.kind === "submit" ? undefined : () => void runButton(el)}
-        className={`font-medium ${sizes[el.size ?? "default"] ?? sizes.default} ${interaction} ${styles[el.style]}`}
+        className={`inline-flex items-center justify-center gap-2 font-medium ${sizes[el.size ?? "default"] ?? sizes.default} ${interaction} ${styles[el.style]}`}
       >
+        {busy ? (
+          <Loader2 className={`${spinner[el.size ?? "default"] ?? spinner.default} animate-spin`} />
+        ) : null}
         {el.label}
       </button>
     );
@@ -2037,24 +2499,27 @@ export function FormRenderer({
             <Plus className="h-4 w-4" /> {filled ? "Edit" : "Add"} {el.label ?? "details"}
           </button>
           {ui[modalKey] ? (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-              <div className="w-full max-w-md space-y-4 rounded-lg border bg-card p-6 shadow-lg">
-                <div className="flex items-center justify-between">
-                  <h3 className="text-lg font-semibold">{el.label ?? "Details"}</h3>
-                  <button type="button" onClick={() => setUi((p) => ({ ...p, [modalKey]: false }))}>
-                    <X className="h-5 w-5" />
-                  </button>
-                </div>
+            // The shared Dialog brings the behavior a hand-rolled backdrop lacks:
+            // focus trap, Escape-to-close, scroll lock, backdrop click.
+            <Dialog
+              open
+              onClose={() => setUi((p) => ({ ...p, [modalKey]: false }))}
+              className="max-w-md"
+            >
+              <DialogHeader>
+                <DialogTitle>{el.label ?? "Details"}</DialogTitle>
+              </DialogHeader>
+              <div className="space-y-4">
                 {renderList(el.elements as FormElement[], scope)}
                 <button
                   type="button"
                   onClick={() => setUi((p) => ({ ...p, [modalKey]: false }))}
-                  className="w-full rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground"
+                  className="w-full rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
                 >
                   Done
                 </button>
               </div>
-            </div>
+            </Dialog>
           ) : null}
         </div>
       );

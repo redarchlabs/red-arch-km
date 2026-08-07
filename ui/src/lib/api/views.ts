@@ -77,7 +77,14 @@ export async function getViewRender(id: string, recordId?: string): Promise<Form
  * comes back exactly once; rotating invalidates the previous link immediately. */
 export async function enableViewShare(
   id: string,
-  input: { record_id?: string | null; expires_at?: string | null; record_follow?: boolean },
+  input: {
+    record_id?: string | null;
+    expires_at?: string | null;
+    record_follow?: boolean;
+    /** Show the org's logo/name on the shared page. Off by default — a link can
+     * be forwarded anywhere, so naming the org is an opt-in disclosure. */
+    show_branding?: boolean;
+  },
 ): Promise<ViewShareCreated> {
   return (await apiClient.post<ViewShareCreated>(`/views/${id}/share`, input)).data;
 }

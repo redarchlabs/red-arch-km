@@ -28,7 +28,7 @@ from api.repositories.custom_entity import (
 from api.repositories.dynamic_entity import DynamicEntityRepository, EntityRecordError
 from api.repositories.report import ReportRepository
 from api.schemas.aggregate import AggregateQuery, AggregateResult
-from api.schemas.report import ReportCreate, ReportRunRequest, ReportUpdate, Visualization
+from api.schemas.report import ReportCreate, ReportRunRequest, ReportRunResult, ReportUpdate, Visualization
 from api.services.form_service import (
     FormConflictError,
     FormNotFoundError,
@@ -107,7 +107,7 @@ class ReportService:
         await self._reports.delete(await self.get_report(report_id))
 
     # -- Running ------------------------------------------------------- #
-    async def run_report(self, report_id: uuid.UUID, overrides: ReportRunRequest | None = None) -> AggregateResult:
+    async def run_report(self, report_id: uuid.UUID, overrides: ReportRunRequest | None = None) -> ReportRunResult:
         report = await self.get_report(report_id)
         if not report.is_active:
             raise FormValidationError("report is not active")
@@ -119,7 +119,10 @@ class ReportService:
                     "limit": overrides.limit if overrides.limit is not None else query.limit,
                 }
             )
-        return await self._run(report.entity_definition_id, query)
+        result = await self._run(report.entity_definition_id, query)
+        # Ship the report's own viz with the rows so dashboard elements don't
+        # need a second GET per report just to know how to draw.
+        return ReportRunResult(**result.model_dump(), viz=Visualization.model_validate(report.viz))
 
     async def run_adhoc(self, entity_definition_id: uuid.UUID, query: AggregateQuery) -> AggregateResult:
         return await self._run(entity_definition_id, query)

@@ -37,6 +37,20 @@ class Org(Base, UUIDMixin, TimestampMixin):
     # this column > env defaults). Routed through OPENAI_MODEL_ROUTES, so it pins
     # the whole org to local or hosted inference. NULL = platform default.
     default_llm_model: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    # Branding for the chrome-free view routes (kiosk + anonymous share), where the
+    # app's own navigation is gone and the page otherwise carries no identity.
+    # The object KEY, not a URL: the asset stays behind the API so a public page
+    # serves it through a token-scoped route rather than a guessable bucket path.
+    logo_object_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # A `#rrggbb` accent applied as a scoped CSS-variable override on branded
+    # pages (never free-form styling). NULL = the theme's own primary.
+    accent_color: Mapped[str | None] = mapped_column(String(7), nullable=True)
+
+    @property
+    def has_logo(self) -> bool:
+        """Whether a logo has been uploaded. Clients get this rather than the
+        storage key — the asset is served from its own route."""
+        return bool(self.logo_object_key)
 
     # Relationships
     regions: Mapped[list[Region]] = relationship(back_populates="org", cascade="all, delete-orphan")

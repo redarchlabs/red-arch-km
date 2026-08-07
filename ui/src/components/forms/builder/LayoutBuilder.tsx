@@ -176,6 +176,8 @@ function ElementEditor({
       return <LiveValueEditor el={el} onChange={onChange} />;
     case "report":
       return <ReportEditor el={el} onChange={onChange} />;
+    case "stat":
+      return <StatEditor el={el} onChange={onChange} />;
     case "record_list":
       return <RecordListEditor el={el} ctx={ctx} onChange={onChange} />;
     case "slides":
@@ -202,6 +204,8 @@ function ElementEditor({
       return <ColumnsEditor el={el} entityId={entityId} ctx={ctx} allow={allow} onChange={onChange} />;
     case "panel":
       return <PanelEditor el={el} entityId={entityId} ctx={ctx} allow={allow} onChange={onChange} />;
+    case "card":
+      return <CardEditor el={el} entityId={entityId} ctx={ctx} allow={allow} onChange={onChange} />;
     default:
       return null;
   }
@@ -975,6 +979,129 @@ function LiveValueEditor({ el, onChange }: { el: LiveValueEl; onChange: (el: For
 }
 
 type ReportEl = Extract<FormElement, { type: "report" }>;
+
+function StatEditor({
+  el,
+  onChange,
+}: {
+  el: Extract<FormElement, { type: "stat" }>;
+  onChange: (el: FormElement) => void;
+}) {
+  const [reports, setReports] = useState<Array<{ id: string; name: string }>>([]);
+
+  useEffect(() => {
+    let alive = true;
+    void listReports()
+      .then((rows) => {
+        if (alive) setReports(rows.map((r) => ({ id: r.id, name: r.name })));
+      })
+      .catch(() => {
+        /* leave the list empty; the id can still be typed */
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  return (
+    <div className="space-y-1.5">
+      <Row label="Report">
+        <select
+          className={input}
+          value={el.report_id}
+          onChange={(e) => onChange({ ...el, report_id: e.target.value })}
+        >
+          <option value="">— pick a report —</option>
+          {reports.map((r) => (
+            <option key={r.id} value={r.id}>
+              {r.name}
+            </option>
+          ))}
+        </select>
+      </Row>
+      <Row label="Label">
+        <input
+          className={input}
+          value={el.label ?? ""}
+          onChange={(e) => onChange({ ...el, label: e.target.value || null })}
+        />
+      </Row>
+      <Row label="Good direction">
+        <select
+          className={input}
+          value={el.trend ?? "up_is_good"}
+          onChange={(e) =>
+            onChange({ ...el, trend: e.target.value as "up_is_good" | "down_is_good" | "neutral" })
+          }
+        >
+          <option value="up_is_good">Up is good</option>
+          <option value="down_is_good">Down is good</option>
+          <option value="neutral">Neither (don&apos;t color it)</option>
+        </select>
+      </Row>
+    </div>
+  );
+}
+
+function CardEditor({
+  el,
+  entityId,
+  ctx,
+  allow,
+  onChange,
+}: {
+  el: Extract<FormElement, { type: "card" }>;
+  entityId: string;
+  ctx: BuilderCtx;
+  allow: "all" | "leaf" | "view";
+  onChange: (el: FormElement) => void;
+}) {
+  return (
+    <div className="space-y-2">
+      <Row label="Title">
+        <input
+          className={input}
+          value={el.title ?? ""}
+          onChange={(e) => onChange({ ...el, title: e.target.value || null })}
+        />
+      </Row>
+      <Row label="Subtitle">
+        <input
+          className={input}
+          value={el.subtitle ?? ""}
+          onChange={(e) => onChange({ ...el, subtitle: e.target.value || null })}
+        />
+      </Row>
+      <Row label="Accent">
+        <select
+          className={input}
+          value={el.accent ?? "none"}
+          onChange={(e) =>
+            onChange({
+              ...el,
+              accent: e.target.value as "none" | "primary" | "success" | "warning" | "destructive",
+            })
+          }
+        >
+          <option value="none">None</option>
+          <option value="primary">Primary</option>
+          <option value="success">Success</option>
+          <option value="warning">Warning</option>
+          <option value="destructive">Danger</option>
+        </select>
+      </Row>
+      <div className="border-l-2 pl-2">
+        <LayoutBuilder
+          elements={el.elements}
+          entityId={entityId}
+          ctx={ctx}
+          allow={allow}
+          onChange={(els) => onChange({ ...el, elements: els })}
+        />
+      </div>
+    </div>
+  );
+}
 
 function ReportEditor({ el, onChange }: { el: ReportEl; onChange: (el: FormElement) => void }) {
   const [reports, setReports] = useState<Array<{ id: string; name: string }>>([]);

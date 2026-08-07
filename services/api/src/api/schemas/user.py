@@ -27,6 +27,10 @@ class OrgSummary(BaseModel):
     is_admin: bool
     # Optional per-org landing view; drives the sidebar "Home" nav item. Null = none.
     home_view_id: str | None = None
+    # Branding for the chrome-free kiosk route, which has a session and so reads
+    # its org identity from here rather than from the render payload.
+    accent_color: str | None = None
+    has_logo: bool = False
 
 
 class CurrentUserRead(BaseModel):

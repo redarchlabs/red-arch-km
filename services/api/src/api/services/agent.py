@@ -2821,6 +2821,93 @@ class AgentService:
                         '(string), {"var":"attempts"}, {"var":"elapsed_ms"} — plus any scope value.'
                     ),
                 },
+                "progress": {
+                    "required": ["type", "value"],
+                    "optional": ["label", "max", "width"],
+                    "use": (
+                        "A progress bar. `value` is an expression over the record's values "
+                        '(e.g. {"var":"progress_pct"}); `max` defaults to 100. Display-only.'
+                    ),
+                },
+                "report": {
+                    "required": ["type", "report_id"],
+                    "optional": ["title", "height", "poll_ms", "width"],
+                    "use": (
+                        "Embeds a SAVED REPORT and draws it per the report's own viz "
+                        "(bar/line/pie/table/metric). Not entity-bound; valid standalone. "
+                        "Clicking it opens an enlarged view. Set poll_ms for a live dashboard."
+                    ),
+                },
+                "record_list": {
+                    "required": ["type", "entity"],
+                    "optional": [
+                        "label",
+                        "fields",
+                        "columns",
+                        "filters",
+                        "sort_by",
+                        "sort_dir",
+                        "limit",
+                        "poll_ms",
+                        "empty_text",
+                        "row_workflow_id",
+                        "row_action_label",
+                        "row_workflow_inputs",
+                        "row_link_template",
+                        "row_link_label",
+                        "width",
+                    ],
+                    "columns": (
+                        "Optional PRESENTATION per column: [{slug, label?, align?, "
+                        "format?(auto|text|number|date|datetime|badge|code), badge_map?}]. "
+                        "badge_map maps a value to a tone (neutral|success|warning|destructive|"
+                        "info) — use it for status columns. Additive to `fields`: a column named "
+                        "here is shown even if `fields` omits it, and headers default to the "
+                        "humanized slug, so `columns` is only needed to override presentation."
+                    ),
+                    "use": (
+                        "A read-only status board over an entity's records. Not bound to the "
+                        "view's record, so it is valid standalone. `filters` narrows rows "
+                        "server-side; a filter value of '@me' scopes to the caller's own records. "
+                        "row_workflow_id adds a per-row button that runs against THAT row."
+                    ),
+                },
+                "chat": {
+                    "required": ["type"],
+                    "optional": [
+                        "title",
+                        "conversation_entity",
+                        "message_entity",
+                        "conversation_relationship",
+                        "role_field",
+                        "text_field",
+                        "answer_workflow_id",
+                        "poll_ms",
+                        "placeholder",
+                        "height (sm|md|lg|fill)",
+                        "width",
+                    ],
+                    "use": (
+                        "A conversation panel over two entities (a conversation + its messages). "
+                        "Sending creates a 'person' message then runs answer_workflow_id with "
+                        "{text, conversation_id}. Not entity-bound; valid standalone."
+                    ),
+                },
+                "stat": {
+                    "required": ["type", "report_id"],
+                    "optional": [
+                        "label",
+                        "icon (lucide name)",
+                        "trend (up_is_good|down_is_good|neutral)",
+                        "poll_ms",
+                        "width",
+                    ],
+                    "use": (
+                        "A KPI tile — one big number with a label, the top row of a dashboard. "
+                        "Reads a SAVED REPORT (same data path as `report`), so build the report "
+                        "first; its viz decides number formatting and compare_to yields the delta."
+                    ),
+                },
                 "section": {
                     "required": ["type", "relationship_id", "mode (inline|modal)", "elements"],
                     "optional": ["label"],
@@ -2848,6 +2935,15 @@ class AgentService:
                 "panel": {
                     "required": ["type", "elements"],
                     "optional": ["title", "collapsible", "collapsed"],
+                },
+                "card": {
+                    "required": ["type", "elements"],
+                    "optional": ["title", "subtitle", "accent (none|primary|success|warning|destructive)"],
+                    "use": (
+                        "VIEWS: the dashboard tile. Same entity scope as its parent (like panel) "
+                        "but styled as a surface, matching the frame report/record_list draw for "
+                        "themselves — prefer it over panel when composing a dashboard."
+                    ),
                 },
                 "accordion": {
                     "required": ["type", "panes"],
