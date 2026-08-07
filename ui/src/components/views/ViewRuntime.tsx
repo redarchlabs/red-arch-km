@@ -3,7 +3,7 @@
 import { ArrowLeft, Maximize, Minimize, X } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { FormRenderer } from "@/components/forms/FormRenderer";
 import { Card, CardContent } from "@/components/ui/card";
@@ -56,12 +56,18 @@ export function ViewRuntime({ id, kiosk = false, token }: ViewRuntimeProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // Serialized form of the last render we committed to state. Kiosk pages poll
+  // for hours; when a tick returns identical data, skipping setRender keeps the
+  // whole element tree from re-rendering for nothing.
+  const lastRenderJson = useRef<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      setRender(await fetchRender());
+      const next = await fetchRender();
+      lastRenderJson.current = JSON.stringify(next);
+      setRender(next);
     } catch (e: unknown) {
       setError(getApiErrorMessage(e, "Failed to load view"));
     } finally {
@@ -88,7 +94,11 @@ export function ViewRuntime({ id, kiosk = false, token }: ViewRuntimeProps) {
       if (typeof document !== "undefined" && document.hidden) return;
       void fetchRender()
         .then((next) => {
-          if (alive) setRender(next);
+          if (!alive) return;
+          const json = JSON.stringify(next);
+          if (json === lastRenderJson.current) return; // unchanged — no re-render
+          lastRenderJson.current = json;
+          setRender(next);
         })
         .catch(() => {
           /* keep the last good render */
@@ -182,7 +192,7 @@ export function ViewRuntime({ id, kiosk = false, token }: ViewRuntimeProps) {
           </div>
         ) : null}
         <div className={KIOSK_PADDING[render.config.padding ?? "none"]}>
-          <FormRenderer render={render} mode="fill" onRunWorkflow={handleRunWorkflow} />
+          <FormRenderer render={render} mode="fill" viewContext onRunWorkflow={handleRunWorkflow} />
         </div>
       </div>
     );
@@ -213,7 +223,7 @@ export function ViewRuntime({ id, kiosk = false, token }: ViewRuntimeProps) {
       {notice ? <p className="text-sm text-green-600">{notice}</p> : null}
       <Card>
         <CardContent className="pt-6">
-          <FormRenderer render={render} mode="fill" onRunWorkflow={handleRunWorkflow} />
+          <FormRenderer render={render} mode="fill" viewContext onRunWorkflow={handleRunWorkflow} />
         </CardContent>
       </Card>
     </div>

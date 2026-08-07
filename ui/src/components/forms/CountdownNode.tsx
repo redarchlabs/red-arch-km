@@ -47,7 +47,7 @@ export function CountdownNode({
   const tone = done || fraction <= URGENT_AT ? "urgent" : fraction <= WARN_AT ? "warn" : "calm";
   const text: Record<string, string> = {
     calm: "text-foreground",
-    warn: "text-amber-600 dark:text-amber-400",
+    warn: "text-warning",
     urgent: "text-destructive",
   };
   const fill: Record<string, string> = {

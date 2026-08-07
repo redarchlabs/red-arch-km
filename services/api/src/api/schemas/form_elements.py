@@ -102,6 +102,11 @@ class FieldElement(_Element):
     label: str | None = None
     required: bool | None = None  # override the entity field's own requiredness
     read_only: bool = False  # render prefilled + non-editable; never written back
+    # Views render fields as read-only value readouts by default (a view shows
+    # data). ``editable=True`` opts a field back into an input there — e.g. a
+    # console where the edited value feeds a workflow button's inputs. Forms
+    # ignore this; their fields are editable unless ``read_only``.
+    editable: bool | None = None
     help_text: str | None = None
     placeholder: str | None = None
     width: FieldWidth | None = None

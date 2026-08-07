@@ -65,6 +65,11 @@ export interface FormRendererProps {
   defaultSubmitLabel?: string;
   /** Page-controlled error to show above the footer submit button. */
   error?: string | null;
+  /** Rendering a VIEW (a display surface) rather than a form. Entity-bound
+   * `field` elements default to a read-only value readout — a view shows data;
+   * an editable input on a wall display reads as unfinished. A field opts back
+   * in with `editable: true` (e.g. a console where edits feed a workflow button). */
+  viewContext?: boolean;
 }
 
 type Values = Record<string, unknown>;
@@ -129,25 +134,59 @@ function LiveValueNode({ el }: { el: LiveValueElement }) {
       return;
     }
     let alive = true;
+    let timer: number | undefined;
+    let failures = 0;
+    let ctrl: AbortController | null = null;
+    const base = Math.max(200, el.poll_ms ?? 1000);
+
     const tick = async () => {
+      // A hidden tab doesn't poll — these can run at 5 Hz against a device on
+      // the local network, and nobody is looking.
+      if (typeof document !== "undefined" && document.hidden) return;
+      ctrl = new AbortController();
       try {
-        const res = await fetch(el.url, { headers: { Accept: "application/json" } });
+        const res = await fetch(el.url, {
+          headers: { Accept: "application/json" },
+          signal: ctrl.signal,
+        });
         const json: unknown = await res.json();
         const picked = readJsonPointer(json, el.json_pointer);
         if (!alive) return;
+        failures = 0;
         setOk(true);
         setValue(formatLiveValue(picked));
       } catch {
         if (!alive) return;
+        failures += 1;
         setOk(false);
         setValue("unreachable");
       }
     };
-    void tick();
-    const id = window.setInterval(tick, Math.max(200, el.poll_ms ?? 1000));
+
+    // Recursive setTimeout: one request finishes before the next is scheduled, so a
+    // slow device can't pile up overlapping fetches. Failures back off (capped ~30s)
+    // instead of hammering an unreachable endpoint at full speed.
+    const loop = async () => {
+      await tick();
+      if (!alive) return;
+      const delay = Math.min(base * 2 ** Math.min(failures, 5), 30_000);
+      timer = window.setTimeout(loop, delay);
+    };
+    void loop();
+
+    const onVisible = () => {
+      if (alive && !document.hidden) {
+        if (timer) window.clearTimeout(timer);
+        void loop();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisible);
+
     return () => {
       alive = false;
-      window.clearInterval(id);
+      ctrl?.abort();
+      if (timer) window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, [el.url, el.json_pointer, el.poll_ms]);
 
@@ -204,6 +243,9 @@ function RecordListNode({
     let alive = true;
     let timer: number | undefined;
     let failures = 0;
+    // Serialized last-committed rows: a poll tick that returns identical data
+    // skips setRows, so a live board doesn't re-render the table for nothing.
+    let lastJson: string | null = null;
     // poll_ms turns the board live; 0 => fetch once.
     const base = el.poll_ms ? Math.max(500, el.poll_ms) : 0;
     // Author-declared server-side filters (ANDed). `@me` resolves to the caller's
@@ -227,7 +269,11 @@ function RecordListNode({
         if (!alive) return;
         failures = 0;
         setError(false);
-        setRows(res.items);
+        const json = JSON.stringify(res.items);
+        if (json !== lastJson) {
+          lastJson = json;
+          setRows(res.items);
+        }
       } catch {
         if (!alive) return;
         failures += 1;
@@ -372,43 +418,71 @@ function ReportNode({ el }: { el: ReportElement }) {
       return;
     }
     let alive = true;
-    const tick = async () => {
+    let timer: number | undefined;
+    let failures = 0;
+    // A poll tick that returns identical data skips setState entirely, so a live
+    // dashboard doesn't redraw its charts for nothing.
+    let lastJson: string | null = null;
+    let vizLoaded = false;
+    const base = el.poll_ms ? Math.max(1000, el.poll_ms) : 0;
+
+    const fetchOnce = async () => {
+      // Pause while the tab is hidden — don't recompute aggregates no one sees.
+      if (typeof document !== "undefined" && document.hidden) return;
       try {
-        // The run response carries the aggregate rows; the report's viz is fetched
-        // once alongside so the chart knows how to draw. We read viz from the report.
+        // One round trip: the run response carries the rows AND the report's viz
+        // spec so the chart knows how to draw.
         const res = await runReport(el.report_id);
         if (!alive) return;
-        setResult(res);
+        failures = 0;
         setError(null);
+        if (res.viz) {
+          vizLoaded = true;
+        } else if (!vizLoaded) {
+          // Older API without viz-in-run: fetch the spec separately, once.
+          const report = await getReport(el.report_id);
+          if (!alive) return;
+          setViz(report.viz);
+          vizLoaded = true;
+        }
+        const json = JSON.stringify(res);
+        if (json === lastJson) return;
+        lastJson = json;
+        const { viz: nextViz, ...rows } = res;
+        setResult(rows);
+        if (nextViz) setViz(nextViz);
       } catch {
         if (!alive) return;
+        failures += 1;
         setError("Unable to load report.");
       }
     };
-    void tick();
-    const interval = el.poll_ms ? window.setInterval(tick, Math.max(1000, el.poll_ms)) : undefined;
+
+    // Recursive setTimeout (not setInterval): one run completes before the next is
+    // scheduled, so slow aggregates can't overlap or land out of order. Consecutive
+    // failures back off exponentially (capped ~30s).
+    const loop = async () => {
+      await fetchOnce();
+      if (!alive || !base) return;
+      const delay = Math.min(base * 2 ** Math.min(failures, 5), 30_000);
+      timer = window.setTimeout(loop, delay);
+    };
+    void loop();
+
+    const onVisible = () => {
+      if (base && alive && !document.hidden) {
+        if (timer) window.clearTimeout(timer);
+        void loop();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisible);
+
     return () => {
       alive = false;
-      if (interval) window.clearInterval(interval);
+      if (timer) window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, [el.report_id, el.poll_ms]);
-
-  // The report's viz spec lives on the saved report; fetch it once.
-  useEffect(() => {
-    if (!el.report_id) return;
-    let alive = true;
-    void (async () => {
-      try {
-        const report = await getReport(el.report_id);
-        if (alive) setViz(report.viz);
-      } catch {
-        /* the chart waits on viz below; a run error already surfaces separately */
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [el.report_id]);
 
   // Wait for BOTH the data and the viz spec so a pie/metric/table report doesn't
   // briefly flash as the bar-chart fallback. Only a fully-loaded report is
@@ -692,6 +766,10 @@ function ChatNode({ el, preview }: { el: ChatElement; preview: boolean }) {
   useEffect(() => {
     if (preview || !conversationId) return;
     let alive = true;
+    // Serialized last-committed transcript: an unchanged poll skips the state
+    // updates below entirely (the answered-detection only ever transitions when
+    // the rows change, so skipping it on identical ticks is safe).
+    let lastJson: string | null = null;
     const tick = async () => {
       try {
         const res = await listRecords(msgEntity, { limit: 100 });
@@ -699,6 +777,9 @@ function ChatNode({ el, preview }: { el: ChatElement; preview: boolean }) {
         const rows = res.items
           .filter((r) => String(r[relSlug] ?? "") === conversationId)
           .sort((a, b) => String(a.created_at ?? "").localeCompare(String(b.created_at ?? "")));
+        const json = JSON.stringify(rows);
+        if (json === lastJson) return;
+        lastJson = json;
         setMessages(rows);
         // The robot has answered once the newest turn is no longer the person's;
         // clearing here (rather than on the run promise) makes the reply and the
@@ -1438,6 +1519,7 @@ export function FormRenderer({
   submitting = false,
   defaultSubmitLabel,
   error,
+  viewContext = false,
 }: FormRendererProps) {
   const catalog = useMemo(() => buildCatalog(render), [render]);
   const preview = mode === "preview";
@@ -1647,6 +1729,22 @@ export function FormRenderer({
                 label={el.label ?? ""}
                 value={scope.values[el.slug]}
               />
+            </div>
+          );
+        }
+        // On a view, a field is a readout unless the author opted it back into
+        // editing: label + value, not a bordered input pretending to be a form.
+        if (viewContext && el.editable !== true) {
+          const text = formatCell(scope.values[el.slug]);
+          return (
+            <div className={spanClass(el.width)}>
+              {(el.label ?? meta.label) ? (
+                <p className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  {el.label ?? meta.label}
+                </p>
+              ) : null}
+              <div className="whitespace-pre-wrap text-sm text-foreground">{text}</div>
+              {el.help_text ? <p className="mt-1 text-xs text-muted-foreground">{el.help_text}</p> : null}
             </div>
           );
         }

@@ -14,7 +14,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from api.schemas.aggregate import AggregateQuery, FilterSpec
+from api.schemas.aggregate import AggregateQuery, AggregateResult, FilterSpec
 
 ChartType = Literal[
     "bar",
@@ -98,6 +98,16 @@ class ReportRead(BaseModel):
     query: dict[str, Any]
     viz: dict[str, Any]
     is_active: bool
+
+
+class ReportRunResult(AggregateResult):
+    """A saved report's run response: the aggregate rows plus the report's own
+    visualization spec, so a dashboard element draws in one round trip instead
+    of fetching the report separately. Ad-hoc runs (the builder preview) keep
+    returning a plain :class:`AggregateResult` — the builder already holds the
+    viz it is editing."""
+
+    viz: Visualization | None = None
 
 
 class ReportRunRequest(BaseModel):

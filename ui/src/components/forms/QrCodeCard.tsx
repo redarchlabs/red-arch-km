@@ -101,7 +101,7 @@ export function QrCodeCard({ el, values, recordId, disabled }: Props) {
       {unreachable ? (
         // The failure this component exists to prevent: scanning succeeds, and
         // then the tablet tries to reach ITSELF and shows a connection error.
-        <p className="flex items-start gap-2 rounded-md bg-amber-500/10 px-3 py-2 text-left text-xs text-amber-700 dark:text-amber-300">
+        <p className="flex items-start gap-2 rounded-md bg-warning/10 px-3 py-2 text-left text-xs text-warning">
           <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" />
           <span>
             This address only works on this computer. Reopen this page at the machine&apos;s network

@@ -87,7 +87,7 @@ export function ShareViewCard({ view, onChange }: Props) {
             <h2 className="text-lg font-semibold">Anonymous access</h2>
             <span
               className={`rounded-full px-2 py-0.5 text-xs font-medium ${
-                live ? "bg-amber-500/15 text-amber-700 dark:text-amber-300" : "bg-muted text-muted-foreground"
+                live ? "bg-warning/15 text-warning" : "bg-muted text-muted-foreground"
               }`}
             >
               {live ? "On — anyone with the link" : "Off"}
@@ -170,7 +170,7 @@ export function ShareViewCard({ view, onChange }: Props) {
               <span className="truncate">{created.url}</span>
             </button>
             {created.unsupported_elements.length ? (
-              <p className="flex items-start gap-2 text-xs text-amber-700 dark:text-amber-300">
+              <p className="flex items-start gap-2 text-xs text-warning">
                 <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" />
                 <span>
                   This view uses {created.unsupported_elements.join(", ")}, which load their own data
