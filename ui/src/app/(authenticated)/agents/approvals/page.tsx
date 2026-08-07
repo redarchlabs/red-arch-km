@@ -83,6 +83,17 @@ export default function AgentApprovalsPage() {
                   <pre className="mt-1 overflow-x-auto whitespace-pre-wrap text-xs text-muted-foreground">
                     {JSON.stringify(a.arguments, null, 2)}
                   </pre>
+                  {a.workflow_run_id && a.workflow_id ? (
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Blocking a workflow step —{" "}
+                      <Link
+                        href={`/workflows/${a.workflow_id}/runs?run=${a.workflow_run_id}`}
+                        className="underline-offset-2 hover:underline"
+                      >
+                        open the workflow run
+                      </Link>
+                    </p>
+                  ) : null}
                 </div>
                 <Button size="sm" onClick={() => decide(a.id, true)}>
                   <Check className="h-4 w-4" /> Approve
