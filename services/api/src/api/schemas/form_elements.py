@@ -404,9 +404,7 @@ class RecordListColumn(BaseModel):
     format: Literal["auto", "text", "number", "date", "datetime", "badge", "code"] = "auto"
     # Value → badge tone, for ``format="badge"``. Values with no entry get the
     # neutral tone, so a new status value degrades quietly instead of vanishing.
-    badge_map: dict[str, Literal["neutral", "success", "warning", "destructive", "info"]] = Field(
-        default_factory=dict
-    )
+    badge_map: dict[str, Literal["neutral", "success", "warning", "destructive", "info"]] = Field(default_factory=dict)
 
 
 class RecordListFilter(BaseModel):

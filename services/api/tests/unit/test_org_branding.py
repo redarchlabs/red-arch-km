@@ -86,9 +86,7 @@ class TestViewThemeLock:
     def test_theme_survives_a_config_round_trip(self):
         """The builder rewrites the whole config on save; a pinned theme has to
         come back out the other side (see the padding regression)."""
-        cfg = FormConfig.model_validate(
-            {"version": 2, "elements": [], "theme": "dark", "padding": "comfortable"}
-        )
+        cfg = FormConfig.model_validate({"version": 2, "elements": [], "theme": "dark", "padding": "comfortable"})
         again = FormConfig.model_validate(cfg.model_dump(mode="json"))
         assert again.theme == "dark"
         assert again.padding == "comfortable"
