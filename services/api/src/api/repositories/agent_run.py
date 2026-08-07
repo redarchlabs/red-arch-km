@@ -150,7 +150,7 @@ class AgentRunRepository:
                 last_activity_at=_now(),
             )
         )
-        won = (result.rowcount or 0) > 0
+        won = int(getattr(result, "rowcount", 0) or 0) > 0
         await self._session.refresh(run)
         return won
 
@@ -170,7 +170,7 @@ class AgentRunRepository:
             )
             .values(status="cancelled", error=reason, wait_kind=None, finished_at=_now(), last_activity_at=_now())
         )
-        won = (result.rowcount or 0) > 0
+        won = int(getattr(result, "rowcount", 0) or 0) > 0
         if won:
             await self._session.execute(
                 update(AgentApproval)

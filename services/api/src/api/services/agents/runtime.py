@@ -47,6 +47,23 @@ class RunCancelled(Exception):  # noqa: N818 - a control signal, not an error co
     effects on its behalf."""
 
 
+class RunFinished(Exception):  # noqa: N818 - a control signal, not an error condition
+    """Raised by a *terminal* tool handler (``spec.terminal``) to end the run
+    deterministically — the model cannot keep calling tools after completing, and
+    completion is exactly-once. ``status`` is the terminal run status ("done" /
+    "escalated"); ``payload`` carries the validated output or escalation reason."""
+
+    def __init__(self, status: str, payload: dict[str, Any] | None = None) -> None:
+        super().__init__(f"run finished: {status}")
+        self.status = status
+        self.payload = payload or {}
+        # Usage accumulated by the loop before the terminal tool fired; attached
+        # on propagation so the finalize can record real token counts.
+        self.prompt_tokens = 0
+        self.completion_tokens = 0
+        self.total_tokens = 0
+
+
 class RunParked(Exception):  # noqa: N818 - a control signal, not an error condition
     """Raised by an approval strategy to suspend the run for later resume.
 
@@ -157,12 +174,20 @@ async def run_agent_loop(
         # before any of this batch's side effects execute.
         if continue_check is not None and not await continue_check():
             raise RunCancelled
-        # Phase 2: execute (or return the pre-set deny/error output).
-        for tc, spec, preset in plans:
-            result.tool_calls += 1
-            output = preset if preset is not None else await _run_tool(spec, ctx, tc)
-            await emit({"type": "tool_result", "name": tc.name, "result": output})
-            messages.append(_tool_message(tc, output))
+        # Phase 2: execute (or return the pre-set deny/error output). Terminal
+        # tools run LAST so a batch's other side effects land before the run ends.
+        plans.sort(key=lambda plan: bool(plan[1] is not None and plan[1].terminal))
+        try:
+            for tc, spec, preset in plans:
+                result.tool_calls += 1
+                output = preset if preset is not None else await _run_tool(spec, ctx, tc)
+                await emit({"type": "tool_result", "name": tc.name, "result": output})
+                messages.append(_tool_message(tc, output))
+        except RunFinished as finished:
+            finished.prompt_tokens = result.prompt_tokens
+            finished.completion_tokens = result.completion_tokens
+            finished.total_tokens = result.total_tokens
+            raise
 
     result.truncated = True
     await emit({"type": "done", "truncated": True})
@@ -221,6 +246,9 @@ async def _gate_tools(agent, tool_calls, specs_by_name, emit, approval_strategy,
 async def _run_tool(spec: ToolSpec, ctx: ToolContext, tc: ToolCallRequest) -> dict[str, Any]:
     try:
         return await spec.handler(ctx, tc.arguments)
+    except RunFinished:
+        # Control signal from a terminal tool — propagate, never swallow.
+        raise
     except Exception as exc:  # noqa: BLE001 - a tool failure must not kill the run
         logger.exception("Agent tool %s failed", tc.name)
         return {"error": f"Tool '{tc.name}' failed: {exc}"}

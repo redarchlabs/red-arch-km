@@ -42,7 +42,7 @@ from api.repositories.workflow import (
     json_safe,
 )
 from api.schemas.workflow_definition import WorkflowDefinitionModel, WorkflowNode
-from api.services.workflow import compat
+from api.services.workflow import agent_bridge, compat
 from api.services.workflow import constants as C
 from api.services.workflow.decision import evaluate_decision_table
 from api.services.workflow.expression import evaluate_transform
@@ -311,7 +311,7 @@ class TokenEngine:
                         SELECT id, created_at FROM workflow_run_tokens
                         WHERE (
                                 status='waiting'
-                                AND wait_kind IN ('timer','boundary','retry','user_task','receive')
+                                AND wait_kind IN ('timer','boundary','retry','user_task','receive','agent')
                                 AND resume_at <= :now
                               )
                            OR (status='running' AND leased_at < :stale)
@@ -363,6 +363,9 @@ class TokenEngine:
                     "WHERE id=:run AND created_at=:rca AND status NOT IN ('succeeded','skipped')"
                 ),
                 {"err": error, "run": row["run_id"], "rca": row["run_created_at"]},
+            )
+            await agent_bridge.cancel_runs_for_workflow_run(
+                self._session, row["org_id"], row["run_id"], reason=f"workflow run failed: {error}"
             )
 
     # ---- advance one claimed token --------------------------------------- #
@@ -489,6 +492,9 @@ class TokenEngine:
                     token_data={**data, "_armed": True},
                 )
             return NodeOutcome("park", wait_kind=wait_kind)
+
+        if task_type == C.TASK_AGENT:
+            return await self._dispatch_agent(node, token, run, model)
 
         if task_type == C.TASK_BUSINESS_RULE:
             return await self._dispatch_decision(node, token, run, model, runs)
@@ -743,6 +749,265 @@ class TokenEngine:
             "park", wait_kind="subprocess", token_data={**(token.data or {}), "_child_run_id": str(child.id)}
         )
 
+    # ---- agent task (the workflow ↔ agent bridge) ------------------------- #
+    async def _dispatch_agent(
+        self,
+        node: WorkflowNode,
+        token: WorkflowRunToken,
+        run: WorkflowRun,
+        model: WorkflowDefinitionModel,
+    ) -> NodeOutcome:
+        """An org-roster agent completes this step.
+
+        First arrival enqueues a queued ``AgentRun`` (the agent worker sweep
+        drives it) and parks with ``wait_kind='agent'`` + ``correlation_key`` =
+        the run id — the enqueue-once idempotency guard is the ``_agent_run_id``
+        stamp on the token. The agent lifecycle's wire-back (or the reconciliation
+        sweep) stamps ``_completed``/``_agent_result`` and reactivates; the
+        re-dispatch branches below consume the stamp. Timeout is the standard
+        attached timer boundary, with one addition: the fired timer CANCELS the
+        linked run so it stops taking side effects after the workflow moved on.
+
+        Deliberately NOT signalable by the human complete-task endpoint — a
+        member must not be able to forge an agent's completion.
+        """
+        data = token.data or {}
+
+        # Completed: wire-back stamped the validated output.
+        if data.get("_completed"):
+            raw_output = data.get("_completion_output")
+            output: dict[str, Any] = raw_output if isinstance(raw_output, dict) else {}
+            cleaned = {
+                k: v
+                for k, v in data.items()
+                if k not in ("_completed", "_completion_output", "_armed", "_agent_run_id")
+            }
+            await self._finish_agent_step(run, node, token, status="succeeded", output=output)
+            variables = None
+            capture = node.data.get("capture")
+            if isinstance(capture, str) and capture:
+                # vars.<capture> is the schema-validated complete_task object; the
+                # audit snapshot stays on the step output.
+                variables = {capture: output.get("result") or {}}
+            return NodeOutcome("advance", targets=_out_edges(model, node.id), token_data=cleaned, variables=variables)
+
+        # Failed / escalated / cancelled out-of-band: route like a caught task
+        # failure. "escalated" keeps its own error_code so a graph can catch the
+        # agent's deliberate hand-back separately from an infrastructure failure.
+        agent_result = data.get("_agent_result")
+        if isinstance(agent_result, dict):
+            cleaned = {k: v for k, v in data.items() if k not in ("_agent_result", "_armed", "_agent_run_id")}
+            status = str(agent_result.get("status") or "error")
+            message = str(agent_result.get("error") or "") or f"agent run {status}"
+            error_code = "escalated" if status == "escalated" else "failed"
+            await self._finish_agent_step(run, node, token, status="failed", output=agent_result, error=message)
+            return self._agent_failure_outcome(node, model, cleaned, message, error_code)
+
+        linked_run_id = data.get("_agent_run_id")
+        if linked_run_id:
+            # Armed SLA timer fired without a completion: cancel the run (it must
+            # stop acting — a human owns the step now), then escalate.
+            if data.get("_armed"):
+                boundary = _timer_boundary_for(model, node.id)
+                if boundary is not None:
+                    from api.services.agents import lifecycle
+
+                    try:
+                        cancelled = await lifecycle.cancel_run(
+                            self._session,
+                            run.org_id,
+                            uuid.UUID(str(linked_run_id)),
+                            reason=f"workflow SLA timeout at node {node.id}",
+                        )
+                    except (ValueError, TypeError):
+                        cancelled = False
+                    await self._finish_agent_step(
+                        run,
+                        node,
+                        token,
+                        status="skipped",
+                        output={"timed_out": True, "agent_run_id": str(linked_run_id), "cancelled": cancelled},
+                    )
+                    cleaned = {k: v for k, v in data.items() if k not in ("_armed", "_agent_run_id")}
+                    return NodeOutcome(
+                        "advance",
+                        targets=_out_edges(model, boundary.id),
+                        token_data={**cleaned, "_error": {"timeout": node.id}},
+                    )
+            # Spurious reactivation (lease reclaim, sweep race): re-park on the
+            # same run. If that run is already terminal, the reconciliation sweep
+            # stamps + reactivates this token on the next beat.
+            return NodeOutcome("park", wait_kind="agent", correlation_key=str(linked_run_id), token_data=data)
+
+        # ---- first arrival ------------------------------------------------- #
+        if run.step_seq >= MAX_RUN_STEPS:
+            return NodeOutcome("fail", error=f"max run steps {MAX_RUN_STEPS} exceeded")
+
+        from api.repositories.agent import AgentRepository
+        from api.repositories.agent_run import AgentRunRepository
+
+        try:
+            agent_uuid = uuid.UUID(str(node.data.get("agent_id")))
+        except (ValueError, TypeError):
+            return await self._agent_setup_failure(
+                node, token, run, model, data, "agent task requires a valid agent_id"
+            )
+        agent = await AgentRepository(self._session, run.org_id).get(agent_uuid)
+        if agent is None or not agent.enabled:
+            return await self._agent_setup_failure(node, token, run, model, data, "agent missing or disabled")
+        if agent.kind != "operator":
+            return await self._agent_setup_failure(
+                node, token, run, model, data, f"agent kind '{agent.kind}' is not assignable (operator only)"
+            )
+        invocable = [str(w) for w in (agent.workflow_invocable or [])]
+        if "*" not in invocable and str(run.workflow_id) not in invocable:
+            return await self._agent_setup_failure(
+                node, token, run, model, data, "agent has not opted in to this workflow (workflow_invocable)"
+            )
+
+        task_template = str(node.data.get("task") or "").strip()
+        if not task_template:
+            return await self._agent_setup_failure(node, token, run, model, data, "agent task requires a task prompt")
+        # Local import: actions.py would close a cycle at module level.
+        from api.services.workflow.actions import _render_template
+
+        rendered_task = _render_template(task_template, _expr_context(run))
+        output_schema = node.data.get("output_schema") if isinstance(node.data.get("output_schema"), dict) else {}
+
+        agent_runs = AgentRunRepository(self._session, run.org_id)
+        agent_run = await agent_runs.create_run(
+            agent_id=agent.id,
+            provider=agent.provider,
+            model=agent.model,
+            trigger="workflow",
+            status="queued",
+            # Service identity, never the triggering user's OAuth identity: the
+            # task text may be authored by someone else entirely.
+            actor_user_id=None,
+            label=f"workflow step {node.id}",
+            input={
+                "task": rendered_task,
+                # Snapshot pins the contract to the executing version — a
+                # mid-flight republish must not change validation — and carries
+                # everything the wire-back needs to hit one partition.
+                "workflow": {
+                    "run_id": str(run.id),
+                    "run_created_at": run.created_at.isoformat(),
+                    "token_id": str(token.id),
+                    "token_created_at": token.created_at.isoformat(),
+                    "node_id": node.id,
+                    "workflow_id": str(run.workflow_id),
+                    "output_schema": output_schema,
+                    "allow_web_research": bool(node.data.get("allow_web_research", False)),
+                },
+            },
+        )
+        agent_run.workflow_run_id = run.id
+        agent_run.workflow_run_created_at = run.created_at
+        agent_run.workflow_node_id = node.id
+        agent_run.workflow_token_id = token.id
+        await self._session.flush()
+
+        # A visible 'running' step while the agent works (the run monitor links
+        # the transcript through agent_run_id); completion mutates this row.
+        await self._record_step(
+            run, node, token, status="running", output={"agent_run_id": str(agent_run.id), "agent_id": str(agent.id)}
+        )
+
+        parked_data = {**data, "_agent_run_id": str(agent_run.id)}
+        boundary = _timer_boundary_for(model, node.id)
+        if boundary is not None:
+            delay = _resolve_delay_seconds(boundary.data or {}, run)
+            return NodeOutcome(
+                "park",
+                wait_kind="agent",
+                correlation_key=str(agent_run.id),
+                resume_at=datetime.now(UTC) + timedelta(seconds=delay),
+                token_data={**parked_data, "_armed": True},
+            )
+        return NodeOutcome("park", wait_kind="agent", correlation_key=str(agent_run.id), token_data=parked_data)
+
+    def _agent_failure_outcome(
+        self,
+        node: WorkflowNode,
+        model: WorkflowDefinitionModel,
+        token_data: dict[str, Any],
+        message: str,
+        error_code: str,
+    ) -> NodeOutcome:
+        """Route an agent-step failure exactly like a caught task failure."""
+        boundary = _error_boundary_for(model, node.id, error_code)
+        if boundary is not None:
+            return NodeOutcome(
+                "advance",
+                targets=[(boundary.id, C.HANDLE_BOUNDARY)],
+                token_data={**token_data, "_error": {"node": node.id, "message": message, "code": error_code}},
+            )
+        if node.data.get("continue_on_error", False):
+            return NodeOutcome("advance", targets=_out_edges(model, node.id), token_data=token_data)
+        return NodeOutcome("fail", error=message)
+
+    async def _agent_setup_failure(
+        self,
+        node: WorkflowNode,
+        token: WorkflowRunToken,
+        run: WorkflowRun,
+        model: WorkflowDefinitionModel,
+        token_data: dict[str, Any],
+        message: str,
+    ) -> NodeOutcome:
+        """A misconfigured agent binding must surface loudly (boundary/dead-letter),
+        never read as success."""
+        await self._record_step(run, node, token, status="failed", output={"error": message})
+        outcome = self._agent_failure_outcome(node, model, token_data, message, "failed")
+        if outcome.kind == "fail":
+            run.dead_letter = True
+        return outcome
+
+    async def _finish_agent_step(
+        self,
+        run: WorkflowRun,
+        node: WorkflowNode,
+        token: WorkflowRunToken,
+        *,
+        status: str,
+        output: dict[str, Any],
+        error: str | None = None,
+    ) -> WorkflowRunStep:
+        """Settle the 'running' step recorded at enqueue (fresh step if missing —
+        e.g. a reconciled token whose enqueue transaction was lost)."""
+        step = (
+            (
+                await self._session.execute(
+                    select(WorkflowRunStep)
+                    .where(
+                        WorkflowRunStep.run_id == run.id,
+                        WorkflowRunStep.run_created_at == run.created_at,
+                        WorkflowRunStep.org_id == run.org_id,
+                        WorkflowRunStep.node_id == node.id,
+                        WorkflowRunStep.token_id == token.id,
+                        WorkflowRunStep.status == "running",
+                    )
+                    .order_by(WorkflowRunStep.step_index.desc())
+                    .limit(1)
+                )
+            )
+            .scalars()
+            .first()
+        )
+        if step is None:
+            step = await self._record_step(run, node, token, status=status, output=output)
+            if error:
+                step.error = error
+                await self._session.flush()
+            return step
+        step.status = status
+        step.output = {**(step.output or {}), **output}
+        step.error = error
+        step.finished_at = func.now()
+        await self._session.flush()
+        return step
+
     async def _dispatch_gateway(
         self,
         node: WorkflowNode,
@@ -962,6 +1227,11 @@ class TokenEngine:
             token.status = "completed"
             token.finished_at = func.now()
             await tokens.kill_all(run.id)
+            # A terminate end event kills sibling tokens that may be parked on
+            # live agent runs — those runs must stop taking side effects.
+            await agent_bridge.cancel_runs_for_workflow_run(
+                self._session, run.org_id, run.id, reason="workflow terminated"
+            )
             await self._finish_run(run, "succeeded")
             return {"advanced": 1}
 
@@ -1042,6 +1312,9 @@ class TokenEngine:
         run.error = error
         run.finished_at = func.now()
         await self._session.flush()
+        await agent_bridge.cancel_runs_for_workflow_run(
+            self._session, run.org_id, run.id, reason=f"workflow run failed: {error}"
+        )
         await self._signal_parent(run)
 
     async def _signal_parent(self, run: WorkflowRun) -> None:
@@ -1180,9 +1453,7 @@ def _expr_context(run: WorkflowRun) -> dict[str, Any]:
     }
 
 
-def _resolve_call_inputs(
-    node: WorkflowNode, run: WorkflowRun, snapshot: dict[str, Any]
-) -> dict[str, Any]:
+def _resolve_call_inputs(node: WorkflowNode, run: WorkflowRun, snapshot: dict[str, Any]) -> dict[str, Any]:
     """The ``inputs`` a call activity hands its child run.
 
     Starts from the parent's own inputs (so a child can still read what the parent was

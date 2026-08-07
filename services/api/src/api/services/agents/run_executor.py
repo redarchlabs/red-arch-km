@@ -31,7 +31,7 @@ from api.services.agents.llm.keys import resolve_provider_key
 from api.services.agents.llm.provider import LLMProvider, ToolCallRequest
 from api.services.agents.notify import create_notification
 from api.services.agents.prompts import build_system_prompt
-from api.services.agents.runtime import RunCancelled, RunParked, run_agent_loop
+from api.services.agents.runtime import RunCancelled, RunFinished, RunParked, run_agent_loop
 from api.services.agents.tools.loader import load_agent_tools
 from api.services.agents.tools.spec import ToolContext, ToolSpec
 from api.services.agents.work_order_service import WorkOrderService
@@ -123,7 +123,14 @@ class AgentRunExecutor:
             (
                 await session.execute(
                     select(AgentRun)
-                    .where(AgentRun.status == "waiting", AgentRun.last_activity_at < cutoff)
+                    .where(
+                        AgentRun.status == "waiting",
+                        AgentRun.last_activity_at < cutoff,
+                        # Workflow-triggered runs: the step's timer boundary owns
+                        # the SLA and the run view surfaces the pending approval —
+                        # a second reminder stream would just split the queue.
+                        AgentRun.trigger != "workflow",
+                    )
                     .order_by(AgentRun.last_activity_at)
                     .limit(limit)
                 )
@@ -186,6 +193,9 @@ class AgentRunExecutor:
             )
             return
 
+        linkage = run.input.get("workflow") if isinstance(run.input, dict) else None
+        linkage = linkage if isinstance(linkage, dict) else None
+
         ctx = ToolContext(
             session=session,
             org_id=org_id,
@@ -199,6 +209,17 @@ class AgentRunExecutor:
             agent,
             await load_agent_tools(session, org_id, agent, self._settings, actor_user_id=run.actor_user_id),
         )
+        if linkage is not None:
+            # Workflow mode: the completion contract comes in; un-gated egress
+            # goes out (web_research's query string leaves the org without an
+            # approval stop — prompt-injected record text must not reach it).
+            from api.services.agents.tools.bridge import workflow_bridge_specs
+
+            if not linkage.get("allow_web_research"):
+                specs = [s for s in specs if s.name != "web_research"]
+            raw_schema = linkage.get("output_schema")
+            schema: dict[str, Any] = raw_schema if isinstance(raw_schema, dict) else {}
+            specs = [*specs, *workflow_bridge_specs(schema)]
 
         # The org's autonomy posture (default high_touch) gates side-effecting tools
         # at call time: under high_touch every outbound action asks the human.
@@ -215,8 +236,14 @@ class AgentRunExecutor:
             approved_names = set(resume.get("approved") or [])
         else:
             task = str(run.input.get("task") or run.input.get("message") or "").strip() or "Proceed."
+            system = build_system_prompt(agent)
+            if linkage is not None:
+                from api.services.agents.tools.bridge import workflow_system_addendum, wrap_workflow_task
+
+                system = f"{system}\n\n{workflow_system_addendum()}"
+                task = wrap_workflow_task(task)
             messages = [
-                {"role": "system", "content": build_system_prompt(agent)},
+                {"role": "system", "content": system},
                 {"role": "user", "content": task},
             ]
             resume_tool_calls = None
@@ -230,12 +257,12 @@ class AgentRunExecutor:
             # external cancel as soon as it commits.
             return await run_repo.current_status(run.id) == "running"
 
-        try:
-            result = await run_agent_loop(
+        async def drive(msgs: list[dict[str, Any]], resume_calls: list[ToolCallRequest] | None):
+            return await run_agent_loop(
                 provider=LLMProvider(api_key=key),
                 agent=agent,
                 model=agent.model,
-                messages=messages,
+                messages=msgs,
                 specs=specs,
                 ctx=ctx,
                 emit=emit,
@@ -243,14 +270,63 @@ class AgentRunExecutor:
                 temperature=(agent.params or {}).get("temperature"),
                 max_tokens=(agent.params or {}).get("max_tokens"),
                 approval_strategy=self._make_strategy(session, org_id, run, approved_names),
-                resume_tool_calls=resume_tool_calls,
+                resume_tool_calls=resume_calls,
                 autonomy=autonomy,
                 continue_check=continue_check,
             )
+
+        try:
+            result = await drive(messages, resume_tool_calls)
+            if linkage is not None and not result.truncated:
+                # Prose is not a completion for a workflow step: one corrective
+                # nudge, then (below) escalate rather than pretend success.
+                first = result
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "The workflow step is NOT complete. Call complete_task with the required "
+                            "structured fields, or escalate_task with a reason if you cannot."
+                        ),
+                    }
+                )
+                result = await drive(messages, None)
+                result.prompt_tokens += first.prompt_tokens
+                result.completion_tokens += first.completion_tokens
+                result.total_tokens += first.total_tokens
         except RunCancelled:
             # The canceller owns the terminal state; committing here persists the
             # transcript steps of the turns that DID run, nothing else.
             logger.info("agent run %s cancelled externally; stopping without finalize", run.id)
+            return
+        except RunFinished as finished:
+            if isinstance(run.input, dict) and "resume" in run.input:
+                run.input = {k: v for k, v in run.input.items() if k != "resume"}
+            if finished.status == "done":
+                run.output = dict(finished.payload.get("output") or {})
+                await run_repo.add_step(run.id, kind="assistant", content={"completed": True, "output": run.output})
+                await lifecycle.finalize_run(
+                    session,
+                    org_id,
+                    run,
+                    status="done",
+                    prompt_tokens=finished.prompt_tokens,
+                    completion_tokens=finished.completion_tokens,
+                    total_tokens=finished.total_tokens,
+                )
+            else:
+                reason = str(finished.payload.get("reason") or "agent escalated")
+                await run_repo.add_step(run.id, kind="escalation", content={"reason": reason})
+                await lifecycle.finalize_run(
+                    session,
+                    org_id,
+                    run,
+                    status="escalated",
+                    error=reason,
+                    prompt_tokens=finished.prompt_tokens,
+                    completion_tokens=finished.completion_tokens,
+                    total_tokens=finished.total_tokens,
+                )
             return
         except RunParked as parked:
             run.input = {
@@ -279,6 +355,27 @@ class AgentRunExecutor:
         if isinstance(run.input, dict) and "resume" in run.input:
             run.input = {k: v for k, v in run.input.items() if k != "resume"}
         await run_repo.add_step(run.id, kind="assistant", content={"content": result.final_content})
+
+        if linkage is not None:
+            # The loop ended without complete_task/escalate_task even after the
+            # nudge — never map that to "completed".
+            reason = (
+                "iteration budget exhausted before complete_task"
+                if result.truncated
+                else "agent finished without calling complete_task"
+            )
+            await lifecycle.finalize_run(
+                session,
+                org_id,
+                run,
+                status="escalated",
+                error=reason,
+                prompt_tokens=result.prompt_tokens,
+                completion_tokens=result.completion_tokens,
+                total_tokens=result.total_tokens,
+            )
+            return
+
         won = await lifecycle.finalize_run(
             session,
             org_id,
