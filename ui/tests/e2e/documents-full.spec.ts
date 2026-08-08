@@ -48,10 +48,18 @@ test.describe.serial("Document Management Flow", () => {
     const res = await apiContext.get(`/api/documents/${createdDocId}`);
     expect(res.ok()).toBe(true);
 
-    const doc = (await res.json()) as { id: string; title: string; text: string };
+    const doc = (await res.json()) as { id: string; title: string };
     expect(doc.id).toBe(createdDocId);
     expect(doc.title).toBe(documentTitle);
-    expect(doc.text).toContain("test content");
+
+    // DocumentRead is metadata only — the body deliberately is not inlined on
+    // every document read. It comes from the content endpoint, which reports
+    // how the reader should render it.
+    const contentRes = await apiContext.get(`/api/documents/${createdDocId}/content`);
+    expect(contentRes.ok()).toBe(true);
+    const body = (await contentRes.json()) as { content: string | null; kind: string };
+    expect(body.kind).toBe("markdown");
+    expect(body.content).toContain("test content");
   });
 
   test("update document", async ({ apiContext }) => {
@@ -66,9 +74,15 @@ test.describe.serial("Document Management Flow", () => {
     });
 
     expect(res.ok()).toBe(true);
-    const doc = (await res.json()) as { title: string; text: string };
+    const doc = (await res.json()) as { title: string };
     expect(doc.title).toBe(newTitle);
-    expect(doc.text).toBe(newText);
+
+    // Same as above: confirm the new body through the content endpoint rather
+    // than expecting `text` back on the metadata schema.
+    const contentRes = await apiContext.get(`/api/documents/${createdDocId}/content`);
+    expect(contentRes.ok()).toBe(true);
+    const body = (await contentRes.json()) as { content: string | null };
+    expect(body.content).toBe(newText);
   });
 
   // Skipped: driving a protected page needs a real Clerk browser session, which
