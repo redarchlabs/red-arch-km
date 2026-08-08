@@ -12,7 +12,12 @@ import { expect, test } from "./fixtures";
 test.describe("documents journey", () => {
   test.skip(!process.env.E2E_WITH_BACKEND, "requires seeded backend");
 
-  test("create folder via API and see it in the UI", async ({
+  // Skipped: driving a protected page needs a real Clerk browser session, which
+  // this suite has no mechanism for (global-setup writes no storageState and
+  // there is no @clerk/testing wiring). The fetch monkey-patch below cannot
+  // stand in for it either — the app's API client is axios, which uses XHR, so
+  // patched fetch headers never reach the API.
+  test.skip("create folder via API and see it in the UI", async ({
     page,
     apiContext,
     e2eState,

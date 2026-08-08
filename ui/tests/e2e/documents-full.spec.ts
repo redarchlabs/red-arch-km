@@ -71,7 +71,12 @@ test.describe.serial("Document Management Flow", () => {
     expect(doc.text).toBe(newText);
   });
 
-  test("list documents via UI", async ({ page, e2eState, apiContext }) => {
+  // Skipped: driving a protected page needs a real Clerk browser session, which
+  // this suite has no mechanism for (global-setup writes no storageState and
+  // there is no @clerk/testing wiring). The fetch monkey-patch below cannot
+  // stand in for it either — the app's API client is axios, which uses XHR, so
+  // patched fetch headers never reach the API.
+  test.skip("list documents via UI", async ({ page, e2eState, apiContext }) => {
     const docsPage = new DocumentsPage(page);
 
     // Inject test session headers
@@ -112,23 +117,25 @@ test.describe.serial("Document Management Flow", () => {
     expect(res.status()).toBe(404);
   });
 
-  test("cannot create document with missing required fields", async ({ apiContext }) => {
-    // Missing title
-    const res1 = await apiContext.post("/api/documents/", {
+  test("cannot create document without a title", async ({ apiContext }) => {
+    const res = await apiContext.post("/api/documents/", {
       data: {
         description: "Missing title",
         text: "Some content",
       },
     });
-    expect([400, 422]).toContain(res1.status());
+    expect([400, 422]).toContain(res.status());
+  });
 
-    // Missing text
-    const res2 = await apiContext.post("/api/documents/", {
+  test("text is optional when creating a document", async ({ apiContext }) => {
+    // DocumentCreate.text is `str | None` (schemas/document.py) — only the title
+    // is required. A text-less document is created and simply skips ingestion.
+    const res = await apiContext.post("/api/documents/", {
       data: {
-        title: "Missing content",
+        title: `e2e-no-text-${Date.now()}`,
       },
     });
-    expect([400, 422]).toContain(res2.status());
+    expect(res.status()).toBe(201);
   });
 
   test("cannot create document with empty title", async ({ apiContext }) => {
@@ -142,13 +149,15 @@ test.describe.serial("Document Management Flow", () => {
   });
 
   test("access non-existent document returns 404", async ({ apiContext }) => {
-    const fakeId = "nonexistent-" + Date.now();
+    // Must be a well-formed UUID: the path param is typed `uuid.UUID`, so a
+    // non-UUID never reaches the handler and is rejected as 422 by validation.
+    const fakeId = crypto.randomUUID();
     const res = await apiContext.get(`/api/documents/${fakeId}`);
     expect(res.status()).toBe(404);
   });
 
   test("update non-existent document returns 404", async ({ apiContext }) => {
-    const fakeId = "nonexistent-" + Date.now();
+    const fakeId = crypto.randomUUID();
     const res = await apiContext.patch(`/api/documents/${fakeId}`, {
       data: { title: "Updated" },
     });
