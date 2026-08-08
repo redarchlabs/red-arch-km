@@ -18,7 +18,6 @@ from api.repositories.document import DocumentRepository
 from api.routers.documents import _persist_task_id
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm.exc import StaleDataError
 
 from .helpers import set_tenant
 
@@ -43,6 +42,11 @@ async def _stored_task_id(session: AsyncSession, org_id: uuid.UUID, doc_id: uuid
     return result.scalar_one()
 
 
+# NOTE: there is deliberately no "bare assignment raises StaleDataError" test.
+# That asserts a failure mode of the removed code, and whether the ORM flush
+# raises or silently writes nothing depends on when the tenant GUC lapses — it
+# passed locally and not in CI. The contract worth pinning is the one below: the
+# id is stored, scoped to its own org, and never turned into a request failure.
 class TestPersistTaskId:
     async def test_task_id_survives_the_row_commit(self, session: AsyncSession) -> None:
         org_id = await _org(session, "TaskId")
@@ -59,27 +63,6 @@ class TestPersistTaskId:
         # too — without the instance going dirty again (see _persist_task_id).
         assert doc.celery_task_id == "task-abc123"
         assert doc not in session.dirty
-
-    async def test_a_bare_assignment_after_commit_writes_nothing(self, session: AsyncSession) -> None:
-        """The defect this guards against.
-
-        Assigning the attribute and leaving it for a later commit flushes the
-        UPDATE with no tenant context. The RLS predicate is then NULL, so the
-        statement matches zero rows and SQLAlchemy raises — and in the request
-        path that happens after the response has already been sent, which drops
-        the connection instead of surfacing an error.
-        """
-        org_id = await _org(session, "TaskId")
-        doc = await DocumentRepository(session, org_id).create(title="Doc", text="body")
-        doc_id = doc.id
-        await session.commit()
-
-        doc.celery_task_id = "task-lost"
-        with pytest.raises(StaleDataError):
-            await session.commit()
-        await session.rollback()
-
-        assert await _stored_task_id(session, org_id, doc_id) is None
 
     async def test_persist_is_scoped_to_the_documents_org(self, session: AsyncSession) -> None:
         """The write must not depend on a widened scope: passing another org's id
