@@ -198,7 +198,17 @@ async def get_tenant_db(
             await session.execute(text("SET LOCAL TIME ZONE 'UTC'"))
             await _apply_timeouts(session)
             yield session
-            await session.commit()
+            try:
+                await session.commit()
+            except Exception:
+                # FastAPI exits yield-dependencies AFTER the response has been
+                # sent, so an exception here can never become a 500 —
+                # ServerErrorMiddleware re-raises it and uvicorn closes the TCP
+                # connection instead. The client sees that as a socket hang up on
+                # its *next* keep-alive request, i.e. a failure attributed to an
+                # unrelated call. Log loudly and let the sent response stand.
+                logger.exception("Teardown commit failed in tenant DB session (org=%s)", org_id)
+                await session.rollback()
         except HTTPException:
             await session.rollback()
             raise
