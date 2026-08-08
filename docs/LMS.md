@@ -105,7 +105,9 @@ The catalog's generic Open + Enroll come from two fields on `RecordListElement`
 
 - **`row_link_template`** — a per-row hyperlink whose `{token}` placeholders are filled from
   the row: `{id}` is the row id, `{<field>}` a field value (e.g.
-  `/views/{player_view_slug}/view` or `/views/course_play/view?record_id={id}`). Fill +
+  `/views/{player_view_slug}/view` or `/views/course_play/view?record_id={id}`). The view
+  segment may be the view's UUID **or its slug** — the render endpoint resolves either
+  (`ViewService.get_view_by_ref`), so links stay authorable by hand. Fill +
   scheme-check delegate to `fillTokens` (below). `row_link_label` names the link ("Open").
 - **`row_workflow_inputs`** — inputs for a per-row `row_workflow_id` button, each an
   expression evaluated over the row's values **merged onto the enclosing view's scope**
