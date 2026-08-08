@@ -183,3 +183,104 @@ async def test_blank_claims_are_treated_as_absent(blank: str | None) -> None:
 
     assert session.flush_count == 0
     assert profile.email == "alice@example.com"
+
+
+# --- SITE_ADMIN_EMAILS: pre-authorizing an admin who has never signed in -----
+
+
+@pytest.fixture
+def allowlist():
+    """Build a Settings carrying just the allow-list under test."""
+    from api.config import Settings
+
+    def _make(raw: str) -> Settings:
+        return Settings(site_admin_emails_raw=raw, secret_key="test-secret")  # type: ignore[arg-type]
+
+    return _make
+
+
+async def test_a_listed_email_is_a_site_admin_from_its_first_login(allowlist) -> None:
+    """The gap this closes: a profile row exists only after a login, so an admin
+    who has never signed in cannot be promoted by any console."""
+    session = _FakeSession(None)
+
+    result = await provision_user_from_claims(
+        session,  # type: ignore[arg-type]
+        sub=SUB,
+        username="boss",
+        email="boss@example.com",
+        settings=allowlist("boss@example.com"),
+    )
+
+    assert result.is_site_admin is True
+
+
+async def test_an_existing_profile_is_promoted_on_its_next_login(allowlist) -> None:
+    profile = _existing()
+    session = _FakeSession(profile)
+
+    result = await provision_user_from_claims(
+        session,  # type: ignore[arg-type]
+        sub=SUB,
+        username="alice",
+        email="alice@example.com",
+        settings=allowlist("alice@example.com"),
+    )
+
+    assert result.is_site_admin is True
+    assert session.flush_count == 1
+
+
+async def test_an_unlisted_user_is_never_promoted(allowlist) -> None:
+    profile = _existing()
+    session = _FakeSession(profile)
+
+    result = await provision_user_from_claims(
+        session,  # type: ignore[arg-type]
+        sub=SUB,
+        username="alice",
+        email="alice@example.com",
+        settings=allowlist("boss@example.com"),
+    )
+
+    assert result.is_site_admin is False
+    # And the pure-read property of an unchanged row still holds — this must not
+    # reintroduce the per-request UPDATE the tests above exist to prevent.
+    assert session.flush_count == 0
+
+
+async def test_removing_an_address_does_not_demote(allowlist) -> None:
+    """The grant is one-way on purpose. An env change is not an audited action, so
+    it must not silently strip someone's access mid-session; demotion belongs to
+    the site-admin console, which records who did it."""
+    profile = _existing()
+    profile.is_site_admin = True
+    session = _FakeSession(profile)
+
+    result = await provision_user_from_claims(
+        session,  # type: ignore[arg-type]
+        sub=SUB,
+        username="alice",
+        email="alice@example.com",
+        settings=allowlist(""),
+    )
+
+    assert result.is_site_admin is True
+    assert session.flush_count == 0
+
+
+async def test_a_claimless_token_cannot_satisfy_the_allowlist(allowlist) -> None:
+    """Without a JWT template the session token carries no email, and provisioning
+    substitutes a sub-derived placeholder. Matching on that would grant admin from
+    a value this code invented rather than one the IdP vouched for."""
+    session = _FakeSession(None)
+
+    result = await provision_user_from_claims(
+        session,  # type: ignore[arg-type]
+        sub=SUB,
+        username="",
+        email="",
+        settings=allowlist(PLACEHOLDER_EMAIL),
+    )
+
+    assert result.is_site_admin is False

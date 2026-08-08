@@ -202,6 +202,49 @@ export async function resolveNotification(id: string): Promise<Notification> {
   return (await apiClient.post<Notification>(`/agents/notifications/${id}/resolve`)).data;
 }
 
+/** An agent is blocked waiting for an answer. Unlike an approval — which is a
+ * yes/no on an action the agent already chose — the text typed here becomes the
+ * result of the tool call that blocked, and the run continues from that point. */
+export interface AgentQuestion {
+  id: string;
+  run_id: string;
+  audience: string;
+  question: string;
+  context: string | null;
+  answer: string | null;
+  status: string;
+  answered_at: string | null;
+  created_at: string;
+  asked_by: string | null;
+  target_agent: string | null;
+}
+
+export interface AnswerResult {
+  question: AgentQuestion;
+  /** False when the asking run had already ended — the answer is recorded, but no
+   * agent picked it up. */
+  resumed: boolean;
+}
+
+/** Only questions addressed to a person; peer consults are answered by the
+ * consulted agent, not from here. */
+export async function listQuestions(): Promise<AgentQuestion[]> {
+  return (await apiClient.get<AgentQuestion[]>("/agents/questions")).data;
+}
+
+export async function answerQuestion(id: string, answer: string): Promise<AnswerResult> {
+  return (await apiClient.post<AnswerResult>(`/agents/questions/${id}/answer`, { answer })).data;
+}
+
+/** Unblock the agent without answering — it is told to use its own judgement. */
+export async function declineQuestion(id: string, reason?: string): Promise<AnswerResult> {
+  return (
+    await apiClient.post<AnswerResult>(`/agents/questions/${id}/decline`, {
+      reason: reason || null,
+    })
+  ).data;
+}
+
 /** Events streamed by the interactive agent console over SSE. */
 export type AgentConsoleEvent =
   | { type: "run_started"; run_id: string }

@@ -2,8 +2,10 @@
 
 An ``AgentRun`` is one agent session (many LLM turns). ``parent_run_id`` forms the
 delegation tree; ``wait_kind`` records why a parked run is waiting (a delegated
-child, a human approval, or an escalation). ``AgentRunStep`` is the durable
-transcript the console tails. ``AgentApproval`` is the human "ask" gate;
+child, a human approval, an escalation, or an unanswered question). ``AgentRunStep``
+is the durable transcript the console tails. ``AgentApproval`` is the human "ask"
+gate; ``AgentQuestion`` is the *open question* gate — an agent asked for information
+(from a human or a peer agent) and cannot proceed until a typed answer comes back;
 ``AgentNotification`` is the inbox item that surfaces bubbled escalations /
 approvals; ``AgentSchedule`` is a cron trigger.
 
@@ -26,8 +28,14 @@ from api.models.base import Base, TimestampMixin, UUIDMixin
 # "error"). "cancelled": an external actor (workflow timeout/termination, admin)
 # ended the run; the executor's cooperative check stops it within one turn.
 AGENT_RUN_STATUSES = ("queued", "running", "waiting", "done", "error", "cancelled", "escalated")
-AGENT_RUN_TRIGGERS = ("manual", "work_order", "delegation", "schedule", "workflow")
-AGENT_WAIT_KINDS = ("delegation", "approval", "escalation")
+# "consult": a run created to answer another agent's consult_peer question. It is
+# distinct from "delegation" because a consult is non-binding advice across the org
+# chart rather than work assigned down it — and because a consult run may not itself
+# consult (the loop guard in delegation.py keys off this trigger).
+AGENT_RUN_TRIGGERS = ("manual", "work_order", "delegation", "schedule", "workflow", "consult")
+# "question": parked on a human's typed answer (ask_human).
+# "consult": parked on a peer agent's answer (consult_peer).
+AGENT_WAIT_KINDS = ("delegation", "approval", "escalation", "question", "consult")
 AGENT_STEP_KINDS = (
     "user",
     "assistant",
@@ -41,7 +49,11 @@ AGENT_STEP_KINDS = (
 )
 # "voided": the run was cancelled/finalized while the ask was still pending.
 AGENT_APPROVAL_STATUSES = ("pending", "approved", "denied", "voided")
-AGENT_NOTIFICATION_KINDS = ("escalation", "approval", "review", "done")
+# "declined": the human (or peer) refused to answer — the asking run resumes with a
+# "no answer" tool result rather than hanging. "voided": the asking run ended first.
+AGENT_QUESTION_STATUSES = ("pending", "answered", "declined", "voided")
+AGENT_QUESTION_AUDIENCES = ("human", "agent")
+AGENT_NOTIFICATION_KINDS = ("escalation", "approval", "review", "done", "question")
 AGENT_NOTIFICATION_STATUSES = ("unread", "read", "resolved")
 
 
@@ -129,6 +141,56 @@ class AgentApproval(Base, UUIDMixin, TimestampMixin):
         UUID(as_uuid=True), ForeignKey("user_profiles.id", ondelete="SET NULL"), nullable=True
     )
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True)
+
+
+class AgentQuestion(Base, UUIDMixin, TimestampMixin):
+    """An open question an agent is blocked on.
+
+    Distinct from ``AgentApproval``: an approval answers "may I do this?" with
+    yes/no and resumes the run to *execute* the tool it already chose. A question
+    answers "what should I know?" with prose, and the answer itself becomes the
+    tool's result. ``tool_call_id`` is how that lands: it identifies the parked
+    call in the run's resume state, so the answer is injected as that call's
+    output and the same turn continues.
+    """
+
+    __tablename__ = "agent_questions"
+
+    # The run that is blocked. CASCADE: a deleted run's question is meaningless.
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("agent_runs.id", ondelete="CASCADE"), index=True
+    )
+    # Provider tool-call id of the parked ask_human/consult_peer call.
+    tool_call_id: Mapped[str] = mapped_column(String(120))
+    asked_by_agent_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("agents.id", ondelete="SET NULL"), nullable=True
+    )
+    audience: Mapped[str] = mapped_column(String(10), default="human")
+    # Set only for audience="agent": the peer asked, and the run spawned for it.
+    target_agent_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("agents.id", ondelete="SET NULL"), nullable=True
+    )
+    peer_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("agent_runs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    work_order_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("work_orders.id", ondelete="SET NULL"), nullable=True
+    )
+
+    question: Mapped[str] = mapped_column(Text)
+    context: Mapped[str | None] = mapped_column(Text, nullable=True)
+    answer: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(12), default="pending", index=True)
+
+    answered_by_profile_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("user_profiles.id", ondelete="SET NULL"), nullable=True
+    )
+    answered_by_agent_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("agents.id", ondelete="SET NULL"), nullable=True
+    )
+    answered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True)
 

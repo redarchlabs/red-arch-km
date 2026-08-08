@@ -7,9 +7,26 @@ import logging
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.config import Settings
 from api.models.user import UserProfile
 
 logger = logging.getLogger(__name__)
+
+
+def _should_be_site_admin(settings: Settings | None, email: str, *, asserted: bool) -> bool:
+    """Is this address pre-authorized as a site admin?
+
+    ``asserted`` gates the whole check: only an email the IdP actually put in the
+    token counts. The sub-derived ``…@placeholder.invalid`` fallback is not an
+    identity claim, and matching on it would let the allow-list be satisfied by a
+    value this code made up.
+
+    ``settings`` is passed in rather than fetched from the global cache so this
+    stays a pure function of its inputs — the caller (auth) already holds it.
+    """
+    if settings is None or not asserted or not email:
+        return False
+    return email.strip().lower() in settings.site_admin_emails
 
 
 async def provision_user_from_claims(
@@ -18,6 +35,7 @@ async def provision_user_from_claims(
     sub: str,
     username: str,
     email: str,
+    settings: Settings | None = None,
 ) -> UserProfile:
     """Find or create a UserProfile for the given Clerk subject.
 
@@ -57,6 +75,8 @@ async def provision_user_from_claims(
     result = await session.execute(select(UserProfile).where(UserProfile.auth_subject == sub))
     profile = result.scalar_one_or_none()
 
+    promote = _should_be_site_admin(settings, email, asserted=has_email_claim)
+
     if profile is not None:
         # Keep email/username in sync with the IdP claims — but only from a
         # token that carries them. A claimless token is a pure read.
@@ -67,6 +87,13 @@ async def provision_user_from_claims(
         if has_email_claim and profile.email != email:
             profile.email = email
             changed = True
+        if promote and not profile.is_site_admin:
+            # One-way: the allow-list grants, it never revokes. Dropping an address
+            # from it must not silently demote someone mid-session — that is the
+            # site-admin console's job, which records who did it.
+            profile.is_site_admin = True
+            changed = True
+            logger.warning("Promoted %s to site admin via SITE_ADMIN_EMAILS", email)
         if changed:
             await session.flush()
         return profile
@@ -75,8 +102,10 @@ async def provision_user_from_claims(
         auth_subject=sub,
         username=username,
         email=email,
-        is_site_admin=False,
+        is_site_admin=promote,
     )
+    if promote:
+        logger.warning("Provisioned %s as a site admin via SITE_ADMIN_EMAILS", email)
     session.add(profile)
     await session.flush()
     logger.info("Provisioned new UserProfile for %s (%s)", username, sub)
