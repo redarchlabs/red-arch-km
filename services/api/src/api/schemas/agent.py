@@ -123,3 +123,39 @@ class ProviderCredentialSet(BaseModel):
 
     provider: str = Field(min_length=1, max_length=40)
     api_key: str = Field(min_length=1)
+
+
+class AgentScheduleBase(BaseModel):
+    """A cron-triggered standing instruction for one agent.
+
+    ``enabled`` defaults to **False**: creating a schedule should never start
+    firing unattended work as a side effect of configuring the roster. Turn it on
+    deliberately, once the agent behaves as intended when run by hand.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    cron: str = Field(min_length=1, max_length=120, description="5-field cron, evaluated in UTC.")
+    task: str = Field(min_length=1, description="The instruction handed to the agent on each firing.")
+    enabled: bool = False
+
+
+class AgentScheduleCreate(AgentScheduleBase):
+    agent_id: uuid.UUID
+
+
+class AgentScheduleUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    cron: str | None = Field(default=None, min_length=1, max_length=120)
+    task: str | None = Field(default=None, min_length=1)
+    enabled: bool | None = None
+
+
+class AgentScheduleRead(AgentScheduleBase):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    agent_id: uuid.UUID
+    last_run_at: datetime | None = None
+    next_run_at: datetime | None = None
