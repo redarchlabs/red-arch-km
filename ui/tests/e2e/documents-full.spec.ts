@@ -96,7 +96,7 @@ test.describe.serial("Document Management Flow", () => {
   // there is no @clerk/testing wiring). The fetch monkey-patch below cannot
   // stand in for it either — the app's API client is axios, which uses XHR, so
   // patched fetch headers never reach the API.
-  test.skip("list documents via UI", async ({ page, e2eState, apiContext }) => {
+  test.skip("list documents via UI", async ({ page, e2eState }) => {
     const docsPage = new DocumentsPage(page);
 
     // Inject test session headers
