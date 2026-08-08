@@ -73,5 +73,9 @@ class ToolContext:
     actor_user_id: uuid.UUID | None = None
     run_id: uuid.UUID | None = None
     work_order_id: uuid.UUID | None = None
+    # The provider's id for the call currently executing, set by the loop before
+    # each dispatch. Handlers that park the run (ask_human, consult_peer) record it
+    # so the eventual answer can be addressed back to this exact call.
+    tool_call_id: str | None = None
     # Resolved org LLM/provider key, for tools that make their own model calls.
     extras: dict[str, Any] = field(default_factory=dict)

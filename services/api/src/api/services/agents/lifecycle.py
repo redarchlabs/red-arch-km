@@ -32,7 +32,8 @@ async def finalize_run(
     completion_tokens: int = 0,
     total_tokens: int = 0,
 ) -> bool:
-    """CAS-finalize ``run``; on winning, resume any workflow token parked on it."""
+    """CAS-finalize ``run``; on winning, settle its questions and resume any
+    workflow token parked on it."""
     won = await AgentRunRepository(session, org_id).finalize_run(
         run,
         status=status,
@@ -42,6 +43,9 @@ async def finalize_run(
         total_tokens=total_tokens,
     )
     if won:
+        await _settle_questions(
+            session, org_id, run, reason=f"The consulted agent's run ended ({status}) without answering."
+        )
         await _wire_back(session, org_id, run)
     return won
 
@@ -51,9 +55,32 @@ async def cancel_run(session: AsyncSession, org_id: uuid.UUID, run_id: uuid.UUID
 
     Cancellation deliberately does NOT wire back: the canceller (workflow timeout /
     token death / admin) already owns the token's next move, and signalling here
-    would race it.
+    would race it. It DOES settle questions — an agent left waiting on a cancelled
+    run is stuck on an answer that is never coming.
     """
-    return await AgentRunRepository(session, org_id).cancel_run(run_id, reason=reason)
+    won = await AgentRunRepository(session, org_id).cancel_run(run_id, reason=reason)
+    if won:
+        run = await AgentRunRepository(session, org_id).get_run(run_id)
+        if run is not None:
+            await _settle_questions(session, org_id, run, reason="The consulted agent's run was cancelled.")
+    return won
+
+
+async def _settle_questions(session: AsyncSession, org_id: uuid.UUID, run: AgentRun, *, reason: str) -> None:
+    """Close both sides of the question ledger for a run that just ended.
+
+    As an *answerer*: a consult run that never called ``reply_to_peer`` would leave
+    its asker parked indefinitely, so the asker is resumed with an explicit "no
+    answer". As an *asker*: its own open questions are voided, because answering one
+    later would try to re-queue a run that is already terminal.
+    """
+    from api.services.agents import questions
+
+    try:
+        await questions.settle_for_peer_run(session, org_id, run, reason=reason)
+        await questions.void_open_questions(session, org_id, run.id)
+    except Exception:  # noqa: BLE001 - never let bookkeeping undo a terminal transition
+        logger.exception("agent run %s: settling open questions failed", run.id)
 
 
 async def _wire_back(session: AsyncSession, org_id: uuid.UUID, run: AgentRun) -> None:

@@ -4,6 +4,7 @@ from api.models.agent import Agent
 from api.models.agent_run import (
     AgentApproval,
     AgentNotification,
+    AgentQuestion,
     AgentRun,
     AgentRunStep,
     AgentSchedule,
@@ -45,6 +46,7 @@ __all__ = [
     "Agent",
     "AgentApproval",
     "AgentNotification",
+    "AgentQuestion",
     "AgentRun",
     "AgentRunStep",
     "AgentSchedule",
