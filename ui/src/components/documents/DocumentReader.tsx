@@ -13,6 +13,7 @@ import {
   getDocumentChunks,
   getDocumentContent,
 } from "@/lib/api/documents";
+import { type ReaderBlock, buildReaderBlocks } from "@/lib/readerBlocks";
 import { segmentOriginalByChunks } from "@/lib/readerSegments";
 import { cn } from "@/lib/utils";
 
@@ -199,6 +200,11 @@ export function DocumentReader({
 
   const hasMore = total === 0 || chunks.length < total;
 
+  // Reading blocks for the no-readable-original path (PDF/image/OCR), where the
+  // chunk text is all there is: retrieval seams moved to sentence endings and
+  // the chunker's overlap dropped. Shared by both view modes.
+  const blocks = useMemo(() => buildReaderBlocks(chunks), [chunks]);
+
   return (
     <Dialog open={open} onClose={onClose} className="flex h-[90vh] max-w-6xl flex-col p-0">
       <header className="flex items-center gap-3 border-b px-5 py-3 pr-14">
@@ -310,7 +316,7 @@ export function DocumentReader({
                 />
               ) : (
                 <>
-                  <FullText chunks={chunks} targetChunkOrder={targetChunkOrder} />
+                  <FullText blocks={blocks} targetChunkOrder={targetChunkOrder} />
                   <div ref={sentinelRef}>
                     <LoadSentinel
                       loading={loading}
@@ -338,21 +344,21 @@ export function DocumentReader({
             // No readable original (PDF/image/OCR): the chunk text is all there
             // is, and it is whitespace-flattened, so it stays unformatted.
             <ol className="space-y-5">
-              {chunks.map((chunk) => (
+              {blocks.map((block) => (
                 <li
-                  key={chunk.id}
-                  id={`reader-chunk-${chunk.chunk_order}`}
+                  key={block.chunkOrder}
+                  id={`reader-chunk-${block.chunkOrder}`}
                   className={cn(
-                    chunk.chunk_order === targetChunkOrder &&
+                    block.chunkOrder === targetChunkOrder &&
                       "rounded-md border border-primary bg-primary/10 p-3",
                   )}
                 >
-                  {chunk.summary ? (
+                  {block.summary ? (
                     <div className="mb-1.5 rounded-md border-l-2 border-primary/60 bg-muted/40 px-3 py-1.5 text-sm italic text-muted-foreground">
-                      {chunk.summary}
+                      {block.summary}
                     </div>
                   ) : null}
-                  <div className="whitespace-pre-wrap text-sm leading-relaxed">{chunk.text}</div>
+                  <div className="whitespace-pre-wrap text-sm leading-relaxed">{block.text}</div>
                 </li>
               ))}
             </ol>
@@ -437,25 +443,25 @@ function EmbeddedOriginal({ content, format, chunks, targetChunkOrder }: Embedde
 
 /** Document text rendered as continuous reading order (one block per chunk). */
 function FullText({
-  chunks,
+  blocks,
   targetChunkOrder,
 }: {
-  chunks: DocumentChunk[];
+  blocks: ReaderBlock[];
   targetChunkOrder?: number | null;
 }) {
   return (
     <div className="space-y-3">
-      {chunks.map((chunk) => (
+      {blocks.map((block) => (
         <p
-          key={chunk.id}
-          id={`reader-chunk-${chunk.chunk_order}`}
+          key={block.chunkOrder}
+          id={`reader-chunk-${block.chunkOrder}`}
           className={cn(
             "whitespace-pre-wrap text-sm leading-relaxed",
-            chunk.chunk_order === targetChunkOrder &&
+            block.chunkOrder === targetChunkOrder &&
               "rounded-md border border-primary bg-primary/10 p-3",
           )}
         >
-          {chunk.text}
+          {block.text}
         </p>
       ))}
     </div>
