@@ -12,6 +12,14 @@ that parks on an ASK verdict has taken no partial side effects. The messages and
 pending tool calls are attached to :class:`RunParked` so the worker can persist
 resume state and continue the exact same turn after a human approves.
 
+A run can also park *mid-execution* — ``ask_human``/``consult_peer`` raise
+:class:`RunParked` from their handlers, because the block is the point of the tool
+rather than a policy verdict on it. That case attaches only the calls that have not
+run yet, so resuming re-executes nothing that already took effect. Such a call comes
+back through ``resume_answers``: its stored answer is fed in as the call's output
+and the handler is never invoked again (re-running ``ask_human`` would only ask the
+same question a second time).
+
 I/O is injected so one loop serves both runtimes:
 * ``emit`` — an async sink for typed events (SSE frames and/or step persistence).
 * ``approval_strategy`` — what an ASK verdict does: approve inline (console) or
@@ -127,6 +135,7 @@ async def run_agent_loop(
     max_tokens: int | None = None,
     approval_strategy: ApprovalStrategy = _approve_inline,
     resume_tool_calls: list[ToolCallRequest] | None = None,
+    resume_answers: dict[str, dict[str, Any]] | None = None,
     autonomy: str = "high_touch",
     continue_check: ContinueCheck | None = None,
 ) -> RunResult:
@@ -135,8 +144,12 @@ async def run_agent_loop(
     ``resume_tool_calls`` continues a parked turn: the loop skips the initial stream
     and gates/executes those calls first (``messages`` must already end with the
     assistant message that requested them).
+
+    ``resume_answers`` maps a tool-call id to the output to use *instead of* calling
+    its handler — how an answered question comes back into the turn that asked it.
     """
     specs_by_name = {s.name: s for s in specs}
+    answers = resume_answers or {}
     schemas = [s.openai_schema() for s in specs] or None
     result = RunResult(messages=messages)
     pending = resume_tool_calls
@@ -169,18 +182,30 @@ async def run_agent_loop(
             tool_calls = list(completion.tool_calls)
 
         # Phase 1: authority-gate every call BEFORE any executes (parks cleanly).
-        plans = await _gate_tools(agent, tool_calls, specs_by_name, emit, approval_strategy, messages, autonomy)
+        plans = await _gate_tools(
+            agent, tool_calls, specs_by_name, emit, approval_strategy, messages, autonomy, answers
+        )
         # A cancel that landed during the (possibly long) stream must stop the run
         # before any of this batch's side effects execute.
         if continue_check is not None and not await continue_check():
             raise RunCancelled
-        # Phase 2: execute (or return the pre-set deny/error output). Terminal
+        # Phase 2: execute (or return the pre-set deny/error/answer output). Terminal
         # tools run LAST so a batch's other side effects land before the run ends.
         plans.sort(key=lambda plan: bool(plan[1] is not None and plan[1].terminal))
         try:
-            for tc, spec, preset in plans:
+            for index, (tc, spec, preset) in enumerate(plans):
                 result.tool_calls += 1
-                output = preset if preset is not None else await _run_tool(spec, ctx, tc)
+                try:
+                    output = preset if preset is not None else await _run_tool(spec, ctx, tc)
+                except RunParked as parked:
+                    # A handler blocked (asked a question). Everything before this
+                    # call already executed and is recorded in ``messages``; only
+                    # this call and the ones after it still need to run.
+                    parked.messages = messages
+                    parked.pending = [
+                        {"id": t.id, "name": t.name, "arguments": t.arguments} for t, _, _ in plans[index:]
+                    ]
+                    raise
                 await emit({"type": "tool_result", "name": tc.name, "result": output})
                 messages.append(_tool_message(tc, output))
         except RunFinished as finished:
@@ -188,6 +213,9 @@ async def run_agent_loop(
             finished.completion_tokens = result.completion_tokens
             finished.total_tokens = result.total_tokens
             raise
+        # An answer is consumed by the call it belonged to; a later turn that reuses
+        # the same provider-generated id must not silently inherit it.
+        answers = {}
 
     result.truncated = True
     await emit({"type": "done", "truncated": True})
@@ -215,11 +243,19 @@ async def _stream_turn(provider, model, messages, schemas, temperature, max_toke
     return completion
 
 
-async def _gate_tools(agent, tool_calls, specs_by_name, emit, approval_strategy, messages, autonomy="high_touch"):
+async def _gate_tools(
+    agent, tool_calls, specs_by_name, emit, approval_strategy, messages, autonomy="high_touch", answers=None
+):
     """Return a plan of (tc, spec, preset_output|None). Raises RunParked to suspend."""
     plans: list[tuple[ToolCallRequest, ToolSpec | None, dict[str, Any] | None]] = []
+    answers = answers or {}
     for tc in tool_calls:
         await emit({"type": "tool_call", "id": tc.id, "name": tc.name, "arguments": tc.arguments})
+        if tc.id in answers:
+            # Already answered while the run was parked. Skip the gate as well as the
+            # handler: the tool never runs again, so there is nothing left to permit.
+            plans.append((tc, specs_by_name.get(tc.name), answers[tc.id]))
+            continue
         spec = specs_by_name.get(tc.name)
         if spec is None:
             plans.append((tc, None, {"error": f"Unknown tool: {tc.name}"}))
@@ -244,10 +280,16 @@ async def _gate_tools(agent, tool_calls, specs_by_name, emit, approval_strategy,
 
 
 async def _run_tool(spec: ToolSpec, ctx: ToolContext, tc: ToolCallRequest) -> dict[str, Any]:
+    # Handlers that park (ask_human, consult_peer) need the provider's id for THIS
+    # call to address their answer back to it. Set per call rather than passed as an
+    # argument so every existing handler signature stays as it is.
+    ctx.tool_call_id = tc.id
     try:
         return await spec.handler(ctx, tc.arguments)
-    except RunFinished:
-        # Control signal from a terminal tool — propagate, never swallow.
+    except (RunFinished, RunParked):
+        # Control signals from a handler — propagate, never swallow into an "error"
+        # tool result. A swallowed RunParked would tell the model its question
+        # failed while a human is looking at it.
         raise
     except Exception as exc:  # noqa: BLE001 - a tool failure must not kill the run
         logger.exception("Agent tool %s failed", tc.name)

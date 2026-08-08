@@ -76,7 +76,7 @@ async def _provision(
     ``CurrentUser`` is built inside the block so nothing lazy-loads afterwards.
     """
     async with auth_provisioning_session(settings) as session:
-        profile = await provision_user_from_claims(session, sub=sub, username=username, email=email)
+        profile = await provision_user_from_claims(session, sub=sub, username=username, email=email, settings=settings)
         _ensure_active(profile)
         return CurrentUser(
             sub=profile.auth_subject,

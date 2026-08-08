@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class AgentRunRead(BaseModel):
@@ -81,3 +81,38 @@ class NotificationRead(BaseModel):
 
 class UnreadCount(BaseModel):
     unread: int
+
+
+class QuestionRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    run_id: uuid.UUID
+    audience: str
+    question: str
+    context: str | None
+    answer: str | None
+    status: str
+    answered_at: datetime | None
+    created_at: datetime
+    # Resolved names, so the inbox can say "Ada asks" without a second round trip.
+    asked_by: str | None = None
+    target_agent: str | None = None
+
+
+class AnswerRequest(BaseModel):
+    """A human's typed answer. Non-empty: an empty string reads to the agent as a
+    real answer meaning nothing, which is worse than declining."""
+
+    answer: str = Field(min_length=1, max_length=20_000)
+
+
+class DeclineRequest(BaseModel):
+    reason: str | None = Field(default=None, max_length=2_000)
+
+
+class AnswerResult(BaseModel):
+    question: QuestionRead
+    # False when the asking run had already ended — the answer is on the record but
+    # no agent is acting on it.
+    resumed: bool

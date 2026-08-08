@@ -54,6 +54,7 @@ _RLS_TABLES = [
     "agent_runs",
     "agent_run_steps",
     "agent_approvals",
+    "agent_questions",
     "agent_notifications",
     "agent_schedules",
     "mcp_server_user_tokens",

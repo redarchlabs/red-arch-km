@@ -85,7 +85,7 @@ async def test_clerk_path_rejects_inactive_user(monkeypatch: pytest.MonkeyPatch)
     async def _fake_verify(token: str, settings: Settings) -> dict[str, Any]:
         return {"sub": "user_clerk_abc", "username": "alice", "email": "alice@example.com"}
 
-    async def _fake_provision(session: Any, *, sub: str, username: str, email: str) -> UserProfile:
+    async def _fake_provision(session: Any, *, sub: str, username: str, email: str, **_kw: Any) -> UserProfile:
         return _profile(is_active=False)
 
     monkeypatch.setattr(dependencies, "_verify_bearer_token", _fake_verify)
@@ -102,7 +102,7 @@ async def test_clerk_path_rejects_inactive_user(monkeypatch: pytest.MonkeyPatch)
 async def test_e2e_path_rejects_inactive_user(monkeypatch: pytest.MonkeyPatch) -> None:
     """The X-Test-User bypass must honor deactivation the same way."""
 
-    async def _fake_provision(session: Any, *, sub: str, username: str, email: str) -> UserProfile:
+    async def _fake_provision(session: Any, *, sub: str, username: str, email: str, **_kw: Any) -> UserProfile:
         return _profile(is_active=False)
 
     monkeypatch.setattr(dependencies, "provision_user_from_claims", _fake_provision)
@@ -126,7 +126,7 @@ async def test_clerk_path_accepts_active_user(monkeypatch: pytest.MonkeyPatch) -
 
     profile = _profile(is_active=True)
 
-    async def _fake_provision(session: Any, *, sub: str, username: str, email: str) -> UserProfile:
+    async def _fake_provision(session: Any, *, sub: str, username: str, email: str, **_kw: Any) -> UserProfile:
         return profile
 
     monkeypatch.setattr(dependencies, "_verify_bearer_token", _fake_verify)

@@ -246,3 +246,178 @@ async def test_ask_strategy_can_park_the_run():
             approval_strategy=park_strategy,
         )
     assert exc.value.wait_kind == "approval"
+
+
+def _blocking_spec(name: str, ran: list, wait_kind: str = "question") -> ToolSpec:
+    """A tool that suspends the run from inside its handler, the way ask_human and
+    consult_peer do — the block is the tool's purpose, not a verdict on it."""
+
+    async def handler(ctx, args):
+        ran.append(name)
+        raise RunParked(wait_kind, {"question": args.get("question")})
+
+    return ToolSpec(
+        name=name,
+        description=name,
+        parameters={"type": "object", "properties": {"question": {"type": "string"}}},
+        category=Category.ESCALATE,
+        handler=handler,
+        always_allowed=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_handler_that_parks_keeps_the_calls_that_have_not_run():
+    """A mid-batch park must hand back exactly the unfinished work. Anything the
+    turn already executed is recorded in ``messages``; listing it as pending too
+    would run those side effects a second time on resume."""
+    agent = _agent()
+    ran: list = []
+    provider = _FakeProvider(
+        [
+            (
+                [],
+                Completion(
+                    content="",
+                    tool_calls=(
+                        ToolCallRequest(id="c1", name="echo", arguments={"x": 1}),
+                        ToolCallRequest(id="c2", name="ask", arguments={"question": "Which region?"}),
+                        ToolCallRequest(id="c3", name="echo", arguments={"x": 2}),
+                    ),
+                    finish_reason="tool_calls",
+                ),
+            )
+        ]
+    )
+    _events, emit = await _collect_emit()
+    echoed: list = []
+
+    with pytest.raises(RunParked) as exc:
+        await run_agent_loop(
+            provider=provider,
+            agent=agent,
+            model="m",
+            messages=[{"role": "user", "content": "go"}],
+            specs=[_echo_spec(echoed), _blocking_spec("ask", ran)],
+            ctx=_ctx(agent),
+            emit=emit,
+            max_iterations=4,
+        )
+
+    assert exc.value.wait_kind == "question"
+    # The first echo ran and must NOT be replayed; the blocked call and the one
+    # after it must be.
+    assert [p["id"] for p in exc.value.pending] == ["c2", "c3"]
+    assert echoed == [{"x": 1}]
+    # The executed call's result is already in the transcript being resumed.
+    assert any(m.get("tool_call_id") == "c1" for m in exc.value.messages)
+
+
+@pytest.mark.asyncio
+async def test_an_answered_call_is_never_re_executed():
+    """The whole point of resume_answers: the stored answer becomes the call's
+    result. Re-running the handler would just ask the same question again."""
+    agent = _agent()
+    ran: list = []
+    provider = _FakeProvider([([], Completion(content="Thanks.", finish_reason="stop"))])
+    _events, emit = await _collect_emit()
+
+    result = await run_agent_loop(
+        provider=provider,
+        agent=agent,
+        model="m",
+        messages=[{"role": "assistant", "content": ""}],
+        specs=[_blocking_spec("ask", ran)],
+        ctx=_ctx(agent),
+        emit=emit,
+        max_iterations=4,
+        resume_tool_calls=[ToolCallRequest(id="c2", name="ask", arguments={"question": "Which region?"})],
+        resume_answers={"c2": {"answer": "us-east-1"}},
+    )
+
+    assert ran == []  # the handler never fired
+    assert result.final_content == "Thanks."
+    # The answer reached the model as that call's tool result.
+    tool_msg = next(m for m in result.messages if m.get("tool_call_id") == "c2")
+    assert "us-east-1" in tool_msg["content"]
+
+
+@pytest.mark.asyncio
+async def test_an_answered_call_skips_the_authority_gate_too():
+    """The tool already ran to the point of blocking; there is nothing left to
+    permit. Re-gating an answered call would park it again for approval and strand
+    the answer a human already gave."""
+    agent = _agent(tools=["ask"], approval_required=["ask"])
+    ran: list = []
+    provider = _FakeProvider([([], Completion(content="ok", finish_reason="stop"))])
+    _events, emit = await _collect_emit()
+    asked: list = []
+
+    async def park_strategy(_spec, _args):
+        asked.append(_spec.name)
+        raise RunParked("approval")
+
+    result = await run_agent_loop(
+        provider=provider,
+        agent=agent,
+        model="m",
+        messages=[{"role": "assistant", "content": ""}],
+        specs=[_blocking_spec("ask", ran)],
+        ctx=_ctx(agent),
+        emit=emit,
+        max_iterations=4,
+        approval_strategy=park_strategy,
+        resume_tool_calls=[ToolCallRequest(id="c2", name="ask", arguments={})],
+        resume_answers={"c2": {"answer": "yes"}},
+    )
+
+    assert asked == [] and ran == []
+    assert result.final_content == "ok"
+
+
+@pytest.mark.asyncio
+async def test_the_executing_call_id_is_visible_to_the_handler():
+    """A parking handler addresses its answer back to the exact call that blocked,
+    so it has to be able to see which call it is."""
+    agent = _agent()
+    seen: list = []
+
+    async def handler(ctx, args):
+        seen.append(ctx.tool_call_id)
+        return {"ok": True}
+
+    spec = ToolSpec(
+        name="peek",
+        description="peek",
+        parameters={"type": "object", "properties": {}},
+        category=Category.READ,
+        handler=handler,
+        always_allowed=True,
+    )
+    provider = _FakeProvider(
+        [
+            (
+                [],
+                Completion(
+                    content="",
+                    tool_calls=(ToolCallRequest(id="call_abc", name="peek", arguments={}),),
+                    finish_reason="tool_calls",
+                ),
+            ),
+            ([], Completion(content="done", finish_reason="stop")),
+        ]
+    )
+    _events, emit = await _collect_emit()
+
+    await run_agent_loop(
+        provider=provider,
+        agent=agent,
+        model="m",
+        messages=[{"role": "user", "content": "go"}],
+        specs=[spec],
+        ctx=_ctx(agent),
+        emit=emit,
+        max_iterations=4,
+    )
+
+    assert seen == ["call_abc"]

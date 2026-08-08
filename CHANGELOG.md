@@ -8,6 +8,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Agents can ask a question and actually get an answer
+
+- **`ask_human` — an agent blocks for a person's typed answer.** Distinct from an approval,
+  which is a yes/no on an action the agent already chose: this is the agent saying it is
+  missing a fact, a preference, or a judgement only a person can supply. The run parks, the
+  question lands in the agents inbox, and the answer comes back **as the result of the tool
+  call that blocked**, so the same turn continues rather than restarting.
+- **`consult_peer` now blocks for the peer's answer, and `reply_to_peer` delivers it.**
+  Previously a consult filed a notification and returned `{"status": "sent"}` — which read as
+  success while the answer went nowhere. A consult now queues a real run for the advisory
+  agent (`trigger: "consult"`), and its `reply_to_peer` call resumes the agent that asked.
+  Routing is unchanged (advisory targets only), plus a depth cap: a consult may not itself
+  consult, so two advisors cannot ping-pong runs forever.
+- **New `agent_questions` table (migration 047)** with the same hardened RLS + admin-bypass
+  policy template as its siblings. `tool_call_id` is the load-bearing column — it names the
+  parked call so the answer is injected into the right place in the run's resume state.
+- **A question can no longer hang a run.** Every terminal transition settles both sides: a
+  consult run that finishes *without* replying resumes its asker with an explicit "no answer",
+  an asking run that ends voids its open questions (so a late answer cannot re-queue a dead
+  run) and cancels the consult runs nobody is waiting on. Answering a run that already
+  stopped records the answer and reports `resumed: false` rather than implying an agent acted
+  on it.
+- **Inbox UI**: `/agents/approvals` gains a "Questions for you" section with an answer box and
+  a "Can't answer" action that unblocks the agent without answering. Peer consults are
+  deliberately excluded — another agent owes that answer.
+
+### Added — `SITE_ADMIN_EMAILS` pre-authorizes an admin who has never signed in
+
+- **Listed addresses become site admins on their first sign-in.** A `user_profiles` row only
+  exists after a successful login, so before this the only ways in were the one-shot first-run
+  setup token or promotion by an existing admin. Inserting a placeholder row is not a
+  workaround: provisioning matches on `auth_subject` alone, so the real login would insert a
+  second row and collide on the UNIQUE email — turning that person's first sign-in into a 500.
+- **Fails closed and never revokes.** Only an email the IdP actually asserted counts (the
+  sub-derived `…@placeholder.invalid` fallback can never satisfy the list), and removing an
+  address does not demote anyone — an env change is not an audited action. Demotion stays in
+  the site-admin console, which records who did it.
+
 ### Fixed — View render links can use the view's slug
 
 - **`GET /views/{ref}/render` now accepts the view's org-unique slug as well as its UUID**

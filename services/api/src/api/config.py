@@ -227,6 +227,14 @@ class Settings(BaseSettings):
     # Observability (shared)
     log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
 
+    # Emails that are site admins the moment they first sign in. A profile row only
+    # exists after a successful login, so without this there is no way to authorize
+    # an administrator ahead of time — the first-run setup token covers exactly one
+    # person, once, and every later admin has to be promoted by an existing one.
+    # Additive only: listing an address never demotes anyone, and removing one does
+    # not revoke access (use the site-admin console for that).
+    site_admin_emails_raw: str = Field(default="", validation_alias="SITE_ADMIN_EMAILS")
+
     # E2E test mode (dev-only)
     e2e_test_mode: bool = Field(
         default=False,
@@ -238,6 +246,12 @@ class Settings(BaseSettings):
         default=SecretStr(""),
         description="Shared secret required alongside X-Test-User; prevents abuse.",
     )
+
+    @property
+    def site_admin_emails(self) -> frozenset[str]:
+        """Parsed SITE_ADMIN_EMAILS, lower-cased for case-insensitive comparison
+        (IdPs vary on the case they assert for the same mailbox)."""
+        return frozenset(p.strip().lower() for p in self.site_admin_emails_raw.split(",") if p.strip())
 
     @property
     def clerk_allowed_azp_list(self) -> list[str]:

@@ -234,6 +234,7 @@ class AgentRunExecutor:
             messages = list(resume.get("messages") or [])
             resume_tool_calls = [ToolCallRequest(**tc) for tc in resume.get("pending") or []]
             approved_names = set(resume.get("approved") or [])
+            resume_answers = dict(resume.get("answers") or {})
         else:
             task = str(run.input.get("task") or run.input.get("message") or "").strip() or "Proceed."
             system = build_system_prompt(agent)
@@ -248,6 +249,7 @@ class AgentRunExecutor:
             ]
             resume_tool_calls = None
             approved_names = set()
+            resume_answers = {}
 
         async def emit(event: dict[str, Any]) -> None:
             await self._persist_event(run_repo, run.id, event)
@@ -257,7 +259,11 @@ class AgentRunExecutor:
             # external cancel as soon as it commits.
             return await run_repo.current_status(run.id) == "running"
 
-        async def drive(msgs: list[dict[str, Any]], resume_calls: list[ToolCallRequest] | None):
+        async def drive(
+            msgs: list[dict[str, Any]],
+            resume_calls: list[ToolCallRequest] | None,
+            answers: dict[str, Any] | None = None,
+        ):
             return await run_agent_loop(
                 provider=LLMProvider(api_key=key),
                 agent=agent,
@@ -271,12 +277,15 @@ class AgentRunExecutor:
                 max_tokens=(agent.params or {}).get("max_tokens"),
                 approval_strategy=self._make_strategy(session, org_id, run, approved_names),
                 resume_tool_calls=resume_calls,
+                resume_answers=answers,
                 autonomy=autonomy,
                 continue_check=continue_check,
             )
 
         try:
-            result = await drive(messages, resume_tool_calls)
+            # Answers apply only to the turn that was parked; the corrective nudge
+            # below is a fresh turn and must not inherit them.
+            result = await drive(messages, resume_tool_calls, resume_answers)
             if linkage is not None and not result.truncated:
                 # Prose is not a completion for a workflow step: one corrective
                 # nudge, then (below) escalate rather than pretend success.
@@ -329,26 +338,36 @@ class AgentRunExecutor:
                 )
             return
         except RunParked as parked:
+            pending = parked.pending or []
+            # Carry forward only answers whose call has still not executed. A call
+            # that already consumed its answer is recorded in ``messages``; keeping
+            # its entry would re-inject the same answer if the provider ever reuses
+            # the id, while dropping a still-pending one would re-ask the human.
+            still_pending = {str(p.get("id")) for p in pending}
             run.input = {
                 **(run.input or {}),
                 "resume": {
                     "messages": parked.messages or messages,
-                    "pending": parked.pending or [],
+                    "pending": pending,
                     "approved": sorted(approved_names),
+                    "answers": {k: v for k, v in resume_answers.items() if k in still_pending},
                 },
             }
             await run_repo.mark_waiting(run, parked.wait_kind)
-            await create_notification(
-                session,
-                org_id,
-                kind="approval",
-                title=f"{agent.name} needs approval",
-                body=str(parked.payload.get("tool")),
-                run_id=run.id,
-                work_order_id=run.work_order_id,
-                recipient_role="org_admin",
-                settings=self._settings,
-            )
+            if parked.wait_kind == "approval":
+                # ask_human and consult_peer notify from their own handlers, where
+                # the question text lives; only the authority gate lands here.
+                await create_notification(
+                    session,
+                    org_id,
+                    kind="approval",
+                    title=f"{agent.name} needs approval",
+                    body=str(parked.payload.get("tool")),
+                    run_id=run.id,
+                    work_order_id=run.work_order_id,
+                    recipient_role="org_admin",
+                    settings=self._settings,
+                )
             return
 
         # Clear resume state once the run completes.
