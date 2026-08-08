@@ -11,6 +11,7 @@ import { registerViewTools } from "./views.js";
 import { registerReportTools } from "./reports.js";
 import { registerEntityTools } from "./entities.js";
 import { registerSearchTools } from "./search.js";
+import { registerAgentTools } from "./agents.js";
 
 export function registerAllTools(server: McpServer, ctx: AppContext): void {
   registerSessionTools(server, ctx);
@@ -23,4 +24,5 @@ export function registerAllTools(server: McpServer, ctx: AppContext): void {
   registerReportTools(server, ctx);
   registerEntityTools(server, ctx);
   registerSearchTools(server, ctx);
+  registerAgentTools(server, ctx);
 }
