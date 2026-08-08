@@ -80,7 +80,9 @@ class MigrationImporter:
         self._ids = IdMap()
         # Documents whose ingest must be enqueued AFTER the import transaction
         # commits (so the worker can read the row), mirroring the create route.
-        self._pending_ingests: list[Any] = []
+        # (document, tag names) — the names travel with the row so the dispatch
+        # loop never has to lazy-load a relationship after the commit.
+        self._pending_ingests: list[tuple[Any, list[str]]] = []
 
     async def import_bundle(
         self,
@@ -1062,7 +1064,12 @@ class MigrationImporter:
             existing_keys.add((folder_new, new_title))
             out.record(action)
             if not dry_run and created.text:
-                self._pending_ingests.append(created)
+                # Carry the tag names with the row. Reading `created.tags` after the
+                # commit would lazy-load the relationship, and a lazy load in this
+                # async path raises MissingGreenlet — which the dispatch loop then
+                # reported as "ingestion could not be queued", so every document in
+                # every imported bundle silently ended up unsearchable.
+                self._pending_ingests.append((created, [str(t) for t in (doc.get("tag_names") or [])]))
 
     async def _resolve_tag_ids(self, names: list[str], existing: dict, tag_repo: TagRepository) -> list[uuid.UUID]:
         ids: list[uuid.UUID] = []
@@ -1084,11 +1091,11 @@ class MigrationImporter:
         from api.tasks.ingest import dispatch_ingest
 
         folder_repo = FolderRepository(self._session, self._org_id)
-        for doc in self._pending_ingests:
+        for doc, tag_names in self._pending_ingests:
             try:
                 folder = await folder_repo.get(doc.folder_id) if doc.folder_id else None
                 access_keys = await folder_repo.effective_view_masks(folder) if folder else []
-                tags = [t.name for t in doc.tags]
+                tags = list(tag_names)
                 if doc.folder_id:
                     tags.append(f"folder:{doc.folder_id}")
                 doc.celery_task_id = dispatch_ingest(
