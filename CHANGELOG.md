@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — View render links can use the view's slug
+
+- **`GET /views/{ref}/render` now accepts the view's org-unique slug as well as its UUID**
+  (`ViewService.get_view_by_ref`). A `row_link_template` authored as
+  `/views/course_play/view?record_id={id}` — the form the LMS docs showed — previously died
+  with a 422 because the path param was typed strictly as a UUID. An unknown slug is a 404;
+  a malformed `record_id` still fails with 422, and the `me`/`latest` sentinels are
+  unchanged. Admin CRUD endpoints remain UUID-only.
+
 ### Added — Live answer streaming for workflow-driven chat
 
 - **An LLM step's tokens now reach the browser while the run is still executing.** A chat

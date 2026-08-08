@@ -60,6 +60,22 @@ class ViewService:
             raise FormNotFoundError("view not found")
         return view
 
+    async def get_view_by_ref(self, ref: str) -> View:
+        """Resolve ``ref`` as a view id, falling back to the org-unique slug.
+
+        The slug fallback exists for authorable links: a ``row_link_template`` like
+        ``/views/course_play/view?record_id={id}`` names the view the way an admin
+        thinks of it, without pasting an internal id into config.
+        """
+        try:
+            view_id = uuid.UUID(ref)
+        except ValueError:
+            view = await self._views.get_by_slug(ref)
+            if view is None:
+                raise FormNotFoundError("view not found") from None
+            return view
+        return await self.get_view(view_id)
+
     async def _validate_config(self, entity_definition_id: uuid.UUID | None, config: FormConfig) -> None:
         if entity_definition_id is None:
             # Standalone view: only presentational/action/layout elements allowed.
@@ -142,7 +158,37 @@ class ViewService:
         current_user_email: str | None = None,
         resolve_latest: bool = False,
     ) -> FormRenderRead:
-        view = await self.get_view(view_id)
+        return await self._render(
+            await self.get_view(view_id),
+            record_id,
+            current_user_email=current_user_email,
+            resolve_latest=resolve_latest,
+        )
+
+    async def render_by_ref(
+        self,
+        ref: str,
+        record_id: uuid.UUID | None,
+        *,
+        current_user_email: str | None = None,
+        resolve_latest: bool = False,
+    ) -> FormRenderRead:
+        """Render addressed by id-or-slug — a single fetch, for the runtime endpoint."""
+        return await self._render(
+            await self.get_view_by_ref(ref),
+            record_id,
+            current_user_email=current_user_email,
+            resolve_latest=resolve_latest,
+        )
+
+    async def _render(
+        self,
+        view: View,
+        record_id: uuid.UUID | None,
+        *,
+        current_user_email: str | None = None,
+        resolve_latest: bool = False,
+    ) -> FormRenderRead:
         config = FormConfig.model_validate(view.config or {})
         if view.entity_definition_id is not None:
             # ``record_id=me`` (signalled by ``current_user_email``) auto-binds the
