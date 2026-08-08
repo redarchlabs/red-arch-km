@@ -36,13 +36,20 @@ jobs:
         # Steps below use bash-only features (`${!v}` indirect expansion,
         # intended word-splitting of $SPECS). Pin the shell so it stays bash.
         shell: bash
-    # Scoped to the in-scope specs verified green at T3 (tip 99b1d27):
-    #   auth 8/8, rbac 10/10, smoke 2/2. The other 6 specs (brain-api, chat-rag,
-    #   documents, documents-full, folders-full, journey) are NOT CI-ready —
-    #   they need the brain service (:8020) + browser-level Clerk auth. Follow-up
-    #   T6/infra. Do NOT widen SPECS below until that lands. See the strategy doc.
+    # The API-level specs. documents-full, folders-full and journey were long
+    # assumed to need brain-api + browser Clerk auth; they do not — they are
+    # almost entirely apiContext, and what actually blocked them was assertions
+    # that had drifted from the API (404 expected where a `uuid.UUID` path param
+    # gives 422, and a required `text` field that is in fact optional). Their few
+    # genuinely browser-driven tests are skipped in place.
+    #
+    # Still excluded: documents.spec.ts (100% browser, needs a real Clerk
+    # session), brain-api.spec.ts and chat-rag.spec.ts (both POST to
+    # /api/brain/*, which does not exist — they need rewriting against
+    # /api/search/ and /api/documents/{id}/reprocess, and chat-rag additionally
+    # needs brain-api + qdrant + neo4j + a paid OpenAI key). See the strategy doc.
     env:
-      SPECS: "smoke.spec.ts auth.spec.ts rbac.spec.ts"
+      SPECS: "smoke.spec.ts auth.spec.ts rbac.spec.ts documents-full.spec.ts folders-full.spec.ts journey.spec.ts"
     steps:
       - uses: actions/checkout@v4
 
