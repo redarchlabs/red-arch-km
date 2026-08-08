@@ -66,16 +66,22 @@ test.describe.serial("Document Management Flow", () => {
     const newTitle = `${documentTitle}-updated`;
     const newText = "Updated content for E2E testing.";
 
+    // PATCH is metadata only (DocumentUpdate has no `text`): replacing a body
+    // re-chunks and re-embeds it, so that lives on its own endpoint. Sending
+    // `text` here is silently ignored — which is what this test used to assert
+    // against.
     const res = await apiContext.patch(`/api/documents/${createdDocId}`, {
-      data: {
-        title: newTitle,
-        text: newText,
-      },
+      data: { title: newTitle },
     });
 
     expect(res.ok()).toBe(true);
     const doc = (await res.json()) as { title: string };
     expect(doc.title).toBe(newTitle);
+
+    const putRes = await apiContext.put(`/api/documents/${createdDocId}/content`, {
+      data: { text: newText },
+    });
+    expect(putRes.ok()).toBe(true);
 
     // Same as above: confirm the new body through the content endpoint rather
     // than expecting `text` back on the metadata schema.
