@@ -110,13 +110,17 @@ async def delete_view(
         _raise_http(exc)
 
 
-@router.get("/{view_id}/render", response_model=FormRenderRead)
+@router.get("/{view_ref}/render", response_model=FormRenderRead)
 async def render_view(
-    view_id: uuid.UUID,
+    view_ref: str,
     ctx: Annotated[OrgContext, Depends(require_org_access)],
     session: Annotated[AsyncSession, Depends(get_tenant_db)],
     record_id: str | None = None,
 ) -> FormRenderRead:
+    # ``view_ref`` is a UUID or the view's org-unique slug. Slugs make links
+    # authorable by hand (``/views/course_play/view?record_id={id}`` in a
+    # row_link_template); only this member-facing render surface accepts them —
+    # admin CRUD stays UUID-only.
     # The sentinel ``record_id=me`` auto-binds the view to the current user's own
     # record in its root entity (matched by the entity's ``email`` field). Any
     # other value must parse as a UUID, so a malformed id still fails validation
@@ -137,8 +141,8 @@ async def render_view(
                 detail="record_id must be a UUID, 'me', or 'latest'",
             ) from exc
     try:
-        return await ViewService(session, ctx.org_id).render(
-            view_id,
+        return await ViewService(session, ctx.org_id).render_by_ref(
+            view_ref,
             parsed_id,
             current_user_email=ctx.user.email if resolve_me else None,
             resolve_latest=resolve_latest,

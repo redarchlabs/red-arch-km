@@ -1485,6 +1485,7 @@ def _incoming_edges(model: WorkflowDefinitionModel, node_id: str) -> list[tuple[
 
 def _expr_context(run: WorkflowRun) -> dict[str, Any]:
     snapshot = run.input_snapshot or {}
+    stamp = datetime.now(UTC)
     return {
         "before": snapshot.get("before"),
         "after": snapshot.get("after"),
@@ -1492,6 +1493,11 @@ def _expr_context(run: WorkflowRun) -> dict[str, Any]:
         # gateways/scripts can route on ``inputs.<key>``.
         "inputs": snapshot.get("inputs") or {},
         "vars": run.variables or {},
+        # Clock tokens, mirroring the action template context (``_trigger_context``):
+        # read at evaluation time, so a gateway resumed by a timer judges dates
+        # against the clock NOW — the whole point of an overdue check.
+        "now": stamp.isoformat(),
+        "today": stamp.date().isoformat(),
     }
 
 
