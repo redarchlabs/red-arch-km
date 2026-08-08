@@ -90,7 +90,12 @@ class TestCreate:
             )
 
         assert exc.value.status_code == 422
-        assert (await admin_session.execute(select(AgentSchedule))).scalars().all() == []
+        # Scoped to this org: the suite shares a database, so a bare select would
+        # also see schedules other tests left behind.
+        rows = (
+            (await admin_session.execute(select(AgentSchedule).where(AgentSchedule.org_id == org_id))).scalars().all()
+        )
+        assert rows == []
 
     async def test_rejects_an_agent_from_another_org(self, admin_session: AsyncSession) -> None:
         org_id, _ = await _seed(admin_session)
