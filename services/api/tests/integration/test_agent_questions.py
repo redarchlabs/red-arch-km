@@ -321,6 +321,34 @@ class TestUnansweredQuestionsCannotHangARun:
         await admin_session.refresh(peer_run)
         assert peer_run.status == "cancelled"
 
+    async def test_a_cancelled_consult_does_not_strand_its_own_question(self, admin_session: AsyncSession) -> None:
+        """A consult run can be `waiting` because it asked a *human* something.
+        Cancelling it as orphaned work bypasses lifecycle.cancel_run, so its
+        question has to be retired here or it sits in the inbox forever and
+        answering it silently does nothing."""
+        org_id = await _org(admin_session)
+        asker = await _agent(admin_session, org_id, "engineer")
+        advisor = await _agent(admin_session, org_id, "security-analyst", kind="advisory")
+        run = await _run(admin_session, org_id, asker)
+        with pytest.raises(RunParked):
+            await CONSULT_PEER.handler(
+                _ctx(admin_session, org_id, asker, run, "call_3"),
+                {"agent": "security-analyst", "question": "Is this safe?"},
+            )
+        peer_run = (await admin_session.execute(select(AgentRun).where(AgentRun.agent_id == advisor.id))).scalar_one()
+        # The advisor turned around and asked a person before answering.
+        peer_run.status = "waiting"
+        await admin_session.flush()
+        with pytest.raises(RunParked):
+            await ASK_HUMAN.handler(
+                _ctx(admin_session, org_id, advisor, peer_run, "call_9"), {"question": "What is the policy?"}
+            )
+
+        await lifecycle.cancel_run(admin_session, org_id, run.id, reason="operator stopped it")
+
+        stranded = await AgentQuestionRepository(admin_session, org_id).list_pending(audience="human")
+        assert stranded == []
+
 
 class _Ctx:
     """Stands in for the OrgContext the route dependency injects."""

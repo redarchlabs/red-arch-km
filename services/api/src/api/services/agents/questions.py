@@ -274,12 +274,26 @@ async def _cancel_orphaned_consults(session: AsyncSession, org_id: uuid.UUID, ru
     )
     if not peer_run_ids:
         return
+    ids = list(peer_run_ids)
     await session.execute(
         update(AgentRun)
         .where(
-            AgentRun.id.in_(list(peer_run_ids)),
+            AgentRun.id.in_(ids),
             AgentRun.org_id == org_id,
             AgentRun.status.in_(("queued", "waiting")),
         )
         .values(status="cancelled", error="the agent that asked is no longer waiting", wait_kind=None)
+    )
+    # A consult run can be `waiting` because it asked a *human* something. Cancelling
+    # it here bypasses lifecycle.cancel_run, so retire that question too — otherwise
+    # it sits in the inbox forever, and answering it silently does nothing. One level
+    # is enough: the depth cap means a consult run never has consults of its own.
+    await session.execute(
+        update(AgentQuestion)
+        .where(
+            AgentQuestion.run_id.in_(ids),
+            AgentQuestion.org_id == org_id,
+            AgentQuestion.status == "pending",
+        )
+        .values(status="voided", answered_at=_now())
     )
