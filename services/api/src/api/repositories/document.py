@@ -123,13 +123,17 @@ class DocumentRepository:
             metadata_=metadata or {},
             document_key=document_key or str(uuid.uuid4()),
         )
-        self._session.add(doc)
-        await self._session.flush()
-
+        # Attach tags BEFORE the first flush. Assigning a collection on a row that
+        # is already persistent makes SQLAlchemy load the existing collection to
+        # diff against, and that lazy load raises MissingGreenlet on the async
+        # session. While the row is still pending its collection is known-empty,
+        # so the assignment is a pure in-memory write.
         if tag_ids:
             tag_result = await self._session.execute(select(Tag).where(Tag.id.in_(tag_ids), Tag.org_id == self._org_id))
             doc.tags = list(tag_result.scalars().all())
-            await self._session.flush()
+
+        self._session.add(doc)
+        await self._session.flush()
 
         return doc
 
