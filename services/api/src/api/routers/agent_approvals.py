@@ -17,7 +17,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth.dependencies import OrgContext, require_org_admin
-from api.dependencies import get_tenant_db
+from api.config import Settings, get_settings
+from api.dependencies import get_redis_client, get_tenant_db
 from api.models.agent import Agent
 from api.models.agent_run import AgentQuestion
 from api.repositories.agent_questions import AgentQuestionRepository
@@ -37,6 +38,7 @@ from api.services.agents.approvals import (
     ApprovalService,
     NotificationService,
 )
+from api.services.agents.live import bus
 
 router = APIRouter()
 
@@ -151,6 +153,7 @@ async def answer_question(
     body: AnswerRequest,
     ctx: Annotated[OrgContext, Depends(require_org_admin)],
     session: Annotated[AsyncSession, Depends(get_tenant_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
 ) -> AnswerResult:
     try:
         outcome = await question_service.answer_question(
@@ -161,6 +164,7 @@ async def answer_question(
     except question_service.QuestionError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     read = (await _to_question_read(session, [outcome.question]))[0]
+    await _wake(session, settings, ctx.org_id, outcome)
     return AnswerResult(question=read, resumed=outcome.resumed)
 
 
@@ -170,6 +174,7 @@ async def decline_question(
     body: DeclineRequest,
     ctx: Annotated[OrgContext, Depends(require_org_admin)],
     session: Annotated[AsyncSession, Depends(get_tenant_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
 ) -> AnswerResult:
     """Unblock the agent without answering — it is told to use its own judgement."""
     try:
@@ -181,7 +186,34 @@ async def decline_question(
     except question_service.QuestionError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     read = (await _to_question_read(session, [outcome.question]))[0]
+    await _wake(session, settings, ctx.org_id, outcome)
     return AnswerResult(question=read, resumed=outcome.resumed)
+
+
+async def _wake(
+    session: AsyncSession,
+    settings: Settings,
+    org_id: uuid.UUID,
+    outcome: question_service.AnswerOutcome,
+) -> None:
+    """Commit, then nudge a console that may be waiting on this run.
+
+    The commit is explicit and comes first. ``get_tenant_db`` commits in teardown,
+    *after* the response is sent, so a wake published before that would tell a
+    waiting console to look for an answer that is not visible to it yet — and it
+    would resume the turn having found nothing.
+
+    The nudge itself is best-effort. A console that misses it notices on its next
+    status poll; the run is already ``queued`` either way, so the background sweep
+    remains the backstop.
+    """
+    await session.commit()
+    await bus.publish_run_event(
+        get_redis_client(settings),
+        org_id,
+        outcome.question.run_id,
+        {"type": bus.EVENT_ANSWER, "question_id": str(outcome.question.id)},
+    )
 
 
 @router.get("/notifications", response_model=list[NotificationRead])

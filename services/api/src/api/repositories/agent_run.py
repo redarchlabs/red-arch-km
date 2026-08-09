@@ -189,6 +189,38 @@ class AgentRunRepository:
             )
         return won
 
+    async def claim_run(self, run_id: uuid.UUID) -> AgentRun | None:
+        """Compare-and-set ``queued`` → ``running``. Returns the run iff THIS caller won.
+
+        The one rule for starting execution: whoever drives a run must first win
+        this transition. Two parties can want the same queued run — the sweep in
+        ``AgentRunExecutor._claim`` and a console waiting to resume inline — and if
+        both proceed they replay the same pending tool batch. That failure is
+        silent rather than loud: ``agent_run_steps.seq`` is ``max+1`` with no unique
+        constraint, and there is no ``version_id_col``, so the transcripts
+        interleave and the last write wins instead of raising. The visible damage
+        is duplicated side effects and two billed LLM turns.
+
+        Correct against the sweep by construction. The sweep selects
+        ``FOR UPDATE SKIP LOCKED`` and updates in the same transaction, so this
+        UPDATE either blocks on its row lock and then matches zero rows (READ
+        COMMITTED re-evaluates the predicate after the lock releases), or gets
+        there first and makes the row invisible to the sweep's ``status='queued'``
+        filter.
+        """
+        result = await self._session.execute(
+            update(AgentRun)
+            .where(
+                AgentRun.id == run_id,
+                AgentRun.org_id == self._org_id,
+                AgentRun.status == "queued",
+            )
+            .values(status="running", last_activity_at=_now())
+        )
+        if int(getattr(result, "rowcount", 0) or 0) < 1:
+            return None
+        return await self.get_run(run_id)
+
     async def current_status(self, run_id: uuid.UUID) -> str | None:
         """The run's committed status, bypassing the ORM identity map — the
         cooperative-cancellation read (READ COMMITTED sees external commits)."""

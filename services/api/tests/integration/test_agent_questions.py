@@ -406,7 +406,9 @@ class TestInboxRoutes:
         )
         await _park(admin_session, run, "question", "c")
 
-        result = await answer_route(row.id, AnswerRequest(answer="us-east-1"), _Ctx(org_id), admin_session)
+        result = await answer_route(
+            row.id, AnswerRequest(answer="us-east-1"), _Ctx(org_id), admin_session, get_settings()
+        )
 
         assert result.resumed is True
         assert result.question.status == "answered"
@@ -423,10 +425,10 @@ class TestInboxRoutes:
             admin_session, org_id, run_id=run.id, tool_call_id="c", asked_by_agent_id=agent.id, question="?"
         )
         await _park(admin_session, run, "question", "c")
-        await answer_route(row.id, AnswerRequest(answer="first"), _Ctx(org_id), admin_session)
+        await answer_route(row.id, AnswerRequest(answer="first"), _Ctx(org_id), admin_session, get_settings())
 
         with pytest.raises(HTTPException) as exc:
-            await answer_route(row.id, AnswerRequest(answer="second"), _Ctx(org_id), admin_session)
+            await answer_route(row.id, AnswerRequest(answer="second"), _Ctx(org_id), admin_session, get_settings())
 
         assert exc.value.status_code == 409
 
@@ -444,6 +446,6 @@ class TestInboxRoutes:
         other_org_id = await _org(admin_session)
 
         with pytest.raises(HTTPException) as exc:
-            await answer_route(row.id, AnswerRequest(answer="x"), _Ctx(other_org_id), admin_session)
+            await answer_route(row.id, AnswerRequest(answer="x"), _Ctx(other_org_id), admin_session, get_settings())
 
         assert exc.value.status_code == 404
