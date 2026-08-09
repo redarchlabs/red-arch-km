@@ -21,6 +21,7 @@ ride in the message list — is what fills a JSONB column with a screenshot.
 from __future__ import annotations
 
 import base64
+import logging
 from dataclasses import dataclass
 from typing import Any
 
@@ -36,6 +37,8 @@ MAX_IMAGES_PER_TURN = 4
 # What the vision path accepts. A PDF is a document, not an `image_url` part —
 # the pipeline already extracts its text, which is the better representation.
 VISION_MIME_TYPES = frozenset({"image/png", "image/jpeg", "image/gif", "image/webp"})
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,3 +152,66 @@ def _showable(attachments: list[Attachment]) -> list[Attachment]:
 def _data_uri(attachment: Attachment) -> str:
     encoded = base64.b64encode(attachment.data or b"").decode("ascii")
     return f"data:{attachment.mime};base64,{encoded}"
+
+
+# Extension -> mime, for the subset that can be shown. Derived from the filename
+# because that is what the upload route treats as authoritative: a mislabelled
+# Content-Type must not decide whether something is sent to a model as an image.
+_IMAGE_EXTENSIONS = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+}
+
+
+def mime_for(filename: str) -> str | None:
+    """The mime type of ``filename``, if it is one we can show a model."""
+    lowered = (filename or "").lower()
+    for extension, mime in _IMAGE_EXTENSIONS.items():
+        if lowered.endswith(extension):
+            return mime
+    return None
+
+
+async def load(session: Any, org_id: Any, document_ids: list[Any], settings: Any) -> list[Attachment]:
+    """Fetch attachment metadata, and the bytes of anything showable.
+
+    One loader for both runtimes: the worker builds a turn from ids on the run's
+    input, the console from ids on the request, and neither should have its own
+    idea of what a showable image is.
+    """
+    if not document_ids:
+        return []
+    import asyncio
+    import uuid as _uuid
+
+    from api.repositories.document import DocumentRepository
+    from api.services.storage import StorageClient
+
+    repo = DocumentRepository(session, org_id)
+    storage = StorageClient(settings)
+    out: list[Attachment] = []
+    for value in list(document_ids)[:MAX_IMAGES_PER_TURN]:
+        try:
+            document = await repo.get(_uuid.UUID(str(value)))
+        except (ValueError, TypeError):
+            continue
+        if document is None:
+            continue
+        # `document_url` is the object key for an uploaded file; a document made
+        # from text has none and there is nothing to show for it.
+        key = document.document_url or ""
+        name = key.rsplit("/", 1)[-1] if key else document.title
+        mime = mime_for(name)
+        data: bytes | None = None
+        if key and mime in VISION_MIME_TYPES:
+            try:
+                # Blocking MinIO client: off the event loop, so one slow read
+                # cannot stall everything else the caller is driving.
+                data = await asyncio.to_thread(storage.get_object, key)
+            except Exception:  # noqa: BLE001 - a missing object costs the picture, not the run
+                logger.warning("attachment %s could not be read from storage", document.id)
+        out.append(Attachment(document_id=str(document.id), filename=name, mime=mime, data=data))
+    return out
