@@ -47,6 +47,43 @@ export interface WorkOrderDetail extends WorkOrder {
   progress: number;
 }
 
+/** One participant's horizontal track. `key` is the agent id, or "human" for the
+ *  lane that questions and approvals land in. */
+export interface WorkOrderMapLane {
+  key: string;
+  label: string;
+  avatar: string | null;
+  agent_kind: string | null;
+  status: string | null;
+}
+
+export type WorkOrderEventKind =
+  | "started"
+  | "delegated"
+  | "consulted"
+  | "answered"
+  | "blocked"
+  | "finished"
+  | "failed"
+  | "note";
+
+export interface WorkOrderMapEvent {
+  id: string;
+  lane: string;
+  kind: WorkOrderEventKind;
+  at: string;
+  title: string;
+  detail: string | null;
+  /** Where a cross-lane arrow lands: the consulted peer, or the human being asked. */
+  target_lane: string | null;
+  run_id: string | null;
+}
+
+export interface WorkOrderMap {
+  lanes: WorkOrderMapLane[];
+  events: WorkOrderMapEvent[];
+}
+
 export interface WorkOrderCreateInput {
   title: string;
   body?: string | null;
@@ -60,6 +97,10 @@ export async function listWorkOrders(): Promise<WorkOrder[]> {
 
 export async function getWorkOrder(id: string): Promise<WorkOrderDetail> {
   return (await apiClient.get<WorkOrderDetail>(`/work-orders/${id}`)).data;
+}
+
+export async function getWorkOrderMap(id: string): Promise<WorkOrderMap> {
+  return (await apiClient.get<WorkOrderMap>(`/work-orders/${id}/map`)).data;
 }
 
 export async function createWorkOrder(input: WorkOrderCreateInput): Promise<WorkOrder> {

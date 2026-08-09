@@ -5,15 +5,19 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 
+import { Markdown } from "@/components/common/Markdown";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { AgentSwimLanes } from "@/components/workOrders/AgentSwimLanes";
 import { getApiErrorMessage } from "@/lib/api/errors";
 import {
   getWorkOrder,
+  getWorkOrderMap,
   setWorkOrderStatus,
   type WorkOrderDetail,
+  type WorkOrderMap,
   type WorkOrderStatus,
 } from "@/lib/api/workOrders";
 
@@ -26,16 +30,30 @@ const NEXT_STATUS: Record<string, WorkOrderStatus[]> = {
   cancelled: [],
 };
 
+/** The agent's emoji, reused from the map so a diary entry and its lane carry the
+ *  same icon. Falls back to a generic bot rather than nothing, so every entry
+ *  still gets an avatar column and the rows stay aligned. */
+function laneAvatar(map: WorkOrderMap | null, agentId: string | null): string {
+  if (!agentId) return "🧑";
+  return map?.lanes.find((lane) => lane.key === agentId)?.avatar ?? "🤖";
+}
+
 export default function WorkOrderDetailPage() {
   const { id } = useParams<{ id: string }>();
   const [wo, setWo] = useState<WorkOrderDetail | null>(null);
+  const [map, setMap] = useState<WorkOrderMap | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setIsLoading(true);
     try {
-      setWo(await getWorkOrder(id));
+      // The map is supplementary: a failure there must not blank the page, so it
+      // settles independently of the detail it decorates.
+      const [detail, graph] = await Promise.allSettled([getWorkOrder(id), getWorkOrderMap(id)]);
+      if (detail.status === "rejected") throw detail.reason;
+      setWo(detail.value);
+      setMap(graph.status === "fulfilled" ? graph.value : null);
     } catch (e: unknown) {
       setError(getApiErrorMessage(e, "Failed to load work order"));
     } finally {
@@ -82,7 +100,16 @@ export default function WorkOrderDetailPage() {
         ))}
       </div>
 
-      {wo.body ? <p className="whitespace-pre-wrap text-sm">{wo.body}</p> : null}
+      {wo.body ? <Markdown content={wo.body} className="text-sm" /> : null}
+
+      {map && map.lanes.length > 0 ? (
+        <Card>
+          <CardContent className="space-y-3 pt-6">
+            <h2 className="text-sm font-medium">Agent interactions</h2>
+            <AgentSwimLanes map={map} />
+          </CardContent>
+        </Card>
+      ) : null}
 
       <Card>
         <CardContent className="space-y-2 pt-6">
@@ -105,17 +132,34 @@ export default function WorkOrderDetailPage() {
       </Card>
 
       <Card>
-        <CardContent className="space-y-2 pt-6">
+        <CardContent className="space-y-3 pt-6">
           <h2 className="text-sm font-medium">Diary</h2>
           {wo.entries.length === 0 ? (
             <p className="text-sm text-muted-foreground">No activity yet.</p>
           ) : (
-            wo.entries.map((e) => (
-              <div key={e.id} className="border-l-2 pl-3 text-sm">
-                <span className="text-xs text-muted-foreground">{e.role ?? "system"}: </span>
-                {e.text}
-              </div>
-            ))
+            <div className="space-y-3">
+              {wo.entries.map((e) => (
+                // Each entry is its own bounded block. Agent answers run to
+                // hundreds of words, so entries separated only by a rule ran
+                // together into one wall of text with no visible boundary
+                // between who said what.
+                <div key={e.id} className="rounded-md border bg-muted/20 p-3">
+                  <div className="mb-1 flex items-center gap-2">
+                    <span className="text-base leading-none">{laneAvatar(map, e.agent_id)}</span>
+                    <span className="text-xs font-medium">{e.role ?? "system"}</span>
+                    <span className="ml-auto text-[10px] text-muted-foreground">
+                      {new Date(e.created_at).toLocaleString()}
+                    </span>
+                  </div>
+                  {/* Diary text is written by agents, so it arrives as Markdown and
+                      has to be rendered as such — a wall of literal ** is unreadable.
+                      Images are stripped: a model talked into emitting one (via a
+                      poisoned document) would make the reader's browser fetch an
+                      attacker URL. */}
+                  <Markdown content={e.text} stripImages className="text-sm" />
+                </div>
+              ))}
+            </div>
           )}
         </CardContent>
       </Card>
