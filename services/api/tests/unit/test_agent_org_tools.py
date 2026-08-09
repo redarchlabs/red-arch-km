@@ -128,6 +128,18 @@ def harness(monkeypatch):
     async def _get(self, agent_id):
         return next((a for a in h.roster if a.id == agent_id), None)
 
+    # Mirrors AgentRepository.list_consultable / list_direct_reports. The real
+    # queries are pinned against PostgreSQL in test_agents_repo.py; here they only
+    # need to feed the error messages under test.
+    async def _list_consultable(self, *, exclude_id=None):
+        return sorted(
+            (a for a in h.roster if a.kind == "advisory" and a.enabled and a.id != exclude_id),
+            key=lambda a: a.name,
+        )
+
+    async def _list_direct_reports(self, supervisor_id):
+        return sorted((a for a in h.roster if a.supervisor_id == supervisor_id), key=lambda a: a.name)
+
     monkeypatch.setattr(delegation, "resolve_agent", _resolve)
     monkeypatch.setattr(delegation, "AgentRunRepository", _Runs)
     monkeypatch.setattr(delegation, "AgentQuestionRepository", _Questions)
@@ -135,6 +147,8 @@ def harness(monkeypatch):
     monkeypatch.setattr(delegation.questions, "record_answer", _record_answer)
     monkeypatch.setattr(delegation, "create_notification", _notify)
     monkeypatch.setattr(delegation.AgentRepository, "get", _get, raising=False)
+    monkeypatch.setattr(delegation.AgentRepository, "list_consultable", _list_consultable, raising=False)
+    monkeypatch.setattr(delegation.AgentRepository, "list_direct_reports", _list_direct_reports, raising=False)
     # The work-order diary is exercised by the integration suite; keep these pure.
     monkeypatch.setattr(delegation, "_diary", lambda ctx, text: _noop())
     return h
@@ -214,6 +228,44 @@ class TestDelegateTask:
         out = await DELEGATE_TASK.handler(FakeCtx(agent=boss), {"agent": "ghost", "task": "x"})
 
         assert "Unknown target agent" in out["error"]
+
+    async def test_unknown_target_names_the_direct_reports(self, harness) -> None:
+        """Same dead end as consult_peer: a coordinator that mis-names a report
+        cannot discover the real name from anywhere, so the delegation is simply
+        lost."""
+        boss = FakeAgent("tpm", kind="coordinator")
+        harness.roster = [
+            boss,
+            FakeAgent("backend-engineer", supervisor_id=boss.id),
+            FakeAgent("frontend-engineer", supervisor_id=boss.id),
+            FakeAgent("someone-elses-report", supervisor_id=uuid.uuid4()),
+        ]
+
+        out = await DELEGATE_TASK.handler(FakeCtx(agent=boss), {"agent": "backend-dev", "task": "x"})
+
+        assert "backend-engineer" in out["error"]
+        assert "frontend-engineer" in out["error"]
+        assert "someone-elses-report" not in out["error"]
+
+    async def test_non_report_target_names_the_direct_reports(self, harness) -> None:
+        boss = FakeAgent("pm", kind="coordinator")
+        middle = FakeAgent("tpm", kind="coordinator", supervisor_id=boss.id)
+        grandchild = FakeAgent("engineer", supervisor_id=middle.id)
+        harness.roster = [boss, middle, grandchild]
+
+        out = await DELEGATE_TASK.handler(FakeCtx(agent=boss), {"agent": "engineer", "task": "x"})
+
+        assert "direct reports" in out["error"]
+        assert "tpm" in out["error"]
+        assert harness.runs == []
+
+    async def test_a_coordinator_with_no_reports_is_told_so(self, harness) -> None:
+        boss = FakeAgent("tpm", kind="coordinator")
+        harness.roster = [boss]
+
+        out = await DELEGATE_TASK.handler(FakeCtx(agent=boss), {"agent": "ghost", "task": "x"})
+
+        assert "no direct reports" in out["error"].lower()
 
     async def test_requires_both_arguments(self, harness) -> None:
         boss = FakeAgent("tpm", kind="coordinator")
@@ -374,6 +426,87 @@ class TestConsultPeer:
         )
 
         assert "Unknown peer" in out["error"]
+
+    async def test_unknown_peer_names_the_agents_that_would_have_worked(self, harness) -> None:
+        """A bare "Unknown peer" is a dead end.
+
+        Nothing tells a model who its colleagues are — not the system prompt, not
+        the tool schema — so one that guesses a plausible-sounding name has no way
+        to find the real one and abandons the consult. Observed live: an SEO agent
+        asked for "technical-seo-specialist", got the bare refusal, and answered
+        from memory instead. The error has to carry the roster.
+        """
+        caller = FakeAgent("backend-engineer")
+        harness.roster = [
+            caller,
+            FakeAgent("security-analyst", kind="advisory"),
+            FakeAgent("qa-engineer", kind="advisory"),
+            FakeAgent("frontend-engineer"),  # operator — not consultable
+            FakeAgent("retired-advisor", kind="advisory", enabled=False),
+        ]
+
+        out = await CONSULT_PEER.handler(
+            FakeCtx(agent=caller, run_id=uuid.uuid4(), tool_call_id="c"),
+            {"agent": "technical-seo-specialist", "question": "?"},
+        )
+
+        assert "security-analyst" in out["error"]
+        assert "qa-engineer" in out["error"]
+        # Suggesting a name the handler would then refuse wastes another whole turn.
+        assert "frontend-engineer" not in out["error"]
+        assert "retired-advisor" not in out["error"]
+
+    async def test_an_advisory_caller_is_not_offered_itself(self, harness) -> None:
+        caller = FakeAgent("seo-specialist", kind="advisory")
+        harness.roster = [caller, FakeAgent("security-analyst", kind="advisory")]
+
+        out = await CONSULT_PEER.handler(
+            FakeCtx(agent=caller, run_id=uuid.uuid4(), tool_call_id="c"), {"agent": "ghost", "question": "?"}
+        )
+
+        assert "seo-specialist" not in out["error"]
+        assert "security-analyst" in out["error"]
+
+    async def test_wrong_kind_also_names_the_alternatives(self, harness) -> None:
+        """Being told "advisory only" without being told who is advisory leaves the
+        model exactly as stuck as an unknown name did."""
+        caller = FakeAgent("backend-engineer")
+        harness.roster = [caller, FakeAgent("tpm", kind="coordinator"), FakeAgent("qa-engineer", kind="advisory")]
+
+        out = await CONSULT_PEER.handler(
+            FakeCtx(agent=caller, run_id=uuid.uuid4(), tool_call_id="c"), {"agent": "tpm", "question": "?"}
+        )
+
+        assert "advisory" in out["error"]
+        assert "qa-engineer" in out["error"]
+        assert harness.runs == []
+
+    async def test_says_so_plainly_when_there_is_nobody_to_consult(self, harness) -> None:
+        """An org with no advisory agents must not emit a dangling "Consultable
+        agents:" with nothing after it — the model would read that as a truncation
+        and retry."""
+        caller = FakeAgent("backend-engineer")
+        harness.roster = [caller]
+
+        out = await CONSULT_PEER.handler(
+            FakeCtx(agent=caller, run_id=uuid.uuid4(), tool_call_id="c"), {"agent": "ghost", "question": "?"}
+        )
+
+        assert "no advisory agents" in out["error"].lower()
+
+    async def test_a_large_roster_is_truncated(self, harness) -> None:
+        """A 200-agent org must not push the real answer out of the model's window
+        with a wall of names."""
+        caller = FakeAgent("backend-engineer")
+        harness.roster = [caller] + [FakeAgent(f"advisor-{i:03d}", kind="advisory") for i in range(50)]
+
+        out = await CONSULT_PEER.handler(
+            FakeCtx(agent=caller, run_id=uuid.uuid4(), tool_call_id="c"), {"agent": "ghost", "question": "?"}
+        )
+
+        assert "advisor-000" in out["error"]
+        assert "more" in out["error"]
+        assert out["error"].count("advisor-") <= delegation.HINT_NAME_CAP
 
     async def test_outside_a_run_it_declines_rather_than_pretending(self, harness) -> None:
         """The interactive console executes tools with no run to suspend. Better an
