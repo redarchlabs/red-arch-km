@@ -114,6 +114,10 @@ def harness(monkeypatch):
         async def pending_for_peer_run(self, run_id):
             return h.pending_question
 
+        async def count_for_run(self, run_id, *, audience=None):
+            # The per-run question budget. Tests that care set h.questions_asked.
+            return getattr(h, "questions_asked", 0)
+
     async def _create_question(session, org_id, **kwargs):
         h.questions.append(kwargs)
         return _FakeQuestion()
@@ -694,3 +698,50 @@ class TestKindGateCoversTheProtocol:
             "request_review",
             "ask_human",
         }
+
+
+class TestTheQuestionBudget:
+    """Asking is capped per run.
+
+    Observed live twice: an agent read its task list, asked three questions, wrote
+    a paragraph and stopped — having done none of the work. Every question ends the
+    run until somebody answers, so an agent that asks freely converts a job into an
+    interview. The prompt asks for restraint; this makes it true.
+    """
+
+    async def test_the_first_questions_go_through(self, harness) -> None:
+        agent = FakeAgent("backend-engineer")
+        harness.roster = [agent]
+        harness.questions_asked = 0
+        ctx = FakeCtx(agent=agent, run_id=uuid.uuid4(), tool_call_id="c1")
+
+        with pytest.raises(RunParked):
+            await ASK_HUMAN.handler(ctx, {"question": "Which environment?"})
+
+    async def test_past_the_budget_it_is_told_to_get_on_with_it(self, harness) -> None:
+        from api.services.agents.delegation import MAX_HUMAN_QUESTIONS_PER_RUN
+
+        agent = FakeAgent("backend-engineer")
+        harness.roster = [agent]
+        harness.questions_asked = MAX_HUMAN_QUESTIONS_PER_RUN
+        ctx = FakeCtx(agent=agent, run_id=uuid.uuid4(), tool_call_id="c2")
+
+        out = await ASK_HUMAN.handler(ctx, {"question": "And another thing?"})
+
+        # A refusal it can act on, not a dead end: it is told what to do instead.
+        assert "error" in out
+        assert "best assumption" in out["error"]
+
+    async def test_the_run_is_not_parked_when_refused(self, harness) -> None:
+        """The point of the cap: the run keeps going rather than stopping to wait
+        for an answer nobody has been asked for."""
+        from api.services.agents.delegation import MAX_HUMAN_QUESTIONS_PER_RUN
+
+        agent = FakeAgent("backend-engineer")
+        harness.roster = [agent]
+        harness.questions_asked = MAX_HUMAN_QUESTIONS_PER_RUN + 5
+        ctx = FakeCtx(agent=agent, run_id=uuid.uuid4(), tool_call_id="c3")
+
+        out = await ASK_HUMAN.handler(ctx, {"question": "Please?"})
+
+        assert isinstance(out, dict) and "error" in out
