@@ -16,20 +16,14 @@ from __future__ import annotations
 
 from typing import Any
 
+from api.services.agents.llm.catalog import bare_model
 from api.services.agents.llm.provider import LLMProvider
 from api.services.openai_client import base_url
 
 # LiteLLM needs the provider prefix on the agent path (``openai/gpt-4.1-mini``);
-# the routes table is keyed by the bare model id, as workflow nodes name it.
-_PREFIXES = ("openai/", "anthropic/", "gemini/")
-
-
-def bare_model(model: str) -> str:
-    """``openai/gpt-4.1-mini`` -> ``gpt-4.1-mini``; anything else unchanged."""
-    for prefix in _PREFIXES:
-        if model.startswith(prefix):
-            return model[len(prefix) :]
-    return model
+# the routes table is keyed by the bare model id, as workflow nodes name it, so
+# `bare_model` (from the catalog) is what bridges the two.
+__all__ = ["bare_model", "provider_for"]
 
 
 def provider_for(settings: Any, model: str, api_key: str | None) -> LLMProvider:

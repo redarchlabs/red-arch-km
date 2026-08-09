@@ -18,6 +18,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from api.services.agents.llm.reasoning import reasoning_kwargs
+
 CHOICE_LETTERS = ("A", "B", "C", "D")
 
 DEFAULT_QUESTION_RULES = (
@@ -104,6 +106,7 @@ async def generate_question(
             {"role": "user", "content": "\n\n".join(parts)},
         ],
         response_format={"type": "json_schema", "json_schema": _question_schema()},
+        **reasoning_kwargs(model),
     )
     parsed = json.loads(response.choices[0].message.content or "{}")
     return {

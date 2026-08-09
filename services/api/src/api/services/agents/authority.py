@@ -98,15 +98,22 @@ def decide(agent: Agent, spec: ToolSpec, *, autonomy: str = "high_touch") -> Aut
     if denial:
         return AuthorityVerdict(Decision.DENY, denial)
     if autonomy == Posture.PLAN_ONLY and (spec.category not in _PLAN_ONLY_CATEGORIES or spec.side_effecting):
-        # DENY, not ASK: plan mode is the answer to "think about this without doing
-        # it", so offering the action for approval would put the decision back on
-        # the person who just said not yet.
+        # Not a dead end: the way out of plan mode is to finish the plan and submit
+        # it, which is the tool this posture adds. An agent that is only refused
+        # reports the refusal as a failure instead of delivering the plan.
         return AuthorityVerdict(
             Decision.DENY,
-            f"plan mode: this work order is for planning only, so '{spec.name}' is unavailable",
+            f"'{spec.name}' is unavailable while this work order is in plan mode. "
+            "Finish your research and call submit_plan — the person approving that "
+            "plan is what lets the work start.",
         )
     if not _is_available(agent, spec):
         return AuthorityVerdict(Decision.DENY, f"'{spec.name}' is not granted to this agent")
+    if spec.always_ask:
+        # Before the AUTOMATIC short-circuit: a tool whose purpose is to put a
+        # decision in front of a person cannot be auto-approved without becoming
+        # a no-op.
+        return AuthorityVerdict(Decision.ASK, "a person decides this one")
     if autonomy == Posture.AUTOMATIC:
         # Grants and the kind-gate still hold — this only removes the human from
         # the loop on tools the agent was already allowed to use.

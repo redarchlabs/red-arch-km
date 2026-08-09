@@ -15,6 +15,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from api.services.agents.llm.reasoning import reasoning_kwargs
+
 # Default grading rules. A workflow author can steer the rubric per assessment via the
 # node's ``rubric``/``question`` config so scoring is grounded by criteria, not vibes.
 DEFAULT_GRADING_RULES = (
@@ -94,6 +96,7 @@ async def grade_answer(
             {"role": "user", "content": user},
         ],
         response_format={"type": "json_schema", "json_schema": _grade_schema()},
+        **reasoning_kwargs(model),
     )
     content = response.choices[0].message.content or "{}"
     parsed = json.loads(content)

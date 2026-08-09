@@ -74,3 +74,15 @@ def provider_for_model(model: str) -> str:
     if sep and prefix in _KNOWN_PREFIXES:
         return prefix
     return "openai"
+
+
+def bare_model(model: str) -> str:
+    """Strip a known provider prefix: ``openai/gpt-5-mini`` -> ``gpt-5-mini``.
+
+    Anything else is returned unchanged, so an unrecognized prefix is never
+    silently eaten. Lives here rather than beside its callers because both the
+    endpoint router and the reasoning-param rules key off the bare id, and this
+    module is the one with no dependencies of its own.
+    """
+    prefix, sep, rest = model.partition("/")
+    return rest if sep and prefix in _KNOWN_PREFIXES else model

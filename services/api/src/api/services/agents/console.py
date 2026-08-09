@@ -261,6 +261,7 @@ class AgentConsoleService:
                     max_iterations=self._settings.agent_max_iterations,
                     temperature=params.get("temperature"),
                     max_tokens=params.get("max_tokens"),
+                    reasoning_effort=params.get("reasoning_effort"),
                     resume_tool_calls=resume.pending or None,
                     resume_answers=resume.answers or None,
                 )

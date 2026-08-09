@@ -472,7 +472,7 @@ See [CHANGE_MANAGEMENT.md](CHANGE_MANAGEMENT.md).
 | Tesseract / poppler / antiword | — | Free OCR and legacy document text extraction (worker image) |
 
 **Models:** chat/summary/claims `gpt-5-mini`; embeddings `text-embedding-3-small`
-(1536-dim); AI OCR `gpt-4.1-mini` (vision); agent org tiered
+(1536-dim); AI OCR `gpt-5-mini` (vision); agent org tiered
 Opus/Sonnet/Haiku (Anthropic), `gpt-5*` (OpenAI), `gemini-2.5-*` (Google).
 
 ---

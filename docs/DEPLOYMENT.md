@@ -247,7 +247,7 @@ Central keys are fallbacks; per-org keys (encrypted at rest — migration 029
 | `EMBEDDING_DIMENSION` | Vector width of the embedding model. **Required** when `EMBEDDING_BASE_URL` is set; changing it is a migration — see [Self-hosted models](#self-hosted-models) | No (default) |
 | `OPENAI_CHAT_MODEL` | Default `gpt-5-mini` | No (default) |
 | `OPENAI_EMBEDDING_MODEL` | Default `text-embedding-3-small` | No (default) |
-| `OPENAI_OCR_MODEL` | Vision model for the `ai` upload extraction. Default `gpt-4.1-mini` | No (default) |
+| `OPENAI_OCR_MODEL` | Vision model for the `ai` upload extraction. Default `gpt-5-mini` | No (default) |
 | `OPENAI_SUMMARY_MODEL` | Small model for short auxiliary calls. Default `gpt-5-nano` | No (default) |
 | `ANTHROPIC_API_KEY` | Anthropic key for the multi-provider agent org | No |
 | `ANTHROPIC_CHAT_MODEL` | LiteLLM id. Default `anthropic/claude-sonnet-5` | No (default) |

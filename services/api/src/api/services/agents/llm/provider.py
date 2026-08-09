@@ -25,6 +25,7 @@ from typing import Any
 
 from api.services.agents.llm.caching import with_cache_breakpoints
 from api.services.agents.llm.catalog import provider_for_model
+from api.services.agents.llm.reasoning import reasoning_effort_for, temperature_for
 
 logger = logging.getLogger(__name__)
 
@@ -189,6 +190,23 @@ def _completion_from_response(response: Any) -> Completion:
     )
 
 
+def _model_params(model: str, temperature: float | None, reasoning_effort: str | None) -> dict[str, Any]:
+    """The sampling params ``model`` actually accepts.
+
+    Applied here, at the single seam every provider call goes through, so no caller
+    has to remember that a reasoning model wants an effort tier and refuses a
+    temperature. See :mod:`api.services.agents.llm.reasoning` for the rules.
+    """
+    params: dict[str, Any] = {}
+    temp = temperature_for(model, temperature)
+    if temp is not None:
+        params["temperature"] = temp
+    effort = reasoning_effort_for(model, reasoning_effort)
+    if effort is not None:
+        params["reasoning_effort"] = effort
+    return params
+
+
 def _litellm() -> Any:
     """Import LiteLLM lazily. Patched in unit tests to avoid the real dependency."""
     import litellm  # noqa: PLC0415 - deliberately lazy
@@ -251,6 +269,7 @@ class LLMProvider:
         tools: list[dict[str, Any]] | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        reasoning_effort: str | None = None,
         extra: dict[str, Any] | None = None,
     ) -> AsyncIterator[LLMStreamEvent]:
         """Stream one assistant turn. Yields ``TextDelta``s then one ``Completion``."""
@@ -269,8 +288,7 @@ class LLMProvider:
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
-        if temperature is not None:
-            kwargs["temperature"] = temperature
+        kwargs.update(_model_params(model, temperature, reasoning_effort))
         if max_tokens is not None:
             kwargs["max_tokens"] = max_tokens
         if extra:
@@ -327,6 +345,7 @@ class LLMProvider:
         tools: list[dict[str, Any]] | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        reasoning_effort: str | None = None,
         extra: dict[str, Any] | None = None,
     ) -> Completion:
         """One non-streaming completion → content + usage + grounding sources.
@@ -344,8 +363,7 @@ class LLMProvider:
             kwargs["api_key"] = self.api_key
         if tools:
             kwargs["tools"] = tools
-        if temperature is not None:
-            kwargs["temperature"] = temperature
+        kwargs.update(_model_params(model, temperature, reasoning_effort))
         if max_tokens is not None:
             kwargs["max_tokens"] = max_tokens
         if extra:

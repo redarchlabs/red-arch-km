@@ -238,7 +238,14 @@ class WorkOrderService:
         await self._repo.flush()
         return wo
 
-    async def _dispatch(self, wo: WorkOrder, *, actor_profile_id: uuid.UUID | None, task: str | None = None) -> None:
+    async def _dispatch(
+        self,
+        wo: WorkOrder,
+        *,
+        actor_profile_id: uuid.UUID | None,
+        task: str | None = None,
+        ignore_run_id: uuid.UUID | None = None,
+    ) -> None:
         """Queue a run for the assigned agent, if there is one.
 
         Unassigned orders are left alone rather than refused: a work order is also
@@ -269,7 +276,7 @@ class WorkOrderService:
                 f"Work order '{wo.title}' is assigned to an agent that cannot run "
                 "(missing or disabled). Reassign it or enable the agent."
             )
-        if await self._has_live_run(wo.id):
+        if await self._has_live_run(wo.id, ignore_run_id=ignore_run_id):
             return
 
         run = await AgentRunRepository(self._session, self._org_id).create_run(
@@ -297,15 +304,21 @@ class WorkOrderService:
             )
         )
 
-    async def _has_live_run(self, wo_id: uuid.UUID) -> bool:
-        result = await self._session.execute(
-            select(AgentRun.id).where(
-                AgentRun.work_order_id == wo_id,
-                AgentRun.org_id == self._org_id,
-                AgentRun.status.in_(_LIVE_RUN_STATUSES),
-            )
+    async def _has_live_run(self, wo_id: uuid.UUID, *, ignore_run_id: uuid.UUID | None = None) -> bool:
+        """Is another run already on this order?
+
+        ``ignore_run_id`` excludes the caller's own run: a tool that queues the
+        next run from inside a run that is about to finish would otherwise see
+        itself and skip.
+        """
+        query = select(AgentRun.id).where(
+            AgentRun.work_order_id == wo_id,
+            AgentRun.org_id == self._org_id,
+            AgentRun.status.in_(_LIVE_RUN_STATUSES),
         )
-        return result.first() is not None
+        if ignore_run_id is not None:
+            query = query.where(AgentRun.id != ignore_run_id)
+        return (await self._session.execute(query)).first() is not None
 
     async def assign(
         self,
@@ -349,6 +362,35 @@ class WorkOrderService:
         )
         await self._repo.flush()
         return wo
+
+    async def start_approved_plan(
+        self,
+        wo_id: uuid.UUID,
+        *,
+        summary: str,
+        actor_profile_id: uuid.UUID | None = None,
+        ignore_run_id: uuid.UUID | None = None,
+    ) -> None:
+        """Queue the run that carries out a plan a person has just approved.
+
+        A fresh run rather than continuing the planning one: that run's transcript
+        is a research session, and the thing worth carrying forward is the approved
+        plan, not how it was arrived at.
+        """
+        wo = await self.get_work_order(wo_id)
+        await self._dispatch(
+            wo,
+            actor_profile_id=actor_profile_id,
+            task=(
+                f"{_brief(wo)}\n\n"
+                "--- Your plan, which has been approved ---\n"
+                f"{summary}\n\n"
+                "Carry it out. The task list on this work order is that plan — work "
+                "through it and mark each step as you go."
+            ),
+            ignore_run_id=ignore_run_id,
+        )
+        await self._repo.flush()
 
     async def reply(
         self,
