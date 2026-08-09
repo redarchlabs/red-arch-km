@@ -101,7 +101,11 @@ async def set_status(
     session: Annotated[AsyncSession, Depends(get_tenant_db)],
 ) -> WorkOrderRead:
     try:
-        wo = await WorkOrderService(session, ctx.org_id).set_status(wo_id, body.status)
+        # Starting an assigned order queues a run for its agent, which reads the
+        # knowledge base as the person who started it — never wider.
+        wo = await WorkOrderService(session, ctx.org_id).set_status(
+            wo_id, body.status, actor_profile_id=ctx.user.profile_id
+        )
     except WorkOrderError as exc:
         _raise_http(exc)
     return _to_read(wo)
