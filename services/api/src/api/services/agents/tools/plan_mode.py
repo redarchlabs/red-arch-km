@@ -70,7 +70,7 @@ async def _clear_the_board(ctx: ToolContext, work_order: Any, summary: str, task
         return {
             "review": "changes requested",
             "failed": outcome.failed,
-            "findings": {who: v for who, v in outcome.verdicts.items()},
+            "findings": dict(outcome.verdicts),
             "review_rounds_remaining": remaining,
             "note": (
                 "Address these and call submit_plan again with a revised summary; "
