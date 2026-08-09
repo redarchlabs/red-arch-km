@@ -24,6 +24,7 @@ from api import db_scope
 from api.config import Settings
 from api.dependencies import get_redis_client
 from api.models.agent_run import AgentApproval, AgentRun
+from api.models.work_order import WorkOrder, WorkOrderEntry
 from api.repositories.agent import AgentRepository
 from api.repositories.agent_run import AgentRunRepository
 from api.repositories.agent_run_messages import AgentRunMessageRepository
@@ -41,6 +42,11 @@ from api.services.agents.tools.spec import ToolContext, ToolSpec
 from api.services.agents.work_order_service import WorkOrderService
 
 logger = logging.getLogger(__name__)
+
+# A stall notice in the diary, and the lane it is filed under. Text rather than a
+# column so the whole story of an order stays in the one place people read.
+_STALL_MARKER = "⚠️ Stalled:"
+_STALL_ROLE = "system"
 
 
 class AgentRunExecutor:
@@ -60,6 +66,9 @@ class AgentRunExecutor:
         await session.commit()
         await db_scope.enter_bypass(session)
         reminded = await self._backstop(session, limit)
+        await session.commit()
+        await db_scope.enter_bypass(session)
+        stalled = await self._stalled_orders(session, limit)
         await session.commit()
         await db_scope.enter_bypass(session)
         claimed = await self._claim(session, limit)
@@ -84,6 +93,7 @@ class AgentRunExecutor:
             "errors": errors,
             "reminded": reminded,
             "reclaimed": reclaimed,
+            "stalled": stalled,
         }
 
     async def _reclaim_stale(self, session: AsyncSession, limit: int) -> int:
@@ -156,6 +166,98 @@ class AgentRunExecutor:
             )
             run.last_activity_at = datetime.now(UTC)
         return len(rows)
+
+    async def _stalled_orders(self, session: AsyncSession, limit: int) -> int:
+        """Work orders whose agents have all stopped with the job unfinished.
+
+        A run's ``done`` only ever meant the model stopped calling tools — not that
+        the work happened. So an order could sit ``in_progress`` at 17%, with every
+        run terminal and nobody working, looking exactly like one in flight. Every
+        other stall in this system surfaces (a waiting run, a pending approval);
+        this one was invisible, which made it the easiest to lose.
+
+        Detection only. Nothing is restarted: an agent that stopped may have been
+        right to, and quietly re-running it would spend money on a decision a person
+        has not seen yet.
+        """
+        live = (
+            select(AgentRun.work_order_id)
+            .where(AgentRun.status.in_(("queued", "running", "waiting")), AgentRun.work_order_id.is_not(None))
+            .scalar_subquery()
+        )
+        rows = (
+            (
+                await session.execute(
+                    select(WorkOrder)
+                    .where(
+                        WorkOrder.status == "in_progress",
+                        WorkOrder.id.not_in(live),
+                        # At least one run: an order nobody has dispatched is not
+                        # stalled, it is human work or waiting to be started.
+                        WorkOrder.id.in_(
+                            select(AgentRun.work_order_id).where(AgentRun.work_order_id.is_not(None)).scalar_subquery()
+                        ),
+                    )
+                    .order_by(WorkOrder.updated_at)
+                    .limit(limit)
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+        notified = 0
+        for wo in rows:
+            service = WorkOrderService(session, wo.org_id)
+            tasks = await service.list_tasks(wo.id)
+            outstanding = [t for t in tasks if t.status not in ("done", "carried")]
+            if not outstanding:
+                continue
+            if await self._already_flagged(session, wo):
+                continue
+            done = len(tasks) - len(outstanding)
+            await create_notification(
+                session,
+                wo.org_id,
+                kind="escalation",
+                title=f"“{wo.title}” has stopped with work outstanding",
+                body=(
+                    f"Every agent on this work order has finished, but {len(outstanding)} of "
+                    f"{len(tasks)} tasks are still open ({done} done). "
+                    f"Still outstanding: {', '.join(t.key for t in outstanding[:8])}."
+                ),
+                work_order_id=wo.id,
+                recipient_role="org_admin",
+                settings=self._settings,
+            )
+            await service.add_entry(
+                wo.id,
+                role=_STALL_ROLE,
+                text=(
+                    f"{_STALL_MARKER} No agent is working this order and "
+                    f"{len(outstanding)} of {len(tasks)} tasks are still open."
+                ),
+            )
+            notified += 1
+        return notified
+
+    async def _already_flagged(self, session: AsyncSession, wo: WorkOrder) -> bool:
+        """Has this stall already been reported since the last run finished?
+
+        Throttled against the newest run rather than a timestamp, so an order that
+        is restarted and stalls *again* is reported again — the same discipline as
+        ``_backstop``'s activity bump, expressed in the diary because a work order
+        has no heartbeat of its own.
+        """
+        newest = (
+            await session.execute(select(func.max(AgentRun.created_at)).where(AgentRun.work_order_id == wo.id))
+        ).scalar()
+        query = select(WorkOrderEntry.id).where(
+            WorkOrderEntry.work_order_id == wo.id, WorkOrderEntry.text.like(f"{_STALL_MARKER}%")
+        )
+        if newest is not None:
+            query = query.where(WorkOrderEntry.created_at > newest)
+        return (await session.execute(query)).first() is not None
 
     async def _claim(self, session: AsyncSession, limit: int) -> list[tuple[uuid.UUID, uuid.UUID]]:
         rows = (
@@ -358,6 +460,21 @@ class AgentRunExecutor:
                 result.prompt_tokens += first.prompt_tokens
                 result.completion_tokens += first.completion_tokens
                 result.total_tokens += first.total_tokens
+            elif run.work_order_id is not None and not result.truncated:
+                nudge = await self._unfinished_work_nudge(session, org_id, run)
+                if nudge:
+                    # Observed live: an agent read the task list, asked three
+                    # questions, wrote a paragraph and stopped — leaving five of six
+                    # tasks pending. Its run was "done", which only ever meant the
+                    # model stopped calling tools. One corrective turn, the same
+                    # shape as the workflow contract above, so stopping is at least
+                    # a decision rather than a drift.
+                    first = result
+                    messages.append({"role": "user", "content": nudge})
+                    result = await drive(messages, None)
+                    result.prompt_tokens += first.prompt_tokens
+                    result.completion_tokens += first.completion_tokens
+                    result.total_tokens += first.total_tokens
         except RunCancelled:
             # The canceller owns the terminal state; committing here persists the
             # transcript steps of the turns that DID run, nothing else.
@@ -467,6 +584,37 @@ class AgentRunExecutor:
         )
         if won:
             await self._signal_parent(session, org_id, run, agent.name, result.final_content)
+
+    async def _unfinished_work_nudge(self, session: AsyncSession, org_id: uuid.UUID, run: AgentRun) -> str | None:
+        """One reminder for an agent about to stop with its checklist unfinished.
+
+        ``None`` when there is nothing to say — no work order, no task list, or the
+        list is complete — so a run that genuinely finished is not asked to justify
+        itself, and neither is one on an order nobody planned.
+
+        Deliberately not an instruction to keep working: the agent may have a good
+        reason to stop, and being told to carry on regardless is how an agent
+        invents work. It is asked to *account* for the gap, which either produces
+        the work or produces a reason a person can read.
+        """
+        if run.work_order_id is None:
+            return None
+        service = WorkOrderService(session, org_id)
+        tasks = await service.list_tasks(run.work_order_id)
+        outstanding = [t for t in tasks if t.status not in ("done", "carried")]
+        if not tasks or not outstanding:
+            return None
+        names = ", ".join(f"{t.key} ({t.title[:60]})" for t in outstanding[:8])
+        return (
+            "Before you stop: this work order's checklist is not finished. Still "
+            f"outstanding: {names}.\n"
+            "If you have done any of it, mark it with update_work_order_task now — "
+            "the percentage a person sees comes from those calls, not from your reply. "
+            "If you are blocked, say on what with ask_human. If a step should not be "
+            "done on this order, mark it 'carried' so it stops counting against you. "
+            "If you are genuinely finished, call request_review and say why the "
+            "remaining steps were not needed."
+        )
 
     def _make_strategy(self, session: AsyncSession, org_id: uuid.UUID, run: AgentRun, approved_names: set[str]):
         """Approval strategy: auto-approve already-approved tools; otherwise record an
