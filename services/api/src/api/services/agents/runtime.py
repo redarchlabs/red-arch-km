@@ -127,6 +127,22 @@ def _assistant_message(completion: Completion) -> dict[str, Any]:
     return msg
 
 
+def _awaits_tool_results(messages: list[dict[str, Any]]) -> bool:
+    """Does the conversation end on an assistant turn whose tool calls are unanswered?
+
+    Checked rather than inferred from where we are in the loop. A resume that
+    carries an empty batch of pending calls reaches the top of a turn with the
+    message list still ending in unresolved ``tool_calls`` — and a user turn there
+    is the exact shape OpenAI and Anthropic reject, which would finalize the run as
+    an error. Making the invariant structural means no future edit to the loop's
+    control flow can quietly break it.
+    """
+    if not messages:
+        return False
+    last = messages[-1]
+    return last.get("role") == "assistant" and bool(last.get("tool_calls"))
+
+
 def _tool_message(tc: ToolCallRequest, output: dict[str, Any]) -> dict[str, Any]:
     return {"role": "tool", "tool_call_id": tc.id, "content": json.dumps(output, default=str)}
 
@@ -235,7 +251,7 @@ async def _drive_loop(
             # a tool result must go, which OpenAI and Anthropic both reject
             # outright: an LLMError that finalizes the run as *error*. A steer that
             # kills the run is worse than one that arrives a turn late.
-            if steer is not None:
+            if steer is not None and not _awaits_tool_results(messages):
                 for text in await steer():
                     messages.append({"role": "user", "content": text})
                     await emit({"type": "steer", "content": text})

@@ -665,9 +665,38 @@ to `api:8000`. Only the `ui` service publishes a port in prod; keep `api`,
 nginx location split:
 
 ```nginx
+# WebSocket upgrade, hoisted to http{} scope. `map` cannot live inside `server{}`.
+# Without this the live agent view (`/api/agents/live/ws`) is refused at the proxy
+# with a 400 and no server-side error — the API never sees the connection.
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
 location /     { proxy_pass http://ui:3000;  proxy_set_header Host $host; }
-location /api/ { proxy_pass http://api:8000/; proxy_set_header Host $host; }
+
+location /api/ {
+    proxy_pass http://api:8000/;
+    proxy_set_header Host $host;
+
+    # The live agent socket. `proxy_read_timeout` is the one that bites: nginx
+    # closes an idle upgraded connection at 60s by default, and a socket watching
+    # an agent think is idle between turns.
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade    $http_upgrade;
+    proxy_set_header Connection $connection_upgrade;
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
+
+    # SSE (the agent console, workflow token streams) must not be buffered, or
+    # frames arrive in a batch when the response ends rather than as they happen.
+    proxy_buffering off;
+}
 ```
+
+The API serves the socket at `/api/agents/live/ws`; the browser authenticates it
+with a single-use ticket minted over an ordinary request, because a WebSocket
+cannot carry an `Authorization` header.
 
 Keep the proxy's public origin identical to `CLERK_ALLOWED_AZP`, `API_CORS_ORIGINS`,
 and `PUBLIC_BASE_URL`. For encrypted backends, use `rediss://`, `bolt+s://`, and

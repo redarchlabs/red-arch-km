@@ -405,6 +405,16 @@ export interface AgentDiaryElement extends ElementBase {
   width?: FieldWidth | null;
 }
 
+/** A running agent's transcript, live, with a box to talk back into. */
+export interface AgentActivityElement extends ElementBase {
+  type: "agent_activity";
+  work_order_id?: string | null;
+  title?: string | null;
+  height?: "sm" | "md" | "lg" | "fill";
+  allow_steer?: boolean;
+  width?: FieldWidth | null;
+}
+
 /** Pending approvals with the decision attached, so a stalled agent is
  *  actionable where the stall is visible rather than only in the inbox. */
 export interface ApprovalQueueElement extends ElementBase {
@@ -669,6 +679,7 @@ export type FormElement =
   | ChatElement
   | AgentTimelineElement
   | AgentDiaryElement
+  | AgentActivityElement
   | ApprovalQueueElement
   | WorkOrderListElement
   | WorkOrderActionsElement
