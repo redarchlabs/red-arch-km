@@ -80,6 +80,21 @@ describe("usePasteAttach", () => {
     expect(result.current.full).toBe(true);
   });
 
+  it("survives React invoking the state updater twice", async () => {
+    // Caught live: the chip list was built INSIDE setAttachments, and React
+    // double-invokes updaters (StrictMode does it every render). That produced
+    // two sets of chips with different keys; only the last reached state, so the
+    // first set's "upload finished" updates matched nothing and its chips span
+    // forever — which left the send button disabled with no way to recover.
+    const { result } = renderHook(() => usePasteAttach());
+
+    await act(async () => result.current.onPaste(pasteEvent([file()])));
+
+    await waitFor(() => expect(result.current.busy).toBe(false));
+    expect(result.current.attachments).toHaveLength(1);
+    expect(uploadDocument).toHaveBeenCalledTimes(1);
+  });
+
   it("gives a pasted screenshot a distinguishable name", async () => {
     // Every screenshot ever pasted arrives as "image.png"; a work order full of
     // them is unreadable a week later.

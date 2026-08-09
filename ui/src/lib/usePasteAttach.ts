@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 
 import { uploadDocument } from "@/lib/api/documents";
 
@@ -46,25 +46,31 @@ function nameFor(file: File): string {
 
 export function usePasteAttach() {
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
+  // The cap has to be read outside the updater too, for the same reason.
+  const attachmentsRef = useRef<PendingAttachment[]>([]);
+  attachmentsRef.current = attachments;
 
   const add = useCallback(async (files: File[]) => {
     if (files.length === 0) return;
-    const accepted: { file: File; item: PendingAttachment }[] = [];
-    setAttachments((prev) => {
-      const room = MAX_ATTACHMENTS - prev.length;
-      for (const file of files.slice(0, Math.max(room, 0))) {
-        accepted.push({
-          file,
-          item: {
-            key: `${Date.now()}-${file.name}-${Math.random().toString(36).slice(2, 8)}`,
-            name: nameFor(file),
-            preview: isImage(file) ? URL.createObjectURL(file) : undefined,
-            uploading: true,
-          },
-        });
-      }
-      return [...prev, ...accepted.map((a) => a.item)];
-    });
+
+    // Built BEFORE setState, never inside the updater. React invokes updater
+    // functions more than once (StrictMode does it on every render), and doing
+    // this work in there produced two sets of chips with different keys: only the
+    // last set reached state, so the "upload finished" updates for the first set
+    // matched nothing and its chips stayed spinning forever — which disabled the
+    // send button permanently. An updater must be a pure function of prev.
+    const room = MAX_ATTACHMENTS - attachmentsRef.current.length;
+    const accepted = files.slice(0, Math.max(room, 0)).map((file) => ({
+      file,
+      item: {
+        key: `${Date.now()}-${file.name}-${Math.random().toString(36).slice(2, 8)}`,
+        name: nameFor(file),
+        preview: isImage(file) ? URL.createObjectURL(file) : undefined,
+        uploading: true,
+      } satisfies PendingAttachment,
+    }));
+    if (accepted.length === 0) return;
+    setAttachments((prev) => [...prev, ...accepted.map((a) => a.item)]);
 
     await Promise.all(
       accepted.map(async ({ file, item }) => {

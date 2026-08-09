@@ -214,7 +214,12 @@ async def reply(
     session: Annotated[AsyncSession, Depends(get_tenant_db)],
 ) -> WorkOrderRead:
     try:
-        wo = await WorkOrderService(session, ctx.org_id).reply(wo_id, body.text, actor_profile_id=ctx.user.profile_id)
+        wo = await WorkOrderService(session, ctx.org_id).reply(
+            wo_id,
+            body.text,
+            actor_profile_id=ctx.user.profile_id,
+            document_ids=body.document_ids,
+        )
     except WorkOrderError as exc:
         _raise_http(exc)
     return _to_read(wo)
