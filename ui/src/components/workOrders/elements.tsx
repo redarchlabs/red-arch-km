@@ -400,8 +400,7 @@ export function WorkOrderCreateNode({
       .catch(() => setAgents([]));
   }, [showAssignee]);
 
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const submit = async () => {
     if (!heading.trim() || busy) return;
     setBusy(true);
     setError(null);
@@ -427,13 +426,23 @@ export function WorkOrderCreateNode({
     }
   };
 
+  // Not a <form>: every element renders inside the FormRenderer's own form, and
+  // HTML forbids nesting them — React reports it as a hydration error and the
+  // browser resolves it by dropping the inner form's fields. Enter is wired by
+  // hand so the keyboard still files the order.
   return (
-    <form onSubmit={submit} className="space-y-2 rounded-md border p-3">
+    <div className="space-y-2 rounded-md border p-3">
       {title ? <h3 className="text-sm font-medium">{title}</h3> : null}
       {error ? <p className="text-xs text-destructive">{error}</p> : null}
       <input
         value={heading}
         onChange={(e) => setHeading(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key !== "Enter") return;
+          // Without this the keypress reaches the outer form and submits *that*.
+          e.preventDefault();
+          void submit();
+        }}
         placeholder="What needs doing?"
         aria-label="Work order title"
         className="w-full rounded-md border bg-background px-2 py-1.5 text-sm"
@@ -476,11 +485,17 @@ export function WorkOrderCreateNode({
             ))}
           </select>
         ) : null}
-        <Button type="submit" size="sm" disabled={busy || !heading.trim()} className="ml-auto">
+        <Button
+          type="button"
+          size="sm"
+          onClick={() => void submit()}
+          disabled={busy || !heading.trim()}
+          className="ml-auto"
+        >
           {submitLabel}
         </Button>
       </div>
-    </form>
+    </div>
   );
 }
 
