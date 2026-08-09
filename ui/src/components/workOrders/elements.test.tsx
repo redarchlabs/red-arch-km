@@ -12,6 +12,7 @@ const setWorkOrderStatus = vi.fn();
 const assignWorkOrder = vi.fn();
 const getWorkOrderEntries = vi.fn();
 const listWorkOrders = vi.fn();
+const createWorkOrder = vi.fn();
 const listApprovals = vi.fn();
 const approveApproval = vi.fn();
 const denyApproval = vi.fn();
@@ -19,7 +20,7 @@ const denyApproval = vi.fn();
 vi.mock("@/lib/api/workOrders", () => ({
   getWorkOrderMap: vi.fn(),
   assignWorkOrder: (...a: unknown[]) => assignWorkOrder(...a),
-  createWorkOrder: vi.fn(),
+  createWorkOrder: (...a: unknown[]) => createWorkOrder(...a),
   getWorkOrder: (...a: unknown[]) => getWorkOrder(...a),
   setWorkOrderStatus: (...a: unknown[]) => setWorkOrderStatus(...a),
   getWorkOrderEntries: (...a: unknown[]) => getWorkOrderEntries(...a),
@@ -34,10 +35,16 @@ vi.mock("@/lib/api/agents", () => ({
   denyApproval: (...a: unknown[]) => denyApproval(...a),
 }));
 
+const push = vi.fn();
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: (...a: unknown[]) => push(...a) }),
+}));
+
 import {
   AgentDiaryNode,
   ApprovalQueueNode,
   WorkOrderActionsNode,
+  WorkOrderCreateNode,
   WorkOrderListNode,
 } from "./elements";
 
@@ -239,5 +246,43 @@ describe("WorkOrderListNode", () => {
 
     expect(await screen.findByText("Done thing")).toBeTruthy();
     expect(screen.queryByText("SEO check")).toBeNull();
+  });
+});
+
+describe("WorkOrderCreateNode", () => {
+  it("renders no form of its own", async () => {
+    // Every element renders inside the FormRenderer's <form>, and HTML forbids
+    // nesting them: React reports a hydration error and the browser recovers by
+    // dropping the inner form's fields, so the control silently stops working.
+    const { container } = render(<WorkOrderCreateNode />);
+    await screen.findByRole("option", { name: "chief-of-staff" });
+
+    expect(container.querySelector("form")).toBeNull();
+  });
+
+  it("files the order from the button", async () => {
+    createWorkOrder.mockResolvedValue({ id: "wo-9" });
+
+    render(<WorkOrderCreateNode detailViewId="view-9" />);
+    fireEvent.change(screen.getByLabelText("Work order title"), { target: { value: "Audit the site" } });
+    fireEvent.click(screen.getByRole("button", { name: "File it" }));
+
+    await waitFor(() => expect(createWorkOrder).toHaveBeenCalled());
+    expect(createWorkOrder.mock.calls[0][0].title).toBe("Audit the site");
+    // Straight to the order just filed — the next thing anyone wants is to start it.
+    await waitFor(() => expect(push).toHaveBeenCalledWith("/views/view-9/view?record_id=wo-9"));
+  });
+
+  it("files the order from the keyboard", async () => {
+    // Enter used to be the browser's job. Without the hand-wired handler it now
+    // reaches the *outer* form and submits that instead.
+    createWorkOrder.mockResolvedValue({ id: "wo-9" });
+
+    render(<WorkOrderCreateNode />);
+    const title = screen.getByLabelText("Work order title");
+    fireEvent.change(title, { target: { value: "Audit the site" } });
+    fireEvent.keyDown(title, { key: "Enter" });
+
+    await waitFor(() => expect(createWorkOrder).toHaveBeenCalled());
   });
 });
