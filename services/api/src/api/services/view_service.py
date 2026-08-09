@@ -206,13 +206,19 @@ class ViewService:
             # Adapt: FormRenderService expects a Form-like object with name/description/
             # entity_definition_id/config — View has all of these attributes.
             return await renderer.build_render(view, record_id, "editable")  # type: ignore[arg-type]
-        # Standalone: config only, empty catalog/values.
+        # Standalone: config only, empty catalog/values — but the requested record
+        # still comes back. An unbound view has no *entity* record to load, which
+        # is not the same as not being about anything: a work-order view is about
+        # one order, and its elements find it here. Dropping the id silently left
+        # every such element rendering "nothing selected" for a page whose URL
+        # named exactly what it wanted.
         return FormRenderRead(
             form_id=view.id,
             form_name=view.name,
             description=view.description,
             status="editable",
             root_entity_id=None,
+            record_id=record_id,
             config=config,
             catalog=[],
             relationships=[],
