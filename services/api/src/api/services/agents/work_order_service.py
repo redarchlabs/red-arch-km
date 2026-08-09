@@ -308,6 +308,10 @@ class WorkOrderService:
             WorkOrderEntry(work_order_id=wo_id, text=text, agent_id=agent_id, agent_run_id=agent_run_id, role=role)
         )
 
+    async def flush_tasks(self) -> None:
+        """Persist in-place task edits (a status change on a loaded row)."""
+        await self._repo.flush()
+
     async def list_entries(self, wo_id: uuid.UUID) -> list[WorkOrderEntry]:
         await self.get_work_order(wo_id)
         return await self._repo.list_entries(wo_id)
