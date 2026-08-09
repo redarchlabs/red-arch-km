@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import uuid
+from typing import Any
 
 from sqlalchemy import Boolean, ForeignKey, SmallInteger, String, Text, UniqueConstraint
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from api.models.base import Base, TimestampMixin, UUIDMixin
@@ -32,6 +33,10 @@ class Org(Base, UUIDMixin, TimestampMixin):
     # Agent-org autonomy posture: high_touch (every external/side-effecting action
     # asks the human) | balanced | hands_off. Enforced in agents/authority.py.
     agent_autonomy: Mapped[str] = mapped_column(String(16), default="high_touch", server_default="high_touch")
+    # Review boards: {name: [{"agent": ..., "lens": ...}]}. Config rather than code
+    # because engineering and business work need different lenses, and an org's
+    # roster is its own. Seeded by migration 050.
+    review_boards: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     # Org-wide default LLM model id. When set, LLM calls made for this org that
     # don't name a model explicitly use it (resolution: explicit config.model >
     # this column > env defaults). Routed through OPENAI_MODEL_ROUTES, so it pins

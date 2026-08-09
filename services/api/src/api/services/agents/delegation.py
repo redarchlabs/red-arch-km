@@ -286,6 +286,13 @@ async def _reply_to_peer(ctx: ToolContext, args: dict[str, Any]) -> dict[str, An
         by_agent_id=ctx.agent.id,
         answered_by=ctx.agent.name,
     )
+    # A consult raised by a review board carries a verdict, and the board is read
+    # back from the diary — so the reply has to leave a PASS/FAIL there, not just
+    # prose. Ordinary consults are untouched: record_verdict only fires for a
+    # question attached to a work order.
+    from api.services.agents.review_gate import record_verdict
+
+    await record_verdict(ctx, row, answer)
     await _diary(ctx, f"Answered the consult: {answer}")
     if not outcome.resumed:
         # The asker gave up (cancelled, timed out) while this run was thinking. The
@@ -334,10 +341,84 @@ async def _ask_human(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
     raise RunParked("question", {"question_id": str(row.id), "question": question})
 
 
+_DELIVERY_GATE = "delivery"
+
+
+async def _peer_review_delivery(ctx: ToolContext, summary: str) -> dict[str, Any] | None:
+    """Put a finished deliverable past its board. ``None`` means cleared.
+
+    Silent for everything the board does not cover — a run with no work order, an
+    order with review turned off, an org with no board — so this changes nothing
+    for the paths that were never meant to be reviewed.
+    """
+    if ctx.work_order_id is None or ctx.run_id is None:
+        return None
+
+    from api.services.agents import review_board as rb
+    from api.services.agents import review_gate
+    from api.services.agents.work_order_service import WorkOrderService
+
+    service = WorkOrderService(ctx.session, ctx.org_id)
+    work_order = await service.get_work_order(ctx.work_order_id)
+    digest = rb.fingerprint(summary)
+    state = await review_gate.status(ctx, work_order.id, _DELIVERY_GATE, digest)
+    if state["passed"]:
+        return None
+
+    boards = await review_gate._org_boards(ctx)
+    seats = review_gate.board_for(work_order, boards, author=ctx.agent.name if ctx.agent else None)
+    if not seats:
+        return None
+
+    outcome = state["outcome"]
+    if state["same_submission"] and outcome.settled:
+        if outcome.approved or rb.rounds_run(state["entries"], _DELIVERY_GATE) >= rb.MAX_ROUNDS:
+            marker = rb.PASSED if outcome.approved else rb.RELEASED
+            ctx.session.add(
+                WorkOrderEntry(
+                    work_order_id=work_order.id,
+                    org_id=ctx.org_id,
+                    role="review",
+                    text=f"🏛️ {marker} {_DELIVERY_GATE} ({digest}) — {', '.join(outcome.verdicts) or 'no verdicts'}",
+                )
+            )
+            await ctx.session.flush()
+            return None
+        return {
+            "review": "changes requested",
+            "failed": outcome.failed,
+            "findings": dict(outcome.verdicts),
+            "note": (
+                "Your reviewers are not satisfied. Address this and call request_review "
+                "again with a revised summary of what you delivered."
+            ),
+        }
+
+    tasks = await service.list_tasks(work_order.id)
+    await review_gate.convene(
+        ctx,
+        work_order,
+        gate=_DELIVERY_GATE,
+        submission=summary,
+        tasks="\n".join(f"{t.key} {t.title} [{t.status}]" for t in tasks),
+        seats=seats,
+    )
+    return None  # unreachable: convene parks the run
+
+
 async def _request_review(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
     summary = str(args.get("summary") or "").strip()
     if not summary:
         return {"error": "'summary' is required"}
+
+    # A finished deliverable goes past its board before it goes to a person. This
+    # is the second half of the same argument as the plan gate: a plan that passed
+    # review can still produce a wrong result, and that is where confident-wrong
+    # output usually surfaces.
+    peer = await _peer_review_delivery(ctx, summary)
+    if peer is not None:
+        return peer
+
     supervisor = await _supervisor(ctx)
     await create_notification(
         ctx.session,

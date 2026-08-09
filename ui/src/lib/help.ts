@@ -24,7 +24,7 @@ export interface HelpTopic {
 
 const TOPICS: HelpTopic[] = [
   {
-    prefix: "/agents/work-orders",
+    prefix: "/views/work-orders",
     title: "Work orders",
     body: `
 **Work orders** are the durable unit of work your agent org executes.

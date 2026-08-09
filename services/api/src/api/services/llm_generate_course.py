@@ -16,6 +16,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from api.services.agents.llm.reasoning import reasoning_kwargs
+
 # Default authoring rules. The tool steers the content per request via the topic/
 # category/audience in the user prompt so the course is grounded by the ask, not vibes.
 DEFAULT_AUTHORING_RULES = (
@@ -255,6 +257,7 @@ async def generate_course_blueprint(
             {"role": "user", "content": user},
         ],
         response_format={"type": "json_schema", "json_schema": _blueprint_schema()},
+        **reasoning_kwargs(model),
     )
     content = response.choices[0].message.content or "{}"
     parsed = json.loads(content)

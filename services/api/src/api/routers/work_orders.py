@@ -10,13 +10,14 @@ from __future__ import annotations
 import uuid
 from typing import Annotated, NoReturn
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth.dependencies import OrgContext, require_org_access, require_org_admin
 from api.dependencies import get_tenant_db
 from api.models.work_order import WorkOrder
 from api.schemas.work_order import (
+    EntryPageRead,
     EntryRead,
     TaskRead,
     TasksSet,
@@ -24,7 +25,10 @@ from api.schemas.work_order import (
     WorkOrderCreate,
     WorkOrderDetail,
     WorkOrderMap,
+    WorkOrderModeUpdate,
     WorkOrderRead,
+    WorkOrderReply,
+    WorkOrderReviewLevelUpdate,
     WorkOrderStatusUpdate,
 )
 from api.services.agents.work_order_service import (
@@ -47,7 +51,9 @@ def _raise_http(exc: WorkOrderError) -> NoReturn:
 
 
 def _to_read(wo: WorkOrder) -> WorkOrderRead:
-    return WorkOrderRead.model_validate(wo)
+    return WorkOrderRead.model_validate(wo).model_copy(
+        update={"allowed_transitions": WorkOrderService.allowed_transitions(wo.status)}
+    )
 
 
 @router.get("/", response_model=list[WorkOrderRead])
@@ -68,6 +74,8 @@ async def create_work_order(
         title=body.title,
         body=body.body,
         priority=body.priority,
+        mode=body.mode,
+        review_level=body.review_level,
         assigned_agent_id=body.assigned_agent_id,
         created_by_profile_id=ctx.user.profile_id,
     )
@@ -88,10 +96,32 @@ async def get_work_order(
     tasks = await svc.list_tasks(wo_id)
     entries = await svc.list_entries(wo_id)
     detail = WorkOrderDetail.model_validate(wo)
+    detail.allowed_transitions = svc.allowed_transitions(wo.status)
     detail.tasks = [TaskRead.model_validate(t) for t in tasks]
     detail.entries = [EntryRead.model_validate(e) for e in entries]
     detail.progress = svc.progress(tasks)
     return detail
+
+
+@router.get("/{wo_id}/entries", response_model=EntryPageRead)
+async def list_entries_page(
+    wo_id: uuid.UUID,
+    ctx: Annotated[OrgContext, Depends(require_org_access)],
+    session: Annotated[AsyncSession, Depends(get_tenant_db)],
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    before: Annotated[uuid.UUID | None, Query()] = None,
+) -> EntryPageRead:
+    """A page of diary, newest first, returned in reading order.
+
+    The page loads the tail and walks backwards as the reader scrolls up, so an
+    order with a long agent transcript does not render hundreds of Markdown
+    blocks nobody looks at.
+    """
+    try:
+        page = await WorkOrderService(session, ctx.org_id).list_entries_page(wo_id, limit=limit, before=before)
+    except WorkOrderError as exc:
+        _raise_http(exc)
+    return EntryPageRead(entries=[EntryRead.model_validate(e) for e in page.entries], has_more=page.has_more)
 
 
 @router.get("/{wo_id}/map", response_model=WorkOrderMap)
@@ -133,7 +163,56 @@ async def assign(
     session: Annotated[AsyncSession, Depends(get_tenant_db)],
 ) -> WorkOrderRead:
     try:
-        wo = await WorkOrderService(session, ctx.org_id).assign(wo_id, body.assigned_agent_id)
+        # Assigning an already-started order dispatches it, so the actor is needed
+        # here for the same reason as on status: the run reads as that person.
+        wo = await WorkOrderService(session, ctx.org_id).assign(
+            wo_id, body.assigned_agent_id, actor_profile_id=ctx.user.profile_id
+        )
+    except WorkOrderError as exc:
+        _raise_http(exc)
+    return _to_read(wo)
+
+
+@router.patch("/{wo_id}/mode", response_model=WorkOrderRead)
+async def set_mode(
+    wo_id: uuid.UUID,
+    body: WorkOrderModeUpdate,
+    # Admin: 'automatic' removes the human from every approval on this order.
+    ctx: Annotated[OrgContext, Depends(require_org_admin)],
+    session: Annotated[AsyncSession, Depends(get_tenant_db)],
+) -> WorkOrderRead:
+    try:
+        wo = await WorkOrderService(session, ctx.org_id).set_mode(wo_id, body.mode)
+    except WorkOrderError as exc:
+        _raise_http(exc)
+    return _to_read(wo)
+
+
+@router.patch("/{wo_id}/review-level", response_model=WorkOrderRead)
+async def set_review_level(
+    wo_id: uuid.UUID,
+    body: WorkOrderReviewLevelUpdate,
+    ctx: Annotated[OrgContext, Depends(require_org_admin)],
+    session: Annotated[AsyncSession, Depends(get_tenant_db)],
+) -> WorkOrderRead:
+    try:
+        wo = await WorkOrderService(session, ctx.org_id).set_review_level(wo_id, body.review_level)
+    except WorkOrderError as exc:
+        _raise_http(exc)
+    return _to_read(wo)
+
+
+@router.post("/{wo_id}/reply", response_model=WorkOrderRead)
+async def reply(
+    wo_id: uuid.UUID,
+    body: WorkOrderReply,
+    # Admin, like status and assignment: a reply can queue a run, and every other
+    # route that starts an agent is admin-gated.
+    ctx: Annotated[OrgContext, Depends(require_org_admin)],
+    session: Annotated[AsyncSession, Depends(get_tenant_db)],
+) -> WorkOrderRead:
+    try:
+        wo = await WorkOrderService(session, ctx.org_id).reply(wo_id, body.text, actor_profile_id=ctx.user.profile_id)
     except WorkOrderError as exc:
         _raise_http(exc)
     return _to_read(wo)

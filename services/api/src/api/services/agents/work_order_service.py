@@ -16,6 +16,8 @@ import json
 import re
 import uuid
 from collections.abc import Sequence
+from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import select
@@ -23,7 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.models.agent import Agent
 from api.models.agent_run import AgentApproval, AgentQuestion, AgentRun
-from api.models.work_order import WorkOrder, WorkOrderEntry, WorkOrderTask
+from api.models.work_order import WORK_ORDER_MODES, WorkOrder, WorkOrderEntry, WorkOrderTask
 from api.repositories.agent_run import AgentRunRepository
 from api.repositories.work_order import WorkOrderRepository
 from api.schemas.work_order import MapEvent, MapLane, WorkOrderMap
@@ -65,6 +67,14 @@ _START_TITLES = {
 _STATUS_RANK = ["error", "waiting", "running", "queued", "done", "cancelled"]
 
 
+@dataclass(frozen=True)
+class EntryPage:
+    """ORM-side page: the route maps it to ``EntryPageRead``."""
+
+    entries: list[WorkOrderEntry]
+    has_more: bool
+
+
 class WorkOrderError(Exception):
     pass
 
@@ -82,6 +92,31 @@ def _brief(wo: WorkOrder) -> str:
     instruction — the body is where the actual request lives."""
     body = (wo.body or "").strip()
     return f"{wo.title}\n\n{body}" if body else wo.title
+
+
+# How much of the diary a follow-up run is given. Enough that the agent knows what
+# has already been tried, bounded so a long-running order does not grow its own
+# prompt without limit.
+_REPLY_CONTEXT_ENTRIES = 12
+
+
+def _reply_brief(wo: WorkOrder, history: Sequence[WorkOrderEntry], reply: str) -> str:
+    """The brief for a run started by a person replying.
+
+    A reply is almost always a *response* — an answer, a correction, a go-ahead —
+    so a run given only the reply would restart the order from nothing and repeat
+    the work already in the diary.
+    """
+    lines = [f"{e.role}: {e.text.strip()}" for e in history if e.text.strip()]
+    transcript = "\n\n".join(lines[-_REPLY_CONTEXT_ENTRIES:])
+    return (
+        f"{_brief(wo)}\n\n"
+        "--- What has happened on this work order so far ---\n"
+        f"{transcript}\n\n"
+        "--- The person who filed it has just replied ---\n"
+        f"{reply}\n\n"
+        "Continue the work order from here, taking their reply as the instruction."
+    )
 
 
 def _lane_for(agent: Agent) -> MapLane:
@@ -142,6 +177,15 @@ class WorkOrderService:
         self._org_id = org_id
         self._repo = WorkOrderRepository(session, org_id)
 
+    @staticmethod
+    def allowed_transitions(status: str) -> list[str]:
+        """The statuses an order in this state may move to.
+
+        Public so the API can send it: a client that re-derived this would offer
+        buttons the server then rejects the moment the state machine changes.
+        """
+        return sorted(_TRANSITIONS.get(status, set()))
+
     async def list_work_orders(self) -> list[WorkOrder]:
         return await self._repo.list_all()
 
@@ -157,6 +201,8 @@ class WorkOrderService:
         title: str,
         body: str | None = None,
         priority: str = "normal",
+        mode: str = "manual",
+        review_level: str = "standard",
         assigned_agent_id: uuid.UUID | None = None,
         created_by_profile_id: uuid.UUID | None = None,
     ) -> WorkOrder:
@@ -165,6 +211,8 @@ class WorkOrderService:
             title=title,
             body=body,
             priority=priority,
+            mode=mode,
+            review_level=review_level,
             assigned_agent_id=assigned_agent_id,
             created_by_profile_id=created_by_profile_id,
             status="draft",
@@ -192,7 +240,14 @@ class WorkOrderService:
         await self._repo.flush()
         return wo
 
-    async def _dispatch(self, wo: WorkOrder, *, actor_profile_id: uuid.UUID | None) -> None:
+    async def _dispatch(
+        self,
+        wo: WorkOrder,
+        *,
+        actor_profile_id: uuid.UUID | None,
+        task: str | None = None,
+        ignore_run_id: uuid.UUID | None = None,
+    ) -> None:
         """Queue a run for the assigned agent, if there is one.
 
         Unassigned orders are left alone rather than refused: a work order is also
@@ -200,6 +255,16 @@ class WorkOrderService:
         every order people work themselves.
         """
         if wo.assigned_agent_id is None:
+            # Not refused, but not silent either. Starting an order that will not
+            # run looks identical to starting one that will, and the only place
+            # anyone would look for the reason is the order's own record.
+            await self._repo.add_entry(
+                WorkOrderEntry(
+                    work_order_id=wo.id,
+                    role=_HUMAN_LANE,
+                    text=("Started with no agent assigned, so no run was queued. Assign an agent to have it worked."),
+                )
+            )
             return
         agent = (
             await self._session.execute(
@@ -213,7 +278,7 @@ class WorkOrderService:
                 f"Work order '{wo.title}' is assigned to an agent that cannot run "
                 "(missing or disabled). Reassign it or enable the agent."
             )
-        if await self._has_live_run(wo.id):
+        if await self._has_live_run(wo.id, ignore_run_id=ignore_run_id):
             return
 
         run = await AgentRunRepository(self._session, self._org_id).create_run(
@@ -221,7 +286,7 @@ class WorkOrderService:
             provider=agent.provider,
             model=agent.model,
             trigger="work_order",
-            input={"task": _brief(wo)},
+            input={"task": task or _brief(wo)},
             work_order_id=wo.id,
             # The agent works on behalf of whoever started the order, and reads the
             # knowledge base with exactly that person's entitlement. A run with no
@@ -241,19 +306,162 @@ class WorkOrderService:
             )
         )
 
-    async def _has_live_run(self, wo_id: uuid.UUID) -> bool:
-        result = await self._session.execute(
-            select(AgentRun.id).where(
-                AgentRun.work_order_id == wo_id,
-                AgentRun.org_id == self._org_id,
-                AgentRun.status.in_(_LIVE_RUN_STATUSES),
-            )
-        )
-        return result.first() is not None
+    async def _has_live_run(self, wo_id: uuid.UUID, *, ignore_run_id: uuid.UUID | None = None) -> bool:
+        """Is another run already on this order?
 
-    async def assign(self, wo_id: uuid.UUID, agent_id: uuid.UUID | None) -> WorkOrder:
+        ``ignore_run_id`` excludes the caller's own run: a tool that queues the
+        next run from inside a run that is about to finish would otherwise see
+        itself and skip.
+        """
+        query = select(AgentRun.id).where(
+            AgentRun.work_order_id == wo_id,
+            AgentRun.org_id == self._org_id,
+            AgentRun.status.in_(_LIVE_RUN_STATUSES),
+        )
+        if ignore_run_id is not None:
+            query = query.where(AgentRun.id != ignore_run_id)
+        return (await self._session.execute(query)).first() is not None
+
+    async def assign(
+        self,
+        wo_id: uuid.UUID,
+        agent_id: uuid.UUID | None,
+        *,
+        actor_profile_id: uuid.UUID | None = None,
+    ) -> WorkOrder:
         wo = await self.get_work_order(wo_id)
         wo.assigned_agent_id = agent_id
+        await self._repo.flush()
+        # Dispatch is normally the status edge into in_progress. An order started
+        # before anyone was assigned passed that edge with nothing to dispatch, so
+        # assigning is the moment it becomes runnable — without this it sits
+        # in_progress, with an agent, forever, and nothing says why.
+        if agent_id is not None and wo.status == _DISPATCH_STATUS:
+            await self._dispatch(wo, actor_profile_id=actor_profile_id)
+            await self._repo.flush()
+        return wo
+
+    async def set_mode(self, wo_id: uuid.UUID, mode: str) -> WorkOrder:
+        """Change how much rope the agent gets: plan | manual | automatic.
+
+        Recorded in the diary rather than only on the row. ``automatic`` means
+        outbound actions stop asking anyone, and "who turned that off, and when"
+        has to be answerable from the order itself — the diary is where anyone
+        reconstructing what happened actually looks.
+        """
+        if mode not in WORK_ORDER_MODES:
+            raise WorkOrderValidationError(f"mode must be one of: {', '.join(WORK_ORDER_MODES)}")
+        wo = await self.get_work_order(wo_id)
+        if wo.mode == mode:
+            return wo
+        previous, wo.mode = wo.mode, mode
+        await self._repo.add_entry(
+            WorkOrderEntry(
+                work_order_id=wo.id,
+                role=_HUMAN_LANE,
+                text=f"Mode changed from {previous} to {mode}.",
+            )
+        )
+        await self._repo.flush()
+        return wo
+
+    async def start_approved_plan(
+        self,
+        wo_id: uuid.UUID,
+        *,
+        summary: str,
+        actor_profile_id: uuid.UUID | None = None,
+        ignore_run_id: uuid.UUID | None = None,
+    ) -> None:
+        """Queue the run that carries out a plan a person has just approved.
+
+        A fresh run rather than continuing the planning one: that run's transcript
+        is a research session, and the thing worth carrying forward is the approved
+        plan, not how it was arrived at.
+        """
+        wo = await self.get_work_order(wo_id)
+        await self._dispatch(
+            wo,
+            actor_profile_id=actor_profile_id,
+            task=(
+                f"{_brief(wo)}\n\n"
+                "--- Your plan, which has been approved ---\n"
+                f"{summary}\n\n"
+                "Carry it out. The task list on this work order is that plan — work "
+                "through it and mark each step as you go."
+            ),
+            ignore_run_id=ignore_run_id,
+        )
+        await self._repo.flush()
+
+    async def set_review_level(self, wo_id: uuid.UUID, level: str) -> WorkOrder:
+        """How big a board this order convenes. Recorded, like the mode: turning
+        review down is a decision someone should be able to find later."""
+        from api.services.agents.review_board import REVIEW_LEVELS
+
+        if level not in REVIEW_LEVELS:
+            raise WorkOrderValidationError(f"review_level must be one of: {', '.join(REVIEW_LEVELS)}")
+        wo = await self.get_work_order(wo_id)
+        if wo.review_level == level:
+            return wo
+        previous, wo.review_level = wo.review_level, level
+        await self._repo.add_entry(
+            WorkOrderEntry(
+                work_order_id=wo.id,
+                role=_HUMAN_LANE,
+                text=f"Review level changed from {previous} to {level}.",
+            )
+        )
+        await self._repo.flush()
+        return wo
+
+    async def reply(
+        self,
+        wo_id: uuid.UUID,
+        text: str,
+        *,
+        actor_profile_id: uuid.UUID | None = None,
+    ) -> WorkOrder:
+        """Record a person's reply on the order and hand it to the agent.
+
+        Agents end runs with questions — sometimes because they were told to ask,
+        sometimes just conversationally — and a finished run has nothing listening.
+        Without this the only reply anyone could make was filing a second work
+        order, which loses everything already in the diary.
+        """
+        message = text.strip()
+        if not message:
+            raise WorkOrderValidationError("A reply cannot be empty")
+        wo = await self.get_work_order(wo_id)
+        # Read the diary before adding the reply: the brief states the reply
+        # separately, and a transcript ending in it would say it twice.
+        history = (await self.list_entries_page(wo.id, limit=_REPLY_CONTEXT_ENTRIES)).entries
+        await self._repo.add_entry(WorkOrderEntry(work_order_id=wo.id, role=_HUMAN_LANE, text=message))
+        await self._repo.flush()
+
+        # A reply is a contribution to the record whatever state the order is in;
+        # it only *starts* an agent on an order that is already under way. Replying
+        # to a draft or a finished order must not quietly restart it.
+        if wo.assigned_agent_id is None or wo.status != _DISPATCH_STATUS:
+            return wo
+        if await self._has_live_run(wo.id):
+            # Delivering into a turn already in flight is the steer problem, not
+            # this one. Say so in the diary rather than letting the reply look
+            # delivered — the failure this whole method exists to fix.
+            await self._repo.add_entry(
+                WorkOrderEntry(
+                    work_order_id=wo.id,
+                    role=_HUMAN_LANE,
+                    text=(
+                        "Noted while the agent was still working, so it was not delivered "
+                        "to the run in progress. Reply again once that run finishes."
+                    ),
+                )
+            )
+            await self._repo.flush()
+            return wo
+
+        await self._dispatch(wo, actor_profile_id=actor_profile_id, task=_reply_brief(wo, history, message))
         await self._repo.flush()
         return wo
 
@@ -289,9 +497,39 @@ class WorkOrderService:
             WorkOrderEntry(work_order_id=wo_id, text=text, agent_id=agent_id, agent_run_id=agent_run_id, role=role)
         )
 
+    async def flush_tasks(self) -> None:
+        """Persist in-place task edits (a status change on a loaded row)."""
+        await self._repo.flush()
+
     async def list_entries(self, wo_id: uuid.UUID) -> list[WorkOrderEntry]:
         await self.get_work_order(wo_id)
         return await self._repo.list_entries(wo_id)
+
+    async def list_entries_page(
+        self, wo_id: uuid.UUID, *, limit: int = 20, before: uuid.UUID | None = None
+    ) -> EntryPage:
+        """A page of diary, newest first, returned oldest-first.
+
+        The diary reads like a conversation: the newest entry is the one you want
+        and history is something you scroll back into. Selecting newest-first and
+        returning in reading order means the caller renders a slice top-to-bottom
+        without reversing it, and lands with the newest at the bottom.
+        """
+        await self.get_work_order(wo_id)
+        cursor: tuple[datetime, uuid.UUID] | None = None
+        if before is not None:
+            anchor = await self._repo.get_entry(wo_id, before)
+            if anchor is None:
+                # Falling back to the newest page would look to the reader like
+                # the history jumped back to the present.
+                raise WorkOrderNotFoundError(f"Diary entry {before} not found")
+            cursor = (anchor.created_at, anchor.id)
+        # One extra row answers "is there more" without a second COUNT.
+        rows = await self._repo.entries_before(wo_id, limit=limit + 1, before=cursor)
+        has_more = len(rows) > limit
+        page = rows[:limit]
+        page.reverse()
+        return EntryPage(entries=page, has_more=has_more)
 
     async def interaction_map(self, wo_id: uuid.UUID) -> WorkOrderMap:
         """One lane per participant, with what each did placed in time.
@@ -409,20 +647,40 @@ class WorkOrderService:
             .scalars()
             .all()
         )
-        return [
-            MapEvent(
-                id=f"ap{a.id}",
-                lane=str(agent_by_run[a.run_id].id),
-                kind="blocked",
-                at=a.created_at,
-                title=f"needs approval: {a.tool_name}",
-                detail=json.dumps(a.arguments) if a.arguments else None,
-                target_lane=_HUMAN_LANE,
-                run_id=a.run_id,
+        events: list[MapEvent] = []
+        for a in rows:
+            if a.run_id not in agent_by_run:
+                continue
+            detail = json.dumps(a.arguments) if a.arguments else None
+            events.append(
+                MapEvent(
+                    id=f"ap{a.id}",
+                    lane=str(agent_by_run[a.run_id].id),
+                    kind="blocked",
+                    at=a.created_at,
+                    title=f"needs approval: {a.tool_name}",
+                    detail=detail,
+                    target_lane=_HUMAN_LANE,
+                    run_id=a.run_id,
+                    approval_id=a.id,
+                )
             )
-            for a in rows
-            if a.run_id in agent_by_run
-        ]
+            # A matching card in the human lane, so the arrow joins two things
+            # rather than trailing off into an empty row — and so the lane says
+            # what is being asked of you instead of only that something is.
+            events.append(
+                MapEvent(
+                    id=f"apw{a.id}",
+                    lane=_HUMAN_LANE,
+                    kind="blocked",
+                    at=a.created_at,
+                    title=f"approve {a.tool_name}",
+                    detail=detail,
+                    run_id=a.run_id,
+                    approval_id=a.id,
+                )
+            )
+        return events
 
     def progress(self, tasks: list[WorkOrderTask]) -> float:
         """Percent complete = done / (total excluding carried)."""

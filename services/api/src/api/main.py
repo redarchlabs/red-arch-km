@@ -28,6 +28,7 @@ from api.routers import (
     agent,
     agent_approvals,
     agent_console,
+    agent_live,
     agents,
     api_keys,
     attributes,
@@ -57,6 +58,7 @@ from api.routers import (
     workflows,
 )
 from api.routers import v1 as v1_router
+from api.services.agents.llm.plugins import load_plugins
 from api.services.openapi_v1 import register_v1_docs
 from api.services.setup_token import ensure_setup_token
 
@@ -117,6 +119,10 @@ async def _instance_has_orgs(session: AsyncSession) -> bool:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     logger.info("Starting Red Arch Knowledge Manager API")
+    # Before anything can serve an agent run: a run pinned to a provider that never
+    # registered would fail at call time, one run at a time. Failing the boot is the
+    # louder, earlier signal.
+    load_plugins(get_settings().llm_provider_plugins)
     await _announce_setup_token_if_needed()
 
     yield
@@ -212,6 +218,7 @@ def create_app() -> FastAPI:
     # approvals, notifications) MUST be registered before agents.router, whose
     # GET /{agent_id} would otherwise shadow them.
     app.include_router(agent_console.router, prefix="/api/agents", tags=["agents"])
+    app.include_router(agent_live.router, prefix="/api/agents", tags=["agents"])
     app.include_router(mcp_servers.router, prefix="/api/agents", tags=["agents"])
     app.include_router(agent_approvals.router, prefix="/api/agents", tags=["agents"])
     app.include_router(agents.router, prefix="/api/agents", tags=["agents"])

@@ -30,6 +30,16 @@ import { formatValue } from "@/components/reports/ReportChart";
 import { streamRunTokens } from "@/lib/api/runStream";
 import { callConnection, runWorkflow } from "@/lib/api/workflows";
 import { Markdown } from "@/components/common/Markdown";
+import {
+  AgentDiaryNode,
+  AgentTimelineNode,
+  ApprovalQueueNode,
+  WorkOrderActionsNode,
+  WorkOrderCreateNode,
+  WorkOrderListNode,
+  WorkOrderTasksNode,
+} from "@/components/workOrders/elements";
+import { LiveActivityNode } from "@/components/workOrders/LiveActivity";
 import { ReportChart } from "@/components/reports/ReportChart";
 import { Dialog, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -2211,6 +2221,120 @@ export function FormRenderer({
           <div className="sm:col-span-12">
             <ElementErrorBoundary>
               <ChatNode el={el} preview={preview} />
+            </ElementErrorBoundary>
+          </div>
+        );
+      // Work-order elements. `work_order_id: null` means "the order this page is
+      // about" — the view's resolved record — so one definition serves every
+      // order rather than needing a view per order.
+      case "agent_timeline":
+        return (
+          <div className={spanClass(el.width)}>
+            <ElementErrorBoundary>
+              <AgentTimelineNode
+                workOrderId={el.work_order_id ?? render.record_id}
+                title={el.title}
+                pollMs={el.poll_ms}
+              />
+            </ElementErrorBoundary>
+          </div>
+        );
+      case "agent_diary":
+        return (
+          <div className={spanClass(el.width)}>
+            <ElementErrorBoundary>
+              <AgentDiaryNode
+                workOrderId={el.work_order_id ?? render.record_id}
+                title={el.title}
+                pageSize={el.page_size}
+                height={el.height}
+                pollMs={el.poll_ms}
+                allowReply={el.allow_reply}
+              />
+            </ElementErrorBoundary>
+          </div>
+        );
+      case "agent_activity":
+        return (
+          <div className={spanClass(el.width)}>
+            <ElementErrorBoundary>
+              <LiveActivityNode
+                workOrderId={el.work_order_id ?? render.record_id}
+                title={el.title}
+                height={el.height}
+                allowSteer={el.allow_steer}
+              />
+            </ElementErrorBoundary>
+          </div>
+        );
+      case "approval_queue":
+        return (
+          <div className={spanClass(el.width)}>
+            <ElementErrorBoundary>
+              <ApprovalQueueNode
+                scope={el.scope ?? "work_order"}
+                workOrderId={el.work_order_id ?? render.record_id}
+                title={el.title}
+                hideWhenEmpty={el.hide_when_empty}
+                includeQuestions={el.include_questions}
+                pollMs={el.poll_ms}
+              />
+            </ElementErrorBoundary>
+          </div>
+        );
+      case "work_order_create":
+        return (
+          <div className={spanClass(el.width)}>
+            <ElementErrorBoundary>
+              <WorkOrderCreateNode
+                title={el.title}
+                submitLabel={el.submit_label}
+                defaultPriority={el.default_priority}
+                showAssignee={el.show_assignee}
+                detailViewId={el.detail_view_id}
+              />
+            </ElementErrorBoundary>
+          </div>
+        );
+      case "work_order_tasks":
+        return (
+          <div className={spanClass(el.width)}>
+            <ElementErrorBoundary>
+              <WorkOrderTasksNode
+                workOrderId={el.work_order_id ?? render.record_id}
+                title={el.title}
+                showProgress={el.show_progress}
+                pollMs={el.poll_ms}
+              />
+            </ElementErrorBoundary>
+          </div>
+        );
+      case "work_order_actions":
+        return (
+          <div className={spanClass(el.width)}>
+            <ElementErrorBoundary>
+              <WorkOrderActionsNode
+                workOrderId={el.work_order_id ?? render.record_id}
+                title={el.title}
+                showSummary={el.show_summary}
+                showAssignee={el.show_assignee}
+                showMode={el.show_mode}
+                showReview={el.show_review}
+              />
+            </ElementErrorBoundary>
+          </div>
+        );
+      case "work_order_list":
+        return (
+          <div className={spanClass(el.width)}>
+            <ElementErrorBoundary>
+              <WorkOrderListNode
+                title={el.title}
+                statuses={el.statuses}
+                detailViewId={el.detail_view_id}
+                limit={el.limit}
+                pollMs={el.poll_ms}
+              />
             </ElementErrorBoundary>
           </div>
         );

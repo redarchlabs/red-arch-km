@@ -41,6 +41,10 @@ class Agent(Base, UUIDMixin, TimestampMixin, LineageMixin):
     # LiteLLM provider + model id (see services/agents/llm/catalog.py).
     provider: Mapped[str] = mapped_column(String(40))
     model: Mapped[str] = mapped_column(String(120))
+    # The model this agent uses WHEN REVIEWING someone else's work. Reading a plan
+    # is far cheaper than writing one, so a board can sit on a mini model while its
+    # authors run on something larger. NULL falls back to ``model``.
+    review_model: Mapped[str | None] = mapped_column(String(120), nullable=True)
     # Sampling / call params: {"temperature": 0.2, "max_tokens": 2048, ...}.
     params: Mapped[dict] = mapped_column(JSONB, default=dict)
 

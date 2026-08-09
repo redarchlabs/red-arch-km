@@ -11,8 +11,9 @@ the per-table tenant policy applies without a join.
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 
-from sqlalchemy import ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -22,6 +23,10 @@ from api.models.base import Base, TimestampMixin, UUIDMixin
 WORK_ORDER_STATUSES = ("draft", "awaiting_approval", "approved", "in_progress", "done", "cancelled")
 # pending | in_progress | blocked | done | carried (handed to a successor WO)
 WORK_ORDER_TASK_STATUSES = ("pending", "in_progress", "blocked", "done", "carried")
+# How much rope the agent gets on this order. plan = think, never act; manual =
+# the org posture decides what needs approval; automatic = approvals are granted
+# without asking. See migration 049.
+WORK_ORDER_MODES = ("plan", "manual", "automatic")
 
 
 class WorkOrder(Base, UUIDMixin, TimestampMixin):
@@ -39,6 +44,11 @@ class WorkOrder(Base, UUIDMixin, TimestampMixin):
     slug: Mapped[str] = mapped_column(String(160))
     title: Mapped[str] = mapped_column(String(300))
     status: Mapped[str] = mapped_column(String(20), default="draft")
+    mode: Mapped[str] = mapped_column(String(10), default="manual", server_default="manual")
+    # How big a board this order convenes at its review gates: none | light |
+    # standard | full. Per order, because the same roster is worth one adversarial
+    # pass on a small job and four lenses on a big one.
+    review_level: Mapped[str] = mapped_column(String(10), default="standard", server_default="standard")
     body: Mapped[str | None] = mapped_column(Text, nullable=True)
     priority: Mapped[str] = mapped_column(String(10), default="normal")  # low|normal|high|urgent
 
@@ -78,6 +88,12 @@ class WorkOrderEntry(Base, UUIDMixin, TimestampMixin):
     """A diary entry — a terse, fact-only log line from an agent's run."""
 
     __tablename__ = "work_order_entries"
+
+    # ``now()`` is the *transaction* timestamp — constant across a request — so
+    # several entries written together tied on it and the diary's (created_at, id)
+    # keyset fell through to a random UUID. ``clock_timestamp()`` advances within
+    # the transaction, which is what keeps a conversation in the order it happened.
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.clock_timestamp())
 
     work_order_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("work_orders.id", ondelete="CASCADE"), index=True

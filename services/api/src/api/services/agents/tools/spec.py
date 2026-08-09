@@ -45,6 +45,10 @@ class ToolSpec:
     side_effecting: bool = False
     # Read tools every agent gets regardless of grants (still kind-gated).
     always_allowed: bool = False
+    # Tools whose whole purpose is to put a decision in front of a person, so they
+    # ASK regardless of posture. Submitting a plan for approval is not an action
+    # that *might* need a human — the human is the point of the call.
+    always_ask: bool = False
     # Terminal tools end the run (raise RunFinished). The loop orders them LAST
     # within a turn's batch so a "complete + one more write" turn executes the
     # write before the run ends, never after.

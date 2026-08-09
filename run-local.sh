@@ -58,11 +58,11 @@ CHAT_MODEL_NAME="${CHAT_MODEL_NAME:-qwen3-30b}"
 # Model ids that must reach HOSTED OpenAI even though OPENAI_BASE_URL points at llama.cpp.
 #
 # Routes are model→URL and win over OPENAI_BASE_URL, so naming api.openai.com here is what
-# lets ONE deployment serve both: an org whose LLM nodes ask for `gpt-4.1-mini` goes out to
+# lets ONE deployment serve both: an org whose LLM nodes ask for `gpt-5-mini` goes out to
 # OpenAI, an org whose nodes ask for `qwen3-30b` (or name nothing at all) stays on this box.
 # Inverting it instead — clearing OPENAI_BASE_URL so hosted is the default — would silently
 # move every existing org onto OpenAI, so the local default is deliberately left alone.
-HOSTED_OPENAI_MODELS="${HOSTED_OPENAI_MODELS:-gpt-4.1-mini gpt-5-mini gpt-5-nano}"
+HOSTED_OPENAI_MODELS="${HOSTED_OPENAI_MODELS:-gpt-5 gpt-5-mini gpt-5-nano}"
 HOSTED_OPENAI_URL="${HOSTED_OPENAI_URL:-https://api.openai.com/v1}"
 
 say()  { printf '\033[1;35m[local]\033[0m %s\n' "$*"; }

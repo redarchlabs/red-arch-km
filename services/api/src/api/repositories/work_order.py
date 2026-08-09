@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.models.work_order import WorkOrder, WorkOrderEntry, WorkOrderTask
@@ -70,6 +71,42 @@ class WorkOrderRepository:
         self._session.add(entry)
         await self._session.flush()
         return entry
+
+    async def entries_before(
+        self,
+        work_order_id: uuid.UUID,
+        *,
+        limit: int,
+        before: tuple[datetime, uuid.UUID] | None = None,
+    ) -> list[WorkOrderEntry]:
+        """The newest ``limit`` entries older than ``before``, newest first.
+
+        Keyset rather than OFFSET: entries are appended while a reader scrolls
+        back, and an offset would repeat or skip a row each time one lands between
+        two requests. ``id`` breaks ties so two entries written in the same
+        millisecond still have a total order.
+        """
+        query = select(WorkOrderEntry).where(
+            WorkOrderEntry.work_order_id == work_order_id,
+            WorkOrderEntry.org_id == self._org_id,
+        )
+        if before is not None:
+            created_at, entry_id = before
+            query = query.where(tuple_(WorkOrderEntry.created_at, WorkOrderEntry.id) < (created_at, entry_id))
+        result = await self._session.execute(
+            query.order_by(WorkOrderEntry.created_at.desc(), WorkOrderEntry.id.desc()).limit(limit)
+        )
+        return list(result.scalars().all())
+
+    async def get_entry(self, work_order_id: uuid.UUID, entry_id: uuid.UUID) -> WorkOrderEntry | None:
+        result = await self._session.execute(
+            select(WorkOrderEntry).where(
+                WorkOrderEntry.id == entry_id,
+                WorkOrderEntry.work_order_id == work_order_id,
+                WorkOrderEntry.org_id == self._org_id,
+            )
+        )
+        return result.scalar_one_or_none()
 
     async def list_entries(self, work_order_id: uuid.UUID, limit: int = 200) -> list[WorkOrderEntry]:
         result = await self._session.execute(

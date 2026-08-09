@@ -22,13 +22,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api import db_scope
 from api.config import Settings
+from api.dependencies import get_redis_client
 from api.models.agent_run import AgentApproval, AgentRun
 from api.repositories.agent import AgentRepository
 from api.repositories.agent_run import AgentRunRepository
+from api.repositories.agent_run_messages import AgentRunMessageRepository
 from api.services.agents import lifecycle
-from api.services.agents.authority import available_tools
+from api.services.agents.authority import Posture, available_tools, posture_for
+from api.services.agents.live.activity import RunActivityPublisher
 from api.services.agents.llm.keys import resolve_provider_key
-from api.services.agents.llm.provider import LLMProvider, ToolCallRequest
+from api.services.agents.llm.provider import ToolCallRequest
+from api.services.agents.llm.routing import provider_for
 from api.services.agents.notify import create_notification
 from api.services.agents.prompts import build_system_prompt
 from api.services.agents.runtime import RunCancelled, RunFinished, RunParked, run_agent_loop
@@ -205,10 +209,28 @@ class AgentRunExecutor:
             run_id=run.id,
             work_order_id=run.work_order_id,
         )
+        # Resolve the posture before building the tool list, not after: a plan-mode
+        # run that is *offered* tools it will be denied burns turns proposing
+        # actions that can never happen.
+        from api.models.org import Org
+        from api.models.work_order import WorkOrder
+
+        org = await session.get(Org, org_id)
+        org_posture = (getattr(org, "agent_autonomy", None) or "high_touch") if org else "high_touch"
+        work_order = await session.get(WorkOrder, run.work_order_id) if run.work_order_id else None
+        autonomy = posture_for(work_order, org_posture)
+
         specs = available_tools(
             agent,
             await load_agent_tools(session, org_id, agent, self._settings, actor_user_id=run.actor_user_id),
+            autonomy=autonomy,
         )
+        if autonomy == Posture.PLAN_ONLY:
+            # The exit from plan mode, and only offered there: submitting a plan on
+            # an order already being worked would mean nothing.
+            from api.services.agents.tools.plan_mode import SUBMIT_PLAN
+
+            specs = [*specs, SUBMIT_PLAN]
         if linkage is not None:
             # Workflow mode: the completion contract comes in; un-gated egress
             # goes out (web_research's query string leaves the org without an
@@ -221,13 +243,6 @@ class AgentRunExecutor:
             schema: dict[str, Any] = raw_schema if isinstance(raw_schema, dict) else {}
             specs = [*specs, *workflow_bridge_specs(schema)]
 
-        # The org's autonomy posture (default high_touch) gates side-effecting tools
-        # at call time: under high_touch every outbound action asks the human.
-        from api.models.org import Org
-
-        org = await session.get(Org, org_id)
-        autonomy = (getattr(org, "agent_autonomy", None) or "high_touch") if org else "high_touch"
-
         # Resume a parked turn (human approved) or start fresh from the task.
         resume = run.input.get("resume") if isinstance(run.input, dict) else None
         if resume:
@@ -237,7 +252,13 @@ class AgentRunExecutor:
             resume_answers = dict(resume.get("answers") or {})
         else:
             task = str(run.input.get("task") or run.input.get("message") or "").strip() or "Proceed."
-            system = build_system_prompt(agent)
+            # A work-order run is watched through a task list the agent has to fill
+            # in; without the title it does not know it is on one.
+            system = build_system_prompt(
+                agent,
+                work_order_title=work_order.title if work_order else None,
+                plan_only=autonomy == Posture.PLAN_ONLY,
+            )
             if linkage is not None:
                 from api.services.agents.tools.bridge import workflow_system_addendum, wrap_workflow_task
 
@@ -251,13 +272,39 @@ class AgentRunExecutor:
             approved_names = set()
             resume_answers = {}
 
+        # Steps stay the durable record; the publisher is a live view bolted beside
+        # it. Deltas are published and NOT persisted — the assistant message is
+        # already stored whole, and one row per token would multiply the step table
+        # for a transcript that is only interesting while it is being written.
+        publisher = RunActivityPublisher(
+            get_redis_client(self._settings),
+            org_id,
+            run.id,
+            agent_name=agent.name,
+            work_order_id=run.work_order_id,
+        )
+
         async def emit(event: dict[str, Any]) -> None:
             await self._persist_event(run_repo, run.id, event)
+            await publisher.publish(event)
 
         async def continue_check() -> bool:
             # Column select bypasses the identity map; READ COMMITTED sees an
             # external cancel as soon as it commits.
             return await run_repo.current_status(run.id) == "running"
+
+        async def steer() -> list[str]:
+            """Messages a person queued for this run, taken exactly once.
+
+            Committed immediately: the drain marks them delivered, and if the turn
+            it feeds them into then fails, they must not silently reappear and be
+            acted on twice.
+            """
+            texts = await AgentRunMessageRepository(session, org_id).drain(run.id)
+            if texts:
+                await session.commit()
+                await db_scope.enter_tenant(session, org_id)
+            return texts
 
         async def drive(
             msgs: list[dict[str, Any]],
@@ -265,7 +312,7 @@ class AgentRunExecutor:
             answers: dict[str, Any] | None = None,
         ):
             return await run_agent_loop(
-                provider=LLMProvider(api_key=key),
+                provider=provider_for(self._settings, agent.model, key),
                 agent=agent,
                 model=agent.model,
                 messages=msgs,
@@ -275,17 +322,25 @@ class AgentRunExecutor:
                 max_iterations=self._settings.agent_max_iterations,
                 temperature=(agent.params or {}).get("temperature"),
                 max_tokens=(agent.params or {}).get("max_tokens"),
+                reasoning_effort=(agent.params or {}).get("reasoning_effort"),
                 approval_strategy=self._make_strategy(session, org_id, run, approved_names),
                 resume_tool_calls=resume_calls,
                 resume_answers=answers,
                 autonomy=autonomy,
+                steer=steer,
                 continue_check=continue_check,
             )
 
         try:
             # Answers apply only to the turn that was parked; the corrective nudge
             # below is a fresh turn and must not inherit them.
-            result = await drive(messages, resume_tool_calls, resume_answers)
+            try:
+                result = await drive(messages, resume_tool_calls, resume_answers)
+            finally:
+                # Whatever ends the run — finished, parked, cancelled, error — the
+                # last few buffered tokens are the ones explaining why. Losing them
+                # to a cancelled flush timer is the one moment they matter most.
+                await publisher.close()
             if linkage is not None and not result.truncated:
                 # Prose is not a completion for a workflow step: one corrective
                 # nudge, then (below) escalate rather than pretend success.
@@ -455,8 +510,27 @@ class AgentRunExecutor:
                 run_id, kind="tool_call", name=event.get("name"), content={"arguments": event.get("arguments")}
             )
         elif kind == "tool_result":
+            # The FULL result, always. The transcript's copy may be elided, and this
+            # step is what read_run_detail hands back when it is — keyed by call_id,
+            # which is the handle the elision leaves behind.
             await run_repo.add_step(
-                run_id, kind="tool_result", name=event.get("name"), content={"result": event.get("result")}
+                run_id,
+                kind="tool_result",
+                name=event.get("name"),
+                content={"result": event.get("result"), "call_id": event.get("call_id")},
+            )
+        elif kind == "compaction":
+            # Recorded so the run's history explains its own gap: a reader who sees
+            # the summary can see what it replaced and how much it saved.
+            await run_repo.add_step(
+                run_id,
+                kind="compaction",
+                content={
+                    "summary": event.get("summary"),
+                    "folded": event.get("folded"),
+                    "before_chars": event.get("before_chars"),
+                    "after_chars": event.get("after_chars"),
+                },
             )
         elif kind == "approval_required":
             await run_repo.add_step(

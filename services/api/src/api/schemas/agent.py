@@ -11,9 +11,27 @@ import uuid
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from api.services.agents.llm.reasoning import EFFORTS
 
 AgentKind = Literal["coordinator", "advisory", "operator"]
+
+
+def _validate_params(value: dict | None) -> dict | None:
+    """Reject a ``reasoning_effort`` the API would 400 on.
+
+    ``params`` is free-form JSON by design, so the runtime treats a bad tier as
+    "use the default" rather than failing a run mid-flight. Here at the write
+    boundary the admin is present to be told, so a typo is refused instead of
+    silently doing something other than what was asked for.
+    """
+    if value is None:
+        return value
+    effort = value.get("reasoning_effort")
+    if effort is not None and effort not in EFFORTS:
+        raise ValueError(f"reasoning_effort must be one of {', '.join(EFFORTS)}")
+    return value
 
 
 class AgentGrants(BaseModel):
@@ -50,6 +68,8 @@ class AgentBase(BaseModel):
     # to an agent_task step (workflow ids as strings, or ["*"]).
     workflow_invocable: list[str] = Field(default_factory=list)
 
+    _check_params = field_validator("params")(_validate_params)
+
 
 class AgentCreate(AgentBase):
     name: str = Field(min_length=1, max_length=120, pattern=r"^[a-z0-9][a-z0-9-]*$")
@@ -75,6 +95,8 @@ class AgentUpdate(BaseModel):
     mcp_server_ids: list[uuid.UUID] | None = None
     workflow_allowlist: list[uuid.UUID] | None = None
     workflow_invocable: list[str] | None = None
+
+    _check_params = field_validator("params")(_validate_params)
 
 
 class AgentRead(BaseModel):

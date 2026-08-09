@@ -4,6 +4,7 @@ import { LogOut, Menu, User } from "lucide-react";
 import Link from "next/link";
 
 import { HelpButton } from "@/components/help/HelpButton";
+import { PendingWorkBell } from "@/components/nav/PendingWorkBell";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/context/AuthContext";
 
@@ -32,6 +33,7 @@ export function Header({ onMenuClick }: HeaderProps) {
         <OrgSwitcher />
       </div>
       <div className="flex items-center gap-2 sm:gap-4">
+        <PendingWorkBell />
         <HelpButton />
         <ThemeSwitcher />
         <Link
