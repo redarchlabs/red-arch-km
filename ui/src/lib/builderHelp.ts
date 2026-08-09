@@ -478,6 +478,32 @@ read to decide whether to chase an order.
 - **Poll (ms)** — refresh while agents are working through it.
 `,
   ),
+  agent_activity: topic(
+    "Live agent activity",
+    `
+A running agent's transcript **as it happens** — the model's reasoning, the tools
+it calls, and their results — plus a box to say something back to it.
+
+The **Diary** records what an agent *did*, once each step is saved. This shows it
+thinking, while it thinks. Both are worth having: one answers "what happened on
+this order", the other "what is happening right now".
+
+Streamed over a WebSocket, so it is genuinely live rather than polled. If the
+connection drops it reconnects on its own, backing off so a server restart is not
+made worse by every open tab retrying at once.
+
+- **Allow steer** — the box that talks back. What you type is **queued**, not
+  injected: the agent picks it up at the top of its next turn. It is never spliced
+  into a turn already in progress, because a message landing between a tool call
+  and its result is rejected by the model provider outright and would end the run.
+- **Height** — how tall the transcript pane is.
+
+Steering needs something to steer, so the box stays disabled until a run has been
+seen on this work order. Nothing is persisted from this view: the durable record
+is the diary and the run's steps, and reloading the page starts the transcript
+fresh from whatever happens next.
+`,
+  ),
   work_order_actions: topic(
     "Work order actions",
     `
