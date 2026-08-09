@@ -510,8 +510,27 @@ class AgentRunExecutor:
                 run_id, kind="tool_call", name=event.get("name"), content={"arguments": event.get("arguments")}
             )
         elif kind == "tool_result":
+            # The FULL result, always. The transcript's copy may be elided, and this
+            # step is what read_run_detail hands back when it is — keyed by call_id,
+            # which is the handle the elision leaves behind.
             await run_repo.add_step(
-                run_id, kind="tool_result", name=event.get("name"), content={"result": event.get("result")}
+                run_id,
+                kind="tool_result",
+                name=event.get("name"),
+                content={"result": event.get("result"), "call_id": event.get("call_id")},
+            )
+        elif kind == "compaction":
+            # Recorded so the run's history explains its own gap: a reader who sees
+            # the summary can see what it replaced and how much it saved.
+            await run_repo.add_step(
+                run_id,
+                kind="compaction",
+                content={
+                    "summary": event.get("summary"),
+                    "folded": event.get("folded"),
+                    "before_chars": event.get("before_chars"),
+                    "after_chars": event.get("after_chars"),
+                },
             )
         elif kind == "approval_required":
             await run_repo.add_step(

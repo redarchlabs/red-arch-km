@@ -21,9 +21,11 @@ const answerQuestion = vi.fn();
 const declineQuestion = vi.fn();
 const approveApproval = vi.fn();
 const denyApproval = vi.fn();
+const getWorkOrderMap = vi.fn();
+const listAgentRunSteps = vi.fn();
 
 vi.mock("@/lib/api/workOrders", () => ({
-  getWorkOrderMap: vi.fn(),
+  getWorkOrderMap: (...a: unknown[]) => getWorkOrderMap(...a),
   assignWorkOrder: (...a: unknown[]) => assignWorkOrder(...a),
   createWorkOrder: (...a: unknown[]) => createWorkOrder(...a),
   getWorkOrder: (...a: unknown[]) => getWorkOrder(...a),
@@ -35,7 +37,7 @@ vi.mock("@/lib/api/workOrders", () => ({
 }));
 
 vi.mock("@/lib/api/agents", () => ({
-  listAgentRunSteps: vi.fn(),
+  listAgentRunSteps: (...a: unknown[]) => listAgentRunSteps(...a),
   listAgents: () => Promise.resolve(agentRoster),
   listApprovals: (...a: unknown[]) => listApprovals(...a),
   listQuestions: (...a: unknown[]) => listQuestions(...a),
@@ -52,6 +54,7 @@ vi.mock("next/navigation", () => ({
 
 import {
   AgentDiaryNode,
+  AgentTimelineNode,
   ApprovalQueueNode,
   WorkOrderActionsNode,
   WorkOrderCreateNode,
@@ -146,6 +149,128 @@ describe("WorkOrderActionsNode", () => {
     render(<WorkOrderActionsNode workOrderId="wo-1" />);
 
     expect(await screen.findByRole("option", { name: "Unassigned" })).toBeTruthy();
+  });
+});
+
+describe("AgentTimelineNode run detail", () => {
+  // The reader's half of the compaction bargain. The runtime shortens what the
+  // MODEL re-reads and keeps every result whole on the step, so this panel has to
+  // be able to open the rest — otherwise the detail is retained and unreachable,
+  // which is indistinguishable from having thrown it away.
+  const laneMap = {
+    lanes: [{ key: "chief", label: "chief-of-staff", avatar: null, agent_kind: "coordinator", status: "done" }],
+    events: [
+      {
+        id: "ev-1",
+        lane: "chief",
+        kind: "finished" as const,
+        at: "2026-08-09T10:00:00Z",
+        title: "Read the handbook",
+        detail: null,
+        target_lane: null,
+        run_id: "run-1",
+      },
+    ],
+  };
+
+  const runStep = (id: string, kind: string, content: Record<string, unknown>, name: string | null = null) => ({
+    id,
+    run_id: "run-1",
+    seq: 1,
+    kind,
+    name,
+    content,
+    tokens: null,
+    created_at: "2026-08-09T10:00:00Z",
+  });
+
+  // The marker sits at the END, past the on-screen preview's cut, so finding it
+  // proves the detail was opened rather than that the preview happened to show it.
+  const body = (marker: string) => `${"L".repeat(3000)}${marker}`;
+  const shows = (marker: string) => (document.body.textContent ?? "").includes(marker);
+
+  async function openTheRun() {
+    getWorkOrderMap.mockResolvedValue(laneMap);
+    render(<AgentTimelineNode workOrderId="wo-1" />);
+    fireEvent.click(await screen.findByText("Read the handbook"));
+    return screen.findByText("What this agent did");
+  }
+
+  it("opens the full result a preview stands in for", async () => {
+    listAgentRunSteps.mockResolvedValue([
+      runStep("s1", "tool_result", { result: { output: body("THE-END") } }, "read_file"),
+    ]);
+    await openTheRun();
+
+    const toggle = await screen.findByRole("button", { name: "Show full detail" });
+    // Nothing past the preview is unrolled until it is asked for.
+    expect(shows("THE-END")).toBe(false);
+
+    fireEvent.click(toggle);
+
+    await waitFor(() => expect(shows("THE-END")).toBe(true));
+  });
+
+  it("closes it again", async () => {
+    listAgentRunSteps.mockResolvedValue([
+      runStep("s1", "tool_result", { result: { output: body("THE-END") } }, "read_file"),
+    ]);
+    await openTheRun();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Show full detail" }));
+    await waitFor(() => expect(shows("THE-END")).toBe(true));
+    fireEvent.click(await screen.findByRole("button", { name: "Hide full detail" }));
+
+    await waitFor(() => expect(shows("THE-END")).toBe(false));
+  });
+
+  it("opens one step without opening the rest", async () => {
+    // One switch for the whole panel would produce the JSON dump this view exists
+    // to avoid.
+    listAgentRunSteps.mockResolvedValue([
+      runStep("s1", "tool_result", { result: { output: body("FIRST-END") } }, "read_file"),
+      runStep("s2", "tool_result", { result: { output: body("SECOND-END") } }, "read_file"),
+    ]);
+    await openTheRun();
+
+    const toggles = await screen.findAllByRole("button", { name: "Show full detail" });
+    fireEvent.click(toggles[0]);
+
+    await waitFor(() => expect(shows("FIRST-END")).toBe(true));
+    expect(shows("SECOND-END")).toBe(false);
+  });
+
+  it("offers the record for a result it has no readable prose for", async () => {
+    listAgentRunSteps.mockResolvedValue([runStep("s1", "tool_result", { result: { rows: [1, 2] } }, "list_records")]);
+    await openTheRun();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Show full detail" }));
+
+    expect(await screen.findByText(/"rows"/)).toBeTruthy();
+  });
+
+  it("leaves a short result with nothing to expand", async () => {
+    listAgentRunSteps.mockResolvedValue([runStep("s1", "tool_result", { result: { output: "12 days" } }, "get_record")]);
+    await openTheRun();
+
+    expect(await screen.findByText("12 days")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Show full detail" })).toBeNull();
+  });
+
+  it("explains a fold rather than leaving a gap", async () => {
+    listAgentRunSteps.mockResolvedValue([
+      runStep("s1", "compaction", {
+        summary: "Searched the handbook and found the leave policy.",
+        folded: 8,
+        before_chars: 64000,
+        after_chars: 9000,
+      }),
+    ]);
+    await openTheRun();
+
+    expect(await screen.findByText("Summarised earlier steps")).toBeTruthy();
+    expect(screen.getByText("Searched the handbook and found the leave policy.")).toBeTruthy();
+    expect(screen.getByText("64,000 → 9,000 chars")).toBeTruthy();
   });
 });
 

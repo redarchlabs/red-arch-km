@@ -108,9 +108,24 @@ export function AgentTimelineNode({ workOrderId, title, pollMs }: TimelineProps)
  *  results. The card can only carry a title; this is the work itself. */
 function RunSteps({ runId, onClose }: { runId: string; onClose: () => void }) {
   const [steps, setSteps] = useState<AgentRunStep[] | null>(null);
+  // Which steps the reader has opened. Per step rather than one switch for the
+  // panel: opening every stored result at once is the JSON dump this view exists
+  // to avoid.
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+
+  const toggle = useCallback((id: string) => {
+    setExpanded((current) => {
+      const next = new Set(current);
+      if (!next.delete(id)) next.add(id);
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
     setSteps(null);
+    // A different run's steps are different rows; carrying the open set across
+    // would open whichever of them happened to share an id.
+    setExpanded(new Set());
     void listAgentRunSteps(runId)
       .then(setSteps)
       .catch(() => setSteps([]));
@@ -137,10 +152,15 @@ function RunSteps({ runId, onClose }: { runId: string; onClose: () => void }) {
         ) : (
           steps.map((step) => {
             const readable = readableStep(step);
+            const open = expanded.has(step.id);
             return (
               <div
                 key={step.id}
-                className={cn("rounded border bg-card p-2", readable.failed && "border-destructive/50")}
+                className={cn(
+                  "rounded border bg-card p-2",
+                  readable.failed && "border-destructive/50",
+                  step.kind === "compaction" && "border-dashed bg-muted/30",
+                )}
               >
                 <div className="text-xs font-medium">{readable.title}</div>
                 {readable.facts.length > 0 ? (
@@ -161,6 +181,27 @@ function RunSteps({ runId, onClose }: { runId: string; onClose: () => void }) {
                     stripImages
                     className={cn("mt-1 text-xs", readable.failed && "text-destructive")}
                   />
+                ) : null}
+                {/* The reader's half of the compaction bargain: the runtime shortens
+                    what the MODEL re-reads but stores every result whole, so a person
+                    can always open the rest. Offered whenever the summary above is a
+                    preview, or whenever there was no readable prose to show at all. */}
+                {readable.truncated || readable.body === null ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => toggle(step.id)}
+                      className="mt-1 text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+                      aria-expanded={open}
+                    >
+                      {open ? "Hide full detail" : "Show full detail"}
+                    </button>
+                    {open ? (
+                      <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded bg-muted/50 p-2 text-[11px] leading-relaxed">
+                        {readable.detail}
+                      </pre>
+                    ) : null}
+                  </>
                 ) : null}
               </div>
             );

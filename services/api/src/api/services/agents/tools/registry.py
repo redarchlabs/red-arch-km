@@ -19,6 +19,7 @@ from api.services.agents.tools.records import (
     LIST_RECORDS,
     UPDATE_RECORD,
 )
+from api.services.agents.tools.run_detail import READ_RUN_DETAIL
 from api.services.agents.tools.spec import ToolSpec
 from api.services.agents.tools.web_research import WEB_RESEARCH
 from api.services.agents.tools.work_order_tasks import work_order_task_specs
@@ -41,6 +42,7 @@ def base_tool_specs(settings: Settings | None = None) -> list[ToolSpec]:
     """
     specs = [
         SEARCH_KNOWLEDGE,
+        READ_RUN_DETAIL,
         LIST_RECORDS,
         GET_RECORD,
         CREATE_RECORD,
