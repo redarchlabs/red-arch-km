@@ -129,7 +129,7 @@ class TestFindingWhatIsThere:
 
 class TestAttachingFromAReply:
     async def test_a_reply_can_be_only_an_attachment(self, admin_session: AsyncSession) -> None:
-        """"Here, look at this" with a screenshot and no words is a whole message."""
+        """ "Here, look at this" with a screenshot and no words is a whole message."""
         org, agent, wo, svc = await _seed(admin_session)
         doc = await DocumentRepository(admin_session, org.id).create(title="shot.png", text=None)
         await admin_session.flush()
@@ -140,9 +140,7 @@ class TestAttachingFromAReply:
         assert len(await svc.list_artifacts(wo.id)) == 1
         assert any("📎" in e.text for e in (await svc.list_entries_page(wo.id)).entries)
 
-    async def test_an_empty_reply_with_nothing_attached_is_still_refused(
-        self, admin_session: AsyncSession
-    ) -> None:
+    async def test_an_empty_reply_with_nothing_attached_is_still_refused(self, admin_session: AsyncSession) -> None:
         from api.services.agents.work_order_service import WorkOrderValidationError
 
         org, agent, wo, svc = await _seed(admin_session)

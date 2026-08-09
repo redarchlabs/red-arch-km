@@ -276,7 +276,7 @@ export interface AgentConsoleMessage {
 export async function* streamAgentConsole(
   agentId: string,
   messages: AgentConsoleMessage[],
-  options: { signal?: AbortSignal } = {},
+  options: { signal?: AbortSignal; documentIds?: string[] } = {},
 ): AsyncGenerator<AgentConsoleEvent> {
   const baseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
   const orgId = typeof window !== "undefined" ? localStorage.getItem("redarch:currentOrgId") : null;
@@ -289,7 +289,7 @@ export async function* streamAgentConsole(
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(orgId ? { "X-Org-ID": orgId } : {}),
     },
-    body: JSON.stringify({ messages }),
+    body: JSON.stringify({ messages, document_ids: options.documentIds ?? [] }),
     signal: options.signal,
   });
 

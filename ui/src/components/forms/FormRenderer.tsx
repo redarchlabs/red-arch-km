@@ -39,7 +39,10 @@ import {
   WorkOrderListNode,
   WorkOrderTasksNode,
 } from "@/components/workOrders/elements";
+import { usePasteAttach } from "@/lib/usePasteAttach";
+import { AttachmentChips } from "@/components/common/AttachmentChips";
 import { LiveActivityNode } from "@/components/workOrders/LiveActivity";
+import { WorkOrderDocumentsNode } from "@/components/workOrders/WorkOrderDocuments";
 import { ReportChart } from "@/components/reports/ReportChart";
 import { Dialog, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -1018,6 +1021,10 @@ function ChatNode({ el, preview }: { el: ChatElement; preview: boolean }) {
   const roleField = el.role_field ?? "role";
   const textField = el.text_field ?? "text";
   const channelField = el.channel_field ?? "channel";
+  // Blank unless the org's message entity actually has a field for it: this
+  // element cannot invent a column on someone else's schema.
+  const attachmentsField = el.attachments_field ?? null;
+  const paste = usePasteAttach();
   const pollMs = Math.max(500, el.poll_ms ?? 1500);
 
   // Live answer-speed controls (Fast mode / Knowledge graph / Concise / Answer model).
@@ -1325,8 +1332,12 @@ function ChatNode({ el, preview }: { el: ChatElement; preview: boolean }) {
         [channelField]: "typed",
         [textField]: text,
         [relSlug]: convId,
+        ...(attachmentsField && paste.documentIds.length
+          ? { [attachmentsField]: paste.documentIds.join(",") }
+          : {}),
       });
       setInput("");
+      paste.clear();
       if (el.answer_workflow_id) {
         // Fire the answer workflow but DON'T block the composer on it: the run
         // fans out to RAG + one or more LLM steps and can take many seconds. The
@@ -1710,12 +1721,16 @@ function ChatNode({ el, preview }: { el: ChatElement; preview: boolean }) {
             <Mic className="h-4 w-4" />
           </button>
         ) : null}
+        {attachmentsField ? (
+          <AttachmentChips attachments={paste.attachments} onRemove={paste.remove} />
+        ) : null}
         <Input
           className="w-full"
           placeholder={micActive ? "Listening…" : el.placeholder ?? "Message the robot…"}
           value={micActive && voiceInterim && !isSelfEcho(voiceInterim, lastRobotSpokenRef.current) ? voiceInterim : input}
           disabled={preview || sending || micActive}
           onChange={(e) => setInput(e.target.value)}
+          onPaste={attachmentsField ? paste.onPaste : undefined}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
@@ -2263,6 +2278,20 @@ export function FormRenderer({
                 title={el.title}
                 height={el.height}
                 allowSteer={el.allow_steer}
+              />
+            </ElementErrorBoundary>
+          </div>
+        );
+      case "work_order_documents":
+        return (
+          <div className={spanClass(el.width)}>
+            <ElementErrorBoundary>
+              <WorkOrderDocumentsNode
+                workOrderId={el.work_order_id ?? render.record_id}
+                title={el.title}
+                hideWhenEmpty={el.hide_when_empty}
+                allowUpload={el.allow_upload}
+                pollMs={el.poll_ms}
               />
             </ElementErrorBoundary>
           </div>
