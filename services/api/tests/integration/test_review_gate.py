@@ -300,3 +300,54 @@ class TestTheDeliveryGate:
         out = await REQUEST_REVIEW.handler(ctx, {"summary": "Done."})
 
         assert out["status"] == "pending"
+
+
+class TestTheRoundCapIsVisibleToTheAgent:
+    """The cap only fires on the *next* submit_plan. Observed live: an agent handed
+    a second round of objections stopped resubmitting and asked a person instead,
+    so the cap never ran and the plan sat in plan mode. It cannot be made
+    unconditional without the handler running on resume — which it does not — so
+    the next best thing is telling the agent the process is bounded and how.
+    """
+
+    async def _round(self, admin_session, ctx, wo, org, summary: str, verdicts: dict[str, str]):
+        with pytest.raises(RunParked):
+            await SUBMIT_PLAN.handler(ctx, {"summary": summary})
+        for reviewer, verdict in verdicts.items():
+            admin_session.add(
+                WorkOrderEntry(
+                    work_order_id=wo.id,
+                    org_id=org.id,
+                    role="review",
+                    text=rb.verdict_marker(reviewer, verdict, "because"),
+                )
+            )
+        await admin_session.commit()
+
+    async def test_the_first_round_says_how_many_are_left(self, admin_session: AsyncSession) -> None:
+        org, author, wo, run, _svc = await _seed(admin_session)
+        ctx = _Ctx(session=admin_session, org_id=org.id, work_order_id=wo.id, agent=author, run_id=run.id)
+        both_fail = {"devils-advocate": rb.FAIL, "security-analyst": rb.FAIL}
+        await self._round(admin_session, ctx, wo, org, "First draft.", both_fail)
+
+        out = await SUBMIT_PLAN.handler(ctx, {"summary": "First draft."})
+
+        assert out["review_rounds_remaining"] == 1
+        assert "1 review round(s) remain" in out["note"]
+
+    async def test_the_final_round_goes_straight_to_the_human(self, admin_session: AsyncSession) -> None:
+        """No extra round-trip: reading the last round's verdicts IS the release.
+        Unresolved objections go to a person rather than looping a third time."""
+        org, author, wo, run, _svc = await _seed(admin_session)
+        ctx = _Ctx(session=admin_session, org_id=org.id, work_order_id=wo.id, agent=author, run_id=run.id)
+        both_fail = {"devils-advocate": rb.FAIL, "security-analyst": rb.FAIL}
+        await self._round(admin_session, ctx, wo, org, "First draft.", both_fail)
+        await SUBMIT_PLAN.handler(ctx, {"summary": "First draft."})
+        await self._round(admin_session, ctx, wo, org, "Revised draft.", both_fail)
+
+        with pytest.raises(RunParked) as parked:
+            await SUBMIT_PLAN.handler(ctx, {"summary": "Revised draft."})
+        await admin_session.commit()
+
+        assert parked.value.wait_kind == "approval"
+        assert any(rb.RELEASED in e.text for e in await _entries(admin_session, wo.id))

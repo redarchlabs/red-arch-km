@@ -62,13 +62,21 @@ async def _clear_the_board(ctx: ToolContext, work_order: Any, summary: str, task
             # the human with the plan rather than being dropped.
             _mark(ctx, work_order.id, f"🏛️ {rb.RELEASED} {_GATE} ({digest}) — unresolved: {', '.join(outcome.failed)}")
             return None
+        # Say how bounded this is. Observed live: an agent handed a second round of
+        # objections stopped resubmitting and asked a person instead, so the cap —
+        # which only fires on the next submit_plan — never ran and the plan sat in
+        # plan mode. An agent that knows the process ends has a reason to finish it.
+        remaining = rb.MAX_ROUNDS - rb.rounds_run(entries, _GATE)
         return {
             "review": "changes requested",
             "failed": outcome.failed,
             "findings": {who: v for who, v in outcome.verdicts.items()},
+            "review_rounds_remaining": remaining,
             "note": (
-                "Address these, update the task list, and call submit_plan again with a "
-                "revised summary. Resubmitting the same text will not re-open the review."
+                "Address these and call submit_plan again with a revised summary; "
+                "resubmitting the same text will not re-open the review. "
+                f"{remaining} review round(s) remain, after which this goes to a person "
+                "with any unresolved objections attached."
             ),
         }
 
