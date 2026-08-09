@@ -10,13 +10,14 @@ from __future__ import annotations
 import uuid
 from typing import Annotated, NoReturn
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth.dependencies import OrgContext, require_org_access, require_org_admin
 from api.dependencies import get_tenant_db
 from api.models.work_order import WorkOrder
 from api.schemas.work_order import (
+    EntryPageRead,
     EntryRead,
     TaskRead,
     TasksSet,
@@ -92,6 +93,27 @@ async def get_work_order(
     detail.entries = [EntryRead.model_validate(e) for e in entries]
     detail.progress = svc.progress(tasks)
     return detail
+
+
+@router.get("/{wo_id}/entries", response_model=EntryPageRead)
+async def list_entries_page(
+    wo_id: uuid.UUID,
+    ctx: Annotated[OrgContext, Depends(require_org_access)],
+    session: Annotated[AsyncSession, Depends(get_tenant_db)],
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    before: Annotated[uuid.UUID | None, Query()] = None,
+) -> EntryPageRead:
+    """A page of diary, newest first, returned in reading order.
+
+    The page loads the tail and walks backwards as the reader scrolls up, so an
+    order with a long agent transcript does not render hundreds of Markdown
+    blocks nobody looks at.
+    """
+    try:
+        page = await WorkOrderService(session, ctx.org_id).list_entries_page(wo_id, limit=limit, before=before)
+    except WorkOrderError as exc:
+        _raise_http(exc)
+    return EntryPageRead(entries=[EntryRead.model_validate(e) for e in page.entries], has_more=page.has_more)
 
 
 @router.get("/{wo_id}/map", response_model=WorkOrderMap)

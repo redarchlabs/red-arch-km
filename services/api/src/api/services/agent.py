@@ -2893,6 +2893,57 @@ class AgentService:
                         "{text, conversation_id}. Not entity-bound; valid standalone."
                     ),
                 },
+                "agent_timeline": {
+                    "required": ["type"],
+                    "optional": ["work_order_id", "title", "poll_ms", "width"],
+                    "use": (
+                        "Swim-lane timeline of every agent that worked a work order, on a shared "
+                        "clock, with a lane for the person that appears only when something is owed "
+                        "to them. Clicking a card opens that run's steps. Leave work_order_id null "
+                        "to bind to the order the page is about (the view's record_id)."
+                    ),
+                },
+                "agent_diary": {
+                    "required": ["type"],
+                    "optional": [
+                        "work_order_id",
+                        "title",
+                        "page_size",
+                        "height (sm|md|lg|fill)",
+                        "poll_ms",
+                        "width",
+                    ],
+                    "use": (
+                        "A work order's diary, newest at the bottom, loading history as the reader "
+                        "scrolls up. Entries are agent-authored Markdown. Leave work_order_id null "
+                        "to bind to the page's own order."
+                    ),
+                },
+                "approval_queue": {
+                    "required": ["type"],
+                    "optional": [
+                        "scope (work_order|org)",
+                        "work_order_id",
+                        "title",
+                        "hide_when_empty",
+                        "poll_ms",
+                        "width",
+                    ],
+                    "use": (
+                        "Pending approvals with Approve/Deny attached, so an agent parked on a "
+                        "decision is actionable where the stall is visible instead of only in the "
+                        "inbox."
+                    ),
+                },
+                "work_order_list": {
+                    "required": ["type"],
+                    "optional": ["title", "statuses", "detail_view_id", "limit", "poll_ms", "width"],
+                    "use": (
+                        "Work orders as a list, optionally narrowed by status. Work orders are not "
+                        "entity records, so record_list cannot reach them. detail_view_id is the "
+                        "view a row opens, with the order passed as its record."
+                    ),
+                },
                 "stat": {
                     "required": ["type", "report_id"],
                     "optional": [

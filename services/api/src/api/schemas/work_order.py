@@ -122,6 +122,16 @@ class MapEvent(BaseModel):
     # human being asked.
     target_lane: str | None = None
     run_id: uuid.UUID | None = None
+    # Set on a `blocked` event that a person can clear, so the page can offer the
+    # decision where the block is visible rather than only in the inbox.
+    approval_id: uuid.UUID | None = None
+
+
+class EntryPageRead(BaseModel):
+    """A slice of diary, oldest-first, with whether older entries remain."""
+
+    entries: list[EntryRead] = Field(default_factory=list)
+    has_more: bool = False
 
 
 class WorkOrderMap(BaseModel):

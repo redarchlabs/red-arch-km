@@ -988,6 +988,91 @@ class ChatElement(_Element):
 
 
 # ------------------------------------------------------------------ #
+# Agent work-order elements
+# ------------------------------------------------------------------ #
+# Which work order these elements read. ``None`` means "the one this page is
+# about" — the view's ``?record_id=``, exactly as an entity-bound view already
+# resolves its record. Pinning an id instead is for a dashboard that always
+# watches one standing order.
+WorkOrderBinding = uuid.UUID | None
+
+# Mirrors ``WORK_ORDER_STATUSES`` in models/work_order.py.
+WorkOrderStatusLiteral = Literal["draft", "awaiting_approval", "approved", "in_progress", "done", "cancelled"]
+
+
+class AgentTimelineElement(_Element):
+    """A swim-lane timeline of every agent that worked an order.
+
+    One lane per participant — plus a lane for the person, appearing only when
+    something is actually owed to them — with each run, consult, answer and
+    approval placed on a shared clock. A diary alone cannot show which agent is
+    blocked on which, or how long a block has lasted, because a list has no room
+    for two things happening at once.
+    """
+
+    type: Literal["agent_timeline"] = "agent_timeline"
+    work_order_id: WorkOrderBinding = None
+    title: str | None = None
+    # Live orders move; a finished one never changes, so polling is opt-in.
+    poll_ms: int | None = None
+    width: FieldWidth | None = None
+
+
+class AgentDiaryElement(_Element):
+    """The order's diary, newest last, loading older entries as the reader scrolls up.
+
+    Read like a conversation: the newest entry is the one that matters and history
+    is something you go back into. Rendering the whole transcript eagerly meant an
+    order with a long agent exchange laid out hundreds of Markdown blocks nobody
+    scrolled to."""
+
+    type: Literal["agent_diary"] = "agent_diary"
+    work_order_id: WorkOrderBinding = None
+    title: str | None = None
+    page_size: int = Field(default=20, ge=1, le=100)
+    height: Literal["sm", "md", "lg", "fill"] = "md"
+    poll_ms: int | None = None
+    width: FieldWidth | None = None
+
+
+class WorkOrderListElement(_Element):
+    """The orders themselves, as a list that links into a detail view.
+
+    Work orders are not entity records, so ``record_list`` cannot reach them —
+    which is the only reason this exists rather than being composed from the
+    existing list element. ``detail_view_id`` is where a row navigates; without
+    it the rows are inert, which is right for a read-only wallboard."""
+
+    type: Literal["work_order_list"] = "work_order_list"
+    title: str | None = None
+    # Empty shows every state. Narrow it for a "needs attention" tile.
+    statuses: list[WorkOrderStatusLiteral] = Field(default_factory=list)
+    detail_view_id: uuid.UUID | None = None
+    limit: int = Field(default=25, ge=1, le=200)
+    poll_ms: int | None = None
+    width: FieldWidth | None = None
+
+
+class ApprovalQueueElement(_Element):
+    """Pending approvals, with the decision attached.
+
+    An agent parked on an approval is invisible until someone opens the inbox, so
+    the work stalls with nothing on screen saying why. This puts the decision
+    where the stall is visible. ``scope`` narrows it to one order's approvals, or
+    shows everything the viewer may decide."""
+
+    type: Literal["approval_queue"] = "approval_queue"
+    scope: Literal["work_order", "org"] = "work_order"
+    work_order_id: WorkOrderBinding = None
+    title: str | None = "Waiting on you"
+    # Nothing pending is the normal state; an always-present empty card is noise
+    # on a dashboard but reassuring on a page about one order.
+    hide_when_empty: bool = True
+    poll_ms: int | None = None
+    width: FieldWidth | None = None
+
+
+# ------------------------------------------------------------------ #
 # The recursive element union
 # ------------------------------------------------------------------ #
 FormElement = Annotated[
@@ -1005,6 +1090,10 @@ FormElement = Annotated[
     | StatElement
     | RecordListElement
     | ChatElement
+    | AgentTimelineElement
+    | AgentDiaryElement
+    | WorkOrderListElement
+    | ApprovalQueueElement
     | ButtonElement
     | PuzzlePadElement
     | FormRefElement
