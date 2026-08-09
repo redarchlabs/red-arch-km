@@ -39,6 +39,7 @@ import {
   WorkOrderListNode,
   WorkOrderTasksNode,
 } from "@/components/workOrders/elements";
+import { LiveActivityNode } from "@/components/workOrders/LiveActivity";
 import { ReportChart } from "@/components/reports/ReportChart";
 import { Dialog, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -2253,6 +2254,19 @@ export function FormRenderer({
             </ElementErrorBoundary>
           </div>
         );
+      case "agent_activity":
+        return (
+          <div className={spanClass(el.width)}>
+            <ElementErrorBoundary>
+              <LiveActivityNode
+                workOrderId={el.work_order_id ?? render.record_id}
+                title={el.title}
+                height={el.height}
+                allowSteer={el.allow_steer}
+              />
+            </ElementErrorBoundary>
+          </div>
+        );
       case "approval_queue":
         return (
           <div className={spanClass(el.width)}>
@@ -2262,6 +2276,7 @@ export function FormRenderer({
                 workOrderId={el.work_order_id ?? render.record_id}
                 title={el.title}
                 hideWhenEmpty={el.hide_when_empty}
+                includeQuestions={el.include_questions}
                 pollMs={el.poll_ms}
               />
             </ElementErrorBoundary>

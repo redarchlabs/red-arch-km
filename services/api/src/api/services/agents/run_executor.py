@@ -22,11 +22,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api import db_scope
 from api.config import Settings
+from api.dependencies import get_redis_client
 from api.models.agent_run import AgentApproval, AgentRun
 from api.repositories.agent import AgentRepository
 from api.repositories.agent_run import AgentRunRepository
+from api.repositories.agent_run_messages import AgentRunMessageRepository
 from api.services.agents import lifecycle
 from api.services.agents.authority import Posture, available_tools, posture_for
+from api.services.agents.live.activity import RunActivityPublisher
 from api.services.agents.llm.keys import resolve_provider_key
 from api.services.agents.llm.provider import ToolCallRequest
 from api.services.agents.llm.routing import provider_for
@@ -269,13 +272,39 @@ class AgentRunExecutor:
             approved_names = set()
             resume_answers = {}
 
+        # Steps stay the durable record; the publisher is a live view bolted beside
+        # it. Deltas are published and NOT persisted — the assistant message is
+        # already stored whole, and one row per token would multiply the step table
+        # for a transcript that is only interesting while it is being written.
+        publisher = RunActivityPublisher(
+            get_redis_client(self._settings),
+            org_id,
+            run.id,
+            agent_name=agent.name,
+            work_order_id=run.work_order_id,
+        )
+
         async def emit(event: dict[str, Any]) -> None:
             await self._persist_event(run_repo, run.id, event)
+            await publisher.publish(event)
 
         async def continue_check() -> bool:
             # Column select bypasses the identity map; READ COMMITTED sees an
             # external cancel as soon as it commits.
             return await run_repo.current_status(run.id) == "running"
+
+        async def steer() -> list[str]:
+            """Messages a person queued for this run, taken exactly once.
+
+            Committed immediately: the drain marks them delivered, and if the turn
+            it feeds them into then fails, they must not silently reappear and be
+            acted on twice.
+            """
+            texts = await AgentRunMessageRepository(session, org_id).drain(run.id)
+            if texts:
+                await session.commit()
+                await db_scope.enter_tenant(session, org_id)
+            return texts
 
         async def drive(
             msgs: list[dict[str, Any]],
@@ -298,13 +327,20 @@ class AgentRunExecutor:
                 resume_tool_calls=resume_calls,
                 resume_answers=answers,
                 autonomy=autonomy,
+                steer=steer,
                 continue_check=continue_check,
             )
 
         try:
             # Answers apply only to the turn that was parked; the corrective nudge
             # below is a fresh turn and must not inherit them.
-            result = await drive(messages, resume_tool_calls, resume_answers)
+            try:
+                result = await drive(messages, resume_tool_calls, resume_answers)
+            finally:
+                # Whatever ends the run — finished, parked, cancelled, error — the
+                # last few buffered tokens are the ones explaining why. Losing them
+                # to a cancelled flush timer is the one moment they matter most.
+                await publisher.close()
             if linkage is not None and not result.truncated:
                 # Prose is not a completion for a workflow step: one corrective
                 # nudge, then (below) escalate rather than pretend success.

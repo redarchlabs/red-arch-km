@@ -28,6 +28,7 @@ from api.routers import (
     agent,
     agent_approvals,
     agent_console,
+    agent_live,
     agents,
     api_keys,
     attributes,
@@ -217,6 +218,7 @@ def create_app() -> FastAPI:
     # approvals, notifications) MUST be registered before agents.router, whose
     # GET /{agent_id} would otherwise shadow them.
     app.include_router(agent_console.router, prefix="/api/agents", tags=["agents"])
+    app.include_router(agent_live.router, prefix="/api/agents", tags=["agents"])
     app.include_router(mcp_servers.router, prefix="/api/agents", tags=["agents"])
     app.include_router(agent_approvals.router, prefix="/api/agents", tags=["agents"])
     app.include_router(agents.router, prefix="/api/agents", tags=["agents"])

@@ -231,3 +231,31 @@ class AgentSchedule(Base, UUIDMixin, TimestampMixin):
     next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True)
+
+
+class AgentRunMessage(Base, UUIDMixin, TimestampMixin):
+    """A person's interjection into a run that is already going — a *steer*.
+
+    Delivery is a pull, not a push: nothing outside the run can tell whether it is
+    safe to interrupt (``status='running'`` covers streaming, gating and
+    mid-tool-batch identically), and a user turn injected where a tool result
+    belongs is rejected outright by the provider. So the run drains this itself at
+    the one seam where its message list is well-formed.
+
+    ``delivered_at`` NULL means still queued; the drain sets it in the same
+    statement that reads the row, which is what makes delivery exactly-once
+    without taking a lock.
+    """
+
+    __tablename__ = "agent_run_messages"
+
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("agent_runs.id", ondelete="CASCADE"), index=True
+    )
+    text: Mapped[str] = mapped_column(Text)
+    sent_by_profile_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("user_profiles.id", ondelete="SET NULL"), nullable=True
+    )
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True)

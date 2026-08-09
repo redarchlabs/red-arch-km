@@ -1121,6 +1121,26 @@ class WorkOrderActionsElement(_Element):
     width: FieldWidth | None = None
 
 
+class AgentActivityElement(_Element):
+    """A running agent's transcript, live, with a box to talk back into.
+
+    The diary records what an agent *did* once a step is persisted; this shows it
+    thinking, while it thinks. Both exist because they answer different questions —
+    "what happened on this order" and "what is happening right now".
+
+    Streamed over a WebSocket rather than polled: the point is the tokens as they
+    arrive, and a poll fine-grained enough to feel live would be a request every
+    few hundred milliseconds per open tab."""
+
+    type: Literal["agent_activity"] = "agent_activity"
+    work_order_id: WorkOrderBinding = None
+    title: str | None = None
+    height: Literal["sm", "md", "lg", "fill"] = "md"
+    # The other half of two-way. Off makes this a read-only window.
+    allow_steer: bool = True
+    width: FieldWidth | None = None
+
+
 class ApprovalQueueElement(_Element):
     """Pending approvals, with the decision attached.
 
@@ -1136,6 +1156,10 @@ class ApprovalQueueElement(_Element):
     # Nothing pending is the normal state; an always-present empty card is noise
     # on a dashboard but reassuring on a page about one order.
     hide_when_empty: bool = True
+    # Also list questions an agent is blocked on. On by default: an agent waiting
+    # for an answer is stopped just as hard as one waiting for an approval, and the
+    # two were only ever separate because they arrived in different releases.
+    include_questions: bool = True
     poll_ms: int | None = None
     width: FieldWidth | None = None
 
@@ -1160,6 +1184,7 @@ FormElement = Annotated[
     | ChatElement
     | AgentTimelineElement
     | AgentDiaryElement
+    | AgentActivityElement
     | WorkOrderListElement
     | WorkOrderTasksElement
     | WorkOrderCreateElement
