@@ -5,6 +5,13 @@ via a queue, so the SSE endpoint can yield frames as the agent thinks and acts.
 Uses a privileged session with explicit org scoping in every repo (matching the
 config assistant and the workflows run endpoint, which drives its own tenant
 scoping inside ``execute_workflow_run``).
+
+The operator is present here, so an ASK verdict auto-approves — but a *question*
+(``ask_human``/``consult_peer``) still parks, because an answer takes as long as a
+person takes and SSE cannot hold a request open that long. A parked console run is
+therefore **handed to the worker**: the question is committed, the run is left
+``waiting``, and answering it from the inbox resumes it in the background. The
+transcript is durable, so the console can show the outcome afterwards.
 """
 
 from __future__ import annotations
@@ -27,7 +34,7 @@ from api.services.agents.authority import available_tools
 from api.services.agents.llm.keys import resolve_provider_key
 from api.services.agents.llm.provider import LLMProvider
 from api.services.agents.prompts import build_system_prompt
-from api.services.agents.runtime import run_agent_loop
+from api.services.agents.runtime import RunParked, run_agent_loop
 from api.services.agents.tools.loader import load_agent_tools
 from api.services.agents.tools.spec import ToolContext
 
@@ -140,6 +147,30 @@ class AgentConsoleService:
                         total_tokens=result.total_tokens,
                     )
                     await session.commit()
+                except RunParked as parked:
+                    # The agent asked something and is waiting on the answer. This is
+                    # NOT a failure: falling through to the handler below would roll
+                    # back the question row and the notification that were written
+                    # inside the handler, then mark the run "error" — losing the
+                    # question entirely while telling the user it crashed.
+                    run.input = {
+                        **(run.input or {}),
+                        "resume": {
+                            "messages": parked.messages or messages,
+                            "pending": parked.pending or [],
+                            "approved": [],
+                        },
+                    }
+                    await run_repo.mark_waiting(run, parked.wait_kind)
+                    await session.commit()
+                    await emit(
+                        {
+                            "type": "waiting",
+                            "wait_kind": parked.wait_kind,
+                            "run_id": str(run.id),
+                            **parked.payload,
+                        }
+                    )
                 except Exception as exc:  # noqa: BLE001 - report + persist error state
                     logger.exception("Agent console run %s failed", run.id)
                     await session.rollback()
