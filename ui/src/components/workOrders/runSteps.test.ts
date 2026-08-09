@@ -107,3 +107,66 @@ describe("readableStep", () => {
     expect(readable.title).toBe("handoff");
   });
 });
+
+describe("reading the whole record", () => {
+  // The runtime compacts what the MODEL re-reads but stores everything. These
+  // cover the reader's side of that bargain: a long step is previewed on screen,
+  // and the full text is always there to open.
+  const long = "L".repeat(3000);
+
+  it("previews a long tool result instead of unrolling it", () => {
+    const readable = readableStep(step("tool_result", { result: { output: long } }, "read_file"));
+
+    expect(readable.body!.length).toBeLessThan(long.length);
+    expect(readable.truncated).toBe(true);
+  });
+
+  it("keeps the full text available to open", () => {
+    const readable = readableStep(step("tool_result", { result: { output: long } }, "read_file"));
+
+    expect(readable.detail).toContain(long);
+  });
+
+  it("leaves a short result alone and offers nothing to expand", () => {
+    const readable = readableStep(step("tool_result", { result: { output: "12 days" } }, "get_record"));
+
+    expect(readable.body).toBe("12 days");
+    expect(readable.truncated).toBe(false);
+  });
+
+  it("still exposes the raw record for a step whose shape it cannot read", () => {
+    // The point of the detail pane: nothing stored is unreachable, even when the
+    // readable mapping has nothing to say about it.
+    const readable = readableStep(step("tool_result", { result: { rows: [1, 2, 3] } }, "list_records"));
+
+    expect(readable.body).toBeNull();
+    expect(readable.detail).toContain("rows");
+  });
+});
+
+describe("a compaction step", () => {
+  const content = {
+    summary: "Searched the handbook and found the leave policy.",
+    folded: 8,
+    before_chars: 64000,
+    after_chars: 9000,
+  };
+
+  it("reads as what it is, with the summary as the prose", () => {
+    const readable = readableStep(step("compaction", content));
+
+    expect(readable.title).toBe("Summarised earlier steps");
+    expect(readable.body).toBe("Searched the handbook and found the leave policy.");
+  });
+
+  it("says how much history it stands in for", () => {
+    // Without this the gap is unexplained — a reader cannot tell a quiet run from
+    // one whose middle was folded away.
+    const readable = readableStep(step("compaction", content));
+
+    expect(readable.facts).toEqual([
+      { label: "messages folded", value: "8" },
+      { label: "size", value: "64,000 → 9,000 chars" },
+    ]);
+  });
+});

@@ -17,6 +17,10 @@ export interface ReadableStep {
   facts: { label: string; value: string }[];
   /** Something went wrong here — the caller tints it. */
   failed: boolean;
+  /** Whether ``body`` is a preview of something longer. */
+  truncated: boolean;
+  /** Everything the step stored, for the reader who asks for it. */
+  detail: string;
 }
 
 const TITLES: Record<string, string> = {
@@ -25,7 +29,22 @@ const TITLES: Record<string, string> = {
   tool_result: "Tool replied",
   approval_required: "Asked permission",
   escalation: "Escalated",
+  compaction: "Summarised earlier steps",
 };
+
+/** On-screen preview length for a step's prose. Generous — the panel scrolls —
+ *  but a multi-thousand-character file read should not bury the steps after it. */
+const BODY_PREVIEW = 1200;
+
+/** The stored step, pretty-printed. This is the reader's equivalent of the
+ *  agent's ``read_run_detail``: the runtime compacts what the MODEL re-reads and
+ *  keeps the whole result on the step, so nothing recorded should be unreachable
+ *  on screen — including the shapes the readable mapping has no words for. */
+function fullDetail(content: Record<string, unknown>): string {
+  const payload = "result" in content ? content.result : content;
+  if (typeof payload === "string") return payload;
+  return JSON.stringify(payload, null, 2);
+}
 
 /** Turn a stored value into one readable line. Long text stays whole — the panel
  *  scrolls — but structures collapse rather than sprawling over a screen. */
@@ -71,6 +90,41 @@ export function readableStep(step: {
   const content = step.content ?? {};
   const base = TITLES[step.kind] ?? step.kind;
   const title = step.name ? `${base}: ${step.name}` : base;
+  const detail = fullDetail(content);
+
+  /** Shared tail: preview a long body, and always carry the full record. */
+  const finish = (
+    body: string | null,
+    facts: { label: string; value: string }[],
+    failed: boolean,
+  ): ReadableStep => {
+    const long = body !== null && body.length > BODY_PREVIEW;
+    return {
+      title,
+      body: long ? `${body!.slice(0, BODY_PREVIEW)}…` : body,
+      facts,
+      failed,
+      truncated: long,
+      detail,
+    };
+  };
+
+  if (step.kind === "compaction") {
+    // The one step that exists to explain a gap. Its summary IS the prose; the
+    // numbers say how much history it stands in for, so a reader can tell a quiet
+    // run from one whose middle was folded away.
+    const facts: { label: string; value: string }[] = [];
+    if (typeof content.folded === "number") {
+      facts.push({ label: "messages folded", value: String(content.folded) });
+    }
+    if (typeof content.before_chars === "number" && typeof content.after_chars === "number") {
+      facts.push({
+        label: "size",
+        value: `${content.before_chars.toLocaleString("en-US")} → ${content.after_chars.toLocaleString("en-US")} chars`,
+      });
+    }
+    return finish(typeof content.summary === "string" ? content.summary : null, facts, false);
+  }
 
   if (step.kind === "tool_call" || step.kind === "approval_required") {
     const args = (content.arguments ?? {}) as Record<string, unknown>;
@@ -89,12 +143,12 @@ export function readableStep(step: {
       }
       facts.push({ label, value: asText(value) });
     }
-    return { title, body, facts, failed: false };
+    return finish(body, facts, false);
   }
 
   if (step.kind === "tool_result") {
     const { body, failed } = resultBody(content.result);
-    return { title, body, facts: [], failed };
+    return finish(body, [], failed);
   }
 
   // assistant / escalation / anything else: prefer the prose fields the runtime
@@ -104,5 +158,5 @@ export function readableStep(step: {
     (typeof content.reason === "string" && content.reason) ||
     (typeof content.output === "string" && content.output) ||
     null;
-  return { title, body: prose, facts: [], failed: step.kind === "error" };
+  return finish(prose, [], step.kind === "error");
 }
