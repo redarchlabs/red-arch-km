@@ -253,6 +253,17 @@ export type AgentConsoleEvent =
   | { type: "tool_result"; name: string; result: Record<string, unknown> }
   | { type: "approval_required"; name: string; arguments: Record<string, unknown> }
   | { type: "usage"; prompt_tokens: number; completion_tokens: number; total_tokens: number }
+  /** The agent asked something and is waiting on the answer. The stream ends here —
+   * an answer takes as long as a person takes — and the run continues in the
+   * background once the question is answered from the inbox. */
+  | {
+      type: "waiting";
+      wait_kind: string;
+      run_id: string;
+      question_id?: string;
+      question?: string;
+      peer?: string;
+    }
   | { type: "done"; truncated?: boolean }
   | { type: "error"; error: string };
 

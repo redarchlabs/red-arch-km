@@ -28,7 +28,15 @@ interface TextBlock {
   kind: "user" | "assistant";
   text: string;
 }
-type Block = TextBlock | ToolBlock;
+/** The run parked on a question. The stream is over, but the run is not — it
+ * resumes in the background once the question is answered. */
+interface WaitingBlock {
+  kind: "waiting";
+  waitKind: string;
+  question?: string;
+  peer?: string;
+}
+type Block = TextBlock | ToolBlock | WaitingBlock;
 
 export default function AgentConsolePage() {
   const { id } = useParams<{ id: string }>();
@@ -69,6 +77,13 @@ export default function AgentConsolePage() {
         }
       } else if (event.type === "approval_required") {
         next.push({ kind: "tool", name: event.name, args: event.arguments, approval: true });
+      } else if (event.type === "waiting") {
+        next.push({
+          kind: "waiting",
+          waitKind: event.wait_kind,
+          question: event.question,
+          peer: event.peer,
+        });
       }
       return next;
     });
@@ -134,6 +149,29 @@ export default function AgentConsolePage() {
                   {JSON.stringify(b.args, null, 2)}
                 </pre>
                 {b.result ? <ToolResult name={b.name} result={b.result} /> : null}
+              </div>
+            ) : b.kind === "waiting" ? (
+              <div key={i} className="rounded-md border border-dashed p-3 text-sm">
+                <div className="font-medium">
+                  {b.waitKind === "consult"
+                    ? `Waiting on ${b.peer ?? "another agent"}`
+                    : "Waiting on your answer"}
+                </div>
+                {b.question ? <p className="mt-1 text-muted-foreground">{b.question}</p> : null}
+                <p className="mt-2 text-xs text-muted-foreground">
+                  {b.waitKind === "consult" ? (
+                    "The consulted agent is working on it; this run resumes on its own once they answer."
+                  ) : (
+                    <>
+                      Answer it in{" "}
+                      <Link href="/agents/approvals" className="underline underline-offset-2">
+                        the inbox
+                      </Link>{" "}
+                      and the run picks up right where it left off — in the background, so you
+                      don&apos;t have to stay on this page.
+                    </>
+                  )}
+                </p>
               </div>
             ) : (
               <div
