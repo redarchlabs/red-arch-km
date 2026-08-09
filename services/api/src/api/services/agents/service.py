@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.models.agent import AGENT_KINDS, Agent
 from api.repositories.agent import AgentRepository
 from api.schemas.agent import AgentCreate, AgentUpdate
-from api.services.agents.llm.catalog import VALID_PROVIDERS, provider_for_model
+from api.services.agents.llm.catalog import provider_for_model, valid_providers
 
 
 class AgentError(Exception):
@@ -123,7 +123,7 @@ class AgentService:
     # --- helpers -----------------------------------------------------------
 
     def _validate_provider_model(self, provider: str, model: str) -> None:
-        if provider not in VALID_PROVIDERS:
+        if provider not in valid_providers():
             raise AgentValidationError(f"Unknown provider: {provider}")
         if provider_for_model(model) != provider:
             raise AgentValidationError(f"Model '{model}' does not belong to provider '{provider}'")

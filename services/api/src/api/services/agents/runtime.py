@@ -38,6 +38,15 @@ from api.models.agent import Agent
 from api.services.agents.authority import Decision, decide
 from api.services.agents.llm.provider import Completion, LLMError, LLMProvider, TextDelta, ToolCallRequest
 from api.services.agents.tools.spec import ToolContext, ToolSpec
+from api.services.agents.transcript import (
+    DEFAULT_KEEP_RECENT,
+    DEFAULT_TOOL_RESULT_BUDGET,
+    DEFAULT_TRANSCRIPT_BUDGET,
+    compact_tool_output,
+    fold_old_turns,
+    summarize_turns,
+    transcript_chars,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +55,10 @@ Emit = Callable[[dict[str, Any]], Awaitable[None]]
 ApprovalStrategy = Callable[[ToolSpec, dict[str, Any]], Awaitable[bool]]
 # () -> keep going? False when the run was cancelled externally.
 ContinueCheck = Callable[[], Awaitable[bool]]
+# () -> messages a person queued for this run, taken exactly once. Pulled by the
+# loop rather than pushed at it, because only the loop knows when its message list
+# is in a state that can accept a user turn.
+SteerDrain = Callable[[], Awaitable[list[str]]]
 
 
 class RunCancelled(Exception):  # noqa: N818 - a control signal, not an error condition
@@ -123,8 +136,69 @@ def _assistant_message(completion: Completion) -> dict[str, Any]:
     return msg
 
 
-def _tool_message(tc: ToolCallRequest, output: dict[str, Any]) -> dict[str, Any]:
-    return {"role": "tool", "tool_call_id": tc.id, "content": json.dumps(output, default=str)}
+def _awaits_tool_results(messages: list[dict[str, Any]]) -> bool:
+    """Does the conversation end on an assistant turn whose tool calls are unanswered?
+
+    Checked rather than inferred from where we are in the loop. A resume that
+    carries an empty batch of pending calls reaches the top of a turn with the
+    message list still ending in unresolved ``tool_calls`` — and a user turn there
+    is the exact shape OpenAI and Anthropic reject, which would finalize the run as
+    an error. Making the invariant structural means no future edit to the loop's
+    control flow can quietly break it.
+    """
+    if not messages:
+        return False
+    last = messages[-1]
+    return last.get("role") == "assistant" and bool(last.get("tool_calls"))
+
+
+def _tool_message(tc: ToolCallRequest, output: dict[str, Any], *, budget: int) -> dict[str, Any]:
+    """The tool result as the *transcript* carries it — not as it is recorded.
+
+    The full output has already been emitted (and persisted as a run step) by the
+    time this is built, so eliding here loses nothing: it only decides what the
+    model re-reads on every remaining turn of the run.
+    """
+    payload, _ = compact_tool_output(output, tc.id, budget=budget)
+    return {"role": "tool", "tool_call_id": tc.id, "content": json.dumps(payload, default=str)}
+
+
+async def _compact_if_needed(
+    provider: LLMProvider,
+    model: str,
+    messages: list[dict[str, Any]],
+    emit: Emit,
+    budget: int,
+    keep_recent: int,
+) -> list[dict[str, Any]]:
+    """Fold the middle of an over-budget transcript into one summary, in place.
+
+    Returns the same list object when nothing was folded, so callers can keep
+    holding the reference the park path persists. A summarization that fails
+    returns the transcript untouched — a larger prompt is a cost, where a failed
+    run is a loss.
+    """
+    if transcript_chars(messages) <= budget:
+        return messages
+    summary = await summarize_turns(provider, model, messages)
+    if not summary:
+        return messages
+    folded = fold_old_turns(messages, summary, keep_recent=keep_recent)
+    if len(folded) >= len(messages):
+        return messages
+    await emit(
+        {
+            "type": "compaction",
+            "folded": len(messages) - len(folded),
+            "summary": summary,
+            "before_chars": transcript_chars(messages),
+            "after_chars": transcript_chars(folded),
+        }
+    )
+    # Mutate in place: ``RunParked`` carries this exact list to the resume path,
+    # and rebinding a local here would persist the uncompacted version instead.
+    messages[:] = folded
+    return messages
 
 
 async def run_agent_loop(
@@ -139,11 +213,16 @@ async def run_agent_loop(
     max_iterations: int,
     temperature: float | None = None,
     max_tokens: int | None = None,
+    transcript_budget: int = DEFAULT_TRANSCRIPT_BUDGET,
+    tool_result_budget: int = DEFAULT_TOOL_RESULT_BUDGET,
+    keep_recent: int = DEFAULT_KEEP_RECENT,
+    reasoning_effort: str | None = None,
     approval_strategy: ApprovalStrategy = _approve_inline,
     resume_tool_calls: list[ToolCallRequest] | None = None,
     resume_answers: dict[str, dict[str, Any]] | None = None,
     autonomy: str = "high_touch",
     continue_check: ContinueCheck | None = None,
+    steer: SteerDrain | None = None,
 ) -> RunResult:
     """Drive ``agent`` to quiescence. ``messages`` already includes the system prompt.
 
@@ -173,11 +252,16 @@ async def run_agent_loop(
             max_iterations=max_iterations,
             temperature=temperature,
             max_tokens=max_tokens,
+            transcript_budget=transcript_budget,
+            tool_result_budget=tool_result_budget,
+            keep_recent=keep_recent,
+            reasoning_effort=reasoning_effort,
             approval_strategy=approval_strategy,
             pending=pending,
             answers=answers,
             autonomy=autonomy,
             continue_check=continue_check,
+            steer=steer,
             result=result,
         )
     except RunParked as parked:
@@ -202,11 +286,16 @@ async def _drive_loop(
     max_iterations,
     temperature,
     max_tokens,
+    transcript_budget,
+    tool_result_budget,
+    keep_recent,
+    reasoning_effort,
     approval_strategy,
     pending,
     answers,
     autonomy,
     continue_check,
+    steer,
     result,
 ) -> RunResult:
     """The loop itself. Split out so ``run_agent_loop`` can attach accumulated usage
@@ -218,7 +307,25 @@ async def _drive_loop(
             tool_calls = pending
             pending = None
         else:
-            completion = await _stream_turn(provider, model, messages, schemas, temperature, max_tokens, emit)
+            # The ONE safe place to interject. Here every tool_use in `messages`
+            # already has its tool_result, so an extra user turn is well-formed.
+            # Mid-batch — or on the `pending` branch above, resuming a parked turn
+            # whose messages end in unresolved tool_calls — a user turn sits where
+            # a tool result must go, which OpenAI and Anthropic both reject
+            # outright: an LLMError that finalizes the run as *error*. A steer that
+            # kills the run is worse than one that arrives a turn late.
+            if steer is not None and not _awaits_tool_results(messages):
+                for text in await steer():
+                    messages.append({"role": "user", "content": text})
+                    await emit({"type": "steer", "content": text})
+            # Then, before paying for the transcript again, see whether it should
+            # shrink. After the steer rather than before, so what a person just said
+            # is measured with everything else — and lands among the recent turns a
+            # fold keeps verbatim, never inside the summary that replaces the middle.
+            await _compact_if_needed(provider, model, messages, emit, transcript_budget, keep_recent)
+            completion = await _stream_turn(
+                provider, model, messages, schemas, temperature, max_tokens, reasoning_effort, emit
+            )
             if completion.usage:
                 result.prompt_tokens += completion.usage.prompt_tokens
                 result.completion_tokens += completion.usage.completion_tokens
@@ -263,8 +370,11 @@ async def _drive_loop(
                         {"id": t.id, "name": t.name, "arguments": t.arguments} for t, _, _ in plans[index:]
                     ]
                     raise
-                await emit({"type": "tool_result", "name": tc.name, "result": output})
-                messages.append(_tool_message(tc, output))
+                # The FULL output goes to emit (and so to the persisted step); only
+                # the transcript copy is compacted. call_id is what read_run_detail
+                # looks the stored result up by.
+                await emit({"type": "tool_result", "name": tc.name, "result": output, "call_id": tc.id})
+                messages.append(_tool_message(tc, output, budget=tool_result_budget))
         except RunFinished as finished:
             finished.prompt_tokens = result.prompt_tokens
             finished.completion_tokens = result.completion_tokens
@@ -279,7 +389,9 @@ async def _drive_loop(
     return result
 
 
-async def _stream_turn(provider, model, messages, schemas, temperature, max_tokens, emit) -> Completion:
+async def _stream_turn(
+    provider, model, messages, schemas, temperature, max_tokens, reasoning_effort, emit
+) -> Completion:
     completion: Completion | None = None
     try:
         async for event in provider.stream(
@@ -288,6 +400,7 @@ async def _stream_turn(provider, model, messages, schemas, temperature, max_toke
             tools=schemas,
             temperature=temperature,
             max_tokens=max_tokens,
+            reasoning_effort=reasoning_effort,
         ):
             if isinstance(event, TextDelta):
                 await emit({"type": "delta", "content": event.text})

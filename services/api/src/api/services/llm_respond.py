@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from api.services.agents.llm.reasoning import reasoning_kwargs
 from api.services.llm_stream import stream_json_content
 from api.services.spoken_summary import DeltaSink
 
@@ -114,6 +115,7 @@ async def respond_action(
             {"role": "user", "content": user},
         ],
         "response_format": {"type": "json_schema", "json_schema": _respond_schema()},
+        **reasoning_kwargs(model),
     }
     if on_delta is not None:
         # 'reply' is declared first in the schema, so it streams before the

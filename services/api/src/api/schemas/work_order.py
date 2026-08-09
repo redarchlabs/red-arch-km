@@ -10,6 +10,10 @@ from pydantic import BaseModel, ConfigDict, Field
 
 WorkOrderStatus = Literal["draft", "awaiting_approval", "approved", "in_progress", "done", "cancelled"]
 Priority = Literal["low", "normal", "high", "urgent"]
+# How much rope the agent gets on this order — see migration 049.
+WorkOrderMode = Literal["plan", "manual", "automatic"]
+# How big a board reviews this order's plan and delivery — see migration 050.
+WorkOrderReviewLevel = Literal["none", "light", "standard", "full"]
 
 
 class WorkOrderCreate(BaseModel):
@@ -18,6 +22,8 @@ class WorkOrderCreate(BaseModel):
     title: str = Field(min_length=1, max_length=300)
     body: str | None = None
     priority: Priority = "normal"
+    mode: WorkOrderMode = "manual"
+    review_level: WorkOrderReviewLevel = "standard"
     assigned_agent_id: uuid.UUID | None = None
 
 
@@ -31,6 +37,26 @@ class WorkOrderAssign(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     assigned_agent_id: uuid.UUID | None = None
+
+
+class WorkOrderModeUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: WorkOrderMode
+
+
+class WorkOrderReviewLevelUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    review_level: WorkOrderReviewLevel
+
+
+class WorkOrderReply(BaseModel):
+    """A person's message back to the agent working the order."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    text: str = Field(min_length=1, max_length=8000)
 
 
 class TaskInput(BaseModel):
@@ -80,10 +106,16 @@ class WorkOrderRead(BaseModel):
     status: str
     body: str | None
     priority: str
+    mode: str
+    review_level: str
     assigned_agent_id: uuid.UUID | None
     created_by_profile_id: uuid.UUID | None
     created_at: datetime
     updated_at: datetime
+    # Which statuses this order may move to next, straight from the service's
+    # state machine. Sent rather than re-derived on the client so the buttons a
+    # person sees can never drift from the transitions the server will accept.
+    allowed_transitions: list[str] = Field(default_factory=list)
 
 
 class WorkOrderDetail(WorkOrderRead):
@@ -122,6 +154,16 @@ class MapEvent(BaseModel):
     # human being asked.
     target_lane: str | None = None
     run_id: uuid.UUID | None = None
+    # Set on a `blocked` event that a person can clear, so the page can offer the
+    # decision where the block is visible rather than only in the inbox.
+    approval_id: uuid.UUID | None = None
+
+
+class EntryPageRead(BaseModel):
+    """A slice of diary, oldest-first, with whether older entries remain."""
+
+    entries: list[EntryRead] = Field(default_factory=list)
+    has_more: bool = False
 
 
 class WorkOrderMap(BaseModel):

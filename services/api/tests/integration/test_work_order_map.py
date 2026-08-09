@@ -130,6 +130,10 @@ class TestInteractionMap:
                 answer="These things.",
                 audience="agent",
                 status="answered",
+                # Both ends pinned. Leaving created_at to default put a real
+                # wall-clock time against a hardcoded answered_at, so this test
+                # passed only while the clock was behind T0.
+                created_at=T0,
                 answered_at=T0 + timedelta(minutes=2),
                 work_order_id=wo.id,
             )
@@ -170,8 +174,12 @@ class TestInteractionMap:
 
         graph = await svc.interaction_map(wo.id)
 
-        blocked = next(e for e in graph.events if e.kind == "blocked")
+        blocked = next(e for e in graph.events if e.lane == str(boss.id) and e.kind == "blocked")
         assert blocked.target_lane == "human"
+        # A matching card in the human lane, so the arrow joins two things rather
+        # than trailing off into an empty row.
+        waiting = next(e for e in graph.events if e.lane == "human")
+        assert waiting.title.startswith("approve ")
         assert "delegate_task" in blocked.title
         assert any(ln.key == "human" for ln in graph.lanes)
 

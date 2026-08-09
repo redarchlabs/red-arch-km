@@ -56,7 +56,7 @@ func Load() Config {
 
 		OpenAIAPIKey:         config.GetEnv("OPENAI_API_KEY", ""),
 		OpenAIEmbeddingModel: config.GetEnv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small"),
-		OpenAIChatModel:      config.GetEnv("OPENAI_CHAT_MODEL", "gpt-4o-mini"),
+		OpenAIChatModel:      config.GetEnv("OPENAI_CHAT_MODEL", "gpt-5-mini"),
 
 		APIKey: config.GetEnv("BRAIN_API_KEY", ""),
 

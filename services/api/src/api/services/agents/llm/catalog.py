@@ -5,11 +5,25 @@ provider (so the runtime can resolve the right API key). Model ids are in
 LiteLLM format: ``"<provider>/<model>"`` for Anthropic/Gemini, and bare model
 names for OpenAI (LiteLLM's default provider). Keep these in sync with the
 provider SDKs; they are the strings passed to ``litellm.acompletion``.
+
+What ships here is the official vendor APIs plus, through the OpenAI shape, any
+self-hosted server — which is the whole surface an open deployment should need.
+A deployment that reaches a model over some other transport registers it with
+:func:`register_provider` instead of forking this file; see
+:mod:`api.services.agents.llm.plugins` for how such a module is loaded. Registered
+providers are indistinguishable from built-ins to the agent roster, the admin
+picker and the org credential store — the only difference is where their code
+lives.
+
+Deliberately free of imports beyond the standard library: this is the leaf that
+the routing, caching and reasoning modules all build on.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,13 +78,70 @@ VALID_PROVIDERS: frozenset[str] = frozenset(p.name for p in PROVIDERS)
 # recognized prefix is treated as OpenAI (LiteLLM's default).
 _KNOWN_PREFIXES: frozenset[str] = frozenset({"anthropic", "openai", "gemini"})
 
+# Builds the transport for one of a plugin's models: (settings, model, api_key).
+# Typed loosely on purpose — a plugin's transport only has to satisfy the shape
+# the runtime uses (`stream`/`complete`), not inherit from LLMProvider, and this
+# module must not import the provider it would otherwise name here.
+TransportFactory = Callable[[Any, str, "str | None"], Any]
+
+# provider name -> (definition, factory). Process-global and written only at
+# startup, by import of the modules named in LLM_PROVIDER_PLUGINS.
+_REGISTERED: dict[str, tuple[ProviderDef, TransportFactory]] = {}
+
+
+def register_provider(definition: ProviderDef, factory: TransportFactory) -> None:
+    """Add an out-of-tree provider to the catalog.
+
+    Refuses to shadow a built-in: quietly rebinding "anthropic" would reroute
+    every Claude agent in the deployment, and a name collision is far more likely
+    to be a mistake than an intent.
+    """
+    if definition.name in VALID_PROVIDERS:
+        raise ValueError(f"'{definition.name}' is a built-in provider and cannot be replaced")
+    _REGISTERED[definition.name] = (definition, factory)
+
+
+def reset_registry() -> None:
+    """Drop every registered provider. For tests; the registry is process-global."""
+    _REGISTERED.clear()
+
+
+def providers() -> tuple[ProviderDef, ...]:
+    """Every provider this process offers: the built-ins, then any registered."""
+    return PROVIDERS + tuple(d for d, _ in _REGISTERED.values())
+
+
+def valid_providers() -> frozenset[str]:
+    """The provider names an agent or an org credential may name."""
+    return VALID_PROVIDERS | frozenset(_REGISTERED)
+
+
+def provider_factory(provider: str) -> TransportFactory | None:
+    """The transport factory for a registered provider, or None for a built-in."""
+    entry = _REGISTERED.get(provider)
+    return entry[1] if entry else None
+
 
 def provider_for_model(model: str) -> str:
     """Return the canonical provider key for a LiteLLM model id.
 
     ``"anthropic/claude-…" -> "anthropic"``; a bare ``"gpt-5"`` -> ``"openai"``.
+    A registered provider claims its own prefix; everything unrecognized stays
+    OpenAI, which is what makes an OpenAI-shaped local server work unconfigured.
     """
     prefix, sep, _rest = model.partition("/")
-    if sep and prefix in _KNOWN_PREFIXES:
+    if sep and (prefix in _KNOWN_PREFIXES or prefix in _REGISTERED):
         return prefix
     return "openai"
+
+
+def bare_model(model: str) -> str:
+    """Strip a known provider prefix: ``openai/gpt-5-mini`` -> ``gpt-5-mini``.
+
+    Anything else is returned unchanged, so an unrecognized prefix is never
+    silently eaten. Lives here rather than beside its callers because both the
+    endpoint router and the reasoning-param rules key off the bare id, and this
+    module is the one with no dependencies of its own.
+    """
+    prefix, sep, rest = model.partition("/")
+    return rest if sep and (prefix in _KNOWN_PREFIXES or prefix in _REGISTERED) else model

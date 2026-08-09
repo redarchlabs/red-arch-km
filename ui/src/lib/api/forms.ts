@@ -381,6 +381,98 @@ export interface ChatElement extends ElementBase {
   width?: FieldWidth | null;
 }
 
+/** Swim-lane timeline of every agent that worked a work order, on a shared clock.
+ *  `work_order_id: null` binds to the order the page is about (the view's record). */
+export interface AgentTimelineElement extends ElementBase {
+  type: "agent_timeline";
+  work_order_id?: string | null;
+  title?: string | null;
+  poll_ms?: number | null;
+  width?: FieldWidth | null;
+}
+
+/** The order's diary, newest last, loading history as the reader scrolls up. */
+export interface AgentDiaryElement extends ElementBase {
+  type: "agent_diary";
+  work_order_id?: string | null;
+  title?: string | null;
+  page_size?: number;
+  height?: "sm" | "md" | "lg" | "fill";
+  poll_ms?: number | null;
+  /** Show a reply box. Agents end runs with questions, and a finished run cannot
+   *  be answered any other way. */
+  allow_reply?: boolean;
+  width?: FieldWidth | null;
+}
+
+/** A running agent's transcript, live, with a box to talk back into. */
+export interface AgentActivityElement extends ElementBase {
+  type: "agent_activity";
+  work_order_id?: string | null;
+  title?: string | null;
+  height?: "sm" | "md" | "lg" | "fill";
+  allow_steer?: boolean;
+  width?: FieldWidth | null;
+}
+
+/** Pending approvals with the decision attached, so a stalled agent is
+ *  actionable where the stall is visible rather than only in the inbox. */
+export interface ApprovalQueueElement extends ElementBase {
+  type: "approval_queue";
+  scope?: "work_order" | "org";
+  work_order_id?: string | null;
+  title?: string | null;
+  hide_when_empty?: boolean;
+  include_questions?: boolean;
+  poll_ms?: number | null;
+  width?: FieldWidth | null;
+}
+
+/** Work orders as a list. They are not entity records, so `record_list` cannot
+ *  reach them — the only reason this is its own element. */
+export interface WorkOrderListElement extends ElementBase {
+  type: "work_order_list";
+  title?: string | null;
+  statuses?: string[];
+  detail_view_id?: string | null;
+  limit?: number;
+  poll_ms?: number | null;
+  width?: FieldWidth | null;
+}
+
+/** The order's lifecycle buttons. Starting an assigned order dispatches its agent. */
+export interface WorkOrderActionsElement extends ElementBase {
+  type: "work_order_actions";
+  work_order_id?: string | null;
+  title?: string | null;
+  show_summary?: boolean;
+  show_mode?: boolean;
+  show_review?: boolean;
+  show_assignee?: boolean;
+  width?: FieldWidth | null;
+}
+
+/** The order's checklist and percent complete (the server's figure). */
+export interface WorkOrderTasksElement extends ElementBase {
+  type: "work_order_tasks";
+  work_order_id?: string | null;
+  title?: string | null;
+  show_progress?: boolean;
+  poll_ms?: number | null;
+  width?: FieldWidth | null;
+}
+
+/** A form that files a new work order. */
+export interface WorkOrderCreateElement extends ElementBase {
+  type: "work_order_create";
+  title?: string | null;
+  submit_label?: string;
+  default_priority?: "low" | "normal" | "high" | "urgent";
+  show_assignee?: boolean;
+  detail_view_id?: string | null;
+  width?: FieldWidth | null;
+}
+
 export type SubmitAction = { kind: "submit" };
 export type RunWorkflowAction = {
   kind: "run_workflow";
@@ -586,6 +678,14 @@ export type FormElement =
   | StatElement
   | RecordListElement
   | ChatElement
+  | AgentTimelineElement
+  | AgentDiaryElement
+  | AgentActivityElement
+  | ApprovalQueueElement
+  | WorkOrderListElement
+  | WorkOrderActionsElement
+  | WorkOrderTasksElement
+  | WorkOrderCreateElement
   | ButtonElement
   | PuzzlePadElement
   | FormRefElement

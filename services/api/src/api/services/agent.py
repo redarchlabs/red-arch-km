@@ -38,6 +38,7 @@ from api.schemas.custom_entity import (
     EntityFieldCreate,
     EntityRelationshipCreate,
 )
+from api.services.agents.llm.reasoning import reasoning_kwargs
 from api.services.brain_client import BrainAPIClient
 from api.services.course_generation import CourseGenerationService
 from api.services.entity_service import EntityError, EntityService
@@ -1727,6 +1728,7 @@ class AgentService:
                 response = await self._client.chat.completions.create(
                     model=self._model,
                     messages=messages,
+                    **reasoning_kwargs(self._model),
                     tools=TOOLS,
                     tool_choice="auto",
                 )
@@ -1779,6 +1781,7 @@ class AgentService:
                 wrap_up = await self._client.chat.completions.create(
                     model=self._model,
                     messages=messages,
+                    **reasoning_kwargs(self._model),
                     tools=TOOLS,
                     tool_choice="none",
                 )
@@ -2891,6 +2894,101 @@ class AgentService:
                         "A conversation panel over two entities (a conversation + its messages). "
                         "Sending creates a 'person' message then runs answer_workflow_id with "
                         "{text, conversation_id}. Not entity-bound; valid standalone."
+                    ),
+                },
+                "agent_timeline": {
+                    "required": ["type"],
+                    "optional": ["work_order_id", "title", "poll_ms", "width"],
+                    "use": (
+                        "Swim-lane timeline of every agent that worked a work order, on a shared "
+                        "clock, with a lane for the person that appears only when something is owed "
+                        "to them. Clicking a card opens that run's steps. Leave work_order_id null "
+                        "to bind to the order the page is about (the view's record_id)."
+                    ),
+                },
+                "agent_diary": {
+                    "required": ["type"],
+                    "optional": [
+                        "work_order_id",
+                        "title",
+                        "page_size",
+                        "height (sm|md|lg|fill)",
+                        "poll_ms",
+                        "width",
+                    ],
+                    "use": (
+                        "A work order's diary, newest at the bottom, loading history as the reader "
+                        "scrolls up. Entries are agent-authored Markdown. Leave work_order_id null "
+                        "to bind to the page's own order."
+                    ),
+                },
+                "work_order_create": {
+                    "required": ["type"],
+                    "optional": [
+                        "title",
+                        "submit_label",
+                        "default_priority (low|normal|high|urgent)",
+                        "show_assignee",
+                        "detail_view_id",
+                        "width",
+                    ],
+                    "use": (
+                        "A form that files a new work order. Assigning an agent is what makes the "
+                        "order startable; unassigned files a request for a person. detail_view_id "
+                        "is the view to open once it exists."
+                    ),
+                },
+                "work_order_tasks": {
+                    "required": ["type"],
+                    "optional": ["work_order_id", "title", "show_progress", "poll_ms", "width"],
+                    "use": (
+                        "The order's checklist with percent complete. The figure is the server's "
+                        "own (done / total, excluding carried), not recounted on the client."
+                    ),
+                },
+                "work_order_actions": {
+                    "required": ["type"],
+                    "optional": ["work_order_id", "title", "show_summary", "show_assignee", "width"],
+                    "use": (
+                        "The order's lifecycle buttons (approve / start / close). The legal moves "
+                        "come from the server with the order, so the buttons match what the state "
+                        "machine accepts. Starting an ASSIGNED order dispatches its agent, which is "
+                        "what turns a filed request into work."
+                    ),
+                },
+                "agent_activity": {
+                    "required": ["type"],
+                    "optional": ["work_order_id", "title", "height (sm|md|lg|fill)", "allow_steer", "width"],
+                    "use": (
+                        "A running agent's transcript live over a WebSocket — its reasoning, tool "
+                        "calls and results — plus a box that queues a message for it. The diary "
+                        "records what an agent DID; this shows it thinking. Steers are delivered at "
+                        "the top of the agent's next turn, never spliced into one already running."
+                    ),
+                },
+                "approval_queue": {
+                    "required": ["type"],
+                    "optional": [
+                        "scope (work_order|org)",
+                        "work_order_id",
+                        "title",
+                        "hide_when_empty",
+                        "poll_ms",
+                        "width",
+                    ],
+                    "use": (
+                        "Pending approvals with Approve/Deny attached, so an agent parked on a "
+                        "decision is actionable where the stall is visible instead of only in the "
+                        "inbox."
+                    ),
+                },
+                "work_order_list": {
+                    "required": ["type"],
+                    "optional": ["title", "statuses", "detail_view_id", "limit", "poll_ms", "width"],
+                    "use": (
+                        "Work orders as a list, optionally narrowed by status. Work orders are not "
+                        "entity records, so record_list cannot reach them. detail_view_id is the "
+                        "view a row opens, with the order passed as its record."
                     ),
                 },
                 "stat": {

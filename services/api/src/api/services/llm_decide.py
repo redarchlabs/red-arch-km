@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from api.services.agents.llm.reasoning import reasoning_kwargs
 from api.services.llm_stream import stream_json_content
 from api.services.spoken_summary import DeltaSink
 
@@ -115,6 +116,10 @@ async def decide_action(
             {"role": "user", "content": user},
         ],
         "response_format": {"type": "json_schema", "json_schema": _decision_schema(gestures, moods)},
+        # Cheapest tier, as for the spoken summary: this call sits in the robot's
+        # speech path, where a visitor hears the delay, and the schema has already
+        # narrowed the decision to one sentence plus two enum picks.
+        **reasoning_kwargs(model, "minimal"),
     }
     if on_delta is not None:
         # 'say' is declared first in the schema, so the spoken line streams

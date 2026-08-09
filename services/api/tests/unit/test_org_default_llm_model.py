@@ -55,8 +55,8 @@ class TestOrgDefaultLlmModelHelper:
 
     @pytest.mark.asyncio
     async def test_accepts_string_org_id(self) -> None:
-        session = _session_returning(SimpleNamespace(default_llm_model="gpt-4.1-mini"))
-        assert await org_default_llm_model(session, str(ORG_ID)) == "gpt-4.1-mini"
+        session = _session_returning(SimpleNamespace(default_llm_model="gpt-5-mini"))
+        assert await org_default_llm_model(session, str(ORG_ID)) == "gpt-5-mini"
 
 
 class TestActionExecutorResolution:

@@ -19,7 +19,44 @@ _KIND_GUIDANCE = {
 }
 
 
-def build_system_prompt(agent: Agent) -> str:
+# A work-order run is watched by the person who filed it, through a task list and a
+# diary. Neither fills itself: an agent that is not told the checklist exists simply
+# works without one, which is indistinguishable from making no progress.
+_WORK_ORDER_GUIDANCE = (
+    'You are working WORK ORDER "{title}".\n'
+    "Before anything else, call set_work_order_tasks to break it into steps. That list "
+    "is how the person who filed this sees what you intend, and the progress figure "
+    "they watch is computed from it — so mark each step with update_work_order_task as "
+    "you go, rather than at the end.\n"
+    "If you need a decision from that person, call ask_human. Do NOT finish your turn "
+    "by asking a question in prose: the run ends when you stop, and a finished run "
+    "cannot be replied to, so the question reaches nobody."
+)
+
+
+# Plan mode is enforced in the authority gate — these tools are not even offered.
+# Saying so up front is still worth it: an agent that discovers the limit by being
+# refused spends turns proposing work, and often reports the refusal as a failure
+# rather than delivering the plan it was actually asked for.
+_PLAN_ONLY_GUIDANCE = (
+    "This work order is in PLAN MODE. Work it out before you work on it. You can "
+    "read, research, ask questions and delegate planning to your reports; every "
+    "write, execution and outbound action is unavailable for now, and your reports "
+    "are under the same restriction.\n"
+    "Finish by calling submit_plan. That puts your plan in front of a person, and "
+    "their approval is what starts the actual work — so this is not a dead end and "
+    "the unavailable tools are not a failure to report. Write the task list with "
+    "set_work_order_tasks first: the summary explains the plan, the task list is the "
+    "plan. If they reject it, revise and submit again."
+)
+
+
+def build_system_prompt(
+    agent: Agent,
+    *,
+    work_order_title: str | None = None,
+    plan_only: bool = False,
+) -> str:
     """Compose the system prompt from the agent's identity, kind, and persona."""
     name = agent.display_name or agent.name
     parts = [
@@ -28,6 +65,10 @@ def build_system_prompt(agent: Agent) -> str:
     ]
     if agent.persona:
         parts.append(agent.persona.strip())
+    if work_order_title:
+        parts.append(_WORK_ORDER_GUIDANCE.format(title=work_order_title))
+    if plan_only:
+        parts.append(_PLAN_ONLY_GUIDANCE)
     parts.append(
         "Use the available tools to accomplish the request. Only take actions you are "
         "permitted to take; if a tool is denied, explain what you would need and stop."

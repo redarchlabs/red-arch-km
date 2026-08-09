@@ -400,6 +400,177 @@ themselves, so a dashboard built from cards reads as one set of surfaces.
 - **Accent** — an optional colored top rule, drawn from the theme's own colors.
 `,
   ),
+  agent_timeline: topic(
+    "Agent timeline",
+    `
+A **swim lane per agent** that worked the order, with each run, consult, answer and
+approval placed on a shared clock — plus a lane for **you**, which appears only when
+something is actually owed to a person.
+
+A diary alone cannot show which agent is blocked on which, or how long a block has
+lasted, because a list has no room for two things happening at once. Here a consult
+is drawn as two events — the question and the reply — so the wait between them has a
+visible length, and clicking a card opens the run's steps.
+
+- **Work order** — leave blank to use the order this page is about (the view's
+  record). Pin an id for a dashboard that always watches one standing order.
+- **Poll (ms)** — refresh cadence for a live order; blank loads once, which is right
+  for a finished one.
+`,
+  ),
+  agent_diary: topic(
+    "Agent diary",
+    `
+The order's **written record**, newest at the bottom, loading history as you scroll
+up — it reads like a conversation rather than a document.
+
+Entries are Markdown written by agents and are rendered as such. Only the newest
+page loads up front, so an order with a long exchange does not lay out hundreds of
+blocks nobody scrolls to.
+
+- **Page size** — entries per fetch (1–100).
+- **Height** — \`fill\` sizes to the viewport, for a diary that IS the screen.
+`,
+  ),
+  approval_queue: topic(
+    "Approvals waiting on you",
+    `
+The decisions an agent is **parked on**, with Approve and Deny attached.
+
+An agent waiting for permission is otherwise invisible until someone opens the
+inbox, so the work stalls with nothing on screen explaining why. Put this where the
+stall is visible.
+
+- **Scope** — \`work_order\` shows only this order's approvals; \`org\` shows
+  everything you may decide.
+- **Hide when empty** — nothing pending is the normal state, so an empty card is
+  noise on a dashboard; turn it off for a page about one order.
+`,
+  ),
+  work_order_create: topic(
+    "File a work order",
+    `
+A form that **files a new work order**.
+
+Its own element rather than a button on the list, because the place people file
+work is often not the place they browse it — a "raise a request" tile on a home
+dashboard is the common case.
+
+- **Assign to** — assigning an agent is what makes the order *startable*. Leaving
+  it unassigned files a request for a person to pick up, which is a real choice
+  rather than a missing one.
+- **Detail view** — where to go once the order exists. Without one the form just
+  clears, which suits a kiosk that files and forgets.
+- The detail box is the **brief the agent works from**, so it is worth filling in.
+`,
+  ),
+  work_order_tasks: topic(
+    "Work order tasks",
+    `
+The order's **checklist** and how far through it is.
+
+Percent complete is the **server's** figure — done over total, excluding tasks
+carried to another order — rather than a count taken here. Two places computing
+progress disagree the moment that rule changes, and this number is what people
+read to decide whether to chase an order.
+
+- **Show progress** — the bar and percentage. Turn it off for a bare checklist.
+- **Poll (ms)** — refresh while agents are working through it.
+`,
+  ),
+  agent_activity: topic(
+    "Live agent activity",
+    `
+A running agent's transcript **as it happens** — the model's reasoning, the tools
+it calls, and their results — plus a box to say something back to it.
+
+The **Diary** records what an agent *did*, once each step is saved. This shows it
+thinking, while it thinks. Both are worth having: one answers "what happened on
+this order", the other "what is happening right now".
+
+Streamed over a WebSocket, so it is genuinely live rather than polled. If the
+connection drops it reconnects on its own, backing off so a server restart is not
+made worse by every open tab retrying at once.
+
+- **Allow steer** — the box that talks back. What you type is **queued**, not
+  injected: the agent picks it up at the top of its next turn. It is never spliced
+  into a turn already in progress, because a message landing between a tool call
+  and its result is rejected by the model provider outright and would end the run.
+- **Height** — how tall the transcript pane is.
+
+Steering needs something to steer, so the box stays disabled until a run has been
+seen on this work order. Nothing is persisted from this view: the durable record
+is the diary and the run's steps, and reloading the page starts the transcript
+fresh from whatever happens next.
+`,
+  ),
+  work_order_actions: topic(
+    "Work order actions",
+    `
+The order's own lifecycle buttons — send for approval, approve, **start work**,
+mark done, cancel.
+
+The legal moves come from the server with the order, so the buttons shown are
+exactly the transitions the state machine will accept; they change as the order
+moves rather than being a fixed row.
+
+**Start work** is the one that matters: on an order with an assigned agent it
+queues that agent's run, which is what turns a filed request into work. An order
+assigned to a disabled agent is refused, and the message names the agent.
+
+- **Show summary** — the order's title and current status above the buttons. Turn
+  it off on a page that already has its own heading.
+- **Show mode** — the plan/manual/automatic picker (below).
+- **Show review** — the peer-review picker (below).
+
+**Mode** decides how much rope the agent gets on *this* order:
+
+- **Plan only** — it reads, researches, delegates thinking to its reports and
+  writes the task list, but every write, execution and outbound action is held
+  back. It finishes by submitting the plan for your approval, and approving it is
+  what starts the work: the order moves to Ask me first and a fresh run carries
+  the plan out. Reject it and the agent revises. Reports are held to the same
+  limit while planning.
+- **Ask me first** — the default, and today's behaviour: it works the order but
+  pauses for your approval on outbound actions.
+- **Automatic** — it approves its own actions. Nothing pauses and nobody is
+  asked, so an agent can send mail and call external tools unattended. Mode
+  changes are written into the diary, because "who turned that off, and when" has
+  to be answerable afterwards.
+
+**Review** decides how many agents read a plan before *you* are asked to approve
+it. Roughly a tenth of what an agent produces is confident and wrong and looks
+exactly like the rest; a reviewer with a different lens catches what the author
+cannot.
+
+- **No review** — straight to you.
+- **1 reviewer** — the devil's advocate alone.
+- **2 reviewers** (default) — adversarial plus one lens matched to the work.
+- **4 reviewers** — the full board, for an order where being wrong is expensive.
+
+Reviewers are one-shot, read-only, and run on a cheaper model than the author,
+because reading a plan costs a fraction of writing one. They reply PASS or FAIL
+with findings; a FAIL goes back to the author to revise, and after two rounds the
+plan comes to you anyway with the objections attached rather than looping forever.
+The author is never seated on its own board.
+
+Automatic never widens what an agent may touch: grants and the role restrictions
+still apply. It only removes the human from the loop on tools it already had.
+`,
+  ),
+  work_order_list: topic(
+    "Work order list",
+    `
+Work orders as a list, optionally narrowed to a few statuses.
+
+Work orders are not entity records, so the Record list element cannot reach them —
+which is the only reason this is its own element.
+
+- **Statuses** — leave empty for all; narrow it for a "needs attention" tile.
+- **Detail view** — the view a row opens, with the order passed as its record.
+  Without one the rows are inert, which is right for a read-only wallboard.
+`,
+  ),
   stat: topic(
     "Stat tile",
     `

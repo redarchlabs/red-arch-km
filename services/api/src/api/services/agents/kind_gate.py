@@ -6,7 +6,8 @@ are even consulted, so a coordinator can never directly mutate and an advisory
 agent can never take a side-effecting action, no matter its grants.
 
 * coordinator — reads, plans, delegates, escalates; must delegate all execution.
-* advisory   — reads + consults/escalates only; produces recommendations, never mutates.
+* advisory   — reads, plans, consults/escalates; produces recommendations and the
+               plans behind them, but never mutates and never executes.
 * operator   — full tool surface (still subject to grants + approval).
 """
 
@@ -16,7 +17,16 @@ from api.services.agents.tools.spec import Category, ToolSpec
 
 _ALLOWED_CATEGORIES: dict[str, frozenset[str]] = {
     "coordinator": frozenset({Category.READ, Category.PLAN, Category.DELEGATE, Category.ESCALATE}),
-    "advisory": frozenset({Category.READ, Category.ESCALATE}),
+    # PLAN is here because planning is saying what you *would* do, not doing it:
+    # the category covers task lists, diary entries, submitting a plan for
+    # approval, and a workflow step's own completion contract. None of it touches
+    # the business. Excluding it made the roster's own reviewers unable to work —
+    # a solution-architect could not write the design it exists to produce, and
+    # worse, `complete_task` is PLAN, so an advisory agent driving a workflow step
+    # did the work and then could not report it, and the step escalated or timed
+    # out. Mutation is still barred: WRITE and EXECUTE are what an advisory agent
+    # may not have.
+    "advisory": frozenset({Category.READ, Category.PLAN, Category.ESCALATE}),
     "operator": frozenset(
         {
             Category.READ,

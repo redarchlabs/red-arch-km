@@ -40,6 +40,14 @@ export const VIEW_KINDS: PaletteKind[] = [
   "report",
   "record_list",
   "chat",
+  "agent_timeline",
+  "agent_diary",
+  "agent_activity",
+  "approval_queue",
+  "work_order_list",
+  "work_order_actions",
+  "work_order_tasks",
+  "work_order_create",
   "button",
   "puzzle_pad",
   "form_ref",
@@ -61,6 +69,14 @@ export const KIND_LABELS: Record<PaletteKind, string> = {
   report: "Report / chart",
   record_list: "Record list / status board",
   chat: "Chat",
+  agent_timeline: "Agent timeline (swim lanes)",
+  agent_diary: "Agent diary",
+  agent_activity: "Live agent activity",
+  approval_queue: "Approvals waiting on you",
+  work_order_list: "Work order list",
+  work_order_actions: "Work order actions (approve / start / close)",
+  work_order_tasks: "Work order tasks + progress",
+  work_order_create: "File a work order",
   button: "Button",
   puzzle_pad: "Puzzle pad (tap / drag / colour)",
   form_ref: "Embedded form",
@@ -81,6 +97,31 @@ export function newElement(kind: PaletteKind): FormElement {
       return { id, type: "field", slug: "", width: "full" };
     case "label":
       return { id, type: "label", text: "Text", variant: "paragraph" };
+    // Work-order elements default to the page's own record, so dropping one on a
+    // work-order view works with no further configuration.
+    case "agent_timeline":
+      return { id, type: "agent_timeline", work_order_id: null, title: "Agent interactions" };
+    case "agent_diary":
+      return { id, type: "agent_diary", work_order_id: null, title: "Diary", page_size: 20, height: "md" };
+    case "agent_activity":
+      return { id, type: "agent_activity", work_order_id: null, title: "Live", height: "md" };
+    case "approval_queue":
+      return {
+        id,
+        type: "approval_queue",
+        scope: "work_order",
+        work_order_id: null,
+        title: "Waiting on you",
+        hide_when_empty: true,
+      };
+    case "work_order_create":
+      return { id, type: "work_order_create", title: "New work order", show_assignee: true };
+    case "work_order_tasks":
+      return { id, type: "work_order_tasks", work_order_id: null, title: "Tasks", show_progress: true };
+    case "work_order_actions":
+      return { id, type: "work_order_actions", work_order_id: null, show_summary: true };
+    case "work_order_list":
+      return { id, type: "work_order_list", title: "Work orders", statuses: [], limit: 25 };
     case "image":
       return { id, type: "image", url: "", alt: "", caption: null, max_height: 320 };
     case "qr_code":

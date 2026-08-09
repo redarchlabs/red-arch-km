@@ -988,6 +988,186 @@ class ChatElement(_Element):
 
 
 # ------------------------------------------------------------------ #
+# Agent work-order elements
+# ------------------------------------------------------------------ #
+# Which work order these elements read. ``None`` means "the one this page is
+# about" — the view's ``?record_id=``, exactly as an entity-bound view already
+# resolves its record. Pinning an id instead is for a dashboard that always
+# watches one standing order.
+WorkOrderBinding = uuid.UUID | None
+
+# Mirrors ``WORK_ORDER_STATUSES`` in models/work_order.py.
+WorkOrderStatusLiteral = Literal["draft", "awaiting_approval", "approved", "in_progress", "done", "cancelled"]
+
+
+class AgentTimelineElement(_Element):
+    """A swim-lane timeline of every agent that worked an order.
+
+    One lane per participant — plus a lane for the person, appearing only when
+    something is actually owed to them — with each run, consult, answer and
+    approval placed on a shared clock. A diary alone cannot show which agent is
+    blocked on which, or how long a block has lasted, because a list has no room
+    for two things happening at once.
+    """
+
+    type: Literal["agent_timeline"] = "agent_timeline"
+    work_order_id: WorkOrderBinding = None
+    title: str | None = None
+    # Live orders move; a finished one never changes, so polling is opt-in.
+    poll_ms: int | None = None
+    width: FieldWidth | None = None
+
+
+class AgentDiaryElement(_Element):
+    """The order's diary, newest last, loading older entries as the reader scrolls up.
+
+    Read like a conversation: the newest entry is the one that matters and history
+    is something you go back into. Rendering the whole transcript eagerly meant an
+    order with a long agent exchange laid out hundreds of Markdown blocks nobody
+    scrolled to."""
+
+    type: Literal["agent_diary"] = "agent_diary"
+    work_order_id: WorkOrderBinding = None
+    title: str | None = None
+    page_size: int = Field(default=20, ge=1, le=100)
+    height: Literal["sm", "md", "lg", "fill"] = "md"
+    poll_ms: int | None = None
+    # Agents end runs with questions, and a finished run has nothing listening —
+    # so without a reply box the only answer available is a second work order.
+    allow_reply: bool = True
+    width: FieldWidth | None = None
+
+
+class WorkOrderCreateElement(_Element):
+    """File a new work order.
+
+    Deliberately its own element rather than a flag on the list: the place people
+    file work is not always the place they browse it — a "raise a request" tile on
+    a home dashboard is the common case — and an element composes anywhere while a
+    flag only ever appears above a list.
+
+    Assigning an agent here is what makes the order startable; leaving it unassigned
+    files a request for a person to pick up.
+    """
+
+    type: Literal["work_order_create"] = "work_order_create"
+    title: str | None = "New work order"
+    submit_label: str = "File it"
+    default_priority: Literal["low", "normal", "high", "urgent"] = "normal"
+    # Offer the agent picker. Off for a surface where people file requests and a
+    # coordinator decides who works them.
+    show_assignee: bool = True
+    # Where to go once it exists. Without one the form just clears, which is right
+    # for a kiosk that files and forgets.
+    detail_view_id: uuid.UUID | None = None
+    width: FieldWidth | None = None
+
+
+class WorkOrderTasksElement(_Element):
+    """The order's checklist and how far through it is.
+
+    Progress is the server's own figure (done / total, excluding carried tasks),
+    not a count taken on the client — two places computing "percent complete"
+    disagree the moment the rule changes, and the number is what people read to
+    decide whether to chase it."""
+
+    type: Literal["work_order_tasks"] = "work_order_tasks"
+    work_order_id: WorkOrderBinding = None
+    title: str | None = "Tasks"
+    show_progress: bool = True
+    poll_ms: int | None = None
+    width: FieldWidth | None = None
+
+
+class WorkOrderListElement(_Element):
+    """The orders themselves, as a list that links into a detail view.
+
+    Work orders are not entity records, so ``record_list`` cannot reach them —
+    which is the only reason this exists rather than being composed from the
+    existing list element. ``detail_view_id`` is where a row navigates; without
+    it the rows are inert, which is right for a read-only wallboard."""
+
+    type: Literal["work_order_list"] = "work_order_list"
+    title: str | None = None
+    # Empty shows every state. Narrow it for a "needs attention" tile.
+    statuses: list[WorkOrderStatusLiteral] = Field(default_factory=list)
+    detail_view_id: uuid.UUID | None = None
+    limit: int = Field(default=25, ge=1, le=200)
+    poll_ms: int | None = None
+    width: FieldWidth | None = None
+
+
+class WorkOrderActionsElement(_Element):
+    """The order's own lifecycle buttons — approve it, start it, close it.
+
+    The legal moves come from the server with the order (``allowed_transitions``),
+    so the buttons on screen are exactly the transitions the state machine will
+    accept. Starting an assigned order is what dispatches its agent, which makes
+    this the control that turns a filed request into work."""
+
+    type: Literal["work_order_actions"] = "work_order_actions"
+    work_order_id: WorkOrderBinding = None
+    title: str | None = None
+    # The assignee picker. Assignment is what decides *who* does the work, and
+    # "Start work" on an unassigned order does nothing — so the two belong on the
+    # same control rather than the choice living only on the filing form.
+    show_assignee: bool = True
+    # Show the order's title and current status above the buttons. Off for a page
+    # that already has a heading of its own.
+    show_summary: bool = True
+    # The plan/manual/automatic picker. Per job rather than per org: the same
+    # roster is worth planning with on one order and turning loose on another.
+    show_mode: bool = True
+    # The peer-review picker. Turning review down is a decision worth making per
+    # order and worth being able to see afterwards.
+    show_review: bool = True
+    width: FieldWidth | None = None
+
+
+class AgentActivityElement(_Element):
+    """A running agent's transcript, live, with a box to talk back into.
+
+    The diary records what an agent *did* once a step is persisted; this shows it
+    thinking, while it thinks. Both exist because they answer different questions —
+    "what happened on this order" and "what is happening right now".
+
+    Streamed over a WebSocket rather than polled: the point is the tokens as they
+    arrive, and a poll fine-grained enough to feel live would be a request every
+    few hundred milliseconds per open tab."""
+
+    type: Literal["agent_activity"] = "agent_activity"
+    work_order_id: WorkOrderBinding = None
+    title: str | None = None
+    height: Literal["sm", "md", "lg", "fill"] = "md"
+    # The other half of two-way. Off makes this a read-only window.
+    allow_steer: bool = True
+    width: FieldWidth | None = None
+
+
+class ApprovalQueueElement(_Element):
+    """Pending approvals, with the decision attached.
+
+    An agent parked on an approval is invisible until someone opens the inbox, so
+    the work stalls with nothing on screen saying why. This puts the decision
+    where the stall is visible. ``scope`` narrows it to one order's approvals, or
+    shows everything the viewer may decide."""
+
+    type: Literal["approval_queue"] = "approval_queue"
+    scope: Literal["work_order", "org"] = "work_order"
+    work_order_id: WorkOrderBinding = None
+    title: str | None = "Waiting on you"
+    # Nothing pending is the normal state; an always-present empty card is noise
+    # on a dashboard but reassuring on a page about one order.
+    hide_when_empty: bool = True
+    # Also list questions an agent is blocked on. On by default: an agent waiting
+    # for an answer is stopped just as hard as one waiting for an approval, and the
+    # two were only ever separate because they arrived in different releases.
+    include_questions: bool = True
+    poll_ms: int | None = None
+    width: FieldWidth | None = None
+
+
+# ------------------------------------------------------------------ #
 # The recursive element union
 # ------------------------------------------------------------------ #
 FormElement = Annotated[
@@ -1005,6 +1185,14 @@ FormElement = Annotated[
     | StatElement
     | RecordListElement
     | ChatElement
+    | AgentTimelineElement
+    | AgentDiaryElement
+    | AgentActivityElement
+    | WorkOrderListElement
+    | WorkOrderTasksElement
+    | WorkOrderCreateElement
+    | WorkOrderActionsElement
+    | ApprovalQueueElement
     | ButtonElement
     | PuzzlePadElement
     | FormRefElement
