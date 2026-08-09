@@ -12,17 +12,21 @@ while nothing was ever going to happen.
 
 from __future__ import annotations
 
+import json
 import re
 import uuid
+from collections.abc import Sequence
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.models.agent import Agent
-from api.models.agent_run import AgentRun
+from api.models.agent_run import AgentApproval, AgentQuestion, AgentRun
 from api.models.work_order import WorkOrder, WorkOrderEntry, WorkOrderTask
 from api.repositories.agent_run import AgentRunRepository
 from api.repositories.work_order import WorkOrderRepository
+from api.schemas.work_order import MapEvent, MapLane, WorkOrderMap
 
 # Allowed status transitions (terminal states have none).
 _TRANSITIONS: dict[str, set[str]] = {
@@ -43,6 +47,23 @@ _DISPATCH_STATUS = "in_progress"
 # two agents on the same work — duplicated side effects and two billed LLM runs.
 _LIVE_RUN_STATUSES = ("queued", "running", "waiting")
 
+# The lane a person occupies. Not an agent id, so it cannot collide with one.
+_HUMAN_LANE = "human"
+
+# How a run came to exist, as the label on its opening event. A consult and a
+# delegation both create a child run, but only a consult blocks the parent.
+_START_TITLES = {
+    "work_order": "started the order",
+    "consult": "consulted",
+    "delegation": "took a delegated task",
+    "schedule": "started on schedule",
+    "manual": "started",
+}
+
+# Worst-first: a lane that is blocked reads as blocked even if it also finished
+# something earlier, because the blocked run is the one that still needs a person.
+_STATUS_RANK = ["error", "waiting", "running", "queued", "done", "cancelled"]
+
 
 class WorkOrderError(Exception):
     pass
@@ -61,6 +82,53 @@ def _brief(wo: WorkOrder) -> str:
     instruction — the body is where the actual request lives."""
     body = (wo.body or "").strip()
     return f"{wo.title}\n\n{body}" if body else wo.title
+
+
+def _lane_for(agent: Agent) -> MapLane:
+    return MapLane(key=str(agent.id), label=agent.name, avatar=agent.avatar, agent_kind=agent.kind)
+
+
+def _roll_up(lane_key: str, runs: Sequence[Any]) -> str | None:
+    """One status for a lane that may have run more than once."""
+    statuses = [run.status for run, agent in runs if str(agent.id) == lane_key]
+    for candidate in _STATUS_RANK:
+        if candidate in statuses:
+            return candidate
+    return statuses[0] if statuses else None
+
+
+def _run_events(runs: Sequence[Any]) -> list[MapEvent]:
+    """Each run opens its lane and, once settled, closes it.
+
+    A run still in flight deliberately gets no closing event: the lane ending at
+    its last event is what makes "still going" visible without a spinner.
+    """
+    events: list[MapEvent] = []
+    for run, agent in runs:
+        events.append(
+            MapEvent(
+                id=f"s{run.id}",
+                lane=str(agent.id),
+                kind="delegated" if run.trigger == "delegation" else "started",
+                at=run.created_at,
+                title=_START_TITLES.get(run.trigger, run.trigger),
+                detail=(run.input or {}).get("task"),
+                run_id=run.id,
+            )
+        )
+        if run.status in ("done", "error", "cancelled") and run.finished_at is not None:
+            events.append(
+                MapEvent(
+                    id=f"f{run.id}",
+                    lane=str(agent.id),
+                    kind="failed" if run.status == "error" else "finished",
+                    at=run.finished_at,
+                    title=run.status,
+                    detail=run.error,
+                    run_id=run.id,
+                )
+            )
+    return events
 
 
 def _slugify(title: str) -> str:
@@ -224,6 +292,137 @@ class WorkOrderService:
     async def list_entries(self, wo_id: uuid.UUID) -> list[WorkOrderEntry]:
         await self.get_work_order(wo_id)
         return await self._repo.list_entries(wo_id)
+
+    async def interaction_map(self, wo_id: uuid.UUID) -> WorkOrderMap:
+        """One lane per participant, with what each did placed in time.
+
+        A tree of runs answers "who invoked whom", which is the least interesting
+        question once more than two agents are involved — it says nothing about
+        *when*, and nothing about who is idle versus blocked. Lanes over a shared
+        clock show the shape of the work: parallel branches sit side by side,
+        a gap is visibly a gap, and a lane that stops while another continues is
+        obvious rather than inferred.
+
+        Every event is derived from a structured row — runs, questions, approvals
+        — never from parsing the diary's prose. Prose is written for people and
+        changes freely; a map built on it silently loses events when the wording
+        moves.
+        """
+        await self.get_work_order(wo_id)
+        runs = (
+            await self._session.execute(
+                select(AgentRun, Agent)
+                .join(Agent, Agent.id == AgentRun.agent_id)
+                .where(AgentRun.work_order_id == wo_id, AgentRun.org_id == self._org_id)
+                .order_by(AgentRun.created_at)
+            )
+        ).all()
+        if not runs:
+            return WorkOrderMap(lanes=[], events=[])
+
+        lanes = {str(agent.id): _lane_for(agent) for _, agent in runs}
+        events = _run_events(runs)
+        events += await self._question_events(wo_id, [run.id for run, _ in runs])
+        events += await self._approval_events([run.id for run, _ in runs], {run.id: agent for run, agent in runs})
+
+        # The human lane only appears once someone is actually owed something —
+        # an empty "you" track on every map would be noise.
+        if any(e.lane == _HUMAN_LANE or e.target_lane == _HUMAN_LANE for e in events):
+            lanes[_HUMAN_LANE] = MapLane(key=_HUMAN_LANE, label="You", avatar="🧑", agent_kind="human")
+        for lane in lanes.values():
+            lane.status = _roll_up(lane.key, runs)
+        events.sort(key=lambda e: e.at)
+        # Lanes in first-appearance order so the dispatched agent leads and each
+        # peer appears under whoever pulled it in.
+        order = {e.lane: i for i, e in enumerate(reversed(events))}
+        return WorkOrderMap(
+            lanes=sorted(lanes.values(), key=lambda ln: -order.get(ln.key, -1)),
+            events=events,
+        )
+
+    async def _question_events(self, wo_id: uuid.UUID, run_ids: list[uuid.UUID]) -> list[MapEvent]:
+        """Consults and questions: an arrow out of the asker, and the reply back.
+
+        Two rows per question rather than one, because the gap between them *is*
+        the block — collapsing them would hide exactly the interval you want to
+        see.
+        """
+        if not run_ids:
+            return []
+        rows = (
+            (
+                await self._session.execute(
+                    select(AgentQuestion).where(
+                        AgentQuestion.run_id.in_(run_ids),
+                        AgentQuestion.org_id == self._org_id,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        events: list[MapEvent] = []
+        for q in rows:
+            asker = str(q.asked_by_agent_id) if q.asked_by_agent_id else _HUMAN_LANE
+            target = str(q.target_agent_id) if q.target_agent_id else _HUMAN_LANE
+            events.append(
+                MapEvent(
+                    id=f"q{q.id}",
+                    lane=asker,
+                    kind="consulted" if q.audience == "agent" else "blocked",
+                    at=q.created_at,
+                    title="asked a peer" if q.audience == "agent" else "asked you",
+                    detail=q.question,
+                    target_lane=target,
+                    run_id=q.run_id,
+                )
+            )
+            if q.status == "answered" and q.answered_at is not None:
+                events.append(
+                    MapEvent(
+                        id=f"a{q.id}",
+                        lane=target,
+                        kind="answered",
+                        at=q.answered_at,
+                        title="answered",
+                        detail=q.answer,
+                        target_lane=asker,
+                    )
+                )
+        return events
+
+    async def _approval_events(self, run_ids: list[uuid.UUID], agent_by_run: dict[uuid.UUID, Agent]) -> list[MapEvent]:
+        """A pending approval is the one state a person can clear, so it is drawn
+        as an arrow into the human lane rather than as another agent status."""
+        if not run_ids:
+            return []
+        rows = (
+            (
+                await self._session.execute(
+                    select(AgentApproval).where(
+                        AgentApproval.run_id.in_(run_ids),
+                        AgentApproval.org_id == self._org_id,
+                        AgentApproval.status == "pending",
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        return [
+            MapEvent(
+                id=f"ap{a.id}",
+                lane=str(agent_by_run[a.run_id].id),
+                kind="blocked",
+                at=a.created_at,
+                title=f"needs approval: {a.tool_name}",
+                detail=json.dumps(a.arguments) if a.arguments else None,
+                target_lane=_HUMAN_LANE,
+                run_id=a.run_id,
+            )
+            for a in rows
+            if a.run_id in agent_by_run
+        ]
 
     def progress(self, tasks: list[WorkOrderTask]) -> float:
         """Percent complete = done / (total excluding carried)."""
