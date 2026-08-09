@@ -136,10 +136,11 @@ def _combined(question: AgentQuestion, siblings: list[AgentQuestion], payload: d
         # "submitted" and stops, leaving the plan neither approved nor rejected.
         # Observed on the first live board; the note is what closes that loop.
         "note": (
-            "Every reviewer has now answered. Call the same tool again with your "
-            "submission to continue — that is what records their verdicts and moves "
-            "this forward. Address any objection first; resubmitting unchanged text "
-            "will not re-open the review."
+            "Every reviewer has now answered. Their verdicts are NOT recorded until you "
+            "call the same tool again with your submission — that call is the only thing "
+            "that moves this forward, and stopping here leaves the work unfinished. "
+            "Address any objection first; resubmitting unchanged text will not re-open "
+            "the review. Do not ask a person instead: the tool decides when to involve one."
         ),
     }
 
