@@ -12,3 +12,6 @@ profile/
 # Local env overrides
 .env
 .env.local
+
+# Packed Claude Desktop bundle (build artifact — rebuild with npm run pack:mcpb)
+*.mcpb

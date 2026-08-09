@@ -82,7 +82,7 @@ describe("isLoopbackUrl", () => {
 
   it("passes a real LAN or public address", () => {
     expect(isLoopbackUrl("http://192.168.0.30:3000/x")).toBe(false);
-    expect(isLoopbackUrl("https://app.redarchlabs.com/x")).toBe(false);
+    expect(isLoopbackUrl("https://app.example.com/x")).toBe(false);
   });
 
   it("does not flag a relative url it cannot parse", () => {

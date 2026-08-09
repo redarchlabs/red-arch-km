@@ -38,6 +38,23 @@ npm run build                     # emits dist/
 npm test                          # optional: unit tests (no browser/network)
 ```
 
+## Claude Desktop bundle (.mcpb) — zero-install distribution
+
+For someone who shouldn't need Node or a terminal (an external tester, a
+non-developer), pack the server as a one-file Claude Desktop extension:
+
+```bash
+npm run pack:mcpb    # emits km2-mcp.mcpb next to this package
+```
+
+The bundle carries `dist/` + production `node_modules` + `manifest.json`
+(prod URLs and `KM2_BROWSER_CHANNEL=chrome` baked in — edit `manifest.json`
+to retarget). The recipient drags the file into Claude Desktop → Settings →
+Extensions; Desktop supplies the Node runtime, and the connector drives their
+installed Chrome, so the Playwright browser download is skipped. They still
+sign in through the app's normal login on first use — the bundle contains
+**no secrets**.
+
 ## Register with Claude Code
 
 A project-level [`.mcp.json`](../../.mcp.json) at the repo root already registers this
