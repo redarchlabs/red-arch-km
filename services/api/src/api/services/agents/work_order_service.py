@@ -219,6 +219,16 @@ class WorkOrderService:
         every order people work themselves.
         """
         if wo.assigned_agent_id is None:
+            # Not refused, but not silent either. Starting an order that will not
+            # run looks identical to starting one that will, and the only place
+            # anyone would look for the reason is the order's own record.
+            await self._repo.add_entry(
+                WorkOrderEntry(
+                    work_order_id=wo.id,
+                    role=_HUMAN_LANE,
+                    text=("Started with no agent assigned, so no run was queued. Assign an agent to have it worked."),
+                )
+            )
             return
         agent = (
             await self._session.execute(
@@ -270,10 +280,23 @@ class WorkOrderService:
         )
         return result.first() is not None
 
-    async def assign(self, wo_id: uuid.UUID, agent_id: uuid.UUID | None) -> WorkOrder:
+    async def assign(
+        self,
+        wo_id: uuid.UUID,
+        agent_id: uuid.UUID | None,
+        *,
+        actor_profile_id: uuid.UUID | None = None,
+    ) -> WorkOrder:
         wo = await self.get_work_order(wo_id)
         wo.assigned_agent_id = agent_id
         await self._repo.flush()
+        # Dispatch is normally the status edge into in_progress. An order started
+        # before anyone was assigned passed that edge with nothing to dispatch, so
+        # assigning is the moment it becomes runnable — without this it sits
+        # in_progress, with an agent, forever, and nothing says why.
+        if agent_id is not None and wo.status == _DISPATCH_STATUS:
+            await self._dispatch(wo, actor_profile_id=actor_profile_id)
+            await self._repo.flush()
         return wo
 
     async def list_tasks(self, wo_id: uuid.UUID) -> list[WorkOrderTask]:

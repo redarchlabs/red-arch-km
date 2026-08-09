@@ -158,7 +158,11 @@ async def assign(
     session: Annotated[AsyncSession, Depends(get_tenant_db)],
 ) -> WorkOrderRead:
     try:
-        wo = await WorkOrderService(session, ctx.org_id).assign(wo_id, body.assigned_agent_id)
+        # Assigning an already-started order dispatches it, so the actor is needed
+        # here for the same reason as on status: the run reads as that person.
+        wo = await WorkOrderService(session, ctx.org_id).assign(
+            wo_id, body.assigned_agent_id, actor_profile_id=ctx.user.profile_id
+        )
     except WorkOrderError as exc:
         _raise_http(exc)
     return _to_read(wo)
