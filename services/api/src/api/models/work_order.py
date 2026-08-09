@@ -11,8 +11,9 @@ the per-table tenant policy applies without a join.
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 
-from sqlalchemy import ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -78,6 +79,12 @@ class WorkOrderEntry(Base, UUIDMixin, TimestampMixin):
     """A diary entry — a terse, fact-only log line from an agent's run."""
 
     __tablename__ = "work_order_entries"
+
+    # ``now()`` is the *transaction* timestamp — constant across a request — so
+    # several entries written together tied on it and the diary's (created_at, id)
+    # keyset fell through to a random UUID. ``clock_timestamp()`` advances within
+    # the transaction, which is what keeps a conversation in the order it happened.
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.clock_timestamp())
 
     work_order_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("work_orders.id", ondelete="CASCADE"), index=True

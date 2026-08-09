@@ -26,6 +26,7 @@ from api.schemas.work_order import (
     WorkOrderDetail,
     WorkOrderMap,
     WorkOrderRead,
+    WorkOrderReply,
     WorkOrderStatusUpdate,
 )
 from api.services.agents.work_order_service import (
@@ -163,6 +164,22 @@ async def assign(
         wo = await WorkOrderService(session, ctx.org_id).assign(
             wo_id, body.assigned_agent_id, actor_profile_id=ctx.user.profile_id
         )
+    except WorkOrderError as exc:
+        _raise_http(exc)
+    return _to_read(wo)
+
+
+@router.post("/{wo_id}/reply", response_model=WorkOrderRead)
+async def reply(
+    wo_id: uuid.UUID,
+    body: WorkOrderReply,
+    # Admin, like status and assignment: a reply can queue a run, and every other
+    # route that starts an agent is admin-gated.
+    ctx: Annotated[OrgContext, Depends(require_org_admin)],
+    session: Annotated[AsyncSession, Depends(get_tenant_db)],
+) -> WorkOrderRead:
+    try:
+        wo = await WorkOrderService(session, ctx.org_id).reply(wo_id, body.text, actor_profile_id=ctx.user.profile_id)
     except WorkOrderError as exc:
         _raise_http(exc)
     return _to_read(wo)

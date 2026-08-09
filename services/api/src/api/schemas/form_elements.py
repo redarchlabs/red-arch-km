@@ -1032,6 +1032,9 @@ class AgentDiaryElement(_Element):
     page_size: int = Field(default=20, ge=1, le=100)
     height: Literal["sm", "md", "lg", "fill"] = "md"
     poll_ms: int | None = None
+    # Agents end runs with questions, and a finished run has nothing listening —
+    # so without a reply box the only answer available is a second work order.
+    allow_reply: bool = True
     width: FieldWidth | None = None
 
 

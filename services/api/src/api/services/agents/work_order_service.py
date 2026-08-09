@@ -94,6 +94,31 @@ def _brief(wo: WorkOrder) -> str:
     return f"{wo.title}\n\n{body}" if body else wo.title
 
 
+# How much of the diary a follow-up run is given. Enough that the agent knows what
+# has already been tried, bounded so a long-running order does not grow its own
+# prompt without limit.
+_REPLY_CONTEXT_ENTRIES = 12
+
+
+def _reply_brief(wo: WorkOrder, history: Sequence[WorkOrderEntry], reply: str) -> str:
+    """The brief for a run started by a person replying.
+
+    A reply is almost always a *response* — an answer, a correction, a go-ahead —
+    so a run given only the reply would restart the order from nothing and repeat
+    the work already in the diary.
+    """
+    lines = [f"{e.role}: {e.text.strip()}" for e in history if e.text.strip()]
+    transcript = "\n\n".join(lines[-_REPLY_CONTEXT_ENTRIES:])
+    return (
+        f"{_brief(wo)}\n\n"
+        "--- What has happened on this work order so far ---\n"
+        f"{transcript}\n\n"
+        "--- The person who filed it has just replied ---\n"
+        f"{reply}\n\n"
+        "Continue the work order from here, taking their reply as the instruction."
+    )
+
+
 def _lane_for(agent: Agent) -> MapLane:
     return MapLane(key=str(agent.id), label=agent.name, avatar=agent.avatar, agent_kind=agent.kind)
 
@@ -211,7 +236,7 @@ class WorkOrderService:
         await self._repo.flush()
         return wo
 
-    async def _dispatch(self, wo: WorkOrder, *, actor_profile_id: uuid.UUID | None) -> None:
+    async def _dispatch(self, wo: WorkOrder, *, actor_profile_id: uuid.UUID | None, task: str | None = None) -> None:
         """Queue a run for the assigned agent, if there is one.
 
         Unassigned orders are left alone rather than refused: a work order is also
@@ -250,7 +275,7 @@ class WorkOrderService:
             provider=agent.provider,
             model=agent.model,
             trigger="work_order",
-            input={"task": _brief(wo)},
+            input={"task": task or _brief(wo)},
             work_order_id=wo.id,
             # The agent works on behalf of whoever started the order, and reads the
             # knowledge base with exactly that person's entitlement. A run with no
@@ -297,6 +322,56 @@ class WorkOrderService:
         if agent_id is not None and wo.status == _DISPATCH_STATUS:
             await self._dispatch(wo, actor_profile_id=actor_profile_id)
             await self._repo.flush()
+        return wo
+
+    async def reply(
+        self,
+        wo_id: uuid.UUID,
+        text: str,
+        *,
+        actor_profile_id: uuid.UUID | None = None,
+    ) -> WorkOrder:
+        """Record a person's reply on the order and hand it to the agent.
+
+        Agents end runs with questions — sometimes because they were told to ask,
+        sometimes just conversationally — and a finished run has nothing listening.
+        Without this the only reply anyone could make was filing a second work
+        order, which loses everything already in the diary.
+        """
+        message = text.strip()
+        if not message:
+            raise WorkOrderValidationError("A reply cannot be empty")
+        wo = await self.get_work_order(wo_id)
+        # Read the diary before adding the reply: the brief states the reply
+        # separately, and a transcript ending in it would say it twice.
+        history = (await self.list_entries_page(wo.id, limit=_REPLY_CONTEXT_ENTRIES)).entries
+        await self._repo.add_entry(WorkOrderEntry(work_order_id=wo.id, role=_HUMAN_LANE, text=message))
+        await self._repo.flush()
+
+        # A reply is a contribution to the record whatever state the order is in;
+        # it only *starts* an agent on an order that is already under way. Replying
+        # to a draft or a finished order must not quietly restart it.
+        if wo.assigned_agent_id is None or wo.status != _DISPATCH_STATUS:
+            return wo
+        if await self._has_live_run(wo.id):
+            # Delivering into a turn already in flight is the steer problem, not
+            # this one. Say so in the diary rather than letting the reply look
+            # delivered — the failure this whole method exists to fix.
+            await self._repo.add_entry(
+                WorkOrderEntry(
+                    work_order_id=wo.id,
+                    role=_HUMAN_LANE,
+                    text=(
+                        "Noted while the agent was still working, so it was not delivered "
+                        "to the run in progress. Reply again once that run finishes."
+                    ),
+                )
+            )
+            await self._repo.flush()
+            return wo
+
+        await self._dispatch(wo, actor_profile_id=actor_profile_id, task=_reply_brief(wo, history, message))
+        await self._repo.flush()
         return wo
 
     async def list_tasks(self, wo_id: uuid.UUID) -> list[WorkOrderTask]:

@@ -33,6 +33,14 @@ class WorkOrderAssign(BaseModel):
     assigned_agent_id: uuid.UUID | None = None
 
 
+class WorkOrderReply(BaseModel):
+    """A person's message back to the agent working the order."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    text: str = Field(min_length=1, max_length=8000)
+
+
 class TaskInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

@@ -13,6 +13,7 @@ const assignWorkOrder = vi.fn();
 const getWorkOrderEntries = vi.fn();
 const listWorkOrders = vi.fn();
 const createWorkOrder = vi.fn();
+const replyToWorkOrder = vi.fn();
 const listApprovals = vi.fn();
 const approveApproval = vi.fn();
 const denyApproval = vi.fn();
@@ -25,6 +26,7 @@ vi.mock("@/lib/api/workOrders", () => ({
   setWorkOrderStatus: (...a: unknown[]) => setWorkOrderStatus(...a),
   getWorkOrderEntries: (...a: unknown[]) => getWorkOrderEntries(...a),
   listWorkOrders: (...a: unknown[]) => listWorkOrders(...a),
+  replyToWorkOrder: (...a: unknown[]) => replyToWorkOrder(...a),
 }));
 
 vi.mock("@/lib/api/agents", () => ({
@@ -284,5 +286,54 @@ describe("WorkOrderCreateNode", () => {
     fireEvent.keyDown(title, { key: "Enter" });
 
     await waitFor(() => expect(createWorkOrder).toHaveBeenCalled());
+  });
+});
+
+describe("AgentDiaryNode reply", () => {
+  it("sends the reply and reloads, so the outcome is visible", async () => {
+    // The server decides what a reply does — start a run, or record that it could
+    // not be delivered. Either way the answer arrives as a diary entry.
+    getWorkOrderEntries
+      .mockResolvedValueOnce({ entries: [entry("e1", "Would you like me to do that?")], has_more: false })
+      .mockResolvedValueOnce({
+        entries: [entry("e1", "Would you like me to do that?"), entry("e2", "Yes please")],
+        has_more: false,
+      });
+    replyToWorkOrder.mockResolvedValue(order());
+
+    render(<AgentDiaryNode workOrderId="wo-1" />);
+    await screen.findByText("Would you like me to do that?");
+    fireEvent.change(screen.getByLabelText("Reply to the agent"), { target: { value: "Yes please" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => expect(replyToWorkOrder).toHaveBeenCalledWith("wo-1", "Yes please"));
+    expect(await screen.findByText("Yes please")).toBeTruthy();
+  });
+
+  it("keeps the text when sending fails", async () => {
+    // Clearing the box on failure loses what the person wrote, with no copy of it
+    // anywhere — the reply was never recorded.
+    getWorkOrderEntries.mockResolvedValue({ entries: [entry("e1", "anything")], has_more: false });
+    replyToWorkOrder.mockRejectedValue({
+      isAxiosError: true,
+      response: { data: { detail: "Work order is not in progress" } },
+    });
+
+    render(<AgentDiaryNode workOrderId="wo-1" />);
+    await screen.findByText("anything");
+    fireEvent.change(screen.getByLabelText("Reply to the agent"), { target: { value: "still here" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(await screen.findByText(/not in progress/)).toBeTruthy();
+    expect((screen.getByLabelText("Reply to the agent") as HTMLTextAreaElement).value).toBe("still here");
+  });
+
+  it("can be turned off by config", async () => {
+    getWorkOrderEntries.mockResolvedValue({ entries: [entry("e1", "read only")], has_more: false });
+
+    render(<AgentDiaryNode workOrderId="wo-1" allowReply={false} />);
+
+    await screen.findByText("read only");
+    expect(screen.queryByLabelText("Reply to the agent")).toBeNull();
   });
 });
