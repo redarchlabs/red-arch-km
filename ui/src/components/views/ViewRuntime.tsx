@@ -161,8 +161,32 @@ export function ViewRuntime({ id, kiosk = false, token }: ViewRuntimeProps) {
       // reference after.*) and `inputs` (manual-trigger workflows whose declared
       // inputs read inputs.*). The backend routes to the right one by trigger
       // type and drops undeclared keys, so sending both is safe.
-      await runWorkflow(workflowId, { operation: "update", record_id: target, after: inputs, inputs });
-      setNotice("Workflow started.");
+      const result = await runWorkflow(workflowId, {
+        operation: "update",
+        record_id: target,
+        after: inputs,
+        inputs,
+      });
+      // The run endpoint executes inline and reports the outcome — surface it
+      // instead of the old fire-and-forget "Workflow started", which read as
+      // "nothing happened" when a click actually did its job.
+      if (result.status === "failed" || result.error) {
+        setError(result.error ?? "Workflow failed");
+        return;
+      }
+      setNotice("Done.");
+      // Silent re-fetch so the page reflects what the run changed (an enrollment
+      // list, a progress bar) without flashing the loading skeleton.
+      void fetchRender()
+        .then((next) => {
+          const json = JSON.stringify(next);
+          if (json === lastRenderJson.current) return;
+          lastRenderJson.current = json;
+          setRender(next);
+        })
+        .catch(() => {
+          /* keep the last good render */
+        });
     } catch (e: unknown) {
       setError(getApiErrorMessage(e, "Workflow failed to start"));
     }
