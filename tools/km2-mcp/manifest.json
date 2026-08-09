@@ -1,0 +1,33 @@
+{
+  "manifest_version": "0.2",
+  "name": "km2-mcp",
+  "display_name": "Red Arch Knowledge Manager",
+  "version": "0.1.0",
+  "description": "Lets Claude build courses, records, views, and workflows in the Red Arch Knowledge Manager as the signed-in user.",
+  "long_description": "Connects Claude to a Red Arch Knowledge Manager deployment. You sign in once through the app's normal login in a Chrome window; after that Claude acts strictly as you — same permissions, same org scoping. 69 tools covering courses/records, entities, forms, views, workflows, documents, and search. The target deployment's URLs are stamped in at pack time (scripts/pack-mcpb.sh); this checked-in copy defaults to a local dev stack.",
+  "author": {
+    "name": "Red Arch Labs"
+  },
+  "server": {
+    "type": "node",
+    "entry_point": "dist/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/dist/index.js"],
+      "env": {
+        "KM2_APP_URL": "http://localhost:3000",
+        "KM2_API_URL": "http://localhost:8000/api",
+        "KM2_CLERK_JWT_TEMPLATE": "redarch-km",
+        "KM2_BROWSER_CHANNEL": "chrome"
+      }
+    }
+  },
+  "compatibility": {
+    "platforms": ["darwin", "win32", "linux"],
+    "runtimes": {
+      "node": ">=20"
+    }
+  },
+  "keywords": ["km2", "red arch", "lms", "courses", "knowledge management"],
+  "license": "Apache-2.0"
+}
