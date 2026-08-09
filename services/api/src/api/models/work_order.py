@@ -45,6 +45,10 @@ class WorkOrder(Base, UUIDMixin, TimestampMixin):
     title: Mapped[str] = mapped_column(String(300))
     status: Mapped[str] = mapped_column(String(20), default="draft")
     mode: Mapped[str] = mapped_column(String(10), default="manual", server_default="manual")
+    # How big a board this order convenes at its review gates: none | light |
+    # standard | full. Per order, because the same roster is worth one adversarial
+    # pass on a small job and four lenses on a big one.
+    review_level: Mapped[str] = mapped_column(String(10), default="standard", server_default="standard")
     body: Mapped[str | None] = mapped_column(Text, nullable=True)
     priority: Mapped[str] = mapped_column(String(10), default="normal")  # low|normal|high|urgent
 
