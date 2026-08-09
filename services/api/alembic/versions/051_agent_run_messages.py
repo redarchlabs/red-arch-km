@@ -45,9 +45,7 @@ _POLICIES = [
 def upgrade() -> None:
     op.create_table(
         "agent_run_messages",
-        sa.Column(
-            "id", postgresql.UUID(as_uuid=True), primary_key=True, server_default=sa.text("gen_random_uuid()")
-        ),
+        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True, server_default=sa.text("gen_random_uuid()")),
         sa.Column(
             "run_id",
             postgresql.UUID(as_uuid=True),
@@ -89,9 +87,7 @@ def upgrade() -> None:
     op.execute("ALTER TABLE agent_run_messages ENABLE ROW LEVEL SECURITY")
     op.execute("ALTER TABLE agent_run_messages FORCE ROW LEVEL SECURITY")
     for suffix, action, clause in _POLICIES:
-        op.execute(
-            f"CREATE POLICY tenant_isolation_{suffix} ON agent_run_messages FOR {action} {clause} ({_HARDENED})"
-        )
+        op.execute(f"CREATE POLICY tenant_isolation_{suffix} ON agent_run_messages FOR {action} {clause} ({_HARDENED})")
     # Migration 034's blanket admin-bypass, so the worker's cross-org sweep can
     # drain on the privileged role.
     op.execute(

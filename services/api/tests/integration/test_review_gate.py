@@ -223,7 +223,9 @@ class TestTheVerdict:
             AgentApproval(run_id=run.id, org_id=org.id, tool_name="submit_plan", arguments={}, status="approved")
         )
         await admin_session.flush()
-        with pytest.raises(Exception):  # RunFinished — the plan is accepted
+        from api.services.agents.runtime import RunFinished
+
+        with pytest.raises(RunFinished):  # the plan is accepted and the run ends
             await SUBMIT_PLAN.handler(ctx, {"summary": "Replace the index."})
         await admin_session.commit()
 
