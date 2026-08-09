@@ -413,6 +413,7 @@ export interface ApprovalQueueElement extends ElementBase {
   work_order_id?: string | null;
   title?: string | null;
   hide_when_empty?: boolean;
+  include_questions?: boolean;
   poll_ms?: number | null;
   width?: FieldWidth | null;
 }

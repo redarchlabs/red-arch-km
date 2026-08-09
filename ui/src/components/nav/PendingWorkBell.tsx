@@ -5,7 +5,6 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
 import { listApprovals, listQuestions } from "@/lib/api/agents";
-import { cn } from "@/lib/utils";
 
 /** How often to re-check, when the tab is actually being looked at. */
 const POLL_MS = 20_000;
@@ -49,18 +48,29 @@ export function PendingWorkBell() {
     };
   }, [refresh]);
 
+  // A bare dot on a bell is easy to miss, and the thing it marks is an agent
+  // stopped dead waiting for a person — so when there IS something, say so in
+  // words. With nothing pending it stays a quiet icon.
+  if (count === 0) {
+    return (
+      <Link
+        href="/agents/approvals"
+        aria-label="Nothing waiting for you"
+        className="rounded-sm p-1 text-muted-foreground transition-colors hover:text-foreground"
+      >
+        <Bell className="h-4 w-4" />
+      </Link>
+    );
+  }
+
   return (
     <Link
       href="/agents/approvals"
-      aria-label={count > 0 ? `${count} items waiting for you` : "Nothing waiting for you"}
-      className="relative rounded-sm p-1 text-muted-foreground transition-colors hover:text-foreground"
+      aria-label={`${count} waiting for you`}
+      className="flex items-center gap-1.5 rounded-full bg-amber-100 px-2 py-1 text-xs font-medium text-amber-900 transition-colors hover:bg-amber-200 dark:bg-amber-900/40 dark:text-amber-100 dark:hover:bg-amber-900/60"
     >
-      <Bell className={cn("h-4 w-4", count > 0 && "text-amber-600")} />
-      {count > 0 ? (
-        <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-amber-600 px-1 text-[10px] font-medium leading-none text-white">
-          {count > 9 ? "9+" : count}
-        </span>
-      ) : null}
+      <Bell className="h-3.5 w-3.5" />
+      {count === 1 ? "1 waiting on you" : `${count} waiting on you`}
     </Link>
   );
 }

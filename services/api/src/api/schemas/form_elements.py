@@ -1136,6 +1136,10 @@ class ApprovalQueueElement(_Element):
     # Nothing pending is the normal state; an always-present empty card is noise
     # on a dashboard but reassuring on a page about one order.
     hide_when_empty: bool = True
+    # Also list questions an agent is blocked on. On by default: an agent waiting
+    # for an answer is stopped just as hard as one waiting for an approval, and the
+    # two were only ever separate because they arrived in different releases.
+    include_questions: bool = True
     poll_ms: int | None = None
     width: FieldWidth | None = None
 
