@@ -975,6 +975,10 @@ class ChatElement(_Element):
     role_field: str = "role"  # picklist person|robot
     text_field: str = "text"
     channel_field: str = "channel"  # picklist heard|typed|spoken
+    # Field on the message entity holding attached document ids, if the org's
+    # schema has one. Blank means this chat does not take attachments — the
+    # element cannot invent a column on someone else's entity.
+    attachments_field: str | None = None
     answer_workflow_id: uuid.UUID | None = None  # run on send (e.g. "Robot: Chat Answer")
     answer_controls: ChatAnswerControls | None = None  # optional live answer-speed toggle row
     filler: ChatFiller | None = None  # optional "one moment…" chatter while the robot works
@@ -1144,6 +1148,24 @@ class AgentActivityElement(_Element):
     width: FieldWidth | None = None
 
 
+class WorkOrderDocumentsElement(_Element):
+    """The documents on a work order — what people attached, what agents produced.
+
+    A work order recorded what happened and not what came of it. This is the other
+    half: the audit report, the spec someone handed in, the CSV an agent wrote."""
+
+    type: Literal["work_order_documents"] = "work_order_documents"
+    work_order_id: WorkOrderBinding = None
+    title: str | None = "Documents"
+    # An order with nothing attached is the normal case early on; an empty card is
+    # noise on a dashboard and reassuring on a page about one order.
+    hide_when_empty: bool = False
+    # Let a person attach from here, not only by replying.
+    allow_upload: bool = True
+    poll_ms: int | None = None
+    width: FieldWidth | None = None
+
+
 class ApprovalQueueElement(_Element):
     """Pending approvals, with the decision attached.
 
@@ -1188,6 +1210,7 @@ FormElement = Annotated[
     | AgentTimelineElement
     | AgentDiaryElement
     | AgentActivityElement
+    | WorkOrderDocumentsElement
     | WorkOrderListElement
     | WorkOrderTasksElement
     | WorkOrderCreateElement

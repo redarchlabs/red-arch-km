@@ -504,6 +504,28 @@ is the diary and the run's steps, and reloading the page starts the transcript
 fresh from whatever happens next.
 `,
   ),
+  work_order_documents: topic(
+    "Work order documents",
+    `
+What went **into** a work order and what came **out** of it.
+
+The diary says what happened; this says what came of it — the audit report an
+agent wrote, the spec somebody handed in, a screenshot pasted into a reply.
+
+Each row is labelled **provided** (a person handed it in) or **produced** (an
+agent wrote it). They answer different questions: an agent starting work wants the
+inputs, a person reviewing wants the outputs.
+
+- **Allow upload** — an Attach button, so a document can be added here and not only
+  by replying with it.
+- **Hide when empty** — leave it out of the page until something is attached.
+
+Attachments are ordinary KM2 documents: searchable, permissioned, and OCR'd if
+they are images. Removing one here unlinks it from the order and leaves the
+document alone — attaching to the wrong order should be undoable without
+destroying the work.
+`,
+  ),
   work_order_actions: topic(
     "Work order actions",
     `

@@ -25,10 +25,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.models.agent import Agent
 from api.models.agent_run import AgentApproval, AgentQuestion, AgentRun
-from api.models.work_order import WORK_ORDER_MODES, WorkOrder, WorkOrderEntry, WorkOrderTask
+from api.models.work_order import (
+    WORK_ORDER_MODES,
+    WorkOrder,
+    WorkOrderArtifact,
+    WorkOrderEntry,
+    WorkOrderTask,
+)
 from api.repositories.agent_run import AgentRunRepository
 from api.repositories.work_order import WorkOrderRepository
+from api.repositories.work_order_artifacts import WorkOrderArtifactRepository
 from api.schemas.work_order import MapEvent, MapLane, WorkOrderMap
+from api.services.agents.attachments import mime_for
 
 # Allowed status transitions (terminal states have none).
 _TRANSITIONS: dict[str, set[str]] = {
@@ -117,6 +125,11 @@ def _reply_brief(wo: WorkOrder, history: Sequence[WorkOrderEntry], reply: str) -
         f"{reply}\n\n"
         "Continue the work order from here, taking their reply as the instruction."
     )
+
+
+def _attachment_lines(artifacts: list[Any]) -> str:
+    """How attachments read in the diary — a name a person recognises."""
+    return "\n".join(f"📎 {a.filename or a.document_id}" for a in artifacts)
 
 
 def _lane_for(agent: Agent) -> MapLane:
@@ -247,6 +260,7 @@ class WorkOrderService:
         actor_profile_id: uuid.UUID | None,
         task: str | None = None,
         ignore_run_id: uuid.UUID | None = None,
+        attachment_ids: list[uuid.UUID] | None = None,
     ) -> None:
         """Queue a run for the assigned agent, if there is one.
 
@@ -286,7 +300,13 @@ class WorkOrderService:
             provider=agent.provider,
             model=agent.model,
             trigger="work_order",
-            input={"task": task or _brief(wo)},
+            # Attachment ids ride on the run's input, not the brief: the executor
+            # loads the bytes at turn time and only for a model that can see them,
+            # so nothing here carries an image.
+            input={
+                "task": task or _brief(wo),
+                **({"attachments": [str(i) for i in attachment_ids]} if attachment_ids else {}),
+            },
             work_order_id=wo.id,
             # The agent works on behalf of whoever started the order, and reads the
             # knowledge base with exactly that person's entitlement. A run with no
@@ -415,12 +435,67 @@ class WorkOrderService:
         await self._repo.flush()
         return wo
 
+    async def attach_documents(
+        self,
+        wo_id: uuid.UUID,
+        document_ids: list[uuid.UUID],
+        *,
+        kind: str = "input",
+        actor_profile_id: uuid.UUID | None = None,
+    ) -> list[WorkOrderArtifact]:
+        """Link existing documents to this order.
+
+        Ignores ids that are not documents in this org rather than failing the
+        whole reply: a message with one bad attachment should still be delivered,
+        and the diary shows what did attach.
+        """
+        if not document_ids:
+            return []
+        from api.repositories.document import DocumentRepository
+
+        docs = DocumentRepository(self._session, self._org_id)
+        repo = WorkOrderArtifactRepository(self._session, self._org_id)
+        attached: list[WorkOrderArtifact] = []
+        for document_id in document_ids:
+            document = await docs.get(document_id)
+            if document is None:
+                continue
+            # A Document has no filename or mime of its own: an uploaded file's
+            # object key is `<org>/<document_key>/<filename>`, and a document made
+            # from text has no object at all. Both are captured onto the artifact
+            # row so the record survives the document being deleted.
+            key = document.document_url or ""
+            name = key.rsplit("/", 1)[-1] if key else document.title
+            attached.append(
+                await repo.attach(
+                    wo_id,
+                    document_id,
+                    kind=kind,
+                    filename=name,
+                    mime=mime_for(name),
+                    size=document.size_bytes,
+                )
+            )
+        return attached
+
+    async def list_artifacts(self, wo_id: uuid.UUID) -> list[tuple[WorkOrderArtifact, Any]]:
+        await self.get_work_order(wo_id)
+        return await WorkOrderArtifactRepository(self._session, self._org_id).list_for(wo_id)
+
+    async def detach_artifact(self, wo_id: uuid.UUID, artifact_id: uuid.UUID) -> None:
+        """Unlink an artifact. The document itself is left alone — attaching to the
+        wrong order should be undoable without destroying the work."""
+        await self.get_work_order(wo_id)
+        if not await WorkOrderArtifactRepository(self._session, self._org_id).detach(artifact_id):
+            raise WorkOrderNotFoundError(f"Artifact {artifact_id} not found")
+
     async def reply(
         self,
         wo_id: uuid.UUID,
         text: str,
         *,
         actor_profile_id: uuid.UUID | None = None,
+        document_ids: list[uuid.UUID] | None = None,
     ) -> WorkOrder:
         """Record a person's reply on the order and hand it to the agent.
 
@@ -430,13 +505,20 @@ class WorkOrderService:
         order, which loses everything already in the diary.
         """
         message = text.strip()
-        if not message:
+        if not message and not document_ids:
+            # A reply that is only an attachment is a real reply — "here, look at
+            # this" is a whole message. Only an empty one with nothing attached is
+            # refused.
             raise WorkOrderValidationError("A reply cannot be empty")
         wo = await self.get_work_order(wo_id)
         # Read the diary before adding the reply: the brief states the reply
         # separately, and a transcript ending in it would say it twice.
         history = (await self.list_entries_page(wo.id, limit=_REPLY_CONTEXT_ENTRIES)).entries
-        await self._repo.add_entry(WorkOrderEntry(work_order_id=wo.id, role=_HUMAN_LANE, text=message))
+        attached = await self.attach_documents(
+            wo.id, document_ids or [], kind="input", actor_profile_id=actor_profile_id
+        )
+        body = "\n".join(part for part in (message, _attachment_lines(attached)) if part)
+        await self._repo.add_entry(WorkOrderEntry(work_order_id=wo.id, role=_HUMAN_LANE, text=body))
         await self._repo.flush()
 
         # A reply is a contribution to the record whatever state the order is in;
@@ -461,7 +543,12 @@ class WorkOrderService:
             await self._repo.flush()
             return wo
 
-        await self._dispatch(wo, actor_profile_id=actor_profile_id, task=_reply_brief(wo, history, message))
+        await self._dispatch(
+            wo,
+            actor_profile_id=actor_profile_id,
+            task=_reply_brief(wo, history, body),
+            attachment_ids=[a.document_id for a in attached if a.document_id],
+        )
         await self._repo.flush()
         return wo
 

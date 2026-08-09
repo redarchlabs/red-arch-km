@@ -26,6 +26,8 @@ import json
 import logging
 from typing import Any
 
+from api.services.agents.attachments import flatten_content
+
 logger = logging.getLogger(__name__)
 
 # The tool an agent calls to read back what was elided.
@@ -178,7 +180,9 @@ def _render_for_summary(messages: list[dict[str, Any]]) -> str:
     lines: list[str] = []
     for message in messages:
         role = message.get("role", "?")
-        content = message.get("content") or ""
+        # Multimodal content is a list of parts; an f-string would render it as a
+        # Python repr inside a summary the model later reads as fact.
+        content = flatten_content(message.get("content"))
         for call in message.get("tool_calls") or []:
             function = call.get("function") or {}
             lines.append(f"assistant called {function.get('name')}({function.get('arguments')})")

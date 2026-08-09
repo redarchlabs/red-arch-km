@@ -3,9 +3,11 @@
 import { Loader2, Send } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { AttachmentChips } from "@/components/common/AttachmentChips";
 import { Markdown } from "@/components/common/Markdown";
 import { Button } from "@/components/ui/button";
 import { liveSocketUrl, mintLiveTicket, type LiveEvent } from "@/lib/api/agentsLive";
+import { usePasteAttach } from "@/lib/usePasteAttach";
 import { cn } from "@/lib/utils";
 
 /** One thing that happened, as it is shown. Assistant text accumulates into the
@@ -47,6 +49,7 @@ export function LiveActivityNode({
   const [connected, setConnected] = useState(false);
   const [steer, setSteer] = useState("");
   const [lastRunId, setLastRunId] = useState<string | null>(null);
+  const paste = usePasteAttach();
   const boxRef = useRef<HTMLDivElement>(null);
   const socketRef = useRef<WebSocket | null>(null);
   const pinned = useRef(true);
@@ -149,9 +152,13 @@ export function LiveActivityNode({
     const text = steer.trim();
     const target = runId || lastRunId;
     const socket = socketRef.current;
-    if (!text || !socket || socket.readyState !== WebSocket.OPEN || !target) return;
-    socket.send(JSON.stringify({ type: "steer", run_id: target, text }));
+    // An attachment on its own is a message: "look at this" with a screenshot.
+    if ((!text && paste.documentIds.length === 0) || !socket || socket.readyState !== WebSocket.OPEN || !target) {
+      return;
+    }
+    socket.send(JSON.stringify({ type: "steer", run_id: target, text, document_ids: paste.documentIds }));
     setSteer("");
+    paste.clear();
   };
 
   if (!workOrderId && !runId) {
@@ -225,7 +232,9 @@ export function LiveActivityNode({
         )}
       </div>
       {allowSteer ? (
-        <div className="flex items-end gap-2">
+        <div className="space-y-1" onDrop={paste.onDrop} onDragOver={(e) => e.preventDefault()}>
+          <AttachmentChips attachments={paste.attachments} onRemove={paste.remove} />
+          <div className="flex items-end gap-2">
           <textarea
             value={steer}
             onChange={(e) => setSteer(e.target.value)}
@@ -235,15 +244,22 @@ export function LiveActivityNode({
               e.preventDefault();
               send();
             }}
-            placeholder={target ? "Say something to the agent…" : "Nothing running to steer yet"}
+            onPaste={paste.onPaste}
+            placeholder={target ? "Say something — paste a screenshot to attach it…" : "Nothing running to steer yet"}
             aria-label="Steer the agent"
             rows={2}
             disabled={!target}
             className="w-full rounded-md border bg-background px-2 py-1.5 text-sm disabled:opacity-60"
           />
-          <Button type="button" size="sm" onClick={send} disabled={!target || !steer.trim() || !connected}>
+          <Button
+            type="button"
+            size="sm"
+            onClick={send}
+            disabled={!target || !connected || paste.busy || (!steer.trim() && paste.documentIds.length === 0)}
+          >
             <Send className="h-3 w-3" />
           </Button>
+          </div>
         </div>
       ) : null}
     </div>

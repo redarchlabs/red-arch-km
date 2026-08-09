@@ -149,8 +149,48 @@ export async function assignWorkOrder(id: string, assignedAgentId: string | null
 
 /** Reply to the agent working an order. A finished run cannot be answered, so a
  *  reply records the message and queues a follow-up run carrying the diary. */
-export async function replyToWorkOrder(id: string, text: string): Promise<WorkOrder> {
-  return (await apiClient.post<WorkOrder>(`/work-orders/${id}/reply`, { text })).data;
+export async function replyToWorkOrder(
+  id: string,
+  text: string,
+  documentIds: string[] = [],
+): Promise<WorkOrder> {
+  return (
+    await apiClient.post<WorkOrder>(`/work-orders/${id}/reply`, { text, document_ids: documentIds })
+  ).data;
+}
+
+/** Documents on a work order — what people attached, what agents produced. */
+export interface WorkOrderArtifact {
+  id: string;
+  document_id: string | null;
+  kind: string;
+  filename: string | null;
+  mime: string | null;
+  size: number | null;
+  created_at: string;
+  title: string | null;
+  missing: boolean;
+}
+
+export async function listWorkOrderArtifacts(id: string): Promise<WorkOrderArtifact[]> {
+  return (await apiClient.get<WorkOrderArtifact[]>(`/work-orders/${id}/artifacts`)).data;
+}
+
+export async function attachWorkOrderDocuments(
+  id: string,
+  documentIds: string[],
+  kind: "input" | "output" = "input",
+): Promise<WorkOrderArtifact[]> {
+  return (
+    await apiClient.post<WorkOrderArtifact[]>(`/work-orders/${id}/artifacts`, {
+      document_ids: documentIds,
+      kind,
+    })
+  ).data;
+}
+
+export async function detachWorkOrderArtifact(id: string, artifactId: string): Promise<void> {
+  await apiClient.delete(`/work-orders/${id}/artifacts/${artifactId}`);
 }
 
 /** Change how much rope the agent gets on this order. */
