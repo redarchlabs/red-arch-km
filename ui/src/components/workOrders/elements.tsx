@@ -8,13 +8,17 @@ import { Markdown } from "@/components/common/Markdown";
 import { Button } from "@/components/ui/button";
 import { approveApproval, denyApproval, listAgentRunSteps, listApprovals } from "@/lib/api/agents";
 import type { AgentRunStep, Approval } from "@/lib/api/agents";
+import { getApiErrorMessage } from "@/lib/api/errors";
 import {
+  getWorkOrder,
   getWorkOrderEntries,
   getWorkOrderMap,
   listWorkOrders,
+  setWorkOrderStatus,
   type WorkOrder,
   type WorkOrderEntry,
   type WorkOrderMap,
+  type WorkOrderStatus,
 } from "@/lib/api/workOrders";
 
 import { AgentSwimLanes } from "./AgentSwimLanes";
@@ -333,6 +337,82 @@ export function ApprovalQueueNode({
           </div>
         ))
       )}
+    </div>
+  );
+}
+
+// ------------------------------------------------------------------ //
+// work_order_actions
+// ------------------------------------------------------------------ //
+
+interface ActionsProps {
+  workOrderId: string | null;
+  title?: string | null;
+  showSummary?: boolean;
+}
+
+/** How each transition reads to the person clicking it. "in_progress" is the one
+ *  that matters: on an assigned order it dispatches the agent, so it is labelled
+ *  as starting work rather than as setting a status. */
+const ACTION_LABELS: Record<string, string> = {
+  awaiting_approval: "Send for approval",
+  approved: "Approve",
+  in_progress: "Start work",
+  done: "Mark done",
+  cancelled: "Cancel",
+  draft: "Back to draft",
+};
+
+export function WorkOrderActionsNode({ workOrderId, title, showSummary = true }: ActionsProps) {
+  const [wo, setWo] = useState<WorkOrder | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(() => {
+    if (!workOrderId) return;
+    void getWorkOrder(workOrderId)
+      .then(setWo)
+      .catch(() => setWo(null));
+  }, [workOrderId]);
+
+  useEffect(load, [load]);
+
+  const move = async (status: string) => {
+    if (!workOrderId) return;
+    setBusy(true);
+    setError(null);
+    try {
+      setWo(await setWorkOrderStatus(workOrderId, status as WorkOrderStatus));
+    } catch (e: unknown) {
+      // Starting an order assigned to a disabled agent is refused here, and the
+      // server's message says which agent — worth showing verbatim rather than
+      // flattening to "failed".
+      setError(getApiErrorMessage(e, "Could not change the status"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!workOrderId) return <p className="text-sm text-muted-foreground">No work order selected.</p>;
+  if (!wo) return null;
+
+  return (
+    <div className="space-y-2">
+      {title ? <h3 className="text-sm font-medium">{title}</h3> : null}
+      {showSummary ? (
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-medium">{wo.title}</span>
+          <span className="rounded border px-1.5 py-0.5 text-[10px] text-muted-foreground">{wo.status}</span>
+        </div>
+      ) : null}
+      {error ? <p className="text-xs text-destructive">{error}</p> : null}
+      <div className="flex flex-wrap gap-2">
+        {(wo.allowed_transitions ?? []).map((s) => (
+          <Button key={s} size="sm" variant="outline" disabled={busy} onClick={() => void move(s)}>
+            {ACTION_LABELS[s] ?? s}
+          </Button>
+        ))}
+      </div>
     </div>
   );
 }

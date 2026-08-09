@@ -152,6 +152,15 @@ class WorkOrderService:
         self._org_id = org_id
         self._repo = WorkOrderRepository(session, org_id)
 
+    @staticmethod
+    def allowed_transitions(status: str) -> list[str]:
+        """The statuses an order in this state may move to.
+
+        Public so the API can send it: a client that re-derived this would offer
+        buttons the server then rejects the moment the state machine changes.
+        """
+        return sorted(_TRANSITIONS.get(status, set()))
+
     async def list_work_orders(self) -> list[WorkOrder]:
         return await self._repo.list_all()
 

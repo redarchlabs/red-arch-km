@@ -2919,6 +2919,16 @@ class AgentService:
                         "to bind to the page's own order."
                     ),
                 },
+                "work_order_actions": {
+                    "required": ["type"],
+                    "optional": ["work_order_id", "title", "show_summary", "width"],
+                    "use": (
+                        "The order's lifecycle buttons (approve / start / close). The legal moves "
+                        "come from the server with the order, so the buttons match what the state "
+                        "machine accepts. Starting an ASSIGNED order dispatches its agent, which is "
+                        "what turns a filed request into work."
+                    ),
+                },
                 "approval_queue": {
                     "required": ["type"],
                     "optional": [
