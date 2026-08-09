@@ -13,6 +13,7 @@ The registry is process-global, so every test restores it.
 
 from __future__ import annotations
 
+import pathlib
 import sys
 from types import SimpleNamespace
 from typing import Any
@@ -56,6 +57,13 @@ def clean_registry():
     test loads the fake plugin second finds an empty catalog and the pair passes
     or fails purely on execution order.
     """
+
+    # `--import-mode=importlib` (what this suite runs under) does not put a test's
+    # own directory on sys.path, so `fake_llm_plugin` is not importable by name —
+    # which is exactly what load_plugins does with it.
+    here = str(pathlib.Path(__file__).parent)
+    if here not in sys.path:
+        sys.path.insert(0, here)
 
     def _clear() -> None:
         catalog.reset_registry()
