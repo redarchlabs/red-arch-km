@@ -2319,6 +2319,7 @@ export function FormRenderer({
                 showSummary={el.show_summary}
                 showAssignee={el.show_assignee}
                 showMode={el.show_mode}
+                showReview={el.show_review}
               />
             </ElementErrorBoundary>
           </div>

@@ -28,11 +28,13 @@ import {
   listWorkOrders,
   replyToWorkOrder,
   setWorkOrderMode,
+  setWorkOrderReviewLevel,
   setWorkOrderStatus,
   type WorkOrder,
   type WorkOrderDetail,
   type WorkOrderEntry,
   type WorkOrderMode,
+  type WorkOrderReviewLevel,
   type WorkOrderMap,
   type WorkOrderStatus,
 } from "@/lib/api/workOrders";
@@ -759,6 +761,7 @@ interface ActionsProps {
   showSummary?: boolean;
   showAssignee?: boolean;
   showMode?: boolean;
+  showReview?: boolean;
 }
 
 /** What each mode means to the person picking it. Wording over jargon: "plan"
@@ -767,6 +770,15 @@ const MODE_LABELS: Record<string, string> = {
   plan: "Plan only",
   manual: "Ask me first",
   automatic: "Automatic",
+};
+
+/** What each review level costs and buys. Named for what a person gets, not for
+ *  how many agents run. */
+const REVIEW_LABELS: Record<string, string> = {
+  none: "No review",
+  light: "1 reviewer",
+  standard: "2 reviewers",
+  full: "4 reviewers",
 };
 
 const MODE_HELP: Record<string, string> = {
@@ -793,6 +805,7 @@ export function WorkOrderActionsNode({
   showSummary = true,
   showAssignee = true,
   showMode = true,
+  showReview = true,
 }: ActionsProps) {
   const [wo, setWo] = useState<WorkOrder | null>(null);
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -836,6 +849,19 @@ export function WorkOrderActionsNode({
       setWo(await setWorkOrderMode(workOrderId, mode as WorkOrderMode));
     } catch (e: unknown) {
       setError(getApiErrorMessage(e, "Could not change the mode"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const changeReview = async (level: string) => {
+    if (!workOrderId) return;
+    setBusy(true);
+    setError(null);
+    try {
+      setWo(await setWorkOrderReviewLevel(workOrderId, level as WorkOrderReviewLevel));
+    } catch (e: unknown) {
+      setError(getApiErrorMessage(e, "Could not change the review level"));
     } finally {
       setBusy(false);
     }
@@ -905,6 +931,24 @@ export function WorkOrderActionsNode({
               {["plan", "manual", "automatic"].map((m) => (
                 <option key={m} value={m}>
                   {MODE_LABELS[m]}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
+        {showReview ? (
+          <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            Review
+            <select
+              value={wo.review_level}
+              onChange={(e) => void changeReview(e.target.value)}
+              disabled={busy}
+              aria-label="Review level"
+              className="rounded-md border bg-background px-2 py-1 text-sm text-foreground"
+            >
+              {["none", "light", "standard", "full"].map((r) => (
+                <option key={r} value={r}>
+                  {REVIEW_LABELS[r]}
                 </option>
               ))}
             </select>

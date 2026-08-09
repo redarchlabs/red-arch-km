@@ -521,6 +521,7 @@ assigned to a disabled agent is refused, and the message names the agent.
 - **Show summary** — the order's title and current status above the buttons. Turn
   it off on a page that already has its own heading.
 - **Show mode** — the plan/manual/automatic picker (below).
+- **Show review** — the peer-review picker (below).
 
 **Mode** decides how much rope the agent gets on *this* order:
 
@@ -536,6 +537,22 @@ assigned to a disabled agent is refused, and the message names the agent.
   asked, so an agent can send mail and call external tools unattended. Mode
   changes are written into the diary, because "who turned that off, and when" has
   to be answerable afterwards.
+
+**Review** decides how many agents read a plan before *you* are asked to approve
+it. Roughly a tenth of what an agent produces is confident and wrong and looks
+exactly like the rest; a reviewer with a different lens catches what the author
+cannot.
+
+- **No review** — straight to you.
+- **1 reviewer** — the devil's advocate alone.
+- **2 reviewers** (default) — adversarial plus one lens matched to the work.
+- **4 reviewers** — the full board, for an order where being wrong is expensive.
+
+Reviewers are one-shot, read-only, and run on a cheaper model than the author,
+because reading a plan costs a fraction of writing one. They reply PASS or FAIL
+with findings; a FAIL goes back to the author to revise, and after two rounds the
+plan comes to you anyway with the objections attached rather than looping forever.
+The author is never seated on its own board.
 
 Automatic never widens what an agent may touch: grants and the role restrictions
 still apply. It only removes the human from the loop on tools it already had.

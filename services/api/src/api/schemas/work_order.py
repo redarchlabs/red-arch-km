@@ -12,6 +12,8 @@ WorkOrderStatus = Literal["draft", "awaiting_approval", "approved", "in_progress
 Priority = Literal["low", "normal", "high", "urgent"]
 # How much rope the agent gets on this order — see migration 049.
 WorkOrderMode = Literal["plan", "manual", "automatic"]
+# How big a board reviews this order's plan and delivery — see migration 050.
+WorkOrderReviewLevel = Literal["none", "light", "standard", "full"]
 
 
 class WorkOrderCreate(BaseModel):
@@ -21,6 +23,7 @@ class WorkOrderCreate(BaseModel):
     body: str | None = None
     priority: Priority = "normal"
     mode: WorkOrderMode = "manual"
+    review_level: WorkOrderReviewLevel = "standard"
     assigned_agent_id: uuid.UUID | None = None
 
 
@@ -40,6 +43,12 @@ class WorkOrderModeUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     mode: WorkOrderMode
+
+
+class WorkOrderReviewLevelUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    review_level: WorkOrderReviewLevel
 
 
 class WorkOrderReply(BaseModel):
@@ -98,6 +107,7 @@ class WorkOrderRead(BaseModel):
     body: str | None
     priority: str
     mode: str
+    review_level: str
     assigned_agent_id: uuid.UUID | None
     created_by_profile_id: uuid.UUID | None
     created_at: datetime

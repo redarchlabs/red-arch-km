@@ -28,6 +28,7 @@ from api.schemas.work_order import (
     WorkOrderModeUpdate,
     WorkOrderRead,
     WorkOrderReply,
+    WorkOrderReviewLevelUpdate,
     WorkOrderStatusUpdate,
 )
 from api.services.agents.work_order_service import (
@@ -74,6 +75,7 @@ async def create_work_order(
         body=body.body,
         priority=body.priority,
         mode=body.mode,
+        review_level=body.review_level,
         assigned_agent_id=body.assigned_agent_id,
         created_by_profile_id=ctx.user.profile_id,
     )
@@ -181,6 +183,20 @@ async def set_mode(
 ) -> WorkOrderRead:
     try:
         wo = await WorkOrderService(session, ctx.org_id).set_mode(wo_id, body.mode)
+    except WorkOrderError as exc:
+        _raise_http(exc)
+    return _to_read(wo)
+
+
+@router.patch("/{wo_id}/review-level", response_model=WorkOrderRead)
+async def set_review_level(
+    wo_id: uuid.UUID,
+    body: WorkOrderReviewLevelUpdate,
+    ctx: Annotated[OrgContext, Depends(require_org_admin)],
+    session: Annotated[AsyncSession, Depends(get_tenant_db)],
+) -> WorkOrderRead:
+    try:
+        wo = await WorkOrderService(session, ctx.org_id).set_review_level(wo_id, body.review_level)
     except WorkOrderError as exc:
         _raise_http(exc)
     return _to_read(wo)

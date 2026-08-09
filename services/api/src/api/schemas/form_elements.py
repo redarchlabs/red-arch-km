@@ -1118,6 +1118,9 @@ class WorkOrderActionsElement(_Element):
     # The plan/manual/automatic picker. Per job rather than per org: the same
     # roster is worth planning with on one order and turning loose on another.
     show_mode: bool = True
+    # The peer-review picker. Turning review down is a decision worth making per
+    # order and worth being able to see afterwards.
+    show_review: bool = True
     width: FieldWidth | None = None
 
 

@@ -17,7 +17,7 @@ from typing import Any
 
 import pytest
 from api.models.agent import Agent
-from api.models.agent_run import AgentRun
+from api.models.agent_run import AgentApproval, AgentRun
 from api.models.org import Org
 from api.services.agents.authority import Decision, Posture, decide
 from api.services.agents.runtime import RunFinished
@@ -62,14 +62,42 @@ async def _runs_for(session: AsyncSession, wo_id: uuid.UUID) -> list[AgentRun]:
     return list((await session.execute(select(AgentRun).where(AgentRun.work_order_id == wo_id))).scalars().all())
 
 
+async def _planning_run(session: AsyncSession, org, agent, wo) -> AgentRun:
+    run = AgentRun(
+        org_id=org.id,
+        agent_id=agent.id,
+        work_order_id=wo.id,
+        provider="openai",
+        model="m",
+        trigger="work_order",
+        status="running",
+        input={},
+    )
+    session.add(run)
+    await session.flush()
+    return run
+
+
+async def _approved(session: AsyncSession, org, run: AgentRun) -> None:
+    """A person has already said yes to this run's plan.
+
+    The handler reads that from agent_approvals rather than being told: the
+    approval is settled by a different request, in another process, long after the
+    handler first ran.
+    """
+    session.add(AgentApproval(run_id=run.id, org_id=org.id, tool_name="submit_plan", arguments={}, status="approved"))
+    await session.flush()
+
+
 class TestTheGate:
-    def test_submitting_a_plan_always_asks_a_person(self) -> None:
-        """Even under automatic. A tool whose whole purpose is to put a decision in
-        front of someone becomes a no-op if it can approve itself."""
+    def test_the_authority_gate_lets_it_through(self) -> None:
+        """The approval is raised by the HANDLER, not by the gate. always_ask fires
+        before the handler runs, which would ask a person to approve a plan the
+        review board had not read — the exact ordering this feature exists for."""
         agent = Agent(name="c", kind="coordinator", provider="openai", model="m", grants={})
 
         for posture in (Posture.PLAN_ONLY, Posture.AUTOMATIC, "high_touch"):
-            assert decide(agent, SUBMIT_PLAN, autonomy=posture).decision is Decision.ASK
+            assert decide(agent, SUBMIT_PLAN, autonomy=posture).decision is Decision.ALLOW
 
 
 class TestApprovingThePlan:
@@ -89,6 +117,7 @@ class TestApprovingThePlan:
         )
         admin_session.add(planning)
         await admin_session.flush()
+        await _approved(admin_session, org, planning)
         ctx = _Ctx(session=admin_session, org_id=org.id, work_order_id=wo.id, agent=agent, run_id=planning.id)
 
         with pytest.raises(RunFinished):
@@ -104,7 +133,9 @@ class TestApprovingThePlan:
         """Otherwise the run that was just released would be refused every tool it
         needs — approving the plan has to actually release execution."""
         org, agent, wo, svc = await _seed(admin_session)
-        ctx = _Ctx(session=admin_session, org_id=org.id, work_order_id=wo.id, agent=agent)
+        run = await _planning_run(admin_session, org, agent, wo)
+        await _approved(admin_session, org, run)
+        ctx = _Ctx(session=admin_session, org_id=org.id, work_order_id=wo.id, agent=agent, run_id=run.id)
 
         with pytest.raises(RunFinished):
             await SUBMIT_PLAN.handler(ctx, {"summary": "Do the thing."})
@@ -130,6 +161,7 @@ class TestApprovingThePlan:
         )
         admin_session.add(planning)
         await admin_session.flush()
+        await _approved(admin_session, org, planning)
         ctx = _Ctx(session=admin_session, org_id=org.id, work_order_id=wo.id, agent=agent, run_id=planning.id)
 
         with pytest.raises(RunFinished):
@@ -140,7 +172,9 @@ class TestApprovingThePlan:
 
     async def test_the_plan_is_written_into_the_diary(self, admin_session: AsyncSession) -> None:
         org, agent, wo, svc = await _seed(admin_session)
-        ctx = _Ctx(session=admin_session, org_id=org.id, work_order_id=wo.id, agent=agent)
+        run = await _planning_run(admin_session, org, agent, wo)
+        await _approved(admin_session, org, run)
+        ctx = _Ctx(session=admin_session, org_id=org.id, work_order_id=wo.id, agent=agent, run_id=run.id)
 
         with pytest.raises(RunFinished):
             await SUBMIT_PLAN.handler(ctx, {"summary": "Crawl every page."})
@@ -150,7 +184,9 @@ class TestApprovingThePlan:
 
     async def test_the_task_list_survives_as_the_plan(self, admin_session: AsyncSession) -> None:
         org, agent, wo, svc = await _seed(admin_session)
-        ctx = _Ctx(session=admin_session, org_id=org.id, work_order_id=wo.id, agent=agent)
+        run = await _planning_run(admin_session, org, agent, wo)
+        await _approved(admin_session, org, run)
+        ctx = _Ctx(session=admin_session, org_id=org.id, work_order_id=wo.id, agent=agent, run_id=run.id)
         await SET_WORK_ORDER_TASKS.handler(ctx, {"tasks": ["Crawl", "Report"]})
 
         with pytest.raises(RunFinished) as raised:
@@ -177,3 +213,23 @@ class TestRefusals:
         out = await SUBMIT_PLAN.handler(ctx, {"summary": "Anything"})
 
         assert "error" in out
+
+
+class TestTheHumanComesLast:
+    async def test_it_parks_for_a_person_before_doing_anything(self, admin_session: AsyncSession) -> None:
+        """The approval is raised by the handler, not by the authority gate's
+        always_ask — that fires BEFORE the handler, which would ask someone to
+        approve a plan the review board had not read yet."""
+        from api.services.agents.runtime import RunParked
+
+        org, agent, wo, svc = await _seed(admin_session)
+        run = await _planning_run(admin_session, org, agent, wo)
+        ctx = _Ctx(session=admin_session, org_id=org.id, work_order_id=wo.id, agent=agent, run_id=run.id)
+
+        with pytest.raises(RunParked) as parked:
+            await SUBMIT_PLAN.handler(ctx, {"summary": "Crawl, then report."})
+
+        assert parked.value.wait_kind == "approval"
+        # Nothing happened yet: the order is still in plan mode and nothing queued.
+        assert (await svc.get_work_order(wo.id)).mode == "plan"
+        assert [r.status for r in await _runs_for(admin_session, wo.id)] == ["running"]

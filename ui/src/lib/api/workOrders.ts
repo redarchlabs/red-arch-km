@@ -14,6 +14,10 @@ export type WorkOrderStatus =
  *  manual = pause for approval; automatic = approve its own actions. */
 export type WorkOrderMode = "plan" | "manual" | "automatic";
 
+/** How big a board reviews this order's plan before a person is asked to approve
+ *  it: none | light (1) | standard (2) | full (4). */
+export type WorkOrderReviewLevel = "none" | "light" | "standard" | "full";
+
 export interface WorkOrder {
   id: string;
   slug: string;
@@ -22,6 +26,7 @@ export interface WorkOrder {
   body: string | null;
   priority: string;
   mode: WorkOrderMode;
+  review_level: WorkOrderReviewLevel;
   assigned_agent_id: string | null;
   created_by_profile_id: string | null;
   created_at: string;
@@ -97,6 +102,7 @@ export interface WorkOrderCreateInput {
   body?: string | null;
   priority?: string;
   mode?: WorkOrderMode;
+  review_level?: WorkOrderReviewLevel;
   assigned_agent_id?: string | null;
 }
 
@@ -150,4 +156,12 @@ export async function replyToWorkOrder(id: string, text: string): Promise<WorkOr
 /** Change how much rope the agent gets on this order. */
 export async function setWorkOrderMode(id: string, mode: WorkOrderMode): Promise<WorkOrder> {
   return (await apiClient.patch<WorkOrder>(`/work-orders/${id}/mode`, { mode })).data;
+}
+
+/** Change how big a board reviews this order. */
+export async function setWorkOrderReviewLevel(
+  id: string,
+  level: WorkOrderReviewLevel,
+): Promise<WorkOrder> {
+  return (await apiClient.patch<WorkOrder>(`/work-orders/${id}/review-level`, { review_level: level })).data;
 }

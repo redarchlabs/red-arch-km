@@ -447,6 +447,7 @@ export interface WorkOrderActionsElement extends ElementBase {
   title?: string | null;
   show_summary?: boolean;
   show_mode?: boolean;
+  show_review?: boolean;
   show_assignee?: boolean;
   width?: FieldWidth | null;
 }
