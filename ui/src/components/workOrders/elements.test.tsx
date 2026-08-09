@@ -16,6 +16,9 @@ const createWorkOrder = vi.fn();
 const replyToWorkOrder = vi.fn();
 const setWorkOrderMode = vi.fn();
 const listApprovals = vi.fn();
+const listQuestions = vi.fn();
+const answerQuestion = vi.fn();
+const declineQuestion = vi.fn();
 const approveApproval = vi.fn();
 const denyApproval = vi.fn();
 const getWorkOrderMap = vi.fn();
@@ -37,6 +40,9 @@ vi.mock("@/lib/api/agents", () => ({
   listAgentRunSteps: (...a: unknown[]) => listAgentRunSteps(...a),
   listAgents: () => Promise.resolve(agentRoster),
   listApprovals: (...a: unknown[]) => listApprovals(...a),
+  listQuestions: (...a: unknown[]) => listQuestions(...a),
+  answerQuestion: (...a: unknown[]) => answerQuestion(...a),
+  declineQuestion: (...a: unknown[]) => declineQuestion(...a),
   approveApproval: (...a: unknown[]) => approveApproval(...a),
   denyApproval: (...a: unknown[]) => denyApproval(...a),
 }));
@@ -81,6 +87,9 @@ const order = (over: Partial<WorkOrder> = {}): WorkOrder => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // The approval queue now also asks for questions; nothing pending is the
+  // default for every test that is not about them.
+  listQuestions.mockResolvedValue([]);
 });
 
 describe("WorkOrderActionsNode", () => {
@@ -495,5 +504,83 @@ describe("WorkOrderActionsNode mode", () => {
 
     await screen.findByLabelText("Assigned agent");
     expect(screen.queryByLabelText("Agent mode")).toBeNull();
+  });
+});
+
+describe("ApprovalQueueNode questions", () => {
+  const question = (over: Record<string, unknown> = {}) => ({
+    id: "q-1",
+    run_id: "run-1",
+    audience: "human",
+    question: "Which pages should I include?",
+    context: null,
+    answer: null,
+    status: "pending",
+    answered_at: null,
+    created_at: "2026-08-09T12:00:00Z",
+    asked_by: "research-analyst",
+    target_agent: null,
+    ...over,
+  });
+
+  it("shows a question where the block is visible, and who is asking", async () => {
+    // An agent parked on a question looks identical to an idle one. This is the
+    // whole reason the work order read as "nothing is happening".
+    listApprovals.mockResolvedValue([]);
+    listQuestions.mockResolvedValue([question()]);
+
+    render(<ApprovalQueueNode scope="org" workOrderId={null} />);
+
+    expect(await screen.findByText(/research-analyst is asking you/)).toBeTruthy();
+    expect(screen.getByText("Which pages should I include?")).toBeTruthy();
+  });
+
+  it("answers the question and reloads", async () => {
+    listApprovals.mockResolvedValue([]);
+    listQuestions.mockResolvedValueOnce([question()]).mockResolvedValueOnce([]);
+    answerQuestion.mockResolvedValue({ resumed: true });
+
+    render(<ApprovalQueueNode scope="org" workOrderId={null} />);
+    fireEvent.change(await screen.findByLabelText("Answer research-analyst"), {
+      target: { value: "Public pages only." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Answer" }));
+
+    await waitFor(() => expect(answerQuestion).toHaveBeenCalledWith("q-1", "Public pages only."));
+  });
+
+  it("can unblock the agent without answering", async () => {
+    // Declining is not ignoring: the agent is told to use its own judgement,
+    // which beats leaving it parked forever.
+    listApprovals.mockResolvedValue([]);
+    listQuestions.mockResolvedValue([question()]);
+    declineQuestion.mockResolvedValue({ resumed: true });
+
+    render(<ApprovalQueueNode scope="org" workOrderId={null} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Let it decide" }));
+
+    await waitFor(() => expect(declineQuestion).toHaveBeenCalledWith("q-1"));
+  });
+
+  it("never offers a peer consult for a human to answer", async () => {
+    // Another agent is already on the hook for those; answering one here would
+    // leave the consulted agent's run going with nobody listening.
+    listApprovals.mockResolvedValue([]);
+    listQuestions.mockResolvedValue([question({ audience: "agent" })]);
+
+    const { container } = render(<ApprovalQueueNode scope="org" workOrderId={null} />);
+
+    await waitFor(() => expect(listQuestions).toHaveBeenCalled());
+    expect(container.textContent).toBe("");
+  });
+
+  it("narrows to this work order's runs", async () => {
+    listApprovals.mockResolvedValue([]);
+    listQuestions.mockResolvedValue([question(), question({ id: "q-2", run_id: "other" })]);
+
+    render(<ApprovalQueueNode scope="work_order" workOrderId="wo-1" runIds={new Set(["run-1"])} />);
+
+    await screen.findByLabelText("Answer research-analyst");
+    expect(screen.queryAllByRole("button", { name: "Answer" })).toHaveLength(1);
   });
 });

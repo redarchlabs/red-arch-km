@@ -92,6 +92,46 @@ async def create_question(
     return row
 
 
+async def _siblings(session: AsyncSession, org_id: uuid.UUID, question: AgentQuestion) -> list[AgentQuestion]:
+    """The other questions asked by the same tool call, if any.
+
+    Empty for every ordinary consult — one call, one question — so this costs a
+    single indexed lookup and changes nothing outside a board.
+    """
+    rows = (
+        (
+            await session.execute(
+                select(AgentQuestion).where(
+                    AgentQuestion.run_id == question.run_id,
+                    AgentQuestion.tool_call_id == question.tool_call_id,
+                    AgentQuestion.org_id == org_id,
+                    AgentQuestion.id != question.id,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return list(rows)
+
+
+def _combined(question: AgentQuestion, siblings: list[AgentQuestion], payload: dict[str, Any]) -> dict[str, Any]:
+    """One result carrying every reviewer's answer, in the order they were asked."""
+    everyone = sorted([question, *siblings], key=lambda q: q.created_at)
+    return {
+        "answers": [
+            {
+                # Who was ASKED, not who replied: the reply comes from the run that
+                # was spawned for it, and the asker cares which seat spoke.
+                "agent_id": str(q.target_agent_id) if q.target_agent_id else None,
+                "answer": payload.get("answer") if q.id == question.id else q.answer,
+                "declined": q.status == "declined",
+            }
+            for q in everyone
+        ]
+    }
+
+
 async def _inject_answer(
     session: AsyncSession,
     org_id: uuid.UUID,
@@ -107,6 +147,16 @@ async def _inject_answer(
     run = await AgentRunRepository(session, org_id).get_run(question.run_id)
     if run is None or run.status != "waiting":
         return False
+
+    # A review board asks several agents on ONE tool call, so several questions
+    # share a tool_call_id. The parked call has one result to receive, and the
+    # board's answer is all of them — resuming on the first would hand the author
+    # one reviewer's verdict and discard the rest.
+    siblings = await _siblings(session, org_id, question)
+    if siblings:
+        if any(s.status == "pending" for s in siblings):
+            return False
+        payload = _combined(question, siblings, payload)
 
     run_input = dict(run.input or {})
     resume = dict(run_input.get("resume") or {"messages": [], "pending": [], "approved": []})

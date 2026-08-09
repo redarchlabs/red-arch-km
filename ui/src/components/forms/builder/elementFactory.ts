@@ -42,6 +42,7 @@ export const VIEW_KINDS: PaletteKind[] = [
   "chat",
   "agent_timeline",
   "agent_diary",
+  "agent_activity",
   "approval_queue",
   "work_order_list",
   "work_order_actions",
@@ -70,6 +71,7 @@ export const KIND_LABELS: Record<PaletteKind, string> = {
   chat: "Chat",
   agent_timeline: "Agent timeline (swim lanes)",
   agent_diary: "Agent diary",
+  agent_activity: "Live agent activity",
   approval_queue: "Approvals waiting on you",
   work_order_list: "Work order list",
   work_order_actions: "Work order actions (approve / start / close)",
@@ -101,6 +103,8 @@ export function newElement(kind: PaletteKind): FormElement {
       return { id, type: "agent_timeline", work_order_id: null, title: "Agent interactions" };
     case "agent_diary":
       return { id, type: "agent_diary", work_order_id: null, title: "Diary", page_size: 20, height: "md" };
+    case "agent_activity":
+      return { id, type: "agent_activity", work_order_id: null, title: "Live", height: "md" };
     case "approval_queue":
       return {
         id,

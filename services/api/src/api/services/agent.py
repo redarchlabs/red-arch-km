@@ -2956,6 +2956,16 @@ class AgentService:
                         "what turns a filed request into work."
                     ),
                 },
+                "agent_activity": {
+                    "required": ["type"],
+                    "optional": ["work_order_id", "title", "height (sm|md|lg|fill)", "allow_steer", "width"],
+                    "use": (
+                        "A running agent's transcript live over a WebSocket — its reasoning, tool "
+                        "calls and results — plus a box that queues a message for it. The diary "
+                        "records what an agent DID; this shows it thinking. Steers are delivered at "
+                        "the top of the agent's next turn, never spliced into one already running."
+                    ),
+                },
                 "approval_queue": {
                     "required": ["type"],
                     "optional": [

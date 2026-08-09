@@ -55,6 +55,10 @@ Emit = Callable[[dict[str, Any]], Awaitable[None]]
 ApprovalStrategy = Callable[[ToolSpec, dict[str, Any]], Awaitable[bool]]
 # () -> keep going? False when the run was cancelled externally.
 ContinueCheck = Callable[[], Awaitable[bool]]
+# () -> messages a person queued for this run, taken exactly once. Pulled by the
+# loop rather than pushed at it, because only the loop knows when its message list
+# is in a state that can accept a user turn.
+SteerDrain = Callable[[], Awaitable[list[str]]]
 
 
 class RunCancelled(Exception):  # noqa: N818 - a control signal, not an error condition
@@ -132,6 +136,22 @@ def _assistant_message(completion: Completion) -> dict[str, Any]:
     return msg
 
 
+def _awaits_tool_results(messages: list[dict[str, Any]]) -> bool:
+    """Does the conversation end on an assistant turn whose tool calls are unanswered?
+
+    Checked rather than inferred from where we are in the loop. A resume that
+    carries an empty batch of pending calls reaches the top of a turn with the
+    message list still ending in unresolved ``tool_calls`` — and a user turn there
+    is the exact shape OpenAI and Anthropic reject, which would finalize the run as
+    an error. Making the invariant structural means no future edit to the loop's
+    control flow can quietly break it.
+    """
+    if not messages:
+        return False
+    last = messages[-1]
+    return last.get("role") == "assistant" and bool(last.get("tool_calls"))
+
+
 def _tool_message(tc: ToolCallRequest, output: dict[str, Any], *, budget: int) -> dict[str, Any]:
     """The tool result as the *transcript* carries it — not as it is recorded.
 
@@ -202,6 +222,7 @@ async def run_agent_loop(
     resume_answers: dict[str, dict[str, Any]] | None = None,
     autonomy: str = "high_touch",
     continue_check: ContinueCheck | None = None,
+    steer: SteerDrain | None = None,
 ) -> RunResult:
     """Drive ``agent`` to quiescence. ``messages`` already includes the system prompt.
 
@@ -240,6 +261,7 @@ async def run_agent_loop(
             answers=answers,
             autonomy=autonomy,
             continue_check=continue_check,
+            steer=steer,
             result=result,
         )
     except RunParked as parked:
@@ -273,6 +295,7 @@ async def _drive_loop(
     answers,
     autonomy,
     continue_check,
+    steer,
     result,
 ) -> RunResult:
     """The loop itself. Split out so ``run_agent_loop`` can attach accumulated usage
@@ -284,7 +307,21 @@ async def _drive_loop(
             tool_calls = pending
             pending = None
         else:
-            # Before paying for the transcript again, see whether it should shrink.
+            # The ONE safe place to interject. Here every tool_use in `messages`
+            # already has its tool_result, so an extra user turn is well-formed.
+            # Mid-batch — or on the `pending` branch above, resuming a parked turn
+            # whose messages end in unresolved tool_calls — a user turn sits where
+            # a tool result must go, which OpenAI and Anthropic both reject
+            # outright: an LLMError that finalizes the run as *error*. A steer that
+            # kills the run is worse than one that arrives a turn late.
+            if steer is not None and not _awaits_tool_results(messages):
+                for text in await steer():
+                    messages.append({"role": "user", "content": text})
+                    await emit({"type": "steer", "content": text})
+            # Then, before paying for the transcript again, see whether it should
+            # shrink. After the steer rather than before, so what a person just said
+            # is measured with everything else — and lands among the recent turns a
+            # fold keeps verbatim, never inside the summary that replaces the middle.
             await _compact_if_needed(provider, model, messages, emit, transcript_budget, keep_recent)
             completion = await _stream_turn(
                 provider, model, messages, schemas, temperature, max_tokens, reasoning_effort, emit
