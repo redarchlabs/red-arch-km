@@ -16,6 +16,8 @@ import json
 import re
 import uuid
 from collections.abc import Sequence
+from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import select
@@ -63,6 +65,14 @@ _START_TITLES = {
 # Worst-first: a lane that is blocked reads as blocked even if it also finished
 # something earlier, because the blocked run is the one that still needs a person.
 _STATUS_RANK = ["error", "waiting", "running", "queued", "done", "cancelled"]
+
+
+@dataclass(frozen=True)
+class EntryPage:
+    """ORM-side page: the route maps it to ``EntryPageRead``."""
+
+    entries: list[WorkOrderEntry]
+    has_more: bool
 
 
 class WorkOrderError(Exception):
@@ -293,6 +303,32 @@ class WorkOrderService:
         await self.get_work_order(wo_id)
         return await self._repo.list_entries(wo_id)
 
+    async def list_entries_page(
+        self, wo_id: uuid.UUID, *, limit: int = 20, before: uuid.UUID | None = None
+    ) -> EntryPage:
+        """A page of diary, newest first, returned oldest-first.
+
+        The diary reads like a conversation: the newest entry is the one you want
+        and history is something you scroll back into. Selecting newest-first and
+        returning in reading order means the caller renders a slice top-to-bottom
+        without reversing it, and lands with the newest at the bottom.
+        """
+        await self.get_work_order(wo_id)
+        cursor: tuple[datetime, uuid.UUID] | None = None
+        if before is not None:
+            anchor = await self._repo.get_entry(wo_id, before)
+            if anchor is None:
+                # Falling back to the newest page would look to the reader like
+                # the history jumped back to the present.
+                raise WorkOrderNotFoundError(f"Diary entry {before} not found")
+            cursor = (anchor.created_at, anchor.id)
+        # One extra row answers "is there more" without a second COUNT.
+        rows = await self._repo.entries_before(wo_id, limit=limit + 1, before=cursor)
+        has_more = len(rows) > limit
+        page = rows[:limit]
+        page.reverse()
+        return EntryPage(entries=page, has_more=has_more)
+
     async def interaction_map(self, wo_id: uuid.UUID) -> WorkOrderMap:
         """One lane per participant, with what each did placed in time.
 
@@ -409,20 +445,40 @@ class WorkOrderService:
             .scalars()
             .all()
         )
-        return [
-            MapEvent(
-                id=f"ap{a.id}",
-                lane=str(agent_by_run[a.run_id].id),
-                kind="blocked",
-                at=a.created_at,
-                title=f"needs approval: {a.tool_name}",
-                detail=json.dumps(a.arguments) if a.arguments else None,
-                target_lane=_HUMAN_LANE,
-                run_id=a.run_id,
+        events: list[MapEvent] = []
+        for a in rows:
+            if a.run_id not in agent_by_run:
+                continue
+            detail = json.dumps(a.arguments) if a.arguments else None
+            events.append(
+                MapEvent(
+                    id=f"ap{a.id}",
+                    lane=str(agent_by_run[a.run_id].id),
+                    kind="blocked",
+                    at=a.created_at,
+                    title=f"needs approval: {a.tool_name}",
+                    detail=detail,
+                    target_lane=_HUMAN_LANE,
+                    run_id=a.run_id,
+                    approval_id=a.id,
+                )
             )
-            for a in rows
-            if a.run_id in agent_by_run
-        ]
+            # A matching card in the human lane, so the arrow joins two things
+            # rather than trailing off into an empty row — and so the lane says
+            # what is being asked of you instead of only that something is.
+            events.append(
+                MapEvent(
+                    id=f"apw{a.id}",
+                    lane=_HUMAN_LANE,
+                    kind="blocked",
+                    at=a.created_at,
+                    title=f"approve {a.tool_name}",
+                    detail=detail,
+                    run_id=a.run_id,
+                    approval_id=a.id,
+                )
+            )
+        return events
 
     def progress(self, tasks: list[WorkOrderTask]) -> float:
         """Percent complete = done / (total excluding carried)."""

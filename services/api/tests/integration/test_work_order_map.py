@@ -170,8 +170,12 @@ class TestInteractionMap:
 
         graph = await svc.interaction_map(wo.id)
 
-        blocked = next(e for e in graph.events if e.kind == "blocked")
+        blocked = next(e for e in graph.events if e.lane == str(boss.id) and e.kind == "blocked")
         assert blocked.target_lane == "human"
+        # A matching card in the human lane, so the arrow joins two things rather
+        # than trailing off into an empty row.
+        waiting = next(e for e in graph.events if e.lane == "human")
+        assert waiting.title.startswith("approve ")
         assert "delegate_task" in blocked.title
         assert any(ln.key == "human" for ln in graph.lanes)
 

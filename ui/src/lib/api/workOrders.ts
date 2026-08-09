@@ -103,6 +103,21 @@ export async function getWorkOrderMap(id: string): Promise<WorkOrderMap> {
   return (await apiClient.get<WorkOrderMap>(`/work-orders/${id}/map`)).data;
 }
 
+export interface WorkOrderEntryPage {
+  entries: WorkOrderEntry[];
+  has_more: boolean;
+}
+
+/** A page of diary, oldest-first. `before` is the id of the oldest entry already
+ *  held, so scrolling up walks backwards without an offset that would repeat or
+ *  skip rows as agents keep writing. */
+export async function getWorkOrderEntries(
+  id: string,
+  params: { limit?: number; before?: string } = {},
+): Promise<WorkOrderEntryPage> {
+  return (await apiClient.get<WorkOrderEntryPage>(`/work-orders/${id}/entries`, { params })).data;
+}
+
 export async function createWorkOrder(input: WorkOrderCreateInput): Promise<WorkOrder> {
   return (await apiClient.post<WorkOrder>("/work-orders/", input)).data;
 }

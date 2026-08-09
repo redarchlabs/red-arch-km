@@ -30,6 +30,12 @@ import { formatValue } from "@/components/reports/ReportChart";
 import { streamRunTokens } from "@/lib/api/runStream";
 import { callConnection, runWorkflow } from "@/lib/api/workflows";
 import { Markdown } from "@/components/common/Markdown";
+import {
+  AgentDiaryNode,
+  AgentTimelineNode,
+  ApprovalQueueNode,
+  WorkOrderListNode,
+} from "@/components/workOrders/elements";
 import { ReportChart } from "@/components/reports/ReportChart";
 import { Dialog, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -2211,6 +2217,63 @@ export function FormRenderer({
           <div className="sm:col-span-12">
             <ElementErrorBoundary>
               <ChatNode el={el} preview={preview} />
+            </ElementErrorBoundary>
+          </div>
+        );
+      // Work-order elements. `work_order_id: null` means "the order this page is
+      // about" — the view's resolved record — so one definition serves every
+      // order rather than needing a view per order.
+      case "agent_timeline":
+        return (
+          <div className={spanClass(el.width)}>
+            <ElementErrorBoundary>
+              <AgentTimelineNode
+                workOrderId={el.work_order_id ?? render.record_id}
+                title={el.title}
+                pollMs={el.poll_ms}
+              />
+            </ElementErrorBoundary>
+          </div>
+        );
+      case "agent_diary":
+        return (
+          <div className={spanClass(el.width)}>
+            <ElementErrorBoundary>
+              <AgentDiaryNode
+                workOrderId={el.work_order_id ?? render.record_id}
+                title={el.title}
+                pageSize={el.page_size}
+                height={el.height}
+                pollMs={el.poll_ms}
+              />
+            </ElementErrorBoundary>
+          </div>
+        );
+      case "approval_queue":
+        return (
+          <div className={spanClass(el.width)}>
+            <ElementErrorBoundary>
+              <ApprovalQueueNode
+                scope={el.scope ?? "work_order"}
+                workOrderId={el.work_order_id ?? render.record_id}
+                title={el.title}
+                hideWhenEmpty={el.hide_when_empty}
+                pollMs={el.poll_ms}
+              />
+            </ElementErrorBoundary>
+          </div>
+        );
+      case "work_order_list":
+        return (
+          <div className={spanClass(el.width)}>
+            <ElementErrorBoundary>
+              <WorkOrderListNode
+                title={el.title}
+                statuses={el.statuses}
+                detailViewId={el.detail_view_id}
+                limit={el.limit}
+                pollMs={el.poll_ms}
+              />
             </ElementErrorBoundary>
           </div>
         );

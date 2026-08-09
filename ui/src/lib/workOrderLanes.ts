@@ -6,8 +6,12 @@
 
 import type { WorkOrderMapEvent, WorkOrderMapLane } from "@/lib/api/workOrders";
 
-export const LANE_HEIGHT = 64;
-export const EVENT_WIDTH = 150;
+/** Tall enough that a card sits fully inside its band with room above and below.
+ *  At 64 the card filled the lane edge to edge and read as an overflow. */
+export const LANE_HEIGHT = 84;
+export const EVENT_HEIGHT = 52;
+/** Wide enough for a short title without an ellipsis on every card. */
+export const EVENT_WIDTH = 190;
 /** Minimum horizontal gap between two events in the same lane. Time alone would
  *  overlap a burst of activity into an unreadable stack, so elapsed time sets the
  *  order and this sets the floor. */
@@ -65,4 +69,9 @@ export function layoutLanes(
 /** Vertical centre of a lane, for drawing an event or an arrow into it. */
 export function laneCenterY(laneIndex: number): number {
   return laneIndex * LANE_HEIGHT + LANE_HEIGHT / 2;
+}
+
+/** Top edge of a card, centred in its band. */
+export function eventTopY(laneIndex: number): number {
+  return laneCenterY(laneIndex) - EVENT_HEIGHT / 2;
 }

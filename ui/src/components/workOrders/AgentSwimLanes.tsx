@@ -11,9 +11,9 @@ import {
 } from "lucide-react";
 import { useMemo } from "react";
 
-import type { WorkOrderEventKind, WorkOrderMap } from "@/lib/api/workOrders";
+import type { WorkOrderEventKind, WorkOrderMap, WorkOrderMapEvent } from "@/lib/api/workOrders";
 import { cn } from "@/lib/utils";
-import { EVENT_WIDTH, LANE_HEIGHT, laneCenterY, layoutLanes } from "@/lib/workOrderLanes";
+import { EVENT_HEIGHT, EVENT_WIDTH, LANE_HEIGHT, eventTopY, layoutLanes } from "@/lib/workOrderLanes";
 
 const LABEL_WIDTH = 168;
 
@@ -46,6 +46,9 @@ const TIME = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-di
 
 interface AgentSwimLanesProps {
   map: WorkOrderMap;
+  /** Opening a card shows the run behind it. A card can only carry a title; the
+   *  work itself lives in the run's steps. */
+  onSelect?: (event: WorkOrderMapEvent) => void;
 }
 
 /**
@@ -55,25 +58,32 @@ interface AgentSwimLanesProps {
  * visibly leaves one lane and lands in another — which is what distinguishes an
  * agent that is blocked on a peer from one that simply stopped.
  */
-export function AgentSwimLanes({ map }: AgentSwimLanesProps) {
+export function AgentSwimLanes({ map, onSelect }: AgentSwimLanesProps) {
   const { placed, width, height } = useMemo(
     () => layoutLanes(map.lanes, map.events),
     [map],
   );
 
   const arrows = useMemo(() => {
-    const at = new Map(placed.map((p) => [p.event.id, p]));
     const laneIndex = new Map(map.lanes.map((lane, i) => [lane.key, i]));
     return placed
       .filter((p) => p.event.target_lane && laneIndex.has(p.event.target_lane))
       .map((p) => {
-        const from = at.get(p.event.id)!;
         const toLane = laneIndex.get(p.event.target_lane!)!;
+        // Land on the counterpart card in the target lane — the reply to this
+        // consult, or the approval this is waiting on. Drawing to the lane's
+        // centre instead would run the line straight through whatever card
+        // happened to sit at that x, which is what made the map look crossed out.
+        const partner = placed.find(
+          (q) => q.laneIndex === toLane && Date.parse(q.event.at) >= Date.parse(p.event.at),
+        );
+        const down = toLane > p.laneIndex;
         return {
           id: p.event.id,
-          x: from.x + EVENT_WIDTH / 2,
-          y1: laneCenterY(from.laneIndex),
-          y2: laneCenterY(toLane),
+          x1: p.x + EVENT_WIDTH / 2,
+          y1: down ? eventTopY(p.laneIndex) + EVENT_HEIGHT : eventTopY(p.laneIndex),
+          x2: partner ? partner.x + EVENT_WIDTH / 2 : p.x + EVENT_WIDTH / 2,
+          y2: down ? eventTopY(toLane) : eventTopY(toLane) + EVENT_HEIGHT,
           dashed: p.event.kind === "consulted" || p.event.kind === "blocked",
         };
       })
@@ -116,16 +126,22 @@ export function AgentSwimLanes({ map }: AgentSwimLanesProps) {
           ))}
 
           <svg className="absolute inset-0 h-full w-full" style={{ width, height }} aria-hidden>
+            <defs>
+              <marker id="lane-arrow" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+                <path d="M0,0 L6,3 L0,6 Z" className="fill-muted-foreground/60" />
+              </marker>
+            </defs>
             {arrows.map((a) => (
-              <line
+              // An elbow rather than a straight diagonal: the vertical leg leaves
+              // the card, the horizontal leg travels in the empty band between
+              // lanes, so the line never crosses a card it is not connecting.
+              <polyline
                 key={a.id}
-                x1={a.x}
-                y1={a.y1}
-                x2={a.x}
-                y2={a.y2}
-                className="stroke-muted-foreground/50"
+                points={`${a.x1},${a.y1} ${a.x1},${(a.y1 + a.y2) / 2} ${a.x2},${(a.y1 + a.y2) / 2} ${a.x2},${a.y2}`}
+                className="fill-none stroke-muted-foreground/60"
                 strokeWidth={1.5}
                 strokeDasharray={a.dashed ? "4 3" : undefined}
+                markerEnd="url(#lane-arrow)"
               />
             ))}
           </svg>
@@ -134,25 +150,35 @@ export function AgentSwimLanes({ map }: AgentSwimLanesProps) {
             const meta = KIND_META[event.kind];
             const { Icon } = meta;
             return (
-              <div
+              <button
+                type="button"
                 key={event.id}
-                className="absolute rounded-md border bg-card px-2 py-1 shadow-sm"
+                onClick={onSelect && event.run_id ? () => onSelect(event) : undefined}
+                disabled={!onSelect || !event.run_id}
+                className="absolute overflow-hidden rounded-md border bg-card px-2 py-1.5 text-left shadow-sm enabled:hover:border-primary enabled:hover:shadow"
                 style={{
                   left: x,
-                  top: laneIndex * LANE_HEIGHT + 10,
+                  top: eventTopY(laneIndex),
                   width: EVENT_WIDTH,
+                  height: EVENT_HEIGHT,
                 }}
                 title={event.detail ?? event.title}
               >
                 <div className="flex items-center gap-1.5">
                   <Icon className={cn("h-3.5 w-3.5 shrink-0", meta.tone)} />
                   <span className="truncate text-xs font-medium">{event.title}</span>
+                  {/* The time never wraps: a second line pushed the card past its
+                      lane and made the whole row look like an overflow. */}
+                  <span className="ml-auto whitespace-nowrap text-[10px] text-muted-foreground">
+                    {TIME.format(new Date(event.at))}
+                  </span>
                 </div>
-                <div className="mt-0.5 flex items-center gap-1 text-[10px] text-muted-foreground">
-                  <span>{TIME.format(new Date(event.at))}</span>
-                  {event.detail ? <span className="truncate">· {event.detail}</span> : null}
-                </div>
-              </div>
+                {event.detail ? (
+                  <div className="mt-0.5 truncate text-[10px] leading-relaxed text-muted-foreground">
+                    {event.detail}
+                  </div>
+                ) : null}
+              </button>
             );
           })}
         </div>

@@ -400,6 +400,66 @@ themselves, so a dashboard built from cards reads as one set of surfaces.
 - **Accent** — an optional colored top rule, drawn from the theme's own colors.
 `,
   ),
+  agent_timeline: topic(
+    "Agent timeline",
+    `
+A **swim lane per agent** that worked the order, with each run, consult, answer and
+approval placed on a shared clock — plus a lane for **you**, which appears only when
+something is actually owed to a person.
+
+A diary alone cannot show which agent is blocked on which, or how long a block has
+lasted, because a list has no room for two things happening at once. Here a consult
+is drawn as two events — the question and the reply — so the wait between them has a
+visible length, and clicking a card opens the run's steps.
+
+- **Work order** — leave blank to use the order this page is about (the view's
+  record). Pin an id for a dashboard that always watches one standing order.
+- **Poll (ms)** — refresh cadence for a live order; blank loads once, which is right
+  for a finished one.
+`,
+  ),
+  agent_diary: topic(
+    "Agent diary",
+    `
+The order's **written record**, newest at the bottom, loading history as you scroll
+up — it reads like a conversation rather than a document.
+
+Entries are Markdown written by agents and are rendered as such. Only the newest
+page loads up front, so an order with a long exchange does not lay out hundreds of
+blocks nobody scrolls to.
+
+- **Page size** — entries per fetch (1–100).
+- **Height** — \`fill\` sizes to the viewport, for a diary that IS the screen.
+`,
+  ),
+  approval_queue: topic(
+    "Approvals waiting on you",
+    `
+The decisions an agent is **parked on**, with Approve and Deny attached.
+
+An agent waiting for permission is otherwise invisible until someone opens the
+inbox, so the work stalls with nothing on screen explaining why. Put this where the
+stall is visible.
+
+- **Scope** — \`work_order\` shows only this order's approvals; \`org\` shows
+  everything you may decide.
+- **Hide when empty** — nothing pending is the normal state, so an empty card is
+  noise on a dashboard; turn it off for a page about one order.
+`,
+  ),
+  work_order_list: topic(
+    "Work order list",
+    `
+Work orders as a list, optionally narrowed to a few statuses.
+
+Work orders are not entity records, so the Record list element cannot reach them —
+which is the only reason this is its own element.
+
+- **Statuses** — leave empty for all; narrow it for a "needs attention" tile.
+- **Detail view** — the view a row opens, with the order passed as its record.
+  Without one the rows are inert, which is right for a read-only wallboard.
+`,
+  ),
   stat: topic(
     "Stat tile",
     `

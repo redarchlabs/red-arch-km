@@ -381,6 +381,51 @@ export interface ChatElement extends ElementBase {
   width?: FieldWidth | null;
 }
 
+/** Swim-lane timeline of every agent that worked a work order, on a shared clock.
+ *  `work_order_id: null` binds to the order the page is about (the view's record). */
+export interface AgentTimelineElement extends ElementBase {
+  type: "agent_timeline";
+  work_order_id?: string | null;
+  title?: string | null;
+  poll_ms?: number | null;
+  width?: FieldWidth | null;
+}
+
+/** The order's diary, newest last, loading history as the reader scrolls up. */
+export interface AgentDiaryElement extends ElementBase {
+  type: "agent_diary";
+  work_order_id?: string | null;
+  title?: string | null;
+  page_size?: number;
+  height?: "sm" | "md" | "lg" | "fill";
+  poll_ms?: number | null;
+  width?: FieldWidth | null;
+}
+
+/** Pending approvals with the decision attached, so a stalled agent is
+ *  actionable where the stall is visible rather than only in the inbox. */
+export interface ApprovalQueueElement extends ElementBase {
+  type: "approval_queue";
+  scope?: "work_order" | "org";
+  work_order_id?: string | null;
+  title?: string | null;
+  hide_when_empty?: boolean;
+  poll_ms?: number | null;
+  width?: FieldWidth | null;
+}
+
+/** Work orders as a list. They are not entity records, so `record_list` cannot
+ *  reach them — the only reason this is its own element. */
+export interface WorkOrderListElement extends ElementBase {
+  type: "work_order_list";
+  title?: string | null;
+  statuses?: string[];
+  detail_view_id?: string | null;
+  limit?: number;
+  poll_ms?: number | null;
+  width?: FieldWidth | null;
+}
+
 export type SubmitAction = { kind: "submit" };
 export type RunWorkflowAction = {
   kind: "run_workflow";
@@ -586,6 +631,10 @@ export type FormElement =
   | StatElement
   | RecordListElement
   | ChatElement
+  | AgentTimelineElement
+  | AgentDiaryElement
+  | ApprovalQueueElement
+  | WorkOrderListElement
   | ButtonElement
   | PuzzlePadElement
   | FormRefElement
