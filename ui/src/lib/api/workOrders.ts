@@ -21,6 +21,9 @@ export interface WorkOrder {
   created_by_profile_id: string | null;
   created_at: string;
   updated_at: string;
+  /** Statuses this order may move to next, from the server's own state machine —
+   *  so the buttons shown can never offer a move the server would reject. */
+  allowed_transitions?: string[];
 }
 
 export interface WorkOrderTask {

@@ -447,6 +447,24 @@ stall is visible.
   noise on a dashboard; turn it off for a page about one order.
 `,
   ),
+  work_order_actions: topic(
+    "Work order actions",
+    `
+The order's own lifecycle buttons — send for approval, approve, **start work**,
+mark done, cancel.
+
+The legal moves come from the server with the order, so the buttons shown are
+exactly the transitions the state machine will accept; they change as the order
+moves rather than being a fixed row.
+
+**Start work** is the one that matters: on an order with an assigned agent it
+queues that agent's run, which is what turns a filed request into work. An order
+assigned to a disabled agent is refused, and the message names the agent.
+
+- **Show summary** — the order's title and current status above the buttons. Turn
+  it off on a page that already has its own heading.
+`,
+  ),
   work_order_list: topic(
     "Work order list",
     `

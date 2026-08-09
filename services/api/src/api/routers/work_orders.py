@@ -48,7 +48,9 @@ def _raise_http(exc: WorkOrderError) -> NoReturn:
 
 
 def _to_read(wo: WorkOrder) -> WorkOrderRead:
-    return WorkOrderRead.model_validate(wo)
+    return WorkOrderRead.model_validate(wo).model_copy(
+        update={"allowed_transitions": WorkOrderService.allowed_transitions(wo.status)}
+    )
 
 
 @router.get("/", response_model=list[WorkOrderRead])
@@ -89,6 +91,7 @@ async def get_work_order(
     tasks = await svc.list_tasks(wo_id)
     entries = await svc.list_entries(wo_id)
     detail = WorkOrderDetail.model_validate(wo)
+    detail.allowed_transitions = svc.allowed_transitions(wo.status)
     detail.tasks = [TaskRead.model_validate(t) for t in tasks]
     detail.entries = [EntryRead.model_validate(e) for e in entries]
     detail.progress = svc.progress(tasks)

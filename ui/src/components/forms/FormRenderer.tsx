@@ -34,6 +34,7 @@ import {
   AgentDiaryNode,
   AgentTimelineNode,
   ApprovalQueueNode,
+  WorkOrderActionsNode,
   WorkOrderListNode,
 } from "@/components/workOrders/elements";
 import { ReportChart } from "@/components/reports/ReportChart";
@@ -2259,6 +2260,18 @@ export function FormRenderer({
                 title={el.title}
                 hideWhenEmpty={el.hide_when_empty}
                 pollMs={el.poll_ms}
+              />
+            </ElementErrorBoundary>
+          </div>
+        );
+      case "work_order_actions":
+        return (
+          <div className={spanClass(el.width)}>
+            <ElementErrorBoundary>
+              <WorkOrderActionsNode
+                workOrderId={el.work_order_id ?? render.record_id}
+                title={el.title}
+                showSummary={el.show_summary}
               />
             </ElementErrorBoundary>
           </div>

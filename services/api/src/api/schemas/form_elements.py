@@ -1053,6 +1053,23 @@ class WorkOrderListElement(_Element):
     width: FieldWidth | None = None
 
 
+class WorkOrderActionsElement(_Element):
+    """The order's own lifecycle buttons — approve it, start it, close it.
+
+    The legal moves come from the server with the order (``allowed_transitions``),
+    so the buttons on screen are exactly the transitions the state machine will
+    accept. Starting an assigned order is what dispatches its agent, which makes
+    this the control that turns a filed request into work."""
+
+    type: Literal["work_order_actions"] = "work_order_actions"
+    work_order_id: WorkOrderBinding = None
+    title: str | None = None
+    # Show the order's title and current status above the buttons. Off for a page
+    # that already has a heading of its own.
+    show_summary: bool = True
+    width: FieldWidth | None = None
+
+
 class ApprovalQueueElement(_Element):
     """Pending approvals, with the decision attached.
 
@@ -1093,6 +1110,7 @@ FormElement = Annotated[
     | AgentTimelineElement
     | AgentDiaryElement
     | WorkOrderListElement
+    | WorkOrderActionsElement
     | ApprovalQueueElement
     | ButtonElement
     | PuzzlePadElement

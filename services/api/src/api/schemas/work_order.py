@@ -84,6 +84,10 @@ class WorkOrderRead(BaseModel):
     created_by_profile_id: uuid.UUID | None
     created_at: datetime
     updated_at: datetime
+    # Which statuses this order may move to next, straight from the service's
+    # state machine. Sent rather than re-derived on the client so the buttons a
+    # person sees can never drift from the transitions the server will accept.
+    allowed_transitions: list[str] = Field(default_factory=list)
 
 
 class WorkOrderDetail(WorkOrderRead):

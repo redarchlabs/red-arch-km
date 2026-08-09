@@ -426,6 +426,15 @@ export interface WorkOrderListElement extends ElementBase {
   width?: FieldWidth | null;
 }
 
+/** The order's lifecycle buttons. Starting an assigned order dispatches its agent. */
+export interface WorkOrderActionsElement extends ElementBase {
+  type: "work_order_actions";
+  work_order_id?: string | null;
+  title?: string | null;
+  show_summary?: boolean;
+  width?: FieldWidth | null;
+}
+
 export type SubmitAction = { kind: "submit" };
 export type RunWorkflowAction = {
   kind: "run_workflow";
@@ -635,6 +644,7 @@ export type FormElement =
   | AgentDiaryElement
   | ApprovalQueueElement
   | WorkOrderListElement
+  | WorkOrderActionsElement
   | ButtonElement
   | PuzzlePadElement
   | FormRefElement
