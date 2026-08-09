@@ -2301,6 +2301,7 @@ export function FormRenderer({
                 workOrderId={el.work_order_id ?? render.record_id}
                 title={el.title}
                 showSummary={el.show_summary}
+                showAssignee={el.show_assignee}
               />
             </ElementErrorBoundary>
           </div>

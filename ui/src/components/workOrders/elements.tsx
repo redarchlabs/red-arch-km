@@ -11,6 +11,7 @@ import { approveApproval, denyApproval, listAgentRunSteps, listAgents, listAppro
 import type { Agent, AgentRunStep, Approval } from "@/lib/api/agents";
 import { getApiErrorMessage } from "@/lib/api/errors";
 import {
+  assignWorkOrder,
   createWorkOrder,
   getWorkOrder,
   getWorkOrderEntries,
@@ -563,6 +564,7 @@ interface ActionsProps {
   workOrderId: string | null;
   title?: string | null;
   showSummary?: boolean;
+  showAssignee?: boolean;
 }
 
 /** How each transition reads to the person clicking it. "in_progress" is the one
@@ -577,8 +579,14 @@ const ACTION_LABELS: Record<string, string> = {
   draft: "Back to draft",
 };
 
-export function WorkOrderActionsNode({ workOrderId, title, showSummary = true }: ActionsProps) {
+export function WorkOrderActionsNode({
+  workOrderId,
+  title,
+  showSummary = true,
+  showAssignee = true,
+}: ActionsProps) {
   const [wo, setWo] = useState<WorkOrder | null>(null);
+  const [agents, setAgents] = useState<Agent[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -590,6 +598,26 @@ export function WorkOrderActionsNode({ workOrderId, title, showSummary = true }:
   }, [workOrderId]);
 
   useEffect(load, [load]);
+
+  useEffect(() => {
+    if (!showAssignee) return;
+    void listAgents()
+      .then((all) => setAgents(all.filter((a) => a.enabled)))
+      .catch(() => setAgents([]));
+  }, [showAssignee]);
+
+  const reassign = async (agentId: string) => {
+    if (!workOrderId) return;
+    setBusy(true);
+    setError(null);
+    try {
+      setWo(await assignWorkOrder(workOrderId, agentId || null));
+    } catch (e: unknown) {
+      setError(getApiErrorMessage(e, "Could not change the assignee"));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const move = async (status: string) => {
     if (!workOrderId) return;
@@ -620,7 +648,28 @@ export function WorkOrderActionsNode({ workOrderId, title, showSummary = true }:
         </div>
       ) : null}
       {error ? <p className="text-xs text-destructive">{error}</p> : null}
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        {showAssignee ? (
+          <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            Assigned to
+            <select
+              value={wo.assigned_agent_id ?? ""}
+              onChange={(e) => void reassign(e.target.value)}
+              disabled={busy}
+              aria-label="Assigned agent"
+              className="min-w-40 rounded-md border bg-background px-2 py-1 text-sm text-foreground"
+            >
+              {/* Unassigned is a real state: the order is a request nobody has
+                  picked up, and "Start work" on one does nothing. */}
+              <option value="">Unassigned</option>
+              {agents.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
         {(wo.allowed_transitions ?? []).map((s) => (
           <Button key={s} size="sm" variant="outline" disabled={busy} onClick={() => void move(s)}>
             {ACTION_LABELS[s] ?? s}

@@ -1105,6 +1105,10 @@ class WorkOrderActionsElement(_Element):
     type: Literal["work_order_actions"] = "work_order_actions"
     work_order_id: WorkOrderBinding = None
     title: str | None = None
+    # The assignee picker. Assignment is what decides *who* does the work, and
+    # "Start work" on an unassigned order does nothing — so the two belong on the
+    # same control rather than the choice living only on the filing form.
+    show_assignee: bool = True
     # Show the order's title and current status above the buttons. Off for a page
     # that already has a heading of its own.
     show_summary: bool = True

@@ -2945,7 +2945,7 @@ class AgentService:
                 },
                 "work_order_actions": {
                     "required": ["type"],
-                    "optional": ["work_order_id", "title", "show_summary", "width"],
+                    "optional": ["work_order_id", "title", "show_summary", "show_assignee", "width"],
                     "use": (
                         "The order's lifecycle buttons (approve / start / close). The legal moves "
                         "come from the server with the order, so the buttons match what the state "

@@ -3,8 +3,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { WorkOrder, WorkOrderEntry } from "@/lib/api/workOrders";
 
+const agentRoster = [
+  { id: "agent-1", name: "chief-of-staff", enabled: true },
+  { id: "agent-2", name: "research-analyst", enabled: true },
+];
 const getWorkOrder = vi.fn();
 const setWorkOrderStatus = vi.fn();
+const assignWorkOrder = vi.fn();
 const getWorkOrderEntries = vi.fn();
 const listWorkOrders = vi.fn();
 const listApprovals = vi.fn();
@@ -13,6 +18,8 @@ const denyApproval = vi.fn();
 
 vi.mock("@/lib/api/workOrders", () => ({
   getWorkOrderMap: vi.fn(),
+  assignWorkOrder: (...a: unknown[]) => assignWorkOrder(...a),
+  createWorkOrder: vi.fn(),
   getWorkOrder: (...a: unknown[]) => getWorkOrder(...a),
   setWorkOrderStatus: (...a: unknown[]) => setWorkOrderStatus(...a),
   getWorkOrderEntries: (...a: unknown[]) => getWorkOrderEntries(...a),
@@ -21,6 +28,7 @@ vi.mock("@/lib/api/workOrders", () => ({
 
 vi.mock("@/lib/api/agents", () => ({
   listAgentRunSteps: vi.fn(),
+  listAgents: () => Promise.resolve(agentRoster),
   listApprovals: (...a: unknown[]) => listApprovals(...a),
   approveApproval: (...a: unknown[]) => approveApproval(...a),
   denyApproval: (...a: unknown[]) => denyApproval(...a),
@@ -96,6 +104,27 @@ describe("WorkOrderActionsNode", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Start work" }));
 
     expect(await screen.findByText(/cannot run/)).toBeTruthy();
+  });
+  it("lets the assignee be chosen where the work is started", async () => {
+    // "Start work" on an unassigned order does nothing, so the choice of who does
+    // it belongs on the same control rather than only on the filing form.
+    getWorkOrder.mockResolvedValue(order({ assigned_agent_id: null, allowed_transitions: [] }));
+    assignWorkOrder.mockResolvedValue(order({ assigned_agent_id: "agent-2" }));
+
+    render(<WorkOrderActionsNode workOrderId="wo-1" />);
+    const picker = (await screen.findByLabelText("Assigned agent")) as HTMLSelectElement;
+    fireEvent.change(picker, { target: { value: "agent-2" } });
+
+    await waitFor(() => expect(assignWorkOrder).toHaveBeenCalledWith("wo-1", "agent-2"));
+  });
+
+  it("offers unassigned as a real choice", async () => {
+    // An order nobody has picked up is a request, not a misconfiguration.
+    getWorkOrder.mockResolvedValue(order({ allowed_transitions: [] }));
+
+    render(<WorkOrderActionsNode workOrderId="wo-1" />);
+
+    expect(await screen.findByRole("option", { name: "Unassigned" })).toBeTruthy();
   });
 });
 
