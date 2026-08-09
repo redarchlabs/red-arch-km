@@ -23,6 +23,7 @@ from api.schemas.work_order import (
     WorkOrderAssign,
     WorkOrderCreate,
     WorkOrderDetail,
+    WorkOrderMap,
     WorkOrderRead,
     WorkOrderStatusUpdate,
 )
@@ -91,6 +92,19 @@ async def get_work_order(
     detail.entries = [EntryRead.model_validate(e) for e in entries]
     detail.progress = svc.progress(tasks)
     return detail
+
+
+@router.get("/{wo_id}/map", response_model=WorkOrderMap)
+async def interaction_map(
+    wo_id: uuid.UUID,
+    ctx: Annotated[OrgContext, Depends(require_org_access)],
+    session: Annotated[AsyncSession, Depends(get_tenant_db)],
+) -> WorkOrderMap:
+    """Who did what under this order, and who is waiting on whom."""
+    try:
+        return await WorkOrderService(session, ctx.org_id).interaction_map(wo_id)
+    except WorkOrderError as exc:
+        _raise_http(exc)
 
 
 @router.patch("/{wo_id}/status", response_model=WorkOrderRead)
