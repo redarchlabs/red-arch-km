@@ -128,6 +128,12 @@ class AgentRunRepository:
         cancelled/timed out by another actor stays as that actor left it. Returns
         whether THIS call won the transition — on ``False`` the caller must take no
         further side effects on the run's behalf (no wire-back, no parent signal).
+
+        Token counts **accumulate**. A resumed run starts the loop's counters at
+        zero, so setting them here would discard everything the run spent before it
+        parked — and a run that asks two questions would report only its last
+        segment. Every question makes the under-count worse, so this is written as
+        an increment against the stored value.
         """
         # Flush pending ORM changes (e.g. cleared resume state) before the raw
         # UPDATE so they aren't flushed later on top of the terminal row.
@@ -142,9 +148,9 @@ class AgentRunRepository:
             .values(
                 status=status,
                 error=error,
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
-                total_tokens=total_tokens,
+                prompt_tokens=AgentRun.prompt_tokens + prompt_tokens,
+                completion_tokens=AgentRun.completion_tokens + completion_tokens,
+                total_tokens=AgentRun.total_tokens + total_tokens,
                 wait_kind=None,
                 finished_at=_now(),
                 last_activity_at=_now(),
@@ -199,9 +205,26 @@ class AgentRunRepository:
             .values(last_activity_at=_now())
         )
 
-    async def mark_waiting(self, run: AgentRun, wait_kind: str) -> AgentRun:
+    async def mark_waiting(
+        self,
+        run: AgentRun,
+        wait_kind: str,
+        *,
+        prompt_tokens: int = 0,
+        completion_tokens: int = 0,
+        total_tokens: int = 0,
+    ) -> AgentRun:
+        """Park the run, banking what it spent up to this point.
+
+        The resumed drive counts from zero, so usage not banked here is simply
+        lost — a run that asks three questions would otherwise report only the work
+        it did after the last answer.
+        """
         run.status = "waiting"
         run.wait_kind = wait_kind
+        run.prompt_tokens = (run.prompt_tokens or 0) + prompt_tokens
+        run.completion_tokens = (run.completion_tokens or 0) + completion_tokens
+        run.total_tokens = (run.total_tokens or 0) + total_tokens
         run.last_activity_at = _now()
         await self._session.flush()
         return run

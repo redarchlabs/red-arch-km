@@ -227,6 +227,16 @@ class Settings(BaseSettings):
     # Observability (shared)
     log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
 
+    # Connection-pool budget for this process (see api/db.py). Connections are
+    # acquired around a unit of read/write work and released immediately after, so
+    # the ceiling bounds *concurrent work*, not concurrent users. Headroom against
+    # PostgreSQL's max_connections, which every process shares.
+    db_pool_size: int = Field(default=25, validation_alias="DB_POOL_SIZE")
+    db_max_overflow: int = Field(default=15, validation_alias="DB_MAX_OVERFLOW")
+    # Fail a checkout that waits this long instead of blocking forever — a stalled
+    # caller then shows up as a clear error rather than as a hung request.
+    db_pool_timeout_seconds: int = Field(default=30, validation_alias="DB_POOL_TIMEOUT_SECONDS")
+
     # Emails that are site admins the moment they first sign in. A profile row only
     # exists after a successful login, so without this there is no way to authorize
     # an administrator ahead of time — the first-run setup token covers exactly one

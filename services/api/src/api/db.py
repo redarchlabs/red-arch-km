@@ -32,12 +32,32 @@ def json_serializer(obj: Any) -> str:
 
 
 def get_engine(settings: Settings) -> AsyncEngine:
+    """The process-wide engine.
+
+    Pool sizing is a budget against PostgreSQL's ``max_connections`` (100 by
+    default, less ``superuser_reserved_connections``), shared by every process
+    that connects. The API is the only heavy consumer today — the Celery worker
+    reaches the database through the API's internal endpoints rather than
+    directly — so the default ceiling of ``pool_size + max_overflow`` leaves the
+    server most of its headroom while giving a single API process room for
+    long-lived streams alongside ordinary request traffic.
+
+    Configurable because the right number is a deployment fact, not a code fact:
+    it depends on how many API replicas share one server. When replicas × this
+    ceiling approaches ``max_connections``, the answer is a connection pooler
+    (PgBouncer) rather than a smaller pool — and this schema is already suited to
+    one, since all tenant scoping is ``SET LOCAL`` (see :mod:`api.db_scope`) and
+    so survives transaction-level pooling.
+    """
     global _engine
     if _engine is None:
         _engine = create_async_engine(
             settings.database_url,
-            pool_size=10,
-            max_overflow=5,
+            pool_size=settings.db_pool_size,
+            max_overflow=settings.db_max_overflow,
+            # Reclaim a connection held by a stalled caller rather than blocking
+            # new work forever; surfaces as a clear TimeoutError in the logs.
+            pool_timeout=settings.db_pool_timeout_seconds,
             echo=settings.debug,
             pool_pre_ping=True,
             json_serializer=json_serializer,

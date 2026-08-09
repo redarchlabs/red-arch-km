@@ -12,7 +12,7 @@ from api.models.agent import Agent
 from api.models.agent_run import AgentApproval, AgentRun
 from api.models.org import Org
 from api.repositories.agent_run import AgentRunRepository
-from api.services.agents.approvals import ApprovalService
+from api.services.agents.approvals import ApprovalAlreadySettledError, ApprovalService
 from api.services.agents.run_executor import AgentRunExecutor
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -91,10 +91,17 @@ class TestCancellation:
         await AgentRunRepository(admin_session, org.id).cancel_run(run.id, reason="workflow timeout")
         await admin_session.commit()
 
-        # The approval was voided by the cancel; approving the void is a no-op.
-        updated = await ApprovalService(admin_session, org.id).approve(approval.id, decided_by=None)
-        await admin_session.commit()
-        assert updated.status == "voided"
+        # The cancel voided the approval. Approving it now must be *refused*, not
+        # silently swallowed: a reviewer who clicks Approve on a request that was
+        # already settled needs to know their decision did nothing, or they will
+        # believe the agent is proceeding.
+        with pytest.raises(ApprovalAlreadySettledError):
+            await ApprovalService(admin_session, org.id).approve(approval.id, decided_by=None)
+        await admin_session.rollback()
+
+        # The property this test exists for: the cancelled run is never requeued.
+        await admin_session.refresh(approval)
+        assert approval.status == "voided"
         await admin_session.refresh(run)
         assert run.status == "cancelled"
 
