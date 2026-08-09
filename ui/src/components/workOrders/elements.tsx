@@ -7,8 +7,17 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Markdown } from "@/components/common/Markdown";
 import { Button } from "@/components/ui/button";
-import { approveApproval, denyApproval, listAgentRunSteps, listAgents, listApprovals } from "@/lib/api/agents";
-import type { Agent, AgentRunStep, Approval } from "@/lib/api/agents";
+import {
+  answerQuestion,
+  approveApproval,
+  declineQuestion,
+  denyApproval,
+  listAgentRunSteps,
+  listAgents,
+  listApprovals,
+  listQuestions,
+} from "@/lib/api/agents";
+import type { Agent, AgentQuestion, AgentRunStep, Approval } from "@/lib/api/agents";
 import { getApiErrorMessage } from "@/lib/api/errors";
 import {
   assignWorkOrder,
@@ -352,6 +361,10 @@ interface ApprovalQueueProps {
   pollMs?: number | null;
   /** Run ids belonging to this work order, used to narrow the org-wide list. */
   runIds?: Set<string>;
+  /** Also list questions an agent is blocked on. On by default: an agent waiting
+   *  for an answer is stopped just as hard as one waiting for an approval, and
+   *  the two were only ever separate because they arrived in different releases. */
+  includeQuestions?: boolean;
 }
 
 export function ApprovalQueueNode({
@@ -360,16 +373,31 @@ export function ApprovalQueueNode({
   hideWhenEmpty = true,
   pollMs,
   runIds,
+  includeQuestions = true,
 }: ApprovalQueueProps) {
   const [items, setItems] = useState<Approval[]>([]);
+  const [asks, setAsks] = useState<AgentQuestion[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+
+  const mine = useCallback(
+    <T extends { run_id: string }>(all: T[]) =>
+      scope === "org" || !runIds ? all : all.filter((r) => runIds.has(r.run_id)),
+    [scope, runIds],
+  );
 
   const load = useCallback(() => {
     void listApprovals()
-      .then((all) => setItems(scope === "org" || !runIds ? all : all.filter((a) => runIds.has(a.run_id))))
+      .then((all) => setItems(mine(all)))
       .catch(() => setItems([]));
-  }, [scope, runIds]);
+    if (!includeQuestions) return;
+    void listQuestions()
+      // Only questions aimed at a person: an agent-to-agent consult is answered by
+      // the peer's own run, and showing it here would invite someone to answer for it.
+      .then((all) => setAsks(mine(all.filter((q) => q.audience === "human" && q.status === "pending"))))
+      .catch(() => setAsks([]));
+  }, [mine, includeQuestions]);
 
   useEffect(load, [load]);
   usePoll(load, pollMs);
@@ -390,13 +418,60 @@ export function ApprovalQueueNode({
     }
   };
 
-  if (items.length === 0 && hideWhenEmpty) return null;
+  const settle = async (id: string, answer: string | null) => {
+    setBusy(id);
+    setError(null);
+    try {
+      await (answer === null ? declineQuestion(id) : answerQuestion(id, answer));
+      setDrafts((prev) => ({ ...prev, [id]: "" }));
+      load();
+    } catch {
+      setError("That question was already answered elsewhere.");
+      load();
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  if (items.length === 0 && asks.length === 0 && hideWhenEmpty) return null;
 
   return (
     <div className="space-y-2">
       {title ? <h3 className="text-sm font-medium">{title}</h3> : null}
       {error ? <p className="text-xs text-destructive">{error}</p> : null}
-      {items.length === 0 ? (
+      {/* Questions first: an agent that asked something is stopped dead until you
+          answer, and it has already told you exactly what it needs. */}
+      {asks.map((q) => (
+        <div key={q.id} className="space-y-2 rounded-md border bg-amber-50/50 p-3 dark:bg-amber-950/20">
+          <div className="text-sm font-medium">{q.asked_by ? `${q.asked_by} is asking you` : "An agent is asking you"}</div>
+          {/* Agent-authored. Images stripped for the same reason as the diary. */}
+          <Markdown content={q.question} stripImages className="text-sm" />
+          {q.context ? <Markdown content={q.context} stripImages className="text-xs text-muted-foreground" /> : null}
+          <textarea
+            value={drafts[q.id] ?? ""}
+            onChange={(e) => setDrafts((prev) => ({ ...prev, [q.id]: e.target.value }))}
+            placeholder="Your answer…"
+            aria-label={`Answer ${q.asked_by ?? "the agent"}`}
+            rows={3}
+            className="w-full rounded-md border bg-background px-2 py-1.5 text-sm"
+          />
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              disabled={busy === q.id || !(drafts[q.id] ?? "").trim()}
+              onClick={() => void settle(q.id, (drafts[q.id] ?? "").trim())}
+            >
+              Answer
+            </Button>
+            {/* Declining is not ignoring: the agent is unblocked and told to use its
+                own judgement, which is better than leaving it parked forever. */}
+            <Button size="sm" variant="outline" disabled={busy === q.id} onClick={() => void settle(q.id, null)}>
+              Let it decide
+            </Button>
+          </div>
+        </div>
+      ))}
+      {items.length === 0 && asks.length === 0 ? (
         <p className="text-sm text-muted-foreground">Nothing is waiting on you.</p>
       ) : (
         items.map((a) => (

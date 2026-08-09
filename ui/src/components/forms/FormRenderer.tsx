@@ -2262,6 +2262,7 @@ export function FormRenderer({
                 workOrderId={el.work_order_id ?? render.record_id}
                 title={el.title}
                 hideWhenEmpty={el.hide_when_empty}
+                includeQuestions={el.include_questions}
                 pollMs={el.poll_ms}
               />
             </ElementErrorBoundary>
