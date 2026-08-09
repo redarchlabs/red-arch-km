@@ -32,6 +32,7 @@ from api.schemas.agent_run import (
 )
 from api.services.agents import questions as question_service
 from api.services.agents.approvals import (
+    ApprovalAlreadySettledError,
     ApprovalNotFoundError,
     ApprovalService,
     NotificationService,
@@ -88,6 +89,9 @@ async def approve(
         approval = await ApprovalService(session, ctx.org_id).approve(approval_id, ctx.user.profile_id)
     except ApprovalNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    except ApprovalAlreadySettledError as exc:
+        # 409, not 200: the caller's decision did not take effect.
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     return ApprovalRead.model_validate(approval)
 
 
@@ -101,6 +105,9 @@ async def deny(
         approval = await ApprovalService(session, ctx.org_id).deny(approval_id, ctx.user.profile_id)
     except ApprovalNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    except ApprovalAlreadySettledError as exc:
+        # 409, not 200: the caller's decision did not take effect.
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     return ApprovalRead.model_validate(approval)
 
 
