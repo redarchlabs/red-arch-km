@@ -88,6 +88,35 @@ class TestTemperature:
         assert temperature_for("anthropic/claude-sonnet-5", None) is None
 
 
+class TestTheWriteBoundaryRefusesABadTier:
+    """The runtime falls back rather than failing a run; the admin API says no.
+
+    A run must survive bad config, but an admin who typed a tier that does not
+    exist should be told at the point of saving, not left with an agent quietly
+    running at a different effort than the one they chose.
+    """
+
+    def test_a_valid_tier_is_accepted(self) -> None:
+        from api.schemas.agent import AgentCreate
+
+        agent = AgentCreate(name="planner", provider="openai", model="gpt-5-mini", params={"reasoning_effort": "high"})
+        assert agent.params["reasoning_effort"] == "high"
+
+    def test_an_invalid_tier_is_refused(self) -> None:
+        from api.schemas.agent import AgentCreate, AgentUpdate
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError, match="reasoning_effort"):
+            AgentCreate(name="planner", provider="openai", model="gpt-5-mini", params={"reasoning_effort": "maximum"})
+        with pytest.raises(ValidationError, match="reasoning_effort"):
+            AgentUpdate(params={"reasoning_effort": "maximum"})
+
+    def test_params_without_an_effort_are_untouched(self) -> None:
+        from api.schemas.agent import AgentUpdate
+
+        assert AgentUpdate(params={"temperature": 0.2}).params == {"temperature": 0.2}
+
+
 # --- provider seam ----------------------------------------------------------
 
 

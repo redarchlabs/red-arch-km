@@ -142,6 +142,13 @@ class Settings(BaseSettings):
     # Hard timeout for a single CLI invocation; the subprocess is killed on expiry.
     claude_cli_timeout_seconds: int = Field(default=300, validation_alias="CLAUDE_CLI_TIMEOUT_SECONDS")
 
+    # Comma-separated import paths of out-of-tree LLM provider modules, imported at
+    # startup so they can register themselves in the provider catalog. Empty (the
+    # default) means this deployment offers only what ships here: the official
+    # vendor APIs plus any OpenAI-shaped self-hosted server. See
+    # api/services/agents/llm/plugins.py for the contract a plugin implements.
+    llm_provider_plugins: str = Field(default="", validation_alias="LLM_PROVIDER_PLUGINS")
+
     # Gemini model used by the web_research tool (Google Search grounding). Flash is
     # cheap + grounding-capable and runs on the free 1,500 grounding-requests/day tier
     # via the AI Studio GEMINI_API_KEY. Overridable for scale/Vertex later.

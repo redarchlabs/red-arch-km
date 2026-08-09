@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from api.services.agents.llm.catalog import bare_model
+from api.services.agents.llm.catalog import bare_model, provider_factory, provider_for_model
 from api.services.agents.llm.provider import LLMProvider
 from api.services.openai_client import base_url
 
@@ -26,14 +26,22 @@ from api.services.openai_client import base_url
 __all__ = ["bare_model", "provider_for"]
 
 
-def provider_for(settings: Any, model: str, api_key: str | None) -> LLMProvider:
-    """An ``LLMProvider`` pinned to the endpoint this model is routed to.
+def provider_for(settings: Any, model: str, api_key: str | None) -> Any:
+    """The transport for ``model``, pinned to the endpoint it is routed to.
 
-    A routed model wins over the global endpoint, so one deployment serves local
-    and hosted models side by side. Anthropic and Gemini are left alone — their
-    endpoints are not ``OPENAI_BASE_URL``'s business, and passing an ``api_base``
-    to them would point a Claude call at an OpenAI-shaped server.
+    A registered provider (see :mod:`api.services.agents.llm.plugins`) builds its
+    own transport and is asked first — LiteLLM has no idea how to reach it, and the
+    endpoint rules below are about OpenAI-shaped HTTP, which such a provider need
+    not be speaking at all.
+
+    Otherwise: a routed model wins over the global endpoint, so one deployment
+    serves local and hosted models side by side. Anthropic and Gemini are left
+    alone — their endpoints are not ``OPENAI_BASE_URL``'s business, and passing an
+    ``api_base`` to them would point a Claude call at an OpenAI-shaped server.
     """
+    factory = provider_factory(provider_for_model(model))
+    if factory is not None:
+        return factory(settings, model, api_key)
     if not model.startswith("openai/") and "/" in model:
         return LLMProvider(api_key=api_key)
     endpoint = base_url(settings, bare_model(model))
