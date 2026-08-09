@@ -27,6 +27,14 @@ WORK_ORDER_TASK_STATUSES = ("pending", "in_progress", "blocked", "done", "carrie
 class WorkOrder(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "work_orders"
     __table_args__ = (UniqueConstraint("org_id", "slug", name="uq_work_order_slug_per_org"),)
+    # ``updated_at`` is ``onupdate=func.now()`` — computed by the database, so after
+    # an UPDATE flushes SQLAlchemy expires the attribute instead of guessing it.
+    # The status and assignment routes mutate a work order and then serialize that
+    # same instance, and the expired read is a lazy refresh: IO from Pydantic's
+    # synchronous attribute walk, i.e. MissingGreenlet and a 500 on a transition
+    # that had already committed. RETURNING fills the value in on the way out, at
+    # no extra round trip on PostgreSQL.
+    __mapper_args__ = {"eager_defaults": True}
 
     slug: Mapped[str] = mapped_column(String(160))
     title: Mapped[str] = mapped_column(String(300))
