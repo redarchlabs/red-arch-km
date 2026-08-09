@@ -89,7 +89,10 @@ export default function AgentsPage() {
             <Network className="h-4 w-4" /> Org chart
           </Button>
         </Link>
-        <Link href="/agents/work-orders">
+        {/* The work-order surface is a view, not a route: it is composed from
+            elements an org can rearrange. Linked by slug so the URL is the same in
+            every org that configures it. */}
+        <Link href="/views/work-orders/view">
           <Button size="sm" variant="outline">
             <ClipboardList className="h-4 w-4" /> Work orders
           </Button>
