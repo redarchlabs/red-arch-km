@@ -271,7 +271,29 @@ export interface RecordListElement extends ElementBase {
    * (`{id}` = row id, `{<field>}` = a field value) — e.g. `/views/{player_view_slug}/view`. */
   row_link_template?: string | null;
   row_link_label?: string | null;
+  /** Auxiliary one-shot queries whose plucked values row expressions can test
+   * against as `lookups.<key>` — e.g. the caller's enrollments plucked to course
+   * ids, so the per-row Enroll hides for already-enrolled rows. */
+  row_lookups?: RecordListLookupConfig[];
+  /** Per-row visibility for the workflow button: JsonLogic over
+   * `{...viewScope, ...row, lookups}`; absent = always visible. */
+  row_workflow_visible_when?: Expression;
+  /** Muted text shown in place of a hidden row button — e.g. "Enrolled ✓". */
+  row_workflow_hidden_text?: string | null;
+  /** Per-row visibility for the row link, same scope as the button rule. */
+  row_link_visible_when?: Expression;
   width?: FieldWidth | null;
+}
+
+/** One auxiliary `record_list` query (mirrors backend `RecordListLookup`): fetch
+ * `entity` narrowed by `filters` (incl. `@me`), pluck one field/relation from each
+ * record, expose the array to row expressions as `lookups.<key>`. */
+export interface RecordListLookupConfig {
+  key: string;
+  entity: string;
+  filters?: RecordListFilterConfig[];
+  pluck: string;
+  limit?: number;
 }
 
 /** Live, per-turn controls for how the answer workflow retrieves/generates. When
