@@ -238,3 +238,78 @@ class TestDispatchOnStart:
         assert len(entries) == 1
         assert "chief" in entries[0].text
         assert entries[0].agent_run_id == (await _runs_for(admin_session, wo.id))[0].id
+
+
+class TestAssigningAfterTheStart:
+    """The failure this exists to stop, seen live: an order was filed with no
+    agent (the create form deliberately omits the picker), started, and *then*
+    assigned. Dispatch only ever fired on the status edge into ``in_progress``,
+    which had already passed with nothing to dispatch — so the order sat
+    ``in_progress``, with an agent, and no run, indefinitely.
+    """
+
+    async def test_assigning_a_started_order_dispatches_it(self, admin_session: AsyncSession) -> None:
+        org, agent, profile = await _seed(admin_session)
+        svc = WorkOrderService(admin_session, org.id)
+        wo = await svc.create_work_order(title="Assign me later")
+        await svc.set_status(wo.id, "in_progress", actor_profile_id=profile.id)
+        await admin_session.commit()
+        assert await _runs_for(admin_session, wo.id) == []
+
+        await svc.assign(wo.id, agent.id, actor_profile_id=profile.id)
+        await admin_session.commit()
+
+        runs = await _runs_for(admin_session, wo.id)
+        assert [r.agent_id for r in runs] == [agent.id]
+        assert runs[0].status == "queued"
+
+    async def test_assigning_a_draft_order_does_not_start_it(self, admin_session: AsyncSession) -> None:
+        """Choosing who will do the work is not the decision to begin it."""
+        org, agent, profile = await _seed(admin_session)
+        svc = WorkOrderService(admin_session, org.id)
+        wo = await svc.create_work_order(title="Not yet")
+        await admin_session.commit()
+
+        await svc.assign(wo.id, agent.id, actor_profile_id=profile.id)
+        await admin_session.commit()
+
+        assert await _runs_for(admin_session, wo.id) == []
+
+    async def test_reassigning_a_running_order_does_not_double_dispatch(self, admin_session: AsyncSession) -> None:
+        """The live-run guard has to hold here too, or handing an order to someone
+        else puts two agents on the same job."""
+        org, agent, profile = await _seed(admin_session)
+        svc = WorkOrderService(admin_session, org.id)
+        wo = await svc.create_work_order(title="Already going", assigned_agent_id=agent.id)
+        await svc.set_status(wo.id, "in_progress", actor_profile_id=profile.id)
+        await admin_session.commit()
+
+        await svc.assign(wo.id, agent.id, actor_profile_id=profile.id)
+        await admin_session.commit()
+
+        assert len(await _runs_for(admin_session, wo.id)) == 1
+
+    async def test_unassigning_never_dispatches(self, admin_session: AsyncSession) -> None:
+        org, agent, profile = await _seed(admin_session)
+        svc = WorkOrderService(admin_session, org.id)
+        wo = await svc.create_work_order(title="Taking it back", assigned_agent_id=agent.id)
+        await admin_session.commit()
+
+        await svc.assign(wo.id, None, actor_profile_id=profile.id)
+        await admin_session.commit()
+
+        assert await _runs_for(admin_session, wo.id) == []
+
+    async def test_starting_without_an_agent_says_so_in_the_diary(self, admin_session: AsyncSession) -> None:
+        """Starting an order that will not run looks identical to starting one that
+        will, and the order's own record is the only place anyone would look."""
+        org, _agent, profile = await _seed(admin_session)
+        svc = WorkOrderService(admin_session, org.id)
+        wo = await svc.create_work_order(title="Nobody home")
+        await admin_session.commit()
+
+        await svc.set_status(wo.id, "in_progress", actor_profile_id=profile.id)
+        await admin_session.commit()
+
+        page = await svc.list_entries_page(wo.id)
+        assert "no agent assigned" in page.entries[0].text
