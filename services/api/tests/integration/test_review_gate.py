@@ -228,3 +228,75 @@ class TestTheVerdict:
         await admin_session.commit()
 
         assert len(await _reviewer_runs(admin_session, wo.id)) == before
+
+
+class TestTheDeliveryGate:
+    """A plan that passed review can still produce a wrong result, and that is
+    where confident-wrong output usually surfaces. So the finished deliverable
+    goes past the board too, before it reaches a person."""
+
+    async def test_reporting_finished_work_convenes_the_board(self, admin_session: AsyncSession) -> None:
+        from api.services.agents.delegation import REQUEST_REVIEW
+
+        org, author, wo, run, _svc = await _seed(admin_session)
+        ctx = _Ctx(session=admin_session, org_id=org.id, work_order_id=wo.id, agent=author, run_id=run.id)
+
+        with pytest.raises(RunParked) as parked:
+            await REQUEST_REVIEW.handler(ctx, {"summary": "Search is rebuilt and indexed."})
+        await admin_session.commit()
+
+        assert parked.value.payload["review"] == "delivery"
+
+    async def test_a_fail_goes_back_to_the_author(self, admin_session: AsyncSession) -> None:
+        from api.services.agents.delegation import REQUEST_REVIEW
+
+        org, author, wo, run, _svc = await _seed(admin_session)
+        ctx = _Ctx(session=admin_session, org_id=org.id, work_order_id=wo.id, agent=author, run_id=run.id)
+        with pytest.raises(RunParked):
+            await REQUEST_REVIEW.handler(ctx, {"summary": "Search is rebuilt and indexed."})
+        for reviewer, verdict in (("devils-advocate", rb.PASS), ("security-analyst", rb.FAIL)):
+            admin_session.add(
+                WorkOrderEntry(
+                    work_order_id=wo.id,
+                    org_id=org.id,
+                    role="review",
+                    text=rb.verdict_marker(reviewer, verdict, "the index is not covered by tests"),
+                )
+            )
+        await admin_session.commit()
+
+        out = await REQUEST_REVIEW.handler(ctx, {"summary": "Search is rebuilt and indexed."})
+
+        assert out["review"] == "changes requested"
+        assert out["failed"] == ["security-analyst"]
+
+    async def test_the_two_gates_are_independent(self, admin_session: AsyncSession) -> None:
+        """A passed plan says nothing about the delivery, and vice versa."""
+        org, author, wo, run, _svc = await _seed(admin_session)
+        ctx = _Ctx(session=admin_session, org_id=org.id, work_order_id=wo.id, agent=author, run_id=run.id)
+        admin_session.add(
+            WorkOrderEntry(
+                work_order_id=wo.id,
+                org_id=org.id,
+                role="review",
+                text=f"🏛️ {rb.PASSED} plan ({rb.fingerprint('anything')}) — all",
+            )
+        )
+        await admin_session.commit()
+
+        from api.services.agents.delegation import REQUEST_REVIEW
+
+        with pytest.raises(RunParked):
+            await REQUEST_REVIEW.handler(ctx, {"summary": "Delivered."})
+
+    async def test_a_run_with_no_work_order_is_untouched(self, admin_session: AsyncSession) -> None:
+        # Console chats and scheduled runs report without a board; the gate must be
+        # invisible to every path it was not meant to cover.
+        from api.services.agents.delegation import REQUEST_REVIEW
+
+        org, author, wo, run, _svc = await _seed(admin_session)
+        ctx = _Ctx(session=admin_session, org_id=org.id, work_order_id=None, agent=author, run_id=run.id)
+
+        out = await REQUEST_REVIEW.handler(ctx, {"summary": "Done."})
+
+        assert out["status"] == "pending"
