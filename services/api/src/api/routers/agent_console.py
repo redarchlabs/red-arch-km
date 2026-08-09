@@ -17,7 +17,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.auth.dependencies import OrgContext, require_org_access
+from api.auth.dependencies import OrgContext, require_org_access, require_org_access_streaming
 from api.config import Settings, get_settings
 from api.db import get_session_factory
 from api.dependencies import get_tenant_db
@@ -43,11 +43,15 @@ class ConsoleRequest(BaseModel):
 async def agent_console_stream(
     agent_id: uuid.UUID,
     body: ConsoleRequest,
-    ctx: Annotated[OrgContext, Depends(require_org_access)],
+    ctx: Annotated[OrgContext, Depends(require_org_access_streaming)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> StreamingResponse:
-    # Like the config assistant, avoid a request-scoped session pinned for the
-    # whole SSE stream — the service opens its own short-lived session.
+    # Deliberately the *streaming* auth dependency. The ordinary one takes
+    # ``get_db``, and FastAPI exits yield-dependencies only after the response
+    # completes — so for an SSE endpoint it pinned a pooled connection for the
+    # entire stream, idle, to serve one membership lookup. (An earlier comment
+    # here claimed the opposite; it was wrong.) The service likewise takes a
+    # session only while it has work to do.
     factory = get_session_factory(settings)
     service = AgentConsoleService(ctx.org_id, settings, factory, ctx.user.profile_id)
     history = [{"role": m.role, "content": m.content} for m in body.messages]

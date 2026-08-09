@@ -31,8 +31,11 @@ _STATEMENT_TIMEOUT = "30s"
 # legible lock error instead of burning the full statement timeout.
 #
 # This is defense-in-depth, not the fix. It caps the blast radius of a lock bug:
-# with pool_size=10/max_overflow=5, requests stuck for 30s starved the entire API
-# (unrelated endpoints ran 37-97s). Matches schema_manager._LOCK_TIMEOUT.
+# on the old 15-connection ceiling, requests stuck for 30s starved the entire API
+# (unrelated endpoints ran 37-97s). The ceiling is larger now and configurable
+# (see api/db.py), which raises the bar without removing it — the real discipline
+# is that a connection is held only while there is read/write work to do.
+# Matches schema_manager._LOCK_TIMEOUT.
 _LOCK_TIMEOUT = "5s"
 
 _redis_client: Redis | None = None
