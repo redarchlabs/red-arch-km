@@ -2563,11 +2563,16 @@ export function FormRenderer({
                       const href = fillHref(col.href_template, row);
                       return (
                         <td key={ci} className="px-2 py-1.5">
+                          {/* Button-look, not underlined text: these are the
+                              primary actions of their rows (open slides, read
+                              the source), and inline links read as an
+                              afterthought next to the styled inputs around
+                              them. Same recipe as the record_list row link. */}
                           <a
                             href={href}
                             target={col.new_tab ? "_blank" : undefined}
                             rel={col.new_tab ? "noopener noreferrer" : undefined}
-                            className="font-medium text-primary underline underline-offset-2 hover:no-underline"
+                            className="inline-block whitespace-nowrap rounded-md border bg-background px-2.5 py-1 text-xs font-medium hover:bg-muted"
                           >
                             {col.link_label ?? "Open"}
                           </a>
