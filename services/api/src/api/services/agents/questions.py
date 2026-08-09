@@ -128,7 +128,19 @@ def _combined(question: AgentQuestion, siblings: list[AgentQuestion], payload: d
                 "declined": q.status == "declined",
             }
             for q in everyone
-        ]
+        ],
+        # Several agents answered one tool call, which only a review board does.
+        # Resuming a parked call feeds the answer in *instead of* running the
+        # handler, so the tool that convened the board never sees these verdicts —
+        # and a model handed a wall of review notes with no instruction reports
+        # "submitted" and stops, leaving the plan neither approved nor rejected.
+        # Observed on the first live board; the note is what closes that loop.
+        "note": (
+            "Every reviewer has now answered. Call the same tool again with your "
+            "submission to continue — that is what records their verdicts and moves "
+            "this forward. Address any objection first; resubmitting unchanged text "
+            "will not re-open the review."
+        ),
     }
 
 

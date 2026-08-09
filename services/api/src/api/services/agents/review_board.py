@@ -158,8 +158,25 @@ def verdict_marker(reviewer: str, verdict: str, note: str) -> str:
 
 
 def parse_verdict(text: str) -> str:
-    """FAIL dominates: a gate must not open on "passes, except…"."""
-    return FAIL if re.search(r"\bFAIL\b", text, re.IGNORECASE) else PASS
+    """The verdict, taken from the line the reviewer declared it on.
+
+    Reviewers are told to open with PASS or FAIL on its own first line, and then
+    write findings — so the verdict is a property of that line, not of the whole
+    answer. Scanning the whole answer read a security reviewer's PASS as a FAIL
+    the moment its findings used the word "fail" in a sentence, which is most of
+    the time. That is not a conservative failure: it discards a real approval and
+    sends the author back to fix nothing.
+
+    Within the declaring line FAIL still dominates, so "PASS, though it would FAIL
+    under load" does not open the gate. An answer that never declares either is
+    treated as a FAIL: a reviewer that would not say is not an approval.
+    """
+    for line in text.splitlines():
+        if re.search(r"\bFAIL\b", line, re.IGNORECASE):
+            return FAIL
+        if re.search(r"\bPASS\b", line, re.IGNORECASE):
+            return PASS
+    return FAIL
 
 
 def rounds_run(entries: list[Any], gate: str) -> int:
