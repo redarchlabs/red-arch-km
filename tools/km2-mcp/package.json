@@ -16,7 +16,8 @@
     "start": "node dist/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --import tsx --test test/*.test.ts",
-    "postinstall-browser": "playwright install chromium"
+    "postinstall-browser": "playwright install chromium",
+    "pack:mcpb": "bash scripts/pack-mcpb.sh"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.19.1",

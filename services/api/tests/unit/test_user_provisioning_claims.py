@@ -106,12 +106,12 @@ async def test_fully_claimless_token_is_a_pure_read() -> None:
 
 async def test_placeholder_email_is_never_written_back_over_a_real_one() -> None:
     """Guards the exact value that caused the alternating UPDATE."""
-    profile = _existing(email="jeremy@redarchlabs.com")
+    profile = _existing(email="jeremy@example.com")
     session = _FakeSession(profile)
 
     await provision_user_from_claims(session, sub=SUB, username="", email="")  # type: ignore[arg-type]
 
-    assert profile.email == "jeremy@redarchlabs.com"
+    assert profile.email == "jeremy@example.com"
     assert profile.email != PLACEHOLDER_EMAIL
 
 
