@@ -154,13 +154,21 @@ def bare_model(model: str) -> str:
 def model_supports_vision(model: str) -> bool:
     """Whether ``model`` can be shown an image.
 
-    Unknown models answer False. A locally served model (``qwen3-30b`` and
+    Compared on the BARE id, because the two halves of the system spell a model
+    differently: an agent stores ``openai/gpt-5-mini`` (LiteLLM needs the prefix)
+    while this table lists OpenAI models unprefixed. An exact match therefore said
+    False for every OpenAI agent in the roster, and every pasted image was quietly
+    downgraded to text — a failure that looks exactly like a model choosing not to
+    mention the picture.
+
+    Unknown models still answer False. A locally served model (``qwen3-30b`` and
     anything else reached through an OpenAI-shaped endpoint) is not in this table,
     and guessing yes would send an image_url part to something that errors on it
     mid-run. Guessing no costs a picture; guessing yes costs the turn.
     """
+    wanted = bare_model(model)
     for provider in providers():
         for candidate in provider.models:
-            if candidate.id == model:
+            if candidate.id == model or bare_model(candidate.id) == wanted:
                 return candidate.vision
     return False

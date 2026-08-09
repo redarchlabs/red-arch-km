@@ -130,6 +130,17 @@ class TestWhichModelsCanSee:
         assert model_supports_vision("gpt-5-mini")
         assert model_supports_vision("anthropic/claude-sonnet-5")
 
+    def test_the_prefix_the_roster_actually_stores(self) -> None:
+        """The two halves spell a model differently: an agent stores
+        `openai/gpt-5-mini` because LiteLLM needs the prefix, while the catalog
+        lists OpenAI models unprefixed. An exact match said False for every
+        OpenAI agent in the roster, so every pasted image was quietly downgraded
+        to text — indistinguishable from a model choosing not to mention it."""
+        from api.services.agents.llm.catalog import model_supports_vision
+
+        assert model_supports_vision("openai/gpt-5-mini")
+        assert model_supports_vision("openai/gpt-5")
+
     def test_an_unknown_model_is_assumed_blind(self) -> None:
         """A locally served model is not in the catalog. Guessing yes sends an
         image_url part to something that errors on it mid-run; guessing no costs
