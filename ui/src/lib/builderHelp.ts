@@ -447,6 +447,23 @@ stall is visible.
   noise on a dashboard; turn it off for a page about one order.
 `,
   ),
+  work_order_create: topic(
+    "File a work order",
+    `
+A form that **files a new work order**.
+
+Its own element rather than a button on the list, because the place people file
+work is often not the place they browse it — a "raise a request" tile on a home
+dashboard is the common case.
+
+- **Assign to** — assigning an agent is what makes the order *startable*. Leaving
+  it unassigned files a request for a person to pick up, which is a real choice
+  rather than a missing one.
+- **Detail view** — where to go once the order exists. Without one the form just
+  clears, which suits a kiosk that files and forgets.
+- The detail box is the **brief the agent works from**, so it is worth filling in.
+`,
+  ),
   work_order_tasks: topic(
     "Work order tasks",
     `

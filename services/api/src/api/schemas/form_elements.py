@@ -1035,6 +1035,31 @@ class AgentDiaryElement(_Element):
     width: FieldWidth | None = None
 
 
+class WorkOrderCreateElement(_Element):
+    """File a new work order.
+
+    Deliberately its own element rather than a flag on the list: the place people
+    file work is not always the place they browse it — a "raise a request" tile on
+    a home dashboard is the common case — and an element composes anywhere while a
+    flag only ever appears above a list.
+
+    Assigning an agent here is what makes the order startable; leaving it unassigned
+    files a request for a person to pick up.
+    """
+
+    type: Literal["work_order_create"] = "work_order_create"
+    title: str | None = "New work order"
+    submit_label: str = "File it"
+    default_priority: Literal["low", "normal", "high", "urgent"] = "normal"
+    # Offer the agent picker. Off for a surface where people file requests and a
+    # coordinator decides who works them.
+    show_assignee: bool = True
+    # Where to go once it exists. Without one the form just clears, which is right
+    # for a kiosk that files and forgets.
+    detail_view_id: uuid.UUID | None = None
+    width: FieldWidth | None = None
+
+
 class WorkOrderTasksElement(_Element):
     """The order's checklist and how far through it is.
 
@@ -1127,6 +1152,7 @@ FormElement = Annotated[
     | AgentDiaryElement
     | WorkOrderListElement
     | WorkOrderTasksElement
+    | WorkOrderCreateElement
     | WorkOrderActionsElement
     | ApprovalQueueElement
     | ButtonElement

@@ -2919,6 +2919,22 @@ class AgentService:
                         "to bind to the page's own order."
                     ),
                 },
+                "work_order_create": {
+                    "required": ["type"],
+                    "optional": [
+                        "title",
+                        "submit_label",
+                        "default_priority (low|normal|high|urgent)",
+                        "show_assignee",
+                        "detail_view_id",
+                        "width",
+                    ],
+                    "use": (
+                        "A form that files a new work order. Assigning an agent is what makes the "
+                        "order startable; unassigned files a request for a person. detail_view_id "
+                        "is the view to open once it exists."
+                    ),
+                },
                 "work_order_tasks": {
                     "required": ["type"],
                     "optional": ["work_order_id", "title", "show_progress", "poll_ms", "width"],

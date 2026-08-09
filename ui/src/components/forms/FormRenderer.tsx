@@ -35,6 +35,7 @@ import {
   AgentTimelineNode,
   ApprovalQueueNode,
   WorkOrderActionsNode,
+  WorkOrderCreateNode,
   WorkOrderListNode,
   WorkOrderTasksNode,
 } from "@/components/workOrders/elements";
@@ -2261,6 +2262,20 @@ export function FormRenderer({
                 title={el.title}
                 hideWhenEmpty={el.hide_when_empty}
                 pollMs={el.poll_ms}
+              />
+            </ElementErrorBoundary>
+          </div>
+        );
+      case "work_order_create":
+        return (
+          <div className={spanClass(el.width)}>
+            <ElementErrorBoundary>
+              <WorkOrderCreateNode
+                title={el.title}
+                submitLabel={el.submit_label}
+                defaultPriority={el.default_priority}
+                showAssignee={el.show_assignee}
+                detailViewId={el.detail_view_id}
               />
             </ElementErrorBoundary>
           </div>

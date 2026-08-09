@@ -28,7 +28,8 @@ from api.repositories.agent_run import AgentRunRepository
 from api.services.agents import lifecycle
 from api.services.agents.authority import available_tools
 from api.services.agents.llm.keys import resolve_provider_key
-from api.services.agents.llm.provider import LLMProvider, ToolCallRequest
+from api.services.agents.llm.provider import ToolCallRequest
+from api.services.agents.llm.routing import provider_for
 from api.services.agents.notify import create_notification
 from api.services.agents.prompts import build_system_prompt
 from api.services.agents.runtime import RunCancelled, RunFinished, RunParked, run_agent_loop
@@ -265,7 +266,7 @@ class AgentRunExecutor:
             answers: dict[str, Any] | None = None,
         ):
             return await run_agent_loop(
-                provider=LLMProvider(api_key=key),
+                provider=provider_for(self._settings, agent.model, key),
                 agent=agent,
                 model=agent.model,
                 messages=msgs,
