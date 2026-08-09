@@ -262,6 +262,12 @@ class AgentConsoleService:
                     temperature=params.get("temperature"),
                     max_tokens=params.get("max_tokens"),
                     reasoning_effort=params.get("reasoning_effort"),
+                    # No elision on this path. Eliding a tool result is only safe
+                    # where the full one was persisted for read_run_detail to find,
+                    # and the console streams its events to a watching human rather
+                    # than writing them as run steps. Interactive runs are short and
+                    # a person is waiting, so there is little to save here anyway.
+                    tool_result_budget=0,
                     resume_tool_calls=resume.pending or None,
                     resume_answers=resume.answers or None,
                 )

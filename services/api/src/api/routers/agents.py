@@ -36,7 +36,7 @@ from api.schemas.agent import (
     ProviderInfo,
     ProviderModelInfo,
 )
-from api.services.agents.llm.catalog import PROVIDERS, VALID_PROVIDERS
+from api.services.agents.llm.catalog import providers, valid_providers
 from api.services.agents.llm.keys import central_provider_key
 from api.services.agents.service import (
     AgentConflictError,
@@ -77,7 +77,7 @@ async def list_providers(
     """The provider/model catalog + whether each provider has a usable key."""
     org_creds = {c.provider for c in await OrgProviderCredentialRepository(session, ctx.org_id).list_all()}
     result: list[ProviderInfo] = []
-    for p in PROVIDERS:
+    for p in providers():
         configured = p.name in org_creds or central_provider_key(p.name, settings) is not None
         result.append(
             ProviderInfo(
@@ -99,7 +99,7 @@ async def set_provider_credential(
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> None:
     """Store (or replace) this org's API key for a provider, encrypted at rest."""
-    if body.provider not in VALID_PROVIDERS:
+    if body.provider not in valid_providers():
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Unknown provider: {body.provider}")
     ciphertext = encrypt_secret(body.api_key, settings.org_encryption_key.get_secret_value())
     await OrgProviderCredentialRepository(session, ctx.org_id).upsert(body.provider, ciphertext)
