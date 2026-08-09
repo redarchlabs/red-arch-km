@@ -6,7 +6,9 @@ import { useParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ToolResult } from "@/components/agents/console/ToolResult";
+import { AttachmentChips } from "@/components/common/AttachmentChips";
 import { Button } from "@/components/ui/button";
+import { usePasteAttach } from "@/lib/usePasteAttach";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import {
@@ -44,6 +46,7 @@ export default function AgentConsolePage() {
   const [blocks, setBlocks] = useState<Block[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const paste = usePasteAttach();
   const [error, setError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
@@ -91,7 +94,8 @@ export default function AgentConsolePage() {
 
   const send = async () => {
     const text = input.trim();
-    if (!text || busy) return;
+    // An attachment on its own is a message: "look at this" with a screenshot.
+    if ((!text && paste.documentIds.length === 0) || busy) return;
     setInput("");
     setError(null);
     setBusy(true);
@@ -103,7 +107,9 @@ export default function AgentConsolePage() {
     ];
     setBlocks((prev) => [...prev, { kind: "user", text }]);
     try {
-      for await (const event of streamAgentConsole(id, history)) {
+      const documentIds = paste.documentIds;
+      paste.clear();
+      for await (const event of streamAgentConsole(id, history, { documentIds })) {
         if (event.type === "error") {
           setError(event.error);
         } else {
@@ -191,7 +197,9 @@ export default function AgentConsolePage() {
 
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
 
-      <div className="flex gap-2">
+      <AttachmentChips attachments={paste.attachments} onRemove={paste.remove} />
+
+      <div className="flex gap-2" onDrop={paste.onDrop} onDragOver={(e) => e.preventDefault()}>
         <Input
           value={input}
           onChange={(e) => setInput(e.target.value)}
@@ -201,10 +209,14 @@ export default function AgentConsolePage() {
               void send();
             }
           }}
-          placeholder="Ask the agent to do something…"
+          onPaste={paste.onPaste}
+          placeholder="Ask the agent — paste a screenshot to attach it…"
           disabled={busy}
         />
-        <Button onClick={() => void send()} disabled={busy || !input.trim()}>
+        <Button
+          onClick={() => void send()}
+          disabled={busy || paste.busy || (!input.trim() && paste.documentIds.length === 0)}
+        >
           <Send className="h-4 w-4" />
         </Button>
       </div>

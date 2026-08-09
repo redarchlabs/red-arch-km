@@ -370,6 +370,7 @@ export interface ChatElement extends ElementBase {
   role_field?: string;
   text_field?: string;
   channel_field?: string;
+  attachments_field?: string | null;
   answer_workflow_id?: string | null;
   answer_controls?: ChatAnswerControls | null;
   filler?: ChatFiller | null;
@@ -412,6 +413,17 @@ export interface AgentActivityElement extends ElementBase {
   title?: string | null;
   height?: "sm" | "md" | "lg" | "fill";
   allow_steer?: boolean;
+  width?: FieldWidth | null;
+}
+
+/** The documents on a work order — inputs people attached, outputs agents produced. */
+export interface WorkOrderDocumentsElement extends ElementBase {
+  type: "work_order_documents";
+  work_order_id?: string | null;
+  title?: string | null;
+  hide_when_empty?: boolean;
+  allow_upload?: boolean;
+  poll_ms?: number | null;
   width?: FieldWidth | null;
 }
 
@@ -681,6 +693,7 @@ export type FormElement =
   | AgentTimelineElement
   | AgentDiaryElement
   | AgentActivityElement
+  | WorkOrderDocumentsElement
   | ApprovalQueueElement
   | WorkOrderListElement
   | WorkOrderActionsElement
