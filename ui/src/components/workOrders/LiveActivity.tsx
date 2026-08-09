@@ -6,7 +6,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AttachmentChips } from "@/components/common/AttachmentChips";
 import { Markdown } from "@/components/common/Markdown";
 import { Button } from "@/components/ui/button";
+import { listAgentRunSteps } from "@/lib/api/agents";
 import { liveSocketUrl, mintLiveTicket, type LiveEvent } from "@/lib/api/agentsLive";
+import { getWorkOrderMap } from "@/lib/api/workOrders";
+import { readableStep } from "./runSteps";
 import { usePasteAttach } from "@/lib/usePasteAttach";
 import { cn } from "@/lib/utils";
 
@@ -22,6 +25,13 @@ type Block =
 /** Reconnect backoff. A page left open through a deploy should come back on its
  *  own, without hammering the server while it is down. */
 const RETRY_MS = [1000, 2000, 5000, 10000, 30000];
+
+/** Lane statuses that mean an agent is still on this order. */
+const LIVE_STATUSES = new Set(["queued", "running", "waiting"]);
+
+/** How many of an order's runs to replay. Enough for context, bounded so a long
+ *  order does not fetch its whole life to fill one panel. */
+const HISTORY_RUNS = 3;
 
 interface Props {
   workOrderId: string | null;
@@ -49,6 +59,10 @@ export function LiveActivityNode({
   const [connected, setConnected] = useState(false);
   const [steer, setSteer] = useState("");
   const [lastRunId, setLastRunId] = useState<string | null>(null);
+  // Null until the history load settles, so the empty state can tell "nothing has
+  // happened yet" from "nothing is running now" instead of guessing.
+  const [anyLive, setAnyLive] = useState<boolean | null>(null);
+  const [loadedHistory, setLoadedHistory] = useState(false);
   const paste = usePasteAttach();
   const boxRef = useRef<HTMLDivElement>(null);
   const socketRef = useRef<WebSocket | null>(null);
@@ -91,6 +105,63 @@ export function LiveActivityNode({
     });
     if ("run_id" in event && event.run_id) setLastRunId(event.run_id);
   }, []);
+
+  // Seed from what is already recorded. The socket only carries what happens
+  // while someone is watching, so without this the panel says "waiting for an
+  // agent" forever on an order that finished hours ago. Deltas are the one thing
+  // that cannot be recovered — they are never persisted — so history is
+  // tool-call granular and the live feed is token granular.
+  useEffect(() => {
+    let cancelled = false;
+    const seed = async () => {
+      if (!workOrderId) {
+        setLoadedHistory(true);
+        return;
+      }
+      try {
+        const map = await getWorkOrderMap(workOrderId);
+        if (cancelled) return;
+        setAnyLive(map.lanes.some((lane) => LIVE_STATUSES.has(lane.status ?? "")));
+        const runIds = [...new Set(map.events.map((e) => e.run_id).filter((v): v is string => !!v))];
+        // Newest runs only: an order with a long history should not fetch every
+        // step it ever produced to fill one panel.
+        const recent = runIds.slice(-HISTORY_RUNS);
+        const perRun = await Promise.all(recent.map((id) => listAgentRunSteps(id).catch(() => [])));
+        if (cancelled) return;
+        const blocks: Block[] = [];
+        for (const steps of perRun) {
+          for (const step of steps) {
+            const readable = readableStep(step);
+            if (step.kind === "tool_call" || step.kind === "approval_required") {
+              blocks.push({ kind: "tool", agent: null, name: step.name ?? readable.title, args: null });
+            } else if (step.kind === "tool_result") {
+              for (let i = blocks.length - 1; i >= 0; i--) {
+                const b = blocks[i];
+                if (b.kind === "tool" && b.name === (step.name ?? "") && b.result === undefined) {
+                  blocks[i] = { ...b, result: readable.body ?? "" };
+                  break;
+                }
+              }
+            } else if (readable.body) {
+              blocks.push({ kind: "assistant", agent: null, text: readable.body });
+            }
+          }
+        }
+        if (blocks.length) blocks.push({ kind: "note", text: "— above is the recorded history —" });
+        setBlocks((prev) => [...blocks, ...prev]);
+        if (recent.length) setLastRunId(recent[recent.length - 1]);
+      } catch {
+        // History is a nicety; the live feed is the feature. A failure here must
+        // not stop the socket connecting.
+      } finally {
+        if (!cancelled) setLoadedHistory(true);
+      }
+    };
+    void seed();
+    return () => {
+      cancelled = true;
+    };
+  }, [workOrderId]);
 
   useEffect(() => {
     if (!workOrderId && !runId) return;
@@ -188,10 +259,23 @@ export function LiveActivityNode({
         className={`space-y-2 overflow-y-auto rounded-md border p-3 ${HEIGHTS[height] ?? HEIGHTS.md}`}
       >
         {blocks.length === 0 ? (
-          <p className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Loader2 className="h-3 w-3 animate-spin" />
-            Waiting for an agent to do something…
-          </p>
+          !loadedHistory ? (
+            <p className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              Loading…
+            </p>
+          ) : anyLive === false ? (
+            // Saying "waiting for an agent" about an order that finished hours ago
+            // is how this panel used to look permanently stuck.
+            <p className="text-sm text-muted-foreground">
+              Nothing is running. The Diary has the record of what happened.
+            </p>
+          ) : (
+            <p className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              Waiting for an agent to do something…
+            </p>
+          )
         ) : (
           blocks.map((block, index) => {
             if (block.kind === "assistant") {
