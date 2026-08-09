@@ -45,6 +45,7 @@ export const VIEW_KINDS: PaletteKind[] = [
   "approval_queue",
   "work_order_list",
   "work_order_actions",
+  "work_order_tasks",
   "button",
   "puzzle_pad",
   "form_ref",
@@ -71,6 +72,7 @@ export const KIND_LABELS: Record<PaletteKind, string> = {
   approval_queue: "Approvals waiting on you",
   work_order_list: "Work order list",
   work_order_actions: "Work order actions (approve / start / close)",
+  work_order_tasks: "Work order tasks + progress",
   button: "Button",
   puzzle_pad: "Puzzle pad (tap / drag / colour)",
   form_ref: "Embedded form",
@@ -106,6 +108,8 @@ export function newElement(kind: PaletteKind): FormElement {
         title: "Waiting on you",
         hide_when_empty: true,
       };
+    case "work_order_tasks":
+      return { id, type: "work_order_tasks", work_order_id: null, title: "Tasks", show_progress: true };
     case "work_order_actions":
       return { id, type: "work_order_actions", work_order_id: null, show_summary: true };
     case "work_order_list":

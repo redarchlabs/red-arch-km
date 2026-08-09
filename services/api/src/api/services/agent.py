@@ -2919,6 +2919,14 @@ class AgentService:
                         "to bind to the page's own order."
                     ),
                 },
+                "work_order_tasks": {
+                    "required": ["type"],
+                    "optional": ["work_order_id", "title", "show_progress", "poll_ms", "width"],
+                    "use": (
+                        "The order's checklist with percent complete. The figure is the server's "
+                        "own (done / total, excluding carried), not recounted on the client."
+                    ),
+                },
                 "work_order_actions": {
                     "required": ["type"],
                     "optional": ["work_order_id", "title", "show_summary", "width"],
