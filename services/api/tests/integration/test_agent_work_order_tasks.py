@@ -167,3 +167,33 @@ class TestScope:
         ):
             out = await tool.handler(ctx, args)
             assert "not attached to a work order" in out["error"]
+
+
+class TestBoardAnswersCarryAnInstruction:
+    """Resuming a parked tool call feeds the answer in *instead of* running the
+    handler — so the tool that convened a board never sees the verdicts. A model
+    handed a wall of review notes with no instruction reports "submitted" and
+    stops, leaving the plan neither approved nor rejected. Seen on the first live
+    board; this pins the note that closes the loop.
+    """
+
+    def test_a_multi_answer_result_says_to_call_the_tool_again(self) -> None:
+        import uuid as _uuid
+        from datetime import UTC, datetime
+
+        from api.services.agents.questions import _combined
+
+        class _Q:
+            def __init__(self, n: int, answer: str) -> None:
+                self.id = _uuid.uuid4()
+                self.target_agent_id = _uuid.uuid4()
+                self.answer = answer
+                self.status = "answered"
+                self.created_at = datetime(2026, 8, 9, 12, n, tzinfo=UTC)
+
+        first, second = _Q(1, "PASS"), _Q(2, "FAIL — no tests")
+
+        out = _combined(first, [second], {"answer": "PASS"})
+
+        assert len(out["answers"]) == 2
+        assert "again" in out["note"]

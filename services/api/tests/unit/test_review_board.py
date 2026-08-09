@@ -74,10 +74,26 @@ class TestChoosingTheBoard:
 
 
 class TestVerdicts:
-    def test_fail_dominates_an_ambiguous_answer(self) -> None:
+    def test_fail_dominates_on_the_line_the_verdict_is_declared_on(self) -> None:
         """A gate must not open on "passes, except…"."""
         assert rb.parse_verdict("PASS overall, but this would FAIL on load") == rb.FAIL
         assert rb.parse_verdict("PASS — nothing to add") == rb.PASS
+
+    def test_findings_that_discuss_failure_do_not_overturn_a_pass(self) -> None:
+        """Caught live: a security reviewer opened with PASS and its findings used
+        the word "fail" in a sentence, so the whole-answer scan recorded a FAIL and
+        sent the author back to fix an approval."""
+        answer = (
+            "PASS\n\n"
+            "Findings (threat model):\n"
+            "1) The webhook should fail closed if the signature is absent.\n"
+            "2) Rate limits fail open today; consider tightening."
+        )
+
+        assert rb.parse_verdict(answer) == rb.PASS
+
+    def test_a_reviewer_that_declares_nothing_is_not_an_approval(self) -> None:
+        assert rb.parse_verdict("Looks fine to me, ship it.") == rb.FAIL
 
     def test_a_board_is_unsettled_until_everyone_reports(self) -> None:
         # The author's run stays parked meanwhile; resuming early would hand it one
