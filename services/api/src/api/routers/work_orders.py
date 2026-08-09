@@ -25,6 +25,7 @@ from api.schemas.work_order import (
     WorkOrderCreate,
     WorkOrderDetail,
     WorkOrderMap,
+    WorkOrderModeUpdate,
     WorkOrderRead,
     WorkOrderReply,
     WorkOrderStatusUpdate,
@@ -72,6 +73,7 @@ async def create_work_order(
         title=body.title,
         body=body.body,
         priority=body.priority,
+        mode=body.mode,
         assigned_agent_id=body.assigned_agent_id,
         created_by_profile_id=ctx.user.profile_id,
     )
@@ -164,6 +166,21 @@ async def assign(
         wo = await WorkOrderService(session, ctx.org_id).assign(
             wo_id, body.assigned_agent_id, actor_profile_id=ctx.user.profile_id
         )
+    except WorkOrderError as exc:
+        _raise_http(exc)
+    return _to_read(wo)
+
+
+@router.patch("/{wo_id}/mode", response_model=WorkOrderRead)
+async def set_mode(
+    wo_id: uuid.UUID,
+    body: WorkOrderModeUpdate,
+    # Admin: 'automatic' removes the human from every approval on this order.
+    ctx: Annotated[OrgContext, Depends(require_org_admin)],
+    session: Annotated[AsyncSession, Depends(get_tenant_db)],
+) -> WorkOrderRead:
+    try:
+        wo = await WorkOrderService(session, ctx.org_id).set_mode(wo_id, body.mode)
     except WorkOrderError as exc:
         _raise_http(exc)
     return _to_read(wo)

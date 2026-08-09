@@ -18,10 +18,12 @@ import {
   getWorkOrderMap,
   listWorkOrders,
   replyToWorkOrder,
+  setWorkOrderMode,
   setWorkOrderStatus,
   type WorkOrder,
   type WorkOrderDetail,
   type WorkOrderEntry,
+  type WorkOrderMode,
   type WorkOrderMap,
   type WorkOrderStatus,
 } from "@/lib/api/workOrders";
@@ -640,7 +642,22 @@ interface ActionsProps {
   title?: string | null;
   showSummary?: boolean;
   showAssignee?: boolean;
+  showMode?: boolean;
 }
+
+/** What each mode means to the person picking it. Wording over jargon: "plan"
+ *  and "automatic" say nothing on their own about what the agent may touch. */
+const MODE_LABELS: Record<string, string> = {
+  plan: "Plan only",
+  manual: "Ask me first",
+  automatic: "Automatic",
+};
+
+const MODE_HELP: Record<string, string> = {
+  plan: "Reads, researches and writes a plan. Cannot change anything.",
+  manual: "Works the order, pausing for your approval on outbound actions.",
+  automatic: "Works the order and approves its own actions. Nobody is asked.",
+};
 
 /** How each transition reads to the person clicking it. "in_progress" is the one
  *  that matters: on an assigned order it dispatches the agent, so it is labelled
@@ -659,6 +676,7 @@ export function WorkOrderActionsNode({
   title,
   showSummary = true,
   showAssignee = true,
+  showMode = true,
 }: ActionsProps) {
   const [wo, setWo] = useState<WorkOrder | null>(null);
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -689,6 +707,19 @@ export function WorkOrderActionsNode({
       setWo(await assignWorkOrder(workOrderId, agentId || null));
     } catch (e: unknown) {
       setError(getApiErrorMessage(e, "Could not change the assignee"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const changeMode = async (mode: string) => {
+    if (!workOrderId) return;
+    setBusy(true);
+    setError(null);
+    try {
+      setWo(await setWorkOrderMode(workOrderId, mode as WorkOrderMode));
+    } catch (e: unknown) {
+      setError(getApiErrorMessage(e, "Could not change the mode"));
     } finally {
       setBusy(false);
     }
@@ -745,12 +776,33 @@ export function WorkOrderActionsNode({
             </select>
           </label>
         ) : null}
+        {showMode ? (
+          <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            Mode
+            <select
+              value={wo.mode}
+              onChange={(e) => void changeMode(e.target.value)}
+              disabled={busy}
+              aria-label="Agent mode"
+              className="rounded-md border bg-background px-2 py-1 text-sm text-foreground"
+            >
+              {["plan", "manual", "automatic"].map((m) => (
+                <option key={m} value={m}>
+                  {MODE_LABELS[m]}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
         {(wo.allowed_transitions ?? []).map((s) => (
           <Button key={s} size="sm" variant="outline" disabled={busy} onClick={() => void move(s)}>
             {ACTION_LABELS[s] ?? s}
           </Button>
         ))}
       </div>
+      {/* What the mode means, spelled out. "Automatic" reads as a convenience
+          setting until you know it means nobody is asked before an agent acts. */}
+      {showMode ? <p className="text-xs text-muted-foreground">{MODE_HELP[wo.mode]}</p> : null}
     </div>
   );
 }

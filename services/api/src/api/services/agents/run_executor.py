@@ -26,7 +26,7 @@ from api.models.agent_run import AgentApproval, AgentRun
 from api.repositories.agent import AgentRepository
 from api.repositories.agent_run import AgentRunRepository
 from api.services.agents import lifecycle
-from api.services.agents.authority import available_tools
+from api.services.agents.authority import Posture, available_tools, posture_for
 from api.services.agents.llm.keys import resolve_provider_key
 from api.services.agents.llm.provider import ToolCallRequest
 from api.services.agents.llm.routing import provider_for
@@ -206,9 +206,21 @@ class AgentRunExecutor:
             run_id=run.id,
             work_order_id=run.work_order_id,
         )
+        # Resolve the posture before building the tool list, not after: a plan-mode
+        # run that is *offered* tools it will be denied burns turns proposing
+        # actions that can never happen.
+        from api.models.org import Org
+        from api.models.work_order import WorkOrder
+
+        org = await session.get(Org, org_id)
+        org_posture = (getattr(org, "agent_autonomy", None) or "high_touch") if org else "high_touch"
+        work_order = await session.get(WorkOrder, run.work_order_id) if run.work_order_id else None
+        autonomy = posture_for(work_order, org_posture)
+
         specs = available_tools(
             agent,
             await load_agent_tools(session, org_id, agent, self._settings, actor_user_id=run.actor_user_id),
+            autonomy=autonomy,
         )
         if linkage is not None:
             # Workflow mode: the completion contract comes in; un-gated egress
@@ -222,13 +234,6 @@ class AgentRunExecutor:
             schema: dict[str, Any] = raw_schema if isinstance(raw_schema, dict) else {}
             specs = [*specs, *workflow_bridge_specs(schema)]
 
-        # The org's autonomy posture (default high_touch) gates side-effecting tools
-        # at call time: under high_touch every outbound action asks the human.
-        from api.models.org import Org
-
-        org = await session.get(Org, org_id)
-        autonomy = (getattr(org, "agent_autonomy", None) or "high_touch") if org else "high_touch"
-
         # Resume a parked turn (human approved) or start fresh from the task.
         resume = run.input.get("resume") if isinstance(run.input, dict) else None
         if resume:
@@ -240,13 +245,11 @@ class AgentRunExecutor:
             task = str(run.input.get("task") or run.input.get("message") or "").strip() or "Proceed."
             # A work-order run is watched through a task list the agent has to fill
             # in; without the title it does not know it is on one.
-            wo_title: str | None = None
-            if run.work_order_id is not None:
-                from api.models.work_order import WorkOrder
-
-                wo = await session.get(WorkOrder, run.work_order_id)
-                wo_title = wo.title if wo is not None else None
-            system = build_system_prompt(agent, work_order_title=wo_title)
+            system = build_system_prompt(
+                agent,
+                work_order_title=work_order.title if work_order else None,
+                plan_only=autonomy == Posture.PLAN_ONLY,
+            )
             if linkage is not None:
                 from api.services.agents.tools.bridge import workflow_system_addendum, wrap_workflow_task
 

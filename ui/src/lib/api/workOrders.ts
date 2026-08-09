@@ -10,6 +10,10 @@ export type WorkOrderStatus =
   | "done"
   | "cancelled";
 
+/** How much rope the agent gets on one order: plan = think but change nothing;
+ *  manual = pause for approval; automatic = approve its own actions. */
+export type WorkOrderMode = "plan" | "manual" | "automatic";
+
 export interface WorkOrder {
   id: string;
   slug: string;
@@ -17,6 +21,7 @@ export interface WorkOrder {
   status: string;
   body: string | null;
   priority: string;
+  mode: WorkOrderMode;
   assigned_agent_id: string | null;
   created_by_profile_id: string | null;
   created_at: string;
@@ -91,6 +96,7 @@ export interface WorkOrderCreateInput {
   title: string;
   body?: string | null;
   priority?: string;
+  mode?: WorkOrderMode;
   assigned_agent_id?: string | null;
 }
 
@@ -139,4 +145,9 @@ export async function assignWorkOrder(id: string, assignedAgentId: string | null
  *  reply records the message and queues a follow-up run carrying the diary. */
 export async function replyToWorkOrder(id: string, text: string): Promise<WorkOrder> {
   return (await apiClient.post<WorkOrder>(`/work-orders/${id}/reply`, { text })).data;
+}
+
+/** Change how much rope the agent gets on this order. */
+export async function setWorkOrderMode(id: string, mode: WorkOrderMode): Promise<WorkOrder> {
+  return (await apiClient.patch<WorkOrder>(`/work-orders/${id}/mode`, { mode })).data;
 }

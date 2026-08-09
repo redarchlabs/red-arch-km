@@ -494,6 +494,23 @@ assigned to a disabled agent is refused, and the message names the agent.
 
 - **Show summary** — the order's title and current status above the buttons. Turn
   it off on a page that already has its own heading.
+- **Show mode** — the plan/manual/automatic picker (below).
+
+**Mode** decides how much rope the agent gets on *this* order:
+
+- **Plan only** — it reads, researches, delegates thinking to its reports and
+  writes the task list, but every write, execution and outbound action is
+  refused. Use it to see the plan before anything happens. Reports working the
+  order are held to the same limit.
+- **Ask me first** — the default, and today's behaviour: it works the order but
+  pauses for your approval on outbound actions.
+- **Automatic** — it approves its own actions. Nothing pauses and nobody is
+  asked, so an agent can send mail and call external tools unattended. Mode
+  changes are written into the diary, because "who turned that off, and when" has
+  to be answerable afterwards.
+
+Automatic never widens what an agent may touch: grants and the role restrictions
+still apply. It only removes the human from the loop on tools it already had.
 `,
   ),
   work_order_list: topic(

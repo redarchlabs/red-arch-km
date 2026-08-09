@@ -14,6 +14,7 @@ const getWorkOrderEntries = vi.fn();
 const listWorkOrders = vi.fn();
 const createWorkOrder = vi.fn();
 const replyToWorkOrder = vi.fn();
+const setWorkOrderMode = vi.fn();
 const listApprovals = vi.fn();
 const approveApproval = vi.fn();
 const denyApproval = vi.fn();
@@ -27,6 +28,7 @@ vi.mock("@/lib/api/workOrders", () => ({
   getWorkOrderEntries: (...a: unknown[]) => getWorkOrderEntries(...a),
   listWorkOrders: (...a: unknown[]) => listWorkOrders(...a),
   replyToWorkOrder: (...a: unknown[]) => replyToWorkOrder(...a),
+  setWorkOrderMode: (...a: unknown[]) => setWorkOrderMode(...a),
 }));
 
 vi.mock("@/lib/api/agents", () => ({
@@ -66,6 +68,7 @@ const order = (over: Partial<WorkOrder> = {}): WorkOrder => ({
   status: "in_progress",
   body: null,
   priority: "normal",
+  mode: "manual",
   assigned_agent_id: "agent-1",
   created_by_profile_id: null,
   created_at: "2026-08-09T12:00:00Z",
@@ -335,5 +338,37 @@ describe("AgentDiaryNode reply", () => {
 
     await screen.findByText("read only");
     expect(screen.queryByLabelText("Reply to the agent")).toBeNull();
+  });
+});
+
+describe("WorkOrderActionsNode mode", () => {
+  it("says what the chosen mode actually means", async () => {
+    // "Automatic" reads as a convenience setting until you know it means nobody
+    // is asked before an agent acts.
+    getWorkOrder.mockResolvedValue(order({ mode: "automatic", allowed_transitions: [] }));
+
+    render(<WorkOrderActionsNode workOrderId="wo-1" />);
+
+    expect(await screen.findByText(/approves its own actions/)).toBeTruthy();
+  });
+
+  it("changes the mode on the server", async () => {
+    getWorkOrder.mockResolvedValue(order({ mode: "manual", allowed_transitions: [] }));
+    setWorkOrderMode.mockResolvedValue(order({ mode: "plan" }));
+
+    render(<WorkOrderActionsNode workOrderId="wo-1" />);
+    fireEvent.change(await screen.findByLabelText("Agent mode"), { target: { value: "plan" } });
+
+    await waitFor(() => expect(setWorkOrderMode).toHaveBeenCalledWith("wo-1", "plan"));
+    expect(await screen.findByText(/Cannot change anything/)).toBeTruthy();
+  });
+
+  it("can be hidden by config", async () => {
+    getWorkOrder.mockResolvedValue(order({ allowed_transitions: [] }));
+
+    render(<WorkOrderActionsNode workOrderId="wo-1" showMode={false} />);
+
+    await screen.findByLabelText("Assigned agent");
+    expect(screen.queryByLabelText("Agent mode")).toBeNull();
   });
 });

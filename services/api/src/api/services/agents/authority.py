@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import enum
 from dataclasses import dataclass
+from typing import Any
 
 from api.models.agent import Agent
 from api.services.agents.kind_gate import kind_gate
@@ -33,6 +34,24 @@ class AuthorityVerdict:
 
 
 _ROLE_PROVIDED = frozenset({Category.DELEGATE, Category.ESCALATE, Category.PLAN})
+
+
+class Posture:
+    """Per-run postures, layered over the org's ``agent_autonomy``.
+
+    A work order carries one of these (see ``WORK_ORDER_MODES``); anything without
+    a work order runs on the org posture as before.
+    """
+
+    PLAN_ONLY = "plan"  # think it through; change nothing
+    AUTOMATIC = "automatic"  # approvals granted without asking
+
+
+# What a plan-only run may still do. It keeps DELEGATE deliberately: a coordinator
+# whose entire job is delegating produces a thin plan alone, and a delegated child
+# inherits the work order — and therefore this posture — so nothing it reaches can
+# act either.
+_PLAN_ONLY_CATEGORIES = frozenset({Category.READ, Category.PLAN, Category.DELEGATE, Category.ESCALATE})
 
 
 def _granted(allowed: set[str], name: str) -> bool:
@@ -78,8 +97,20 @@ def decide(agent: Agent, spec: ToolSpec, *, autonomy: str = "high_touch") -> Aut
     denial = kind_gate(agent.kind, spec)
     if denial:
         return AuthorityVerdict(Decision.DENY, denial)
+    if autonomy == Posture.PLAN_ONLY and (spec.category not in _PLAN_ONLY_CATEGORIES or spec.side_effecting):
+        # DENY, not ASK: plan mode is the answer to "think about this without doing
+        # it", so offering the action for approval would put the decision back on
+        # the person who just said not yet.
+        return AuthorityVerdict(
+            Decision.DENY,
+            f"plan mode: this work order is for planning only, so '{spec.name}' is unavailable",
+        )
     if not _is_available(agent, spec):
         return AuthorityVerdict(Decision.DENY, f"'{spec.name}' is not granted to this agent")
+    if autonomy == Posture.AUTOMATIC:
+        # Grants and the kind-gate still hold — this only removes the human from
+        # the loop on tools the agent was already allowed to use.
+        return AuthorityVerdict(Decision.ALLOW)
     approval = set((agent.grants or {}).get("approval_required") or [])
     if spec.name in approval:
         return AuthorityVerdict(Decision.ASK, "requires human approval")
@@ -88,10 +119,26 @@ def decide(agent: Agent, spec: ToolSpec, *, autonomy: str = "high_touch") -> Aut
     return AuthorityVerdict(Decision.ALLOW)
 
 
-def available_tools(agent: Agent, specs: list[ToolSpec]) -> list[ToolSpec]:
+def available_tools(agent: Agent, specs: list[ToolSpec], *, autonomy: str = "high_touch") -> list[ToolSpec]:
     """Subset of ``specs`` the agent may see (ALLOW or ASK — not DENY).
 
     ASK tools are offered to the model; the gate fires at call time so the model
-    can still *propose* an action a human then approves.
+    can still *propose* an action a human then approves. ``autonomy`` matters here
+    as well as at call time: a plan-only run offered tools it will be denied burns
+    turns proposing actions that can never happen.
     """
-    return [s for s in specs if decide(agent, s).decision is not Decision.DENY]
+    return [s for s in specs if decide(agent, s, autonomy=autonomy).decision is not Decision.DENY]
+
+
+def posture_for(work_order: Any, org_posture: str) -> str:
+    """The posture a run executes under: the work order's mode wins where it has one.
+
+    ``manual`` defers to the org so an org that has moved off ``high_touch`` keeps
+    that setting; the other two modes are explicit per-job choices and override it.
+    """
+    mode = getattr(work_order, "mode", None) if work_order is not None else None
+    if mode == "plan":
+        return Posture.PLAN_ONLY
+    if mode == "automatic":
+        return Posture.AUTOMATIC
+    return org_posture
