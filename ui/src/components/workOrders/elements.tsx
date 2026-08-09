@@ -16,12 +16,16 @@ import {
   listWorkOrders,
   setWorkOrderStatus,
   type WorkOrder,
+  type WorkOrderDetail,
   type WorkOrderEntry,
   type WorkOrderMap,
   type WorkOrderStatus,
 } from "@/lib/api/workOrders";
 
+import { cn } from "@/lib/utils";
+
 import { AgentSwimLanes } from "./AgentSwimLanes";
+import { readableStep } from "./runSteps";
 
 /** Re-fetch on a cadence, but only while the tab is visible. A dashboard left
  *  open overnight would otherwise poll thousands of times for a screen nobody is
@@ -116,19 +120,36 @@ function RunSteps({ runId, onClose }: { runId: string; onClose: () => void }) {
         ) : steps.length === 0 ? (
           <p className="text-xs text-muted-foreground">No recorded steps.</p>
         ) : (
-          steps.map((step) => (
-            <div key={step.id} className="rounded border bg-card p-2">
-              <div className="flex items-center gap-2 text-xs font-medium">
-                <span className="text-muted-foreground">{step.kind}</span>
-                {step.name ? <span>{step.name}</span> : null}
+          steps.map((step) => {
+            const readable = readableStep(step);
+            return (
+              <div
+                key={step.id}
+                className={cn("rounded border bg-card p-2", readable.failed && "border-destructive/50")}
+              >
+                <div className="text-xs font-medium">{readable.title}</div>
+                {readable.facts.length > 0 ? (
+                  <dl className="mt-1 space-y-0.5">
+                    {readable.facts.map((fact) => (
+                      <div key={fact.label} className="flex gap-2 text-xs">
+                        <dt className="shrink-0 text-muted-foreground">{fact.label}</dt>
+                        <dd className="min-w-0 flex-1 break-words">{fact.value}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                ) : null}
+                {readable.body ? (
+                  // The prose the model wrote, as Markdown — it is written to be
+                  // read, and a JSON dump of it is not.
+                  <Markdown
+                    content={readable.body}
+                    stripImages
+                    className={cn("mt-1 text-xs", readable.failed && "text-destructive")}
+                  />
+                ) : null}
               </div>
-              {step.content ? (
-                <pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap break-words text-[10px] text-muted-foreground">
-                  {JSON.stringify(step.content, null, 2)}
-                </pre>
-              ) : null}
-            </div>
-          ))
+            );
+          })
         )}
       </div>
     </div>
@@ -336,6 +357,78 @@ export function ApprovalQueueNode({
             </div>
           </div>
         ))
+      )}
+    </div>
+  );
+}
+
+// ------------------------------------------------------------------ //
+// work_order_tasks
+// ------------------------------------------------------------------ //
+
+interface TasksProps {
+  workOrderId: string | null;
+  title?: string | null;
+  showProgress?: boolean;
+  pollMs?: number | null;
+}
+
+/** Task status → dot colour. `blocked` is red rather than amber: a blocked task
+ *  needs someone, where a pending one is merely not started. */
+const TASK_TONE: Record<string, string> = {
+  done: "bg-emerald-500",
+  in_progress: "bg-blue-500",
+  blocked: "bg-destructive",
+  carried: "bg-muted-foreground",
+  pending: "bg-slate-400",
+};
+
+export function WorkOrderTasksNode({ workOrderId, title, showProgress = true, pollMs }: TasksProps) {
+  const [wo, setWo] = useState<WorkOrderDetail | null>(null);
+
+  const load = useCallback(() => {
+    if (!workOrderId) return;
+    void getWorkOrder(workOrderId)
+      .then(setWo)
+      .catch(() => setWo(null));
+  }, [workOrderId]);
+
+  useEffect(load, [load]);
+  usePoll(load, pollMs);
+
+  if (!workOrderId) return <p className="text-sm text-muted-foreground">No work order selected.</p>;
+  if (!wo) return null;
+
+  // The server's figure, not a recount: two places computing "percent complete"
+  // disagree the moment the rule (carried tasks are excluded) changes.
+  const pct = Math.round((wo.progress ?? 0) * 100);
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        {title ? <h3 className="text-sm font-medium">{title}</h3> : <span />}
+        {showProgress ? <span className="text-xs text-muted-foreground">{pct}% complete</span> : null}
+      </div>
+      {showProgress ? (
+        <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+          <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${pct}%` }} />
+        </div>
+      ) : null}
+      {wo.tasks.length === 0 ? (
+        <p className="text-sm text-muted-foreground">No tasks yet.</p>
+      ) : (
+        <ul className="space-y-1">
+          {wo.tasks.map((t) => (
+            <li key={t.id} className="flex items-center gap-2 text-sm">
+              <span className={cn("h-2 w-2 shrink-0 rounded-full", TASK_TONE[t.status] ?? "bg-muted")} />
+              <span className="shrink-0 text-xs text-muted-foreground">{t.key}</span>
+              <span className={cn("min-w-0 flex-1 truncate", t.status === "done" && "line-through opacity-60")}>
+                {t.title}
+              </span>
+              <span className="shrink-0 text-[10px] text-muted-foreground">{t.status}</span>
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   );

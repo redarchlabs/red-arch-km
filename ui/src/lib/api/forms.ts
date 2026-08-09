@@ -435,6 +435,16 @@ export interface WorkOrderActionsElement extends ElementBase {
   width?: FieldWidth | null;
 }
 
+/** The order's checklist and percent complete (the server's figure). */
+export interface WorkOrderTasksElement extends ElementBase {
+  type: "work_order_tasks";
+  work_order_id?: string | null;
+  title?: string | null;
+  show_progress?: boolean;
+  poll_ms?: number | null;
+  width?: FieldWidth | null;
+}
+
 export type SubmitAction = { kind: "submit" };
 export type RunWorkflowAction = {
   kind: "run_workflow";
@@ -645,6 +655,7 @@ export type FormElement =
   | ApprovalQueueElement
   | WorkOrderListElement
   | WorkOrderActionsElement
+  | WorkOrderTasksElement
   | ButtonElement
   | PuzzlePadElement
   | FormRefElement

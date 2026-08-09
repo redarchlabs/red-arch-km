@@ -36,6 +36,7 @@ import {
   ApprovalQueueNode,
   WorkOrderActionsNode,
   WorkOrderListNode,
+  WorkOrderTasksNode,
 } from "@/components/workOrders/elements";
 import { ReportChart } from "@/components/reports/ReportChart";
 import { Dialog, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -2259,6 +2260,19 @@ export function FormRenderer({
                 workOrderId={el.work_order_id ?? render.record_id}
                 title={el.title}
                 hideWhenEmpty={el.hide_when_empty}
+                pollMs={el.poll_ms}
+              />
+            </ElementErrorBoundary>
+          </div>
+        );
+      case "work_order_tasks":
+        return (
+          <div className={spanClass(el.width)}>
+            <ElementErrorBoundary>
+              <WorkOrderTasksNode
+                workOrderId={el.work_order_id ?? render.record_id}
+                title={el.title}
+                showProgress={el.show_progress}
                 pollMs={el.poll_ms}
               />
             </ElementErrorBoundary>

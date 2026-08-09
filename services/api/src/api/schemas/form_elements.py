@@ -1035,6 +1035,22 @@ class AgentDiaryElement(_Element):
     width: FieldWidth | None = None
 
 
+class WorkOrderTasksElement(_Element):
+    """The order's checklist and how far through it is.
+
+    Progress is the server's own figure (done / total, excluding carried tasks),
+    not a count taken on the client — two places computing "percent complete"
+    disagree the moment the rule changes, and the number is what people read to
+    decide whether to chase it."""
+
+    type: Literal["work_order_tasks"] = "work_order_tasks"
+    work_order_id: WorkOrderBinding = None
+    title: str | None = "Tasks"
+    show_progress: bool = True
+    poll_ms: int | None = None
+    width: FieldWidth | None = None
+
+
 class WorkOrderListElement(_Element):
     """The orders themselves, as a list that links into a detail view.
 
@@ -1110,6 +1126,7 @@ FormElement = Annotated[
     | AgentTimelineElement
     | AgentDiaryElement
     | WorkOrderListElement
+    | WorkOrderTasksElement
     | WorkOrderActionsElement
     | ApprovalQueueElement
     | ButtonElement

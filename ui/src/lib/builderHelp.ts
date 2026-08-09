@@ -447,6 +447,20 @@ stall is visible.
   noise on a dashboard; turn it off for a page about one order.
 `,
   ),
+  work_order_tasks: topic(
+    "Work order tasks",
+    `
+The order's **checklist** and how far through it is.
+
+Percent complete is the **server's** figure — done over total, excluding tasks
+carried to another order — rather than a count taken here. Two places computing
+progress disagree the moment that rule changes, and this number is what people
+read to decide whether to chase an order.
+
+- **Show progress** — the bar and percentage. Turn it off for a bare checklist.
+- **Poll (ms)** — refresh while agents are working through it.
+`,
+  ),
   work_order_actions: topic(
     "Work order actions",
     `
