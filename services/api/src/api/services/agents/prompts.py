@@ -39,13 +39,15 @@ _WORK_ORDER_GUIDANCE = (
 # refused spends turns proposing work, and often reports the refusal as a failure
 # rather than delivering the plan it was actually asked for.
 _PLAN_ONLY_GUIDANCE = (
-    "This work order is in PLAN MODE. You are being asked to think it through, not "
-    "to carry it out. You can read, research, ask questions and delegate planning to "
-    "your reports — every write, execution and outbound action is unavailable, and "
-    "your reports are under the same restriction.\n"
-    "Deliver the plan itself: the task list, what each step involves, what you would "
-    "need, and anything you are unsure of. Do not treat the missing tools as a "
-    "failure or ask for them — producing the plan IS the job here."
+    "This work order is in PLAN MODE. Work it out before you work on it. You can "
+    "read, research, ask questions and delegate planning to your reports; every "
+    "write, execution and outbound action is unavailable for now, and your reports "
+    "are under the same restriction.\n"
+    "Finish by calling submit_plan. That puts your plan in front of a person, and "
+    "their approval is what starts the actual work — so this is not a dead end and "
+    "the unavailable tools are not a failure to report. Write the task list with "
+    "set_work_order_tasks first: the summary explains the plan, the task list is the "
+    "plan. If they reject it, revise and submit again."
 )
 
 

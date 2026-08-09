@@ -461,7 +461,7 @@ cmd_env() {
   echo
   echo "  host processes (uvicorn):"
   echo "    OPENAI_BASE_URL=http://127.0.0.1:$CHAT_PORT/v1"
-  echo "    OPENAI_MODEL_ROUTES=$CHAT_MODEL_NAME=http://127.0.0.1:$CHAT_PORT/v1, $FAST_MODEL_NAME=http://127.0.0.1:$FAST_PORT/v1, gpt-4.1-mini=https://api.openai.com/v1"
+  echo "    OPENAI_MODEL_ROUTES=$CHAT_MODEL_NAME=http://127.0.0.1:$CHAT_PORT/v1, $FAST_MODEL_NAME=http://127.0.0.1:$FAST_PORT/v1, gpt-5-mini=https://api.openai.com/v1"
   echo
   dim "  A route wins over OPENAI_BASE_URL, so adding a hosted id to that list is how one"
   dim "  org runs on OpenAI while the rest stay on this box — the model name a workflow's"

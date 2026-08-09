@@ -38,6 +38,7 @@ from api.schemas.custom_entity import (
     EntityFieldCreate,
     EntityRelationshipCreate,
 )
+from api.services.agents.llm.reasoning import reasoning_kwargs
 from api.services.brain_client import BrainAPIClient
 from api.services.course_generation import CourseGenerationService
 from api.services.entity_service import EntityError, EntityService
@@ -1727,6 +1728,7 @@ class AgentService:
                 response = await self._client.chat.completions.create(
                     model=self._model,
                     messages=messages,
+                    **reasoning_kwargs(self._model),
                     tools=TOOLS,
                     tool_choice="auto",
                 )
@@ -1779,6 +1781,7 @@ class AgentService:
                 wrap_up = await self._client.chat.completions.create(
                     model=self._model,
                     messages=messages,
+                    **reasoning_kwargs(self._model),
                     tools=TOOLS,
                     tool_choice="none",
                 )

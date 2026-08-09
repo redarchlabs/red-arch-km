@@ -222,6 +222,12 @@ class AgentRunExecutor:
             await load_agent_tools(session, org_id, agent, self._settings, actor_user_id=run.actor_user_id),
             autonomy=autonomy,
         )
+        if autonomy == Posture.PLAN_ONLY:
+            # The exit from plan mode, and only offered there: submitting a plan on
+            # an order already being worked would mean nothing.
+            from api.services.agents.tools.plan_mode import SUBMIT_PLAN
+
+            specs = [*specs, SUBMIT_PLAN]
         if linkage is not None:
             # Workflow mode: the completion contract comes in; un-gated egress
             # goes out (web_research's query string leaves the org without an
@@ -287,6 +293,7 @@ class AgentRunExecutor:
                 max_iterations=self._settings.agent_max_iterations,
                 temperature=(agent.params or {}).get("temperature"),
                 max_tokens=(agent.params or {}).get("max_tokens"),
+                reasoning_effort=(agent.params or {}).get("reasoning_effort"),
                 approval_strategy=self._make_strategy(session, org_id, run, approved_names),
                 resume_tool_calls=resume_calls,
                 resume_answers=answers,

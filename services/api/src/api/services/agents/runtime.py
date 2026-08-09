@@ -139,6 +139,7 @@ async def run_agent_loop(
     max_iterations: int,
     temperature: float | None = None,
     max_tokens: int | None = None,
+    reasoning_effort: str | None = None,
     approval_strategy: ApprovalStrategy = _approve_inline,
     resume_tool_calls: list[ToolCallRequest] | None = None,
     resume_answers: dict[str, dict[str, Any]] | None = None,
@@ -173,6 +174,7 @@ async def run_agent_loop(
             max_iterations=max_iterations,
             temperature=temperature,
             max_tokens=max_tokens,
+            reasoning_effort=reasoning_effort,
             approval_strategy=approval_strategy,
             pending=pending,
             answers=answers,
@@ -202,6 +204,7 @@ async def _drive_loop(
     max_iterations,
     temperature,
     max_tokens,
+    reasoning_effort,
     approval_strategy,
     pending,
     answers,
@@ -218,7 +221,9 @@ async def _drive_loop(
             tool_calls = pending
             pending = None
         else:
-            completion = await _stream_turn(provider, model, messages, schemas, temperature, max_tokens, emit)
+            completion = await _stream_turn(
+                provider, model, messages, schemas, temperature, max_tokens, reasoning_effort, emit
+            )
             if completion.usage:
                 result.prompt_tokens += completion.usage.prompt_tokens
                 result.completion_tokens += completion.usage.completion_tokens
@@ -279,7 +284,9 @@ async def _drive_loop(
     return result
 
 
-async def _stream_turn(provider, model, messages, schemas, temperature, max_tokens, emit) -> Completion:
+async def _stream_turn(
+    provider, model, messages, schemas, temperature, max_tokens, reasoning_effort, emit
+) -> Completion:
     completion: Completion | None = None
     try:
         async for event in provider.stream(
@@ -288,6 +295,7 @@ async def _stream_turn(provider, model, messages, schemas, temperature, max_toke
             tools=schemas,
             temperature=temperature,
             max_tokens=max_tokens,
+            reasoning_effort=reasoning_effort,
         ):
             if isinstance(event, TextDelta):
                 await emit({"type": "delta", "content": event.text})

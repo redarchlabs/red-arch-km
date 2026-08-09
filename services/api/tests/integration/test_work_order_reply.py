@@ -31,7 +31,7 @@ async def _seed(admin_session: AsyncSession) -> tuple[Org, Agent, UserProfile]:
     org = Org(name=f"Reply-{tag}", permission_number=1)
     admin_session.add(org)
     await admin_session.flush()
-    agent = Agent(name="chief", provider="openai", model="gpt-4.1-mini", kind="coordinator", org_id=org.id)
+    agent = Agent(name="chief", provider="openai", model="gpt-5-mini", kind="coordinator", org_id=org.id)
     profile = UserProfile(auth_subject=f"sub-{tag}", username=f"u-{tag}", email=f"u-{tag}@x.com")
     admin_session.add_all([agent, profile])
     await admin_session.commit()

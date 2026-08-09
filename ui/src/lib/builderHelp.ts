@@ -499,9 +499,11 @@ assigned to a disabled agent is refused, and the message names the agent.
 **Mode** decides how much rope the agent gets on *this* order:
 
 - **Plan only** — it reads, researches, delegates thinking to its reports and
-  writes the task list, but every write, execution and outbound action is
-  refused. Use it to see the plan before anything happens. Reports working the
-  order are held to the same limit.
+  writes the task list, but every write, execution and outbound action is held
+  back. It finishes by submitting the plan for your approval, and approving it is
+  what starts the work: the order moves to Ask me first and a fresh run carries
+  the plan out. Reject it and the agent revises. Reports are held to the same
+  limit while planning.
 - **Ask me first** — the default, and today's behaviour: it works the order but
   pauses for your approval on outbound actions.
 - **Automatic** — it approves its own actions. Nothing pauses and nobody is

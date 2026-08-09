@@ -12,6 +12,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from api.services.agents.llm.reasoning import reasoning_kwargs
 from api.services.speech_chunks import SentenceChunker
 
 logger = logging.getLogger(__name__)
@@ -48,24 +49,6 @@ _DEFAULT_INSTRUCTION = (
     "reply, warmly and in one sentence, that you are not familiar with that topic "
     '(e.g. "I\'m not familiar with jokes" or "I don\'t know about that").'
 )
-
-
-def _reasoning_effort_for(model: str) -> str | None:
-    """Cheapest reasoning tier for ``model``, or None if it rejects the parameter.
-
-    Reasoning models (gpt-5 family, o-series) default to medium effort and can spend
-    20s+ of hidden reasoning tokens on a one-sentence condensation, so pin the lowest
-    tier. The o-series has no "minimal"; gpt-5-chat-* and non-reasoning models reject
-    ``reasoning_effort`` outright.
-    """
-    name = model.lower()
-    if name.startswith("gpt-5-chat"):
-        return None
-    if name.startswith("gpt-5"):
-        return "minimal"
-    if name.startswith(("o1", "o3", "o4")):
-        return "low"
-    return None
 
 
 async def _emit(sink: DeltaSink, delta: str) -> None:
@@ -135,9 +118,10 @@ async def summarize_for_speech(
         "model": model,
         "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
     }
-    effort = _reasoning_effort_for(model)
-    if effort is not None:
-        kwargs["reasoning_effort"] = effort
+    # A one-sentence condensation is the one place the cheapest tier is right: a
+    # reasoning model can otherwise spend 20s+ of hidden tokens on it, and this call
+    # sits in the robot's spoken-latency path.
+    kwargs.update(reasoning_kwargs(model, "minimal"))
 
     if on_delta is None and on_chunk is None:
         response = await client.chat.completions.create(**kwargs)

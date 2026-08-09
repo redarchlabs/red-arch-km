@@ -47,7 +47,7 @@ def _operator(**grants) -> Agent:
         name="op",
         kind="operator",
         provider="openai",
-        model="gpt-4.1-mini",
+        model="gpt-5-mini",
         grants={"tools": ["update_record", "run_workflow"], "records_write": True, **grants},
     )
 
@@ -67,11 +67,14 @@ class TestPlanMode:
             assert verdict.decision is Decision.DENY
             assert "plan mode" in verdict.reason
 
-    def test_denied_rather_than_offered_for_approval(self) -> None:
-        """ASK would put the decision back on the person who just said 'not yet'."""
+    def test_the_refusal_points_at_the_way_out(self) -> None:
+        """A bare refusal is a dead end, and an agent that only gets refused reports
+        that as a failure instead of delivering the plan it was asked for."""
         agent = _operator()
 
-        assert decide(agent, WRITE, autonomy=Posture.PLAN_ONLY).decision is not Decision.ASK
+        verdict = decide(agent, WRITE, autonomy=Posture.PLAN_ONLY)
+        assert verdict.decision is Decision.DENY
+        assert "submit_plan" in verdict.reason
 
     def test_the_model_is_never_shown_a_tool_it_cannot_use(self) -> None:
         # Offering them burns turns proposing actions that can never happen.
