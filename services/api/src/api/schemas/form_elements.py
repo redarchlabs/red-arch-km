@@ -1115,6 +1115,9 @@ class WorkOrderActionsElement(_Element):
     # Show the order's title and current status above the buttons. Off for a page
     # that already has a heading of its own.
     show_summary: bool = True
+    # The plan/manual/automatic picker. Per job rather than per org: the same
+    # roster is worth planning with on one order and turning loose on another.
+    show_mode: bool = True
     width: FieldWidth | None = None
 
 

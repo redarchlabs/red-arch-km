@@ -34,7 +34,27 @@ _WORK_ORDER_GUIDANCE = (
 )
 
 
-def build_system_prompt(agent: Agent, *, work_order_title: str | None = None) -> str:
+# Plan mode is enforced in the authority gate — these tools are not even offered.
+# Saying so up front is still worth it: an agent that discovers the limit by being
+# refused spends turns proposing work, and often reports the refusal as a failure
+# rather than delivering the plan it was actually asked for.
+_PLAN_ONLY_GUIDANCE = (
+    "This work order is in PLAN MODE. You are being asked to think it through, not "
+    "to carry it out. You can read, research, ask questions and delegate planning to "
+    "your reports — every write, execution and outbound action is unavailable, and "
+    "your reports are under the same restriction.\n"
+    "Deliver the plan itself: the task list, what each step involves, what you would "
+    "need, and anything you are unsure of. Do not treat the missing tools as a "
+    "failure or ask for them — producing the plan IS the job here."
+)
+
+
+def build_system_prompt(
+    agent: Agent,
+    *,
+    work_order_title: str | None = None,
+    plan_only: bool = False,
+) -> str:
     """Compose the system prompt from the agent's identity, kind, and persona."""
     name = agent.display_name or agent.name
     parts = [
@@ -45,6 +65,8 @@ def build_system_prompt(agent: Agent, *, work_order_title: str | None = None) ->
         parts.append(agent.persona.strip())
     if work_order_title:
         parts.append(_WORK_ORDER_GUIDANCE.format(title=work_order_title))
+    if plan_only:
+        parts.append(_PLAN_ONLY_GUIDANCE)
     parts.append(
         "Use the available tools to accomplish the request. Only take actions you are "
         "permitted to take; if a tool is denied, explain what you would need and stop."

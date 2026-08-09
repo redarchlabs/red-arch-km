@@ -23,6 +23,10 @@ from api.models.base import Base, TimestampMixin, UUIDMixin
 WORK_ORDER_STATUSES = ("draft", "awaiting_approval", "approved", "in_progress", "done", "cancelled")
 # pending | in_progress | blocked | done | carried (handed to a successor WO)
 WORK_ORDER_TASK_STATUSES = ("pending", "in_progress", "blocked", "done", "carried")
+# How much rope the agent gets on this order. plan = think, never act; manual =
+# the org posture decides what needs approval; automatic = approvals are granted
+# without asking. See migration 049.
+WORK_ORDER_MODES = ("plan", "manual", "automatic")
 
 
 class WorkOrder(Base, UUIDMixin, TimestampMixin):
@@ -40,6 +44,7 @@ class WorkOrder(Base, UUIDMixin, TimestampMixin):
     slug: Mapped[str] = mapped_column(String(160))
     title: Mapped[str] = mapped_column(String(300))
     status: Mapped[str] = mapped_column(String(20), default="draft")
+    mode: Mapped[str] = mapped_column(String(10), default="manual", server_default="manual")
     body: Mapped[str | None] = mapped_column(Text, nullable=True)
     priority: Mapped[str] = mapped_column(String(10), default="normal")  # low|normal|high|urgent
 

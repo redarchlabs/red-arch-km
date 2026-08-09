@@ -25,7 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.models.agent import Agent
 from api.models.agent_run import AgentApproval, AgentQuestion, AgentRun
-from api.models.work_order import WorkOrder, WorkOrderEntry, WorkOrderTask
+from api.models.work_order import WORK_ORDER_MODES, WorkOrder, WorkOrderEntry, WorkOrderTask
 from api.repositories.agent_run import AgentRunRepository
 from api.repositories.work_order import WorkOrderRepository
 from api.schemas.work_order import MapEvent, MapLane, WorkOrderMap
@@ -201,6 +201,7 @@ class WorkOrderService:
         title: str,
         body: str | None = None,
         priority: str = "normal",
+        mode: str = "manual",
         assigned_agent_id: uuid.UUID | None = None,
         created_by_profile_id: uuid.UUID | None = None,
     ) -> WorkOrder:
@@ -209,6 +210,7 @@ class WorkOrderService:
             title=title,
             body=body,
             priority=priority,
+            mode=mode,
             assigned_agent_id=assigned_agent_id,
             created_by_profile_id=created_by_profile_id,
             status="draft",
@@ -322,6 +324,30 @@ class WorkOrderService:
         if agent_id is not None and wo.status == _DISPATCH_STATUS:
             await self._dispatch(wo, actor_profile_id=actor_profile_id)
             await self._repo.flush()
+        return wo
+
+    async def set_mode(self, wo_id: uuid.UUID, mode: str) -> WorkOrder:
+        """Change how much rope the agent gets: plan | manual | automatic.
+
+        Recorded in the diary rather than only on the row. ``automatic`` means
+        outbound actions stop asking anyone, and "who turned that off, and when"
+        has to be answerable from the order itself — the diary is where anyone
+        reconstructing what happened actually looks.
+        """
+        if mode not in WORK_ORDER_MODES:
+            raise WorkOrderValidationError(f"mode must be one of: {', '.join(WORK_ORDER_MODES)}")
+        wo = await self.get_work_order(wo_id)
+        if wo.mode == mode:
+            return wo
+        previous, wo.mode = wo.mode, mode
+        await self._repo.add_entry(
+            WorkOrderEntry(
+                work_order_id=wo.id,
+                role=_HUMAN_LANE,
+                text=f"Mode changed from {previous} to {mode}.",
+            )
+        )
+        await self._repo.flush()
         return wo
 
     async def reply(

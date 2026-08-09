@@ -10,6 +10,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 WorkOrderStatus = Literal["draft", "awaiting_approval", "approved", "in_progress", "done", "cancelled"]
 Priority = Literal["low", "normal", "high", "urgent"]
+# How much rope the agent gets on this order — see migration 049.
+WorkOrderMode = Literal["plan", "manual", "automatic"]
 
 
 class WorkOrderCreate(BaseModel):
@@ -18,6 +20,7 @@ class WorkOrderCreate(BaseModel):
     title: str = Field(min_length=1, max_length=300)
     body: str | None = None
     priority: Priority = "normal"
+    mode: WorkOrderMode = "manual"
     assigned_agent_id: uuid.UUID | None = None
 
 
@@ -31,6 +34,12 @@ class WorkOrderAssign(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     assigned_agent_id: uuid.UUID | None = None
+
+
+class WorkOrderModeUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: WorkOrderMode
 
 
 class WorkOrderReply(BaseModel):
@@ -88,6 +97,7 @@ class WorkOrderRead(BaseModel):
     status: str
     body: str | None
     priority: str
+    mode: str
     assigned_agent_id: uuid.UUID | None
     created_by_profile_id: uuid.UUID | None
     created_at: datetime

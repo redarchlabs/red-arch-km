@@ -2303,6 +2303,7 @@ export function FormRenderer({
                 title={el.title}
                 showSummary={el.show_summary}
                 showAssignee={el.show_assignee}
+                showMode={el.show_mode}
               />
             </ElementErrorBoundary>
           </div>

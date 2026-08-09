@@ -130,6 +130,10 @@ class TestInteractionMap:
                 answer="These things.",
                 audience="agent",
                 status="answered",
+                # Both ends pinned. Leaving created_at to default put a real
+                # wall-clock time against a hardcoded answered_at, so this test
+                # passed only while the clock was behind T0.
+                created_at=T0,
                 answered_at=T0 + timedelta(minutes=2),
                 work_order_id=wo.id,
             )
