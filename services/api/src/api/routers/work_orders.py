@@ -17,6 +17,8 @@ from api.auth.dependencies import OrgContext, require_org_access, require_org_ad
 from api.dependencies import get_tenant_db
 from api.models.work_order import WorkOrder
 from api.schemas.work_order import (
+    ArtifactAttach,
+    ArtifactRead,
     EntryPageRead,
     EntryRead,
     TaskRead,
@@ -216,6 +218,59 @@ async def reply(
     except WorkOrderError as exc:
         _raise_http(exc)
     return _to_read(wo)
+
+
+@router.get("/{wo_id}/artifacts", response_model=list[ArtifactRead])
+async def list_artifacts(
+    wo_id: uuid.UUID,
+    ctx: Annotated[OrgContext, Depends(require_org_access)],
+    session: Annotated[AsyncSession, Depends(get_tenant_db)],
+) -> list[ArtifactRead]:
+    """Documents on this order — what people attached, and what agents produced."""
+    try:
+        rows = await WorkOrderService(session, ctx.org_id).list_artifacts(wo_id)
+    except WorkOrderError as exc:
+        _raise_http(exc)
+    return [
+        ArtifactRead.model_validate(artifact).model_copy(
+            update={"title": document.title if document else None, "missing": document is None}
+        )
+        for artifact, document in rows
+    ]
+
+
+@router.post("/{wo_id}/artifacts", response_model=list[ArtifactRead], status_code=status.HTTP_201_CREATED)
+async def attach_artifacts(
+    wo_id: uuid.UUID,
+    body: ArtifactAttach,
+    # Open to members: attaching a spec to an order is contributing to it, the same
+    # act as filing the order in the first place.
+    ctx: Annotated[OrgContext, Depends(require_org_access)],
+    session: Annotated[AsyncSession, Depends(get_tenant_db)],
+) -> list[ArtifactRead]:
+    svc = WorkOrderService(session, ctx.org_id)
+    try:
+        await svc.get_work_order(wo_id)
+        attached = await svc.attach_documents(
+            wo_id, body.document_ids, kind=body.kind, actor_profile_id=ctx.user.profile_id
+        )
+    except WorkOrderError as exc:
+        _raise_http(exc)
+    return [ArtifactRead.model_validate(a) for a in attached]
+
+
+@router.delete("/{wo_id}/artifacts/{artifact_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def detach_artifact(
+    wo_id: uuid.UUID,
+    artifact_id: uuid.UUID,
+    ctx: Annotated[OrgContext, Depends(require_org_admin)],
+    session: Annotated[AsyncSession, Depends(get_tenant_db)],
+) -> None:
+    """Unlink a document. The document itself is untouched."""
+    try:
+        await WorkOrderService(session, ctx.org_id).detach_artifact(wo_id, artifact_id)
+    except WorkOrderError as exc:
+        _raise_http(exc)
 
 
 @router.put("/{wo_id}/tasks", response_model=list[TaskRead])

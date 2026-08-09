@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from api.services.agents.tools.artifacts import artifact_tool_specs
 from api.services.agents.tools.batch_generate import BATCH_GENERATE, CHECK_BATCH
 from api.services.agents.tools.claude_code import RUN_CLAUDE_CODE
 from api.services.agents.tools.documents import CREATE_DOCUMENT
@@ -54,6 +55,7 @@ def base_tool_specs(settings: Settings | None = None) -> list[ToolSpec]:
         BATCH_GENERATE,
         CHECK_BATCH,
         *work_order_task_specs(),
+        *artifact_tool_specs(),
     ]
     # Powerful local-exec tool: registered only when explicitly enabled, and even then
     # only ever *offered* to an agent that also holds the run_claude_code grant.

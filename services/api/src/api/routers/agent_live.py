@@ -83,6 +83,7 @@ async def _record_steer(
     profile_id: uuid.UUID | None,
     run_id: uuid.UUID,
     text: str,
+    document_ids: list[uuid.UUID] | None = None,
 ) -> dict[str, Any]:
     """Queue a steer for ``run_id``. Opens a session, writes, releases.
 
@@ -102,7 +103,18 @@ async def _record_steer(
                 "run_id": str(run_id),
                 "reason": f"that run is already {run.status}",
             }
-        await AgentRunMessageRepository(session, org_id).add(run_id, text, sent_by_profile_id=profile_id)
+        # Attachments ride on the work order, not the steer row: the document is a
+        # durable part of the order's record, and the message only has to name it.
+        body = text
+        if document_ids and run.work_order_id is not None:
+            from api.services.agents.work_order_service import WorkOrderService
+
+            attached = await WorkOrderService(session, org_id).attach_documents(
+                run.work_order_id, document_ids, kind="input", actor_profile_id=profile_id
+            )
+            names = "\n".join(f"[attached: {a.filename}]" for a in attached)
+            body = "\n".join(part for part in (text, names) if part)
+        await AgentRunMessageRepository(session, org_id).add(run_id, body, sent_by_profile_id=profile_id)
         await session.commit()
     return {"type": "steer_queued", "run_id": str(run_id), "when": "next turn"}
 
@@ -181,7 +193,8 @@ async def live_socket(
                 continue
             text = str(frame.get("text") or "").strip()[:MAX_STEER_CHARS]
             target = str(frame.get("run_id") or run_id)
-            if not text or not activity_scope_is_valid(target):
+            documents = _document_ids(frame)
+            if (not text and not documents) or not activity_scope_is_valid(target):
                 await websocket.send_text(
                     json.dumps({"type": "steer_rejected", "reason": "a run_id and text are required"})
                 )
@@ -204,6 +217,20 @@ def activity_scope_is_valid(value: str) -> bool:
     except (ValueError, AttributeError, TypeError):
         return False
     return True
+
+
+def _document_ids(frame: dict[str, Any]) -> list[uuid.UUID]:
+    """Attachment ids off a steer frame, ignoring anything malformed.
+
+    A bad id must not lose the message someone typed alongside it.
+    """
+    out: list[uuid.UUID] = []
+    for value in frame.get("document_ids") or []:
+        try:
+            out.append(uuid.UUID(str(value)))
+        except (ValueError, TypeError):
+            continue
+    return out
 
 
 def _parse(raw: str) -> dict[str, Any] | None:
