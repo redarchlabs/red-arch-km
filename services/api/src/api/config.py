@@ -109,6 +109,15 @@ class Settings(BaseSettings):
     # worker: requeued once, then finalized as an error.
     agent_run_lease_ttl_seconds: int = Field(default=600, validation_alias="AGENT_RUN_LEASE_TTL_SECONDS")
     agent_supervisor_idle_seconds: int = Field(default=1200, validation_alias="AGENT_SUPERVISOR_IDLE_SECONDS")
+    # How long the interactive console keeps a stream open waiting for a person to
+    # answer an agent's question. Past this the run is handed to the background
+    # sweep and the question waits in the inbox — nothing is lost either way, so
+    # this trades "answer it right here" against holding an HTTP connection for a
+    # tab someone walked away from.
+    agent_console_inline_wait_seconds: int = Field(default=300, validation_alias="AGENT_CONSOLE_INLINE_WAIT_SECONDS")
+    # How many times one console session will resume inline. An agent that asks
+    # question after question must not hold the connection indefinitely.
+    agent_console_inline_resumes_max: int = Field(default=8, validation_alias="AGENT_CONSOLE_INLINE_RESUMES_MAX")
     # Default recipient for bubbled escalations/approvals when no org admin email
     # resolves; empty means fall back to the org admins only.
     agent_notify_email: str = Field(default="", validation_alias="AGENT_NOTIFY_EMAIL")

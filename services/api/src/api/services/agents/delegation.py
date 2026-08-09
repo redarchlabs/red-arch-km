@@ -40,12 +40,48 @@ class DelegationError(Exception):
     pass
 
 
+# How many names a routing error lists before it truncates. Nothing in the system
+# prompt or the tool schema tells an agent who its colleagues are, so these errors
+# are the only place the roster is ever named — but a large org would otherwise
+# push the model's actual work out of the window with a wall of names.
+HINT_NAME_CAP = 20
+
+
 async def resolve_agent(session: AsyncSession, org_id: uuid.UUID, ref: str) -> Agent | None:
     repo = AgentRepository(session, org_id)
     try:
         return await repo.get(uuid.UUID(str(ref)))
     except (ValueError, TypeError):
         return await repo.get_by_name(str(ref))
+
+
+def _name_list(agents: list[Agent]) -> str:
+    names = [a.name for a in agents]
+    if len(names) <= HINT_NAME_CAP:
+        return ", ".join(names)
+    return f"{', '.join(names[:HINT_NAME_CAP])}, and {len(names) - HINT_NAME_CAP} more"
+
+
+async def _consultable_hint(session: AsyncSession, org_id: uuid.UUID, caller: Agent) -> str:
+    """Name the agents ``consult_peer`` would accept.
+
+    Without this a wrong name is a dead end: a model has no way to discover the
+    real one, so it abandons the consult and answers from memory — which reads as
+    a considered choice rather than the routing failure it is.
+    """
+    peers = await AgentRepository(session, org_id).list_consultable(exclude_id=caller.id)
+    if not peers:
+        return "There are no advisory agents in this organization to consult."
+    return f"Advisory agents you can consult: {_name_list(peers)}."
+
+
+async def _reports_hint(session: AsyncSession, org_id: uuid.UUID, caller: Agent) -> str:
+    """Name the agents ``delegate_task`` would accept — the same dead end, one
+    level up the org chart."""
+    reports = await AgentRepository(session, org_id).list_direct_reports(caller.id)
+    if not reports:
+        return f"'{caller.name}' has no direct reports to delegate to."
+    return f"Direct reports of '{caller.name}': {_name_list(reports)}."
 
 
 async def _diary(ctx: ToolContext, text: str) -> None:
@@ -76,9 +112,11 @@ async def delegate(
     """Queue a child run for a DIRECT report. Raises on a non-report target."""
     target = await resolve_agent(session, org_id, target_ref)
     if target is None:
-        raise DelegationError(f"Unknown target agent: {target_ref}")
+        raise DelegationError(f"Unknown target agent: {target_ref}. {await _reports_hint(session, org_id, caller)}")
     if target.supervisor_id != caller.id:
-        raise DelegationError(f"'{caller.name}' may only delegate to its direct reports")
+        raise DelegationError(
+            f"'{caller.name}' may only delegate to its direct reports. {await _reports_hint(session, org_id, caller)}"
+        )
     return await AgentRunRepository(session, org_id).create_run(
         agent_id=target.id,
         provider=target.provider,
@@ -175,11 +213,16 @@ async def _consult_peer(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any
     # ("that agent cannot be consulted") rather than an environmental one.
     peer = await resolve_agent(ctx.session, ctx.org_id, target)
     if peer is None:
-        return {"error": f"Unknown peer: {target}"}
+        return {"error": f"Unknown peer: {target}. {await _consultable_hint(ctx.session, ctx.org_id, ctx.agent)}"}
     if peer.id == ctx.agent.id:
         return {"error": "You cannot consult yourself"}
     if peer.kind != "advisory":
-        return {"error": "You may only consult advisory agents"}
+        return {
+            "error": (
+                f"'{peer.name}' is a {peer.kind} agent; you may only consult advisory agents. "
+                f"{await _consultable_hint(ctx.session, ctx.org_id, ctx.agent)}"
+            )
+        }
     if not peer.enabled:
         return {"error": f"{peer.name} is not currently enabled"}
     if ctx.run_id is None or not ctx.tool_call_id:
