@@ -21,6 +21,7 @@ from api.services.agents.tools.records import (
 )
 from api.services.agents.tools.spec import ToolSpec
 from api.services.agents.tools.web_research import WEB_RESEARCH
+from api.services.agents.tools.work_order_tasks import work_order_task_specs
 from api.services.agents.tools.workflows import LIST_WORKFLOWS, RUN_WORKFLOW
 
 if TYPE_CHECKING:
@@ -50,6 +51,7 @@ def base_tool_specs(settings: Settings | None = None) -> list[ToolSpec]:
         WEB_RESEARCH,
         BATCH_GENERATE,
         CHECK_BATCH,
+        *work_order_task_specs(),
     ]
     # Powerful local-exec tool: registered only when explicitly enabled, and even then
     # only ever *offered* to an agent that also holds the run_claude_code grant.
