@@ -46,6 +46,11 @@ class DelegationError(Exception):
 # push the model's actual work out of the window with a wall of names.
 HINT_NAME_CAP = 20
 
+# Questions to a person per run. Two is a genuine blocker plus one follow-up;
+# past that an agent is interviewing rather than working, and every question ends
+# the run until somebody answers it.
+MAX_HUMAN_QUESTIONS_PER_RUN = 2
+
 
 async def resolve_agent(session: AsyncSession, org_id: uuid.UUID, ref: str) -> Agent | None:
     repo = AgentRepository(session, org_id)
@@ -314,6 +319,21 @@ async def _ask_human(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
         return {"error": "'question' is required"}
     if ctx.run_id is None or not ctx.tool_call_id:
         return {"error": "ask_human is only available inside an agent run"}
+
+    asked = await AgentQuestionRepository(ctx.session, ctx.org_id).count_for_run(ctx.run_id, audience="human")
+    if asked >= MAX_HUMAN_QUESTIONS_PER_RUN:
+        # A budget, because the prompt asking for restraint is persuasion and this
+        # is not. Observed live: an agent read its task list, asked three questions,
+        # wrote a paragraph and stopped, having done none of the work. Each question
+        # ends the run until a person answers, so an agent that asks freely converts
+        # a job into an interview.
+        return {
+            "error": (
+                f"You have already asked {asked} question(s) on this run, which is the limit. "
+                "Proceed on your best assumption and say plainly what you assumed — a person "
+                "can correct an assumption, and can do nothing with a run that stopped to ask."
+            )
+        }
 
     row = await questions.create_question(
         ctx.session,
