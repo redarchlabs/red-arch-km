@@ -123,6 +123,21 @@ class AgentConsoleService:
                 )
                 params = agent.params or {}
                 messages = [{"role": "system", "content": build_system_prompt(agent)}, *history]
+
+                async def heartbeat_emit(event: dict[str, Any]) -> None:
+                    """Stream the event AND renew the run's lease.
+
+                    Without this, a console run that takes longer than
+                    ``agent_run_lease_ttl_seconds`` looks orphaned to
+                    ``_reclaim_stale``, which requeues it — and the sweep then drives
+                    a second copy in parallel with this one, duplicating every tool
+                    side effect. The worker path has always heartbeated (see
+                    ``AgentRunExecutor._persist_event``); the console never did.
+                    """
+                    if event.get("type") in ("tool_call", "tool_result", "usage"):
+                        await run_repo.heartbeat(run.id)
+                    await emit(event)
+
                 try:
                     result = await run_agent_loop(
                         provider=provider,
@@ -131,7 +146,7 @@ class AgentConsoleService:
                         messages=messages,
                         specs=specs,
                         ctx=ctx,
-                        emit=emit,
+                        emit=heartbeat_emit,
                         max_iterations=self._settings.agent_max_iterations,
                         temperature=params.get("temperature"),
                         max_tokens=params.get("max_tokens"),
@@ -161,7 +176,13 @@ class AgentConsoleService:
                             "approved": [],
                         },
                     }
-                    await run_repo.mark_waiting(run, parked.wait_kind)
+                    await run_repo.mark_waiting(
+                        run,
+                        parked.wait_kind,
+                        prompt_tokens=parked.prompt_tokens,
+                        completion_tokens=parked.completion_tokens,
+                        total_tokens=parked.total_tokens,
+                    )
                     await session.commit()
                     await emit(
                         {

@@ -200,9 +200,7 @@ async def answer_question(
     by_profile_id: uuid.UUID | None = None,
 ) -> AnswerOutcome:
     """Human-facing entry point (the inbox route)."""
-    question = await AgentQuestionRepository(session, org_id).get(question_id)
-    if question is None:
-        raise QuestionNotFoundError(f"Question {question_id} not found")
+    question = await _get_human_question(session, org_id, question_id)
     return await record_answer(session, org_id, question, answer=answer, by_profile_id=by_profile_id)
 
 
@@ -214,10 +212,28 @@ async def decline_question(
     reason: str | None = None,
     by_profile_id: uuid.UUID | None = None,
 ) -> AnswerOutcome:
+    question = await _get_human_question(session, org_id, question_id)
+    return await decline(session, org_id, question, reason=reason, by_profile_id=by_profile_id)
+
+
+async def _get_human_question(session: AsyncSession, org_id: uuid.UUID, question_id: uuid.UUID) -> AgentQuestion:
+    """Fetch a question a *person* is entitled to settle.
+
+    The audience check is the point. ``list_pending(audience="human")`` filters the
+    inbox, but the fetch-by-id did not — so a human holding a consult's id could
+    answer a question addressed to an *agent*. The consulted agent would then find
+    nothing waiting on it (``reply_to_peer`` returns "No one is waiting on you")
+    and its entire run would be discarded, while the asker resumed on an answer
+    from someone who was never asked.
+    """
     question = await AgentQuestionRepository(session, org_id).get(question_id)
     if question is None:
         raise QuestionNotFoundError(f"Question {question_id} not found")
-    return await decline(session, org_id, question, reason=reason, by_profile_id=by_profile_id)
+    if question.audience != "human":
+        # A 404 rather than a 403: the id of another agent's consult is not a thing
+        # this endpoint has, and saying "exists but not yours" only confirms it.
+        raise QuestionNotFoundError(f"Question {question_id} not found")
+    return question
 
 
 # --- lifecycle hooks -------------------------------------------------------
