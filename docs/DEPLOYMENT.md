@@ -702,6 +702,42 @@ Keep the proxy's public origin identical to `CLERK_ALLOWED_AZP`, `API_CORS_ORIGI
 and `PUBLIC_BASE_URL`. For encrypted backends, use `rediss://`, `bolt+s://`, and
 `sslmode=verify-full` on the respective connection strings.
 
+## Deploying to the prod host
+
+The stack runs from `docker/` with **both** compose files:
+
+```bash
+cd ~/github/red-arch-km-2/docker
+TAG=<new> docker compose -f docker-compose.prod.yml -f docker-compose.prod.override.yml \
+  --env-file ../.env build api worker ui
+```
+
+`docker-compose.prod.override.yml` is tracked in the repo and carries three things
+the base file omits: `env_file: ../.env` for the app services (without it the UI
+has no Clerk secret and the Next middleware 500s every page), the MinIO service
+and its bucket bootstrap, and — the one that is invisible until it bites — the
+UI's **build args**.
+
+`NEXT_PUBLIC_*` values are inlined into the client bundle at build time. Miss them
+and the build dies in the prerender step with
+`@clerk/clerk-react: Missing publishableKey`. They also leave no trace in a
+running container, so a lost override cannot be reconstructed from
+`docker inspect` the way the rest of it can.
+
+**Syncing code to the host** — the host has no GitHub auth, so the repo is
+rsync'd. Always exclude the host's own secrets:
+
+```bash
+rsync -az --delete --exclude '.git' --exclude 'node_modules' --exclude '.venv' \
+  --exclude '.next' --exclude '__pycache__' \
+  --exclude '.env' --exclude 'ui/.env.local' --exclude '.env.host' \
+  ./ jblair@<host>:~/github/red-arch-km-2/
+```
+
+**Migrate with the admin role.** `.env`'s `DATABASE_URL` is the RLS runtime role
+and has no DDL rights; build the admin URL from `POSTGRES_USER/PASSWORD/DB`. Take
+a `pg_dump -Fc` first, and quiesce the app services before running it.
+
 ## Security checklist
 
 - [ ] All secrets provided via env / secret manager (no secrets in files or images).
