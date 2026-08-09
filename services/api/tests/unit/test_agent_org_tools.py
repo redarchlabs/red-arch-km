@@ -60,6 +60,7 @@ class FakeCtx:
     run_id: uuid.UUID | None = None
     work_order_id: uuid.UUID | None = None
     tool_call_id: str | None = None
+    actor_user_id: uuid.UUID | None = None
 
 
 @dataclass
@@ -231,6 +232,55 @@ class TestDelegateTask:
         with pytest.raises(DelegationError):
             await delegation.delegate(None, uuid.uuid4(), boss, "unrelated", "task", run_id=None, work_order_id=None)
         assert harness.runs == []
+
+
+class TestActorInheritance:
+    """A child run must never read wider than the person who started the parent.
+
+    Work handed down the org chart carries the delegator's identity with it: the
+    knowledge base is scoped to a run's ``actor_user_id``, so a child created
+    without one would either fail closed or — before that scoping existed — read
+    the whole organisation on behalf of someone who cannot."""
+
+    async def test_a_delegated_report_inherits_the_delegators_actor(self, harness) -> None:
+        boss = FakeAgent("tpm", kind="coordinator")
+        report = FakeAgent("backend-engineer", supervisor_id=boss.id)
+        harness.roster = [boss, report]
+        actor = uuid.uuid4()
+
+        await DELEGATE_TASK.handler(
+            FakeCtx(agent=boss, run_id=uuid.uuid4(), actor_user_id=actor),
+            {"agent": "backend-engineer", "task": "ship it"},
+        )
+
+        assert harness.runs[0]["actor_user_id"] == actor
+
+    async def test_a_consulted_advisor_inherits_the_askers_actor(self, harness) -> None:
+        caller = FakeAgent("backend-engineer")
+        peer = FakeAgent("security-analyst", kind="advisory")
+        harness.roster = [caller, peer]
+        actor = uuid.uuid4()
+
+        with pytest.raises(RunParked):
+            await CONSULT_PEER.handler(
+                FakeCtx(agent=caller, run_id=uuid.uuid4(), tool_call_id="c", actor_user_id=actor),
+                {"agent": "security-analyst", "question": "safe?"},
+            )
+
+        assert harness.runs[0]["actor_user_id"] == actor
+
+    async def test_an_unattended_parent_produces_an_unattended_child(self, harness) -> None:
+        """No actor to inherit is itself the answer — the child must not silently
+        acquire one, and the knowledge tool fails closed on it."""
+        boss = FakeAgent("tpm", kind="coordinator")
+        report = FakeAgent("backend-engineer", supervisor_id=boss.id)
+        harness.roster = [boss, report]
+
+        await DELEGATE_TASK.handler(
+            FakeCtx(agent=boss, run_id=uuid.uuid4()), {"agent": "backend-engineer", "task": "ship it"}
+        )
+
+        assert harness.runs[0]["actor_user_id"] is None
 
 
 class TestConsultPeer:

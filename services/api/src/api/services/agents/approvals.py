@@ -27,6 +27,23 @@ class ApprovalNotFoundError(ApprovalError):
     pass
 
 
+class ApprovalAlreadySettledError(ApprovalError):
+    """Someone already decided this one."""
+
+
+def _require_pending(approval: AgentApproval) -> None:
+    """Refuse a second decision instead of quietly reporting success.
+
+    Returning the row unchanged made the losing tab in a two-reviewer race read as
+    "approved" when it had approved nothing — and if the first decision was a
+    *denial*, the second reviewer was told their approval took effect on a run that
+    had already been failed. The question path already raises here; approvals now
+    match it, so the first decision wins and the second is told so.
+    """
+    if approval.status != "pending":
+        raise ApprovalAlreadySettledError(f"This request was already {approval.status}")
+
+
 def _now() -> datetime:
     return datetime.now(UTC)
 
@@ -49,8 +66,7 @@ class ApprovalService:
 
     async def approve(self, approval_id: uuid.UUID, decided_by: uuid.UUID | None) -> AgentApproval:
         approval = await self._get(approval_id)
-        if approval.status != "pending":
-            return approval
+        _require_pending(approval)
 
         run = await self._runs.get_run(approval.run_id)
         if run is not None and run.status in ("done", "error", "cancelled", "escalated"):
@@ -82,8 +98,7 @@ class ApprovalService:
 
     async def deny(self, approval_id: uuid.UUID, decided_by: uuid.UUID | None) -> AgentApproval:
         approval = await self._get(approval_id)
-        if approval.status != "pending":
-            return approval
+        _require_pending(approval)
         approval.status = "denied"
         approval.decided_by_profile_id = decided_by
         approval.decided_at = _now()

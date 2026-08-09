@@ -237,6 +237,30 @@ async def require_org_access(
     )
 
 
+async def require_org_access_streaming(
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+    org_id: Annotated[uuid.UUID, Depends(get_org_id)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> OrgContext:
+    """``require_org_access`` for endpoints that return a long-lived stream.
+
+    Identical authorization; the difference is where the session lives. The normal
+    dependency takes ``get_db``, and FastAPI exits yield-dependencies only *after*
+    the response is finished — which for an SSE endpoint means the whole life of
+    the stream. So a membership lookup that takes a millisecond pinned a pooled
+    connection for as long as the client stayed connected, and the connection then
+    sat idle: a stream does no database work between frames.
+
+    Resolving in a short-lived session of its own and releasing it immediately
+    keeps a connection tied to actual read/write work, which is the same reason
+    :func:`api.dependencies.auth_provisioning_session` exists. ``OrgContext`` is
+    built inside the block and its relationships are eager-loaded, so nothing
+    lazy-loads against a closed session afterwards.
+    """
+    async with auth_provisioning_session(settings) as session:
+        return await require_org_access(user=user, org_id=org_id, session=session)
+
+
 async def require_org_admin(
     ctx: Annotated[OrgContext, Depends(require_org_access)],
 ) -> OrgContext:

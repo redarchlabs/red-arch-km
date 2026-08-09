@@ -85,6 +85,12 @@ class RunParked(Exception):  # noqa: N818 - a control signal, not an error condi
         self.payload = payload or {}
         self.messages: list[dict[str, Any]] | None = None
         self.pending: list[dict[str, Any]] | None = None
+        # Usage spent before the park, attached on propagation. The resumed drive
+        # starts its counters at zero, so a park that dropped these would bill a
+        # multi-question run for its last segment only.
+        self.prompt_tokens = 0
+        self.completion_tokens = 0
+        self.total_tokens = 0
 
 
 @dataclass
@@ -154,6 +160,57 @@ async def run_agent_loop(
     result = RunResult(messages=messages)
     pending = resume_tool_calls
 
+    try:
+        return await _drive_loop(
+            provider=provider,
+            agent=agent,
+            model=model,
+            messages=messages,
+            specs_by_name=specs_by_name,
+            schemas=schemas,
+            ctx=ctx,
+            emit=emit,
+            max_iterations=max_iterations,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            approval_strategy=approval_strategy,
+            pending=pending,
+            answers=answers,
+            autonomy=autonomy,
+            continue_check=continue_check,
+            result=result,
+        )
+    except RunParked as parked:
+        # Same contract as RunFinished: the caller records what this segment spent,
+        # because the resumed drive starts counting from zero.
+        parked.prompt_tokens = result.prompt_tokens
+        parked.completion_tokens = result.completion_tokens
+        parked.total_tokens = result.total_tokens
+        raise
+
+
+async def _drive_loop(
+    *,
+    provider,
+    agent,
+    model,
+    messages,
+    specs_by_name,
+    schemas,
+    ctx,
+    emit,
+    max_iterations,
+    temperature,
+    max_tokens,
+    approval_strategy,
+    pending,
+    answers,
+    autonomy,
+    continue_check,
+    result,
+) -> RunResult:
+    """The loop itself. Split out so ``run_agent_loop`` can attach accumulated usage
+    to a propagating :class:`RunParked` without wrapping every ``return``."""
     for _iteration in range(max_iterations):
         if continue_check is not None and not await continue_check():
             raise RunCancelled

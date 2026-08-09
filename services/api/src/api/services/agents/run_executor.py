@@ -353,7 +353,13 @@ class AgentRunExecutor:
                     "answers": {k: v for k, v in resume_answers.items() if k in still_pending},
                 },
             }
-            await run_repo.mark_waiting(run, parked.wait_kind)
+            await run_repo.mark_waiting(
+                run,
+                parked.wait_kind,
+                prompt_tokens=parked.prompt_tokens,
+                completion_tokens=parked.completion_tokens,
+                total_tokens=parked.total_tokens,
+            )
             if parked.wait_kind == "approval":
                 # ask_human and consult_peer notify from their own handlers, where
                 # the question text lives; only the authority gate lands here.
