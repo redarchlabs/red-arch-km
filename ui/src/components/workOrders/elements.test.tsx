@@ -444,7 +444,9 @@ describe("AgentDiaryNode reply", () => {
     fireEvent.change(screen.getByLabelText("Reply to the agent"), { target: { value: "Yes please" } });
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
-    await waitFor(() => expect(replyToWorkOrder).toHaveBeenCalledWith("wo-1", "Yes please"));
+    // No attachments pasted, so an empty list — never undefined, which the server
+    // would read as a missing field.
+    await waitFor(() => expect(replyToWorkOrder).toHaveBeenCalledWith("wo-1", "Yes please", []));
     expect(await screen.findByText("Yes please")).toBeTruthy();
   });
 

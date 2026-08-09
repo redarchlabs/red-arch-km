@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { AttachmentChips } from "@/components/common/AttachmentChips";
 import { Markdown } from "@/components/common/Markdown";
 import { Button } from "@/components/ui/button";
 import {
@@ -39,6 +40,7 @@ import {
   type WorkOrderStatus,
 } from "@/lib/api/workOrders";
 
+import { usePasteAttach } from "@/lib/usePasteAttach";
 import { cn } from "@/lib/utils";
 
 import { AgentSwimLanes } from "./AgentSwimLanes";
@@ -250,6 +252,7 @@ export function AgentDiaryNode({
   const [reply, setReply] = useState("");
   const [sending, setSending] = useState(false);
   const [replyError, setReplyError] = useState<string | null>(null);
+  const paste = usePasteAttach();
   const boxRef = useRef<HTMLDivElement>(null);
   const pinnedToBottom = useRef(true);
 
@@ -302,12 +305,14 @@ export function AgentDiaryNode({
   };
 
   const send = async () => {
-    if (!workOrderId || !reply.trim() || sending) return;
+    // An attachment with no words is a whole message — "here, look at this".
+    if (!workOrderId || sending || (!reply.trim() && paste.documentIds.length === 0)) return;
     setSending(true);
     setReplyError(null);
     try {
-      await replyToWorkOrder(workOrderId, reply.trim());
+      await replyToWorkOrder(workOrderId, reply.trim(), paste.documentIds);
       setReply("");
+      paste.clear();
       // The reply — and whatever the server decided to do with it — is a diary
       // entry, so reloading is what shows the outcome.
       pinnedToBottom.current = true;
@@ -359,8 +364,9 @@ export function AgentDiaryNode({
         )}
       </div>
       {allowReply ? (
-        <div className="space-y-1">
+        <div className="space-y-1" onDrop={paste.onDrop} onDragOver={(e) => e.preventDefault()}>
           {replyError ? <p className="text-xs text-destructive">{replyError}</p> : null}
+          <AttachmentChips attachments={paste.attachments} onRemove={paste.remove} />
           <div className="flex items-end gap-2">
             <textarea
               value={reply}
@@ -372,7 +378,8 @@ export function AgentDiaryNode({
                 e.preventDefault();
                 void send();
               }}
-              placeholder="Reply to the agent…"
+              onPaste={paste.onPaste}
+              placeholder="Reply to the agent — paste a screenshot to attach it…"
               aria-label="Reply to the agent"
               rows={2}
               className="w-full rounded-md border bg-background px-2 py-1.5 text-sm"
@@ -381,7 +388,7 @@ export function AgentDiaryNode({
               type="button"
               size="sm"
               onClick={() => void send()}
-              disabled={sending || !reply.trim()}
+              disabled={sending || paste.busy || (!reply.trim() && paste.documentIds.length === 0)}
             >
               {sending ? <Loader2 className="h-3 w-3 animate-spin" /> : "Send"}
             </Button>

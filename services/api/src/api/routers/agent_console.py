@@ -40,6 +40,9 @@ class ConsoleMessage(BaseModel):
 
 class ConsoleRequest(BaseModel):
     messages: list[ConsoleMessage] = Field(default_factory=list)
+    # Documents pasted alongside the last message. Ids only: the bytes are loaded
+    # server-side and only for a model that can actually look at them.
+    document_ids: list[uuid.UUID] = Field(default_factory=list)
 
 
 @router.post("/{agent_id}/console/stream")
@@ -61,7 +64,7 @@ async def agent_console_stream(
 
     async def iterator() -> AsyncGenerator[bytes]:
         try:
-            async for event in service.run_stream(agent_id, history):
+            async for event in service.run_stream(agent_id, history, document_ids=body.document_ids):
                 yield f"data: {json.dumps(event, default=str)}\n\n".encode()
         except Exception:  # noqa: BLE001 - never break the SSE frame contract
             yield b'data: {"type": "error", "error": "Stream failed"}\n\n'

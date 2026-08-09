@@ -2966,6 +2966,15 @@ class AgentService:
                         "the top of the agent's next turn, never spliced into one already running."
                     ),
                 },
+                "work_order_documents": {
+                    "required": ["type"],
+                    "optional": ["work_order_id", "title", "hide_when_empty", "allow_upload", "poll_ms", "width"],
+                    "use": (
+                        "The documents on a work order — inputs a person attached and outputs "
+                        "agents produced. Pair with the diary: the diary says what happened, this "
+                        "says what came of it."
+                    ),
+                },
                 "approval_queue": {
                     "required": ["type"],
                     "optional": [

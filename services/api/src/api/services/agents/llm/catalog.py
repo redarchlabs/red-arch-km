@@ -30,6 +30,10 @@ from typing import Any
 class ModelDef:
     id: str  # full LiteLLM model id, e.g. "anthropic/claude-sonnet-5"
     label: str
+    # Can this model look at an image? Declared rather than guessed: a model that
+    # cannot gets an attachment as text, which is a working message. Sending an
+    # image_url part to one that cannot is a provider error mid-run.
+    vision: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,9 +49,9 @@ PROVIDERS: tuple[ProviderDef, ...] = (
         "anthropic",
         "Anthropic (Claude)",
         (
-            ModelDef("anthropic/claude-opus-4-8", "Claude Opus 4.8"),
-            ModelDef("anthropic/claude-sonnet-5", "Claude Sonnet 5"),
-            ModelDef("anthropic/claude-haiku-4-5-20251001", "Claude Haiku 4.5"),
+            ModelDef("anthropic/claude-opus-4-8", "Claude Opus 4.8", vision=True),
+            ModelDef("anthropic/claude-sonnet-5", "Claude Sonnet 5", vision=True),
+            ModelDef("anthropic/claude-haiku-4-5-20251001", "Claude Haiku 4.5", vision=True),
         ),
         "ANTHROPIC_API_KEY",
     ),
@@ -55,9 +59,9 @@ PROVIDERS: tuple[ProviderDef, ...] = (
         "openai",
         "OpenAI (GPT)",
         (
-            ModelDef("gpt-5", "GPT-5"),
-            ModelDef("gpt-5-mini", "GPT-5 mini"),
-            ModelDef("gpt-5-nano", "GPT-5 nano"),
+            ModelDef("gpt-5", "GPT-5", vision=True),
+            ModelDef("gpt-5-mini", "GPT-5 mini", vision=True),
+            ModelDef("gpt-5-nano", "GPT-5 nano", vision=True),
         ),
         "OPENAI_API_KEY",
     ),
@@ -65,8 +69,8 @@ PROVIDERS: tuple[ProviderDef, ...] = (
         "gemini",
         "Google (Gemini)",
         (
-            ModelDef("gemini/gemini-2.5-pro", "Gemini 2.5 Pro"),
-            ModelDef("gemini/gemini-2.5-flash", "Gemini 2.5 Flash"),
+            ModelDef("gemini/gemini-2.5-pro", "Gemini 2.5 Pro", vision=True),
+            ModelDef("gemini/gemini-2.5-flash", "Gemini 2.5 Flash", vision=True),
         ),
         "GEMINI_API_KEY",
     ),
@@ -145,3 +149,18 @@ def bare_model(model: str) -> str:
     """
     prefix, sep, rest = model.partition("/")
     return rest if sep and (prefix in _KNOWN_PREFIXES or prefix in _REGISTERED) else model
+
+
+def model_supports_vision(model: str) -> bool:
+    """Whether ``model`` can be shown an image.
+
+    Unknown models answer False. A locally served model (``qwen3-30b`` and
+    anything else reached through an OpenAI-shaped endpoint) is not in this table,
+    and guessing yes would send an image_url part to something that errors on it
+    mid-run. Guessing no costs a picture; guessing yes costs the turn.
+    """
+    for provider in providers():
+        for candidate in provider.models:
+            if candidate.id == model:
+                return candidate.vision
+    return False

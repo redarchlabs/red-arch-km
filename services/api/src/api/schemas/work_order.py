@@ -56,7 +56,33 @@ class WorkOrderReply(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    text: str = Field(min_length=1, max_length=8000)
+    # Not min_length=1: "here, look at this" with a screenshot and no words is a
+    # whole message. The service refuses only an empty reply with nothing attached.
+    text: str = Field(default="", max_length=8000)
+    document_ids: list[uuid.UUID] = Field(default_factory=list)
+
+
+class ArtifactAttach(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    document_ids: list[uuid.UUID] = Field(min_length=1)
+    kind: Literal["input", "output"] = "input"
+
+
+class ArtifactRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    document_id: uuid.UUID | None
+    kind: str
+    filename: str | None
+    mime: str | None
+    size: int | None
+    created_at: datetime
+    # The document may have been deleted out from under the link, which is why the
+    # filename is kept on the artifact row itself.
+    title: str | None = None
+    missing: bool = False
 
 
 class TaskInput(BaseModel):

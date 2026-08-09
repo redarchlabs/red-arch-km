@@ -28,9 +28,10 @@ from api.models.work_order import WorkOrder, WorkOrderEntry
 from api.repositories.agent import AgentRepository
 from api.repositories.agent_run import AgentRunRepository
 from api.repositories.agent_run_messages import AgentRunMessageRepository
-from api.services.agents import lifecycle
+from api.services.agents import attachments, lifecycle
 from api.services.agents.authority import Posture, available_tools, posture_for
 from api.services.agents.live.activity import RunActivityPublisher
+from api.services.agents.llm.catalog import model_supports_vision
 from api.services.agents.llm.keys import resolve_provider_key
 from api.services.agents.llm.provider import ToolCallRequest
 from api.services.agents.llm.routing import provider_for
@@ -352,6 +353,7 @@ class AgentRunExecutor:
             resume_tool_calls = [ToolCallRequest(**tc) for tc in resume.get("pending") or []]
             approved_names = set(resume.get("approved") or [])
             resume_answers = dict(resume.get("answers") or {})
+            turn_attachments = []
         else:
             task = str(run.input.get("task") or run.input.get("message") or "").strip() or "Proceed."
             # A work-order run is watched through a task list the agent has to fill
@@ -366,10 +368,13 @@ class AgentRunExecutor:
 
                 system = f"{system}\n\n{workflow_system_addendum()}"
                 task = wrap_workflow_task(task)
-            messages = [
-                {"role": "system", "content": system},
-                {"role": "user", "content": task},
-            ]
+            # Vision on arrival: the opening turn carries any attached image as a
+            # real content part, and `persistable` strips it back to text before
+            # anything is written down. See services/agents/attachments.py.
+            loaded = await self._load_attachments(session, org_id, run)
+            opening = attachments.build_user_turn(task, loaded, vision=model_supports_vision(agent.model))
+            messages = [{"role": "system", "content": system}, opening]
+            turn_attachments = loaded
             resume_tool_calls = None
             approved_names = set()
             resume_answers = {}
@@ -519,7 +524,10 @@ class AgentRunExecutor:
             run.input = {
                 **(run.input or {}),
                 "resume": {
-                    "messages": parked.messages or messages,
+                    # Flattened before it is written down: resume state lives in a
+                    # JSONB column, and a parked run that carried its screenshot
+                    # here would store megabytes of base64 per park.
+                    "messages": [attachments.persistable(m, turn_attachments) for m in (parked.messages or messages)],
                     "pending": pending,
                     "approved": sorted(approved_names),
                     "answers": {k: v for k, v in resume_answers.items() if k in still_pending},
@@ -584,6 +592,18 @@ class AgentRunExecutor:
         )
         if won:
             await self._signal_parent(session, org_id, run, agent.name, result.final_content)
+
+    async def _load_attachments(
+        self, session: AsyncSession, org_id: uuid.UUID, run: AgentRun
+    ) -> list[attachments.Attachment]:
+        """Documents attached to this run's opening turn.
+
+        The ids live on ``run.input`` precisely so a run sitting in the queue is
+        not carrying an image around; the bytes are fetched only when a turn is
+        actually being built.
+        """
+        raw = (run.input or {}).get("attachments") if isinstance(run.input, dict) else None
+        return await attachments.load(session, org_id, raw or [], self._settings)
 
     async def _unfinished_work_nudge(self, session: AsyncSession, org_id: uuid.UUID, run: AgentRun) -> str | None:
         """One reminder for an agent about to stop with its checklist unfinished.

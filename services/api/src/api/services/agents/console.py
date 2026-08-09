@@ -41,9 +41,10 @@ from api.config import Settings
 from api.models.agent import Agent
 from api.repositories.agent import AgentRepository
 from api.repositories.agent_run import AgentRunRepository
-from api.services.agents import lifecycle
+from api.services.agents import attachments, lifecycle
 from api.services.agents.authority import available_tools
 from api.services.agents.live import bus
+from api.services.agents.llm.catalog import model_supports_vision
 from api.services.agents.llm.keys import resolve_provider_key
 from api.services.agents.llm.provider import ToolCallRequest
 from api.services.agents.llm.routing import provider_for
@@ -92,13 +93,19 @@ class AgentConsoleService:
         self._actor_user_id = actor_user_id
         self._redis = redis
 
-    async def run_stream(self, agent_id: uuid.UUID, history: list[dict[str, Any]]) -> AsyncGenerator[dict[str, Any]]:
+    async def run_stream(
+        self,
+        agent_id: uuid.UUID,
+        history: list[dict[str, Any]],
+        *,
+        document_ids: list[uuid.UUID] | None = None,
+    ) -> AsyncGenerator[dict[str, Any]]:
         queue: asyncio.Queue = asyncio.Queue()
 
         async def emit(event: dict[str, Any]) -> None:
             await queue.put(event)
 
-        task = asyncio.create_task(self._drive(agent_id, history, emit, queue))
+        task = asyncio.create_task(self._drive(agent_id, history, emit, queue, document_ids or []))
         try:
             while True:
                 event = await queue.get()
@@ -129,7 +136,7 @@ class AgentConsoleService:
 
     # --- the drive ---------------------------------------------------------
 
-    async def _drive(self, agent_id, history, emit, queue) -> None:
+    async def _drive(self, agent_id, history, emit, queue, document_ids=None) -> None:
         try:
             prepared = await self._prepare(agent_id, history, emit)
             if prepared is None:
@@ -138,8 +145,25 @@ class AgentConsoleService:
 
             messages: list[dict[str, Any]] = [
                 {"role": "system", "content": build_system_prompt(agent)},
-                *history,
+                *history[:-1],
             ]
+            # Vision on arrival: only the last turn carries the image, and only
+            # for a model that can see it. See services/agents/attachments.py.
+            if history:
+                # A session only for this read, then released — the console holds
+                # no connection across a stream, which is what keeps a browser tab
+                # from pinning one out of a pool of fifteen.
+                loaded: list[attachments.Attachment] = []
+                if document_ids:
+                    async with self._work() as session:
+                        loaded = await attachments.load(session, self._org_id, document_ids, self._settings)
+                messages.append(
+                    attachments.build_user_turn(
+                        str(history[-1].get("content") or ""),
+                        loaded,
+                        vision=model_supports_vision(agent.model),
+                    )
+                )
             resume = _Resume(messages=messages)
             resumes = 0
 
