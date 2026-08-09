@@ -28,9 +28,15 @@ _WORK_ORDER_GUIDANCE = (
     "is how the person who filed this sees what you intend, and the progress figure "
     "they watch is computed from it — so mark each step with update_work_order_task as "
     "you go, rather than at the end.\n"
-    "If you need a decision from that person, call ask_human. Do NOT finish your turn "
-    "by asking a question in prose: the run ends when you stop, and a finished run "
-    "cannot be replied to, so the question reaches nobody."
+    "Do the work. Asking is the exception, not the opening move: if something is "
+    "unclear but you could still make progress, state the assumption you are working "
+    "under and carry on — a person can correct an assumption, and cannot do anything "
+    "with a run that stopped to ask. Use ask_human only when you genuinely cannot "
+    "proceed at all, never for something you could look up, and never twice for the "
+    "same decision.\n"
+    "When you do ask, use ask_human rather than ending your turn with a question in "
+    "prose: the run ends when you stop, and a finished run cannot be replied to, so "
+    "a question asked that way reaches nobody."
 )
 
 

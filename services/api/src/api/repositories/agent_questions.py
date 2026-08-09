@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.models.agent_run import AgentQuestion
@@ -20,6 +20,19 @@ class AgentQuestionRepository:
             select(AgentQuestion).where(AgentQuestion.id == question_id, AgentQuestion.org_id == self._org_id)
         )
         return result.scalar_one_or_none()
+
+    async def count_for_run(self, run_id: uuid.UUID, *, audience: str | None = None) -> int:
+        """How many questions this run has already asked.
+
+        Counts answered and declined ones too: the budget is about how much of a
+        run was spent asking, not about how many are outstanding right now.
+        """
+        stmt = select(func.count(AgentQuestion.id)).where(
+            AgentQuestion.run_id == run_id, AgentQuestion.org_id == self._org_id
+        )
+        if audience is not None:
+            stmt = stmt.where(AgentQuestion.audience == audience)
+        return int((await self._session.execute(stmt)).scalar_one())
 
     async def list_pending(self, *, audience: str | None = None) -> list[AgentQuestion]:
         stmt = select(AgentQuestion).where(AgentQuestion.org_id == self._org_id, AgentQuestion.status == "pending")
