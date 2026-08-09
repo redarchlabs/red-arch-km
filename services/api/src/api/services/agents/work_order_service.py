@@ -202,6 +202,7 @@ class WorkOrderService:
         body: str | None = None,
         priority: str = "normal",
         mode: str = "manual",
+        review_level: str = "standard",
         assigned_agent_id: uuid.UUID | None = None,
         created_by_profile_id: uuid.UUID | None = None,
     ) -> WorkOrder:
@@ -211,6 +212,7 @@ class WorkOrderService:
             body=body,
             priority=priority,
             mode=mode,
+            review_level=review_level,
             assigned_agent_id=assigned_agent_id,
             created_by_profile_id=created_by_profile_id,
             status="draft",
@@ -391,6 +393,27 @@ class WorkOrderService:
             ignore_run_id=ignore_run_id,
         )
         await self._repo.flush()
+
+    async def set_review_level(self, wo_id: uuid.UUID, level: str) -> WorkOrder:
+        """How big a board this order convenes. Recorded, like the mode: turning
+        review down is a decision someone should be able to find later."""
+        from api.services.agents.review_board import REVIEW_LEVELS
+
+        if level not in REVIEW_LEVELS:
+            raise WorkOrderValidationError(f"review_level must be one of: {', '.join(REVIEW_LEVELS)}")
+        wo = await self.get_work_order(wo_id)
+        if wo.review_level == level:
+            return wo
+        previous, wo.review_level = wo.review_level, level
+        await self._repo.add_entry(
+            WorkOrderEntry(
+                work_order_id=wo.id,
+                role=_HUMAN_LANE,
+                text=f"Review level changed from {previous} to {level}.",
+            )
+        )
+        await self._repo.flush()
+        return wo
 
     async def reply(
         self,

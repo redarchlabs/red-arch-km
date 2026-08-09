@@ -15,6 +15,7 @@ the plan in the approval queue. Approve and the handler runs — the order moves
 
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
 from api.services.agents.runtime import RunFinished
@@ -24,6 +25,109 @@ from api.services.agents.tools.spec import Category, ToolContext, ToolSpec
 # plan is right, which is not the same as saying nobody needs to see what happens
 # while it is carried out.
 _APPROVED_MODE = "manual"
+
+
+_GATE = "plan"
+
+
+async def _clear_the_board(ctx: ToolContext, work_order: Any, summary: str, tasks: list[Any]) -> dict[str, Any] | None:
+    """Run the plan past its review board. ``None`` means cleared — carry on.
+
+    Returns a tool result when the author still has work to do: findings to
+    address, or an acknowledgement that the board is now sitting. Parks the run
+    (via ``convene``) while the board reads.
+    """
+    from api.services.agents import review_board as rb
+    from api.services.agents import review_gate
+
+    digest = rb.fingerprint(summary)
+    state = await review_gate.status(ctx, work_order.id, _GATE, digest)
+    if state["passed"]:
+        return None
+
+    boards = await review_gate._org_boards(ctx)
+    seats = review_gate.board_for(work_order, boards, author=ctx.agent.name if ctx.agent else None)
+    if not seats:
+        return None  # review_level 'none', or an org with no board configured
+
+    outcome = state["outcome"]
+    if state["same_submission"] and outcome.settled:
+        entries = state["entries"]
+        if outcome.approved:
+            _mark(ctx, work_order.id, f"🏛️ {rb.PASSED} {_GATE} ({digest}) — {', '.join(outcome.verdicts)}")
+            return None
+        if rb.rounds_run(entries, _GATE) >= rb.MAX_ROUNDS:
+            # The cap exists so a reviewer that never softens and an author that
+            # never satisfies it cannot trade runs forever. The objections go to
+            # the human with the plan rather than being dropped.
+            _mark(ctx, work_order.id, f"🏛️ {rb.RELEASED} {_GATE} ({digest}) — unresolved: {', '.join(outcome.failed)}")
+            return None
+        return {
+            "review": "changes requested",
+            "failed": outcome.failed,
+            "findings": {who: v for who, v in outcome.verdicts.items()},
+            "note": (
+                "Address these, update the task list, and call submit_plan again with a "
+                "revised summary. Resubmitting the same text will not re-open the review."
+            ),
+        }
+
+    await review_gate.convene(
+        ctx,
+        work_order,
+        gate=_GATE,
+        submission=summary,
+        tasks="\n".join(f"{t.key} {t.title}" for t in tasks),
+        seats=seats,
+    )
+    return None  # unreachable: convene parks the run
+
+
+async def _human_approved(ctx: ToolContext) -> bool:
+    """Has a person already approved this run's plan?
+
+    Read from ``agent_approvals`` rather than held in memory: the approval is
+    settled by a different request, in a different process, long after this
+    handler first ran.
+    """
+    from sqlalchemy import select
+
+    from api.models.agent_run import AgentApproval
+
+    row = (
+        await ctx.session.execute(
+            select(AgentApproval.id).where(
+                AgentApproval.run_id == ctx.run_id,
+                AgentApproval.org_id == ctx.org_id,
+                AgentApproval.tool_name == "submit_plan",
+                AgentApproval.status == "approved",
+            )
+        )
+    ).first()
+    return row is not None
+
+
+async def _ask_the_human(ctx: ToolContext, summary: str) -> None:
+    """Put the plan in the approval queue and park. Never returns."""
+    from api.models.agent_run import AgentApproval
+    from api.services.agents.runtime import RunParked
+
+    approval = AgentApproval(
+        run_id=ctx.run_id,
+        tool_name="submit_plan",
+        arguments={"summary": summary[:4000]},
+        status="pending",
+        org_id=ctx.org_id,
+    )
+    ctx.session.add(approval)
+    await ctx.session.flush()
+    raise RunParked("approval", {"approval_id": str(approval.id), "tool": "submit_plan"})
+
+
+def _mark(ctx: ToolContext, wo_id: uuid.UUID, text: str) -> None:
+    from api.models.work_order import WorkOrderEntry
+
+    ctx.session.add(WorkOrderEntry(work_order_id=wo_id, org_id=ctx.org_id, role="review", text=text))
 
 
 async def _submit_plan(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
@@ -37,9 +141,21 @@ async def _submit_plan(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]
 
     service = WorkOrderService(ctx.session, ctx.org_id)
     tasks = await service.list_tasks(ctx.work_order_id)
+    work_order = await service.get_work_order(ctx.work_order_id)
 
-    # Reaching the handler at all means a human already approved: the gate parks
-    # the run before this runs, and a rejection never gets here.
+    # Peer review comes BEFORE the human, so what a person is asked to approve
+    # arrives with its objections already attached rather than being the first
+    # thing anyone has read.
+    gated = await _clear_the_board(ctx, work_order, summary, tasks)
+    if gated is not None:
+        return gated
+
+    # Only now is a person asked. Raised here rather than by the authority gate's
+    # ``always_ask``, because that fires *before* the handler — which would put the
+    # human first and the board second, so someone would be approving a plan nobody
+    # had reviewed. That is the whole point of the ordering.
+    if not await _human_approved(ctx):
+        await _ask_the_human(ctx, summary)
     await service.add_entry(
         ctx.work_order_id,
         agent_id=ctx.agent.id if ctx.agent else None,
@@ -67,8 +183,11 @@ async def _submit_plan(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]
 
 async def _handler(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
     result = await _submit_plan(ctx, args)
-    if "error" in result:
-        # A refusal the agent can act on, not the end of the run.
+    # Only an approved plan ends the run. A refusal the agent can act on — a blank
+    # summary, or a board asking for changes — is an ordinary tool result, so the
+    # agent revises and submits again. Ending the run on "changes requested" would
+    # close the order on the reviewers' objections.
+    if not result.get("approved"):
         return result
     raise RunFinished("plan approved", result)
 
@@ -97,6 +216,8 @@ SUBMIT_PLAN = ToolSpec(
     category=Category.PLAN,
     handler=_handler,
     always_allowed=True,
-    always_ask=True,
+    # NOT always_ask: that fires before the handler, which would ask a person to
+    # approve a plan the board has not read yet. The handler raises the approval
+    # itself, after the review.
     terminal=True,
 )

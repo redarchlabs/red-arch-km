@@ -286,6 +286,13 @@ async def _reply_to_peer(ctx: ToolContext, args: dict[str, Any]) -> dict[str, An
         by_agent_id=ctx.agent.id,
         answered_by=ctx.agent.name,
     )
+    # A consult raised by a review board carries a verdict, and the board is read
+    # back from the diary — so the reply has to leave a PASS/FAIL there, not just
+    # prose. Ordinary consults are untouched: record_verdict only fires for a
+    # question attached to a work order.
+    from api.services.agents.review_gate import record_verdict
+
+    await record_verdict(ctx, row, answer)
     await _diary(ctx, f"Answered the consult: {answer}")
     if not outcome.resumed:
         # The asker gave up (cancelled, timed out) while this run was thinking. The

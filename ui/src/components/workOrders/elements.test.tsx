@@ -78,6 +78,7 @@ const order = (over: Partial<WorkOrder> = {}): WorkOrder => ({
   body: null,
   priority: "normal",
   mode: "manual",
+  review_level: "standard",
   assigned_agent_id: "agent-1",
   created_by_profile_id: null,
   created_at: "2026-08-09T12:00:00Z",
