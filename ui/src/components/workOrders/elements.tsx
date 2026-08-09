@@ -2,14 +2,16 @@
 
 import { Check, ChevronUp, Loader2, X } from "lucide-react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Markdown } from "@/components/common/Markdown";
 import { Button } from "@/components/ui/button";
-import { approveApproval, denyApproval, listAgentRunSteps, listApprovals } from "@/lib/api/agents";
-import type { AgentRunStep, Approval } from "@/lib/api/agents";
+import { approveApproval, denyApproval, listAgentRunSteps, listAgents, listApprovals } from "@/lib/api/agents";
+import type { Agent, AgentRunStep, Approval } from "@/lib/api/agents";
 import { getApiErrorMessage } from "@/lib/api/errors";
 import {
+  createWorkOrder,
   getWorkOrder,
   getWorkOrderEntries,
   getWorkOrderMap,
@@ -359,6 +361,125 @@ export function ApprovalQueueNode({
         ))
       )}
     </div>
+  );
+}
+
+// ------------------------------------------------------------------ //
+// work_order_create
+// ------------------------------------------------------------------ //
+
+interface CreateProps {
+  title?: string | null;
+  submitLabel?: string;
+  defaultPriority?: string;
+  showAssignee?: boolean;
+  detailViewId?: string | null;
+}
+
+export function WorkOrderCreateNode({
+  title,
+  submitLabel = "File it",
+  defaultPriority = "normal",
+  showAssignee = true,
+  detailViewId,
+}: CreateProps) {
+  const router = useRouter();
+  const [heading, setHeading] = useState("");
+  const [body, setBody] = useState("");
+  const [priority, setPriority] = useState(defaultPriority);
+  const [assignee, setAssignee] = useState("");
+  const [agents, setAgents] = useState<Agent[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!showAssignee) return;
+    void listAgents()
+      .then((all) => setAgents(all.filter((a) => a.enabled)))
+      .catch(() => setAgents([]));
+  }, [showAssignee]);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!heading.trim() || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const created = await createWorkOrder({
+        title: heading.trim(),
+        body: body.trim() || null,
+        priority,
+        assigned_agent_id: assignee || null,
+      });
+      setHeading("");
+      setBody("");
+      setAssignee("");
+      // Straight to the order that was just filed — the next thing anyone wants
+      // is to start it, and hunting for it in the list is friction.
+      if (detailViewId) {
+        router.push(`/views/${detailViewId}/view?record_id=${encodeURIComponent(created.id)}`);
+      }
+    } catch (err: unknown) {
+      setError(getApiErrorMessage(err, "Could not file the work order"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <form onSubmit={submit} className="space-y-2 rounded-md border p-3">
+      {title ? <h3 className="text-sm font-medium">{title}</h3> : null}
+      {error ? <p className="text-xs text-destructive">{error}</p> : null}
+      <input
+        value={heading}
+        onChange={(e) => setHeading(e.target.value)}
+        placeholder="What needs doing?"
+        aria-label="Work order title"
+        className="w-full rounded-md border bg-background px-2 py-1.5 text-sm"
+      />
+      <textarea
+        value={body}
+        onChange={(e) => setBody(e.target.value)}
+        placeholder="Any detail the agent needs — this is the brief it works from."
+        aria-label="Work order detail"
+        rows={3}
+        className="w-full rounded-md border bg-background px-2 py-1.5 text-sm"
+      />
+      <div className="flex flex-wrap items-center gap-2">
+        <select
+          value={priority}
+          onChange={(e) => setPriority(e.target.value)}
+          aria-label="Priority"
+          className="rounded-md border bg-background px-2 py-1.5 text-sm"
+        >
+          {["low", "normal", "high", "urgent"].map((p) => (
+            <option key={p} value={p}>
+              {p}
+            </option>
+          ))}
+        </select>
+        {showAssignee ? (
+          <select
+            value={assignee}
+            onChange={(e) => setAssignee(e.target.value)}
+            aria-label="Assign to"
+            className="min-w-40 rounded-md border bg-background px-2 py-1.5 text-sm"
+          >
+            {/* Unassigned is a real choice, not a missing one: it files a request
+                for a person rather than queuing an agent. */}
+            <option value="">Unassigned</option>
+            {agents.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.name}
+              </option>
+            ))}
+          </select>
+        ) : null}
+        <Button type="submit" size="sm" disabled={busy || !heading.trim()} className="ml-auto">
+          {submitLabel}
+        </Button>
+      </div>
+    </form>
   );
 }
 

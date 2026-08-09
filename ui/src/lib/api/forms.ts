@@ -445,6 +445,17 @@ export interface WorkOrderTasksElement extends ElementBase {
   width?: FieldWidth | null;
 }
 
+/** A form that files a new work order. */
+export interface WorkOrderCreateElement extends ElementBase {
+  type: "work_order_create";
+  title?: string | null;
+  submit_label?: string;
+  default_priority?: "low" | "normal" | "high" | "urgent";
+  show_assignee?: boolean;
+  detail_view_id?: string | null;
+  width?: FieldWidth | null;
+}
+
 export type SubmitAction = { kind: "submit" };
 export type RunWorkflowAction = {
   kind: "run_workflow";
@@ -656,6 +667,7 @@ export type FormElement =
   | WorkOrderListElement
   | WorkOrderActionsElement
   | WorkOrderTasksElement
+  | WorkOrderCreateElement
   | ButtonElement
   | PuzzlePadElement
   | FormRefElement
