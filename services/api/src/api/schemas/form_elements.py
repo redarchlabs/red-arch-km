@@ -423,6 +423,26 @@ class RecordListFilter(BaseModel):
     value: Any = None
 
 
+class RecordListLookup(BaseModel):
+    """One auxiliary query a ``record_list`` runs ONCE (not per row), so per-row
+    visibility expressions can test the rows against ANOTHER entity's records.
+
+    The list fetches ``entity`` narrowed by ``filters`` (same semantics as the
+    element's own ``filters``, including the ``@me`` sentinel), plucks the
+    ``pluck`` field/relation value from each record, and exposes the resulting
+    array to row expressions as ``lookups.<key>``. The canonical use: a course
+    catalog looks up the caller's enrollments plucked to ``course`` ids, and the
+    per-row Enroll button hides for courses whose id is in that array."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    key: str = Field(min_length=1, max_length=63, pattern=r"^[a-z][a-z0-9_]*$")
+    entity: str
+    filters: list[RecordListFilter] = Field(default_factory=list)
+    pluck: str  # field or to-one relation slug whose values form the array
+    limit: int = 200
+
+
 class RecordListElement(_Element):
     """A read-only display of existing records of an entity — a live "status board".
 
@@ -467,6 +487,17 @@ class RecordListElement(_Element):
     # board route each row to its own player, e.g. ``/views/{player_view_slug}/view``.
     row_link_template: str | None = None
     row_link_label: str = "Open"
+    # Auxiliary one-shot queries whose plucked values row expressions can test
+    # against (exposed as ``lookups.<key>``) — see :class:`RecordListLookup`.
+    row_lookups: list[RecordListLookup] = Field(default_factory=list)
+    # Per-row visibility for the workflow button / link: a JsonLogic expression
+    # evaluated over the ROW's values merged onto the view scope, plus
+    # ``lookups.*``. ``None`` = always visible. The canonical catalog rule:
+    # ``{"!": {"in": [{"var": "id"}, {"var": "lookups.my_course_ids"}]}}``.
+    row_workflow_visible_when: Expression = None
+    # Shown (muted, no button) in place of a hidden row action — "Enrolled ✓".
+    row_workflow_hidden_text: str | None = None
+    row_link_visible_when: Expression = None
     width: FieldWidth | None = None
 
     @field_validator("row_link_template")
