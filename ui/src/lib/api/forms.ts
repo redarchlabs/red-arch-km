@@ -399,6 +399,9 @@ export interface AgentDiaryElement extends ElementBase {
   page_size?: number;
   height?: "sm" | "md" | "lg" | "fill";
   poll_ms?: number | null;
+  /** Show a reply box. Agents end runs with questions, and a finished run cannot
+   *  be answered any other way. */
+  allow_reply?: boolean;
   width?: FieldWidth | null;
 }
 

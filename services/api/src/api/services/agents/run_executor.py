@@ -238,7 +238,15 @@ class AgentRunExecutor:
             resume_answers = dict(resume.get("answers") or {})
         else:
             task = str(run.input.get("task") or run.input.get("message") or "").strip() or "Proceed."
-            system = build_system_prompt(agent)
+            # A work-order run is watched through a task list the agent has to fill
+            # in; without the title it does not know it is on one.
+            wo_title: str | None = None
+            if run.work_order_id is not None:
+                from api.models.work_order import WorkOrder
+
+                wo = await session.get(WorkOrder, run.work_order_id)
+                wo_title = wo.title if wo is not None else None
+            system = build_system_prompt(agent, work_order_title=wo_title)
             if linkage is not None:
                 from api.services.agents.tools.bridge import workflow_system_addendum, wrap_workflow_task
 

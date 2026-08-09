@@ -17,6 +17,7 @@ import {
   getWorkOrderEntries,
   getWorkOrderMap,
   listWorkOrders,
+  replyToWorkOrder,
   setWorkOrderStatus,
   type WorkOrder,
   type WorkOrderDetail,
@@ -169,6 +170,7 @@ interface DiaryProps {
   pageSize?: number;
   height?: string;
   pollMs?: number | null;
+  allowReply?: boolean;
 }
 
 /**
@@ -180,10 +182,20 @@ interface DiaryProps {
  * prepends — without that, adding content above the viewport yanks the reader
  * back to where those entries now sit.
  */
-export function AgentDiaryNode({ workOrderId, title, pageSize = 20, height = "md", pollMs }: DiaryProps) {
+export function AgentDiaryNode({
+  workOrderId,
+  title,
+  pageSize = 20,
+  height = "md",
+  pollMs,
+  allowReply = true,
+}: DiaryProps) {
   const [entries, setEntries] = useState<WorkOrderEntry[]>([]);
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [reply, setReply] = useState("");
+  const [sending, setSending] = useState(false);
+  const [replyError, setReplyError] = useState<string | null>(null);
   const boxRef = useRef<HTMLDivElement>(null);
   const pinnedToBottom = useRef(true);
 
@@ -235,6 +247,24 @@ export function AgentDiaryNode({ workOrderId, title, pageSize = 20, height = "md
     if (box.scrollTop < 60) void loadOlder();
   };
 
+  const send = async () => {
+    if (!workOrderId || !reply.trim() || sending) return;
+    setSending(true);
+    setReplyError(null);
+    try {
+      await replyToWorkOrder(workOrderId, reply.trim());
+      setReply("");
+      // The reply — and whatever the server decided to do with it — is a diary
+      // entry, so reloading is what shows the outcome.
+      pinnedToBottom.current = true;
+      loadNewest();
+    } catch (err: unknown) {
+      setReplyError(getApiErrorMessage(err, "Could not send the reply"));
+    } finally {
+      setSending(false);
+    }
+  };
+
   if (!workOrderId) return <p className="text-sm text-muted-foreground">No work order selected.</p>;
 
   return (
@@ -274,6 +304,36 @@ export function AgentDiaryNode({ workOrderId, title, pageSize = 20, height = "md
           ))
         )}
       </div>
+      {allowReply ? (
+        <div className="space-y-1">
+          {replyError ? <p className="text-xs text-destructive">{replyError}</p> : null}
+          <div className="flex items-end gap-2">
+            <textarea
+              value={reply}
+              onChange={(e) => setReply(e.target.value)}
+              onKeyDown={(e) => {
+                // Enter sends, Shift+Enter breaks the line — and preventDefault
+                // matters twice over, since this sits inside the renderer's form.
+                if (e.key !== "Enter" || e.shiftKey) return;
+                e.preventDefault();
+                void send();
+              }}
+              placeholder="Reply to the agent…"
+              aria-label="Reply to the agent"
+              rows={2}
+              className="w-full rounded-md border bg-background px-2 py-1.5 text-sm"
+            />
+            <Button
+              type="button"
+              size="sm"
+              onClick={() => void send()}
+              disabled={sending || !reply.trim()}
+            >
+              {sending ? <Loader2 className="h-3 w-3 animate-spin" /> : "Send"}
+            </Button>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

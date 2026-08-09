@@ -2248,6 +2248,7 @@ export function FormRenderer({
                 pageSize={el.page_size}
                 height={el.height}
                 pollMs={el.poll_ms}
+                allowReply={el.allow_reply}
               />
             </ElementErrorBoundary>
           </div>

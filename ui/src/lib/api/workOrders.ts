@@ -134,3 +134,9 @@ export async function assignWorkOrder(id: string, assignedAgentId: string | null
     assigned_agent_id: assignedAgentId,
   })).data;
 }
+
+/** Reply to the agent working an order. A finished run cannot be answered, so a
+ *  reply records the message and queues a follow-up run carrying the diary. */
+export async function replyToWorkOrder(id: string, text: string): Promise<WorkOrder> {
+  return (await apiClient.post<WorkOrder>(`/work-orders/${id}/reply`, { text })).data;
+}

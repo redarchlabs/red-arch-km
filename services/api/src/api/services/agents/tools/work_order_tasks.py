@@ -124,7 +124,11 @@ SET_WORK_ORDER_TASKS = ToolSpec(
     },
     category=Category.PLAN,
     handler=_set_tasks,
-    side_effecting=True,
+    # NOT side_effecting: that flag means an action that leaves the company, and
+    # under the default high_touch posture it forces approval. Writing a plan is
+    # internal, and an agent that must ask permission before it can say what it
+    # intends to do cannot plan at all.
+    side_effecting=False,
 )
 
 UPDATE_WORK_ORDER_TASK = ToolSpec(
@@ -147,7 +151,7 @@ UPDATE_WORK_ORDER_TASK = ToolSpec(
     },
     category=Category.PLAN,
     handler=_update_task,
-    side_effecting=True,
+    side_effecting=False,  # internal progress reporting — see set_work_order_tasks
 )
 
 LIST_WORK_ORDER_TASKS = ToolSpec(
