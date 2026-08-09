@@ -46,6 +46,10 @@ Emit = Callable[[dict[str, Any]], Awaitable[None]]
 ApprovalStrategy = Callable[[ToolSpec, dict[str, Any]], Awaitable[bool]]
 # () -> keep going? False when the run was cancelled externally.
 ContinueCheck = Callable[[], Awaitable[bool]]
+# () -> messages a person queued for this run, taken exactly once. Pulled by the
+# loop rather than pushed at it, because only the loop knows when its message list
+# is in a state that can accept a user turn.
+SteerDrain = Callable[[], Awaitable[list[str]]]
 
 
 class RunCancelled(Exception):  # noqa: N818 - a control signal, not an error condition
@@ -145,6 +149,7 @@ async def run_agent_loop(
     resume_answers: dict[str, dict[str, Any]] | None = None,
     autonomy: str = "high_touch",
     continue_check: ContinueCheck | None = None,
+    steer: SteerDrain | None = None,
 ) -> RunResult:
     """Drive ``agent`` to quiescence. ``messages`` already includes the system prompt.
 
@@ -180,6 +185,7 @@ async def run_agent_loop(
             answers=answers,
             autonomy=autonomy,
             continue_check=continue_check,
+            steer=steer,
             result=result,
         )
     except RunParked as parked:
@@ -210,6 +216,7 @@ async def _drive_loop(
     answers,
     autonomy,
     continue_check,
+    steer,
     result,
 ) -> RunResult:
     """The loop itself. Split out so ``run_agent_loop`` can attach accumulated usage
@@ -221,6 +228,17 @@ async def _drive_loop(
             tool_calls = pending
             pending = None
         else:
+            # The ONE safe place to interject. Here every tool_use in `messages`
+            # already has its tool_result, so an extra user turn is well-formed.
+            # Mid-batch — or on the `pending` branch above, resuming a parked turn
+            # whose messages end in unresolved tool_calls — a user turn sits where
+            # a tool result must go, which OpenAI and Anthropic both reject
+            # outright: an LLMError that finalizes the run as *error*. A steer that
+            # kills the run is worse than one that arrives a turn late.
+            if steer is not None:
+                for text in await steer():
+                    messages.append({"role": "user", "content": text})
+                    await emit({"type": "steer", "content": text})
             completion = await _stream_turn(
                 provider, model, messages, schemas, temperature, max_tokens, reasoning_effort, emit
             )
