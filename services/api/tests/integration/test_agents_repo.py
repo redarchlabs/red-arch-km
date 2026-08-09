@@ -9,6 +9,7 @@ import uuid
 import pytest
 from api.models.agent import Agent
 from api.models.org import Org
+from api.repositories.agent import AgentRepository
 from api.schemas.agent import AgentCreate, AgentUpdate
 from api.services.agents.service import (
     AgentConflictError,
@@ -78,6 +79,57 @@ class TestAgentServiceValidation:
         await admin_session.commit()
         with pytest.raises(AgentValidationError):
             await svc.update_agent(a.id, AgentUpdate(supervisor_id=a.id))
+
+
+class TestListConsultable:
+    """The roster ``consult_peer`` names back to a model that guessed wrong.
+
+    It must match the handler's own routing rules exactly. A name listed here that
+    the handler then rejects is worse than no list at all: the model would spend a
+    second turn being refused by the suggestion it was given.
+    """
+
+    async def test_only_enabled_advisory_agents_excluding_self(self, admin_session: AsyncSession) -> None:
+        org_a, _ = await _seed_two_orgs(admin_session)
+        me = Agent(name="asker", provider="openai", model="gpt-5-mini", org_id=org_a.id, kind="advisory")
+        admin_session.add_all(
+            [
+                me,
+                Agent(name="security", provider="openai", model="gpt-5-mini", org_id=org_a.id, kind="advisory"),
+                Agent(name="seo", provider="openai", model="gpt-5-mini", org_id=org_a.id, kind="advisory"),
+                # excluded: wrong kind
+                Agent(name="hands", provider="openai", model="gpt-5-mini", org_id=org_a.id, kind="operator"),
+                Agent(name="boss", provider="openai", model="gpt-5-mini", org_id=org_a.id, kind="coordinator"),
+                # excluded: advisory but switched off
+                Agent(
+                    name="retired",
+                    provider="openai",
+                    model="gpt-5-mini",
+                    org_id=org_a.id,
+                    kind="advisory",
+                    enabled=False,
+                ),
+            ]
+        )
+        await admin_session.commit()
+
+        names = [a.name for a in await AgentRepository(admin_session, org_a.id).list_consultable(exclude_id=me.id)]
+
+        assert names == ["security", "seo"]
+
+    async def test_scoped_to_the_org(self, admin_session: AsyncSession) -> None:
+        org_a, org_b = await _seed_two_orgs(admin_session)
+        admin_session.add_all(
+            [
+                Agent(name="mine", provider="openai", model="gpt-5-mini", org_id=org_a.id, kind="advisory"),
+                Agent(name="theirs", provider="openai", model="gpt-5-mini", org_id=org_b.id, kind="advisory"),
+            ]
+        )
+        await admin_session.commit()
+
+        names = [a.name for a in await AgentRepository(admin_session, org_a.id).list_consultable()]
+
+        assert names == ["mine"]
 
 
 class TestAgentRLS:

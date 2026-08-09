@@ -39,8 +39,25 @@ class AgentRepository:
 
     async def list_direct_reports(self, supervisor_id: uuid.UUID) -> list[Agent]:
         result = await self._session.execute(
-            select(Agent).where(Agent.org_id == self._org_id, Agent.supervisor_id == supervisor_id)
+            select(Agent).where(Agent.org_id == self._org_id, Agent.supervisor_id == supervisor_id).order_by(Agent.name)
         )
+        return list(result.scalars().all())
+
+    async def list_consultable(self, *, exclude_id: uuid.UUID | None = None) -> list[Agent]:
+        """Agents ``consult_peer`` would accept: enabled, advisory, not the caller.
+
+        The filters must stay in step with the handler's routing checks. This list
+        is read back to a model that named a peer wrongly, so an entry the handler
+        would then refuse costs it a second wasted turn.
+        """
+        query = select(Agent).where(
+            Agent.org_id == self._org_id,
+            Agent.kind == "advisory",
+            Agent.enabled.is_(True),
+        )
+        if exclude_id is not None:
+            query = query.where(Agent.id != exclude_id)
+        result = await self._session.execute(query.order_by(Agent.name))
         return list(result.scalars().all())
 
     async def create(self, agent: Agent) -> Agent:
