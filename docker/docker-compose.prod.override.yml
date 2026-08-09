@@ -1,0 +1,72 @@
+# Production additions to docker-compose.prod.yml.
+#
+# TRACKED, deliberately. This lived only on the prod host for months, which meant
+# an `rsync --delete` to that host destroyed it — and it did, on 2026-08-09,
+# taking the whole build with it until it was reconstructed from `docker inspect`.
+# The build args below could not be recovered that way at all: they are consumed
+# at image build time and leave no trace in a running container.
+#
+# It holds no secrets. Every value is interpolated from the host's .env, so the
+# file is safe to track and the host keeps the only copy of the credentials.
+services:
+  # The base prod compose gives the ui service no environment at all, so the
+  # Clerk secret is missing and the Next middleware 500s every page.
+  ui:
+    env_file: ../.env
+    # NEXT_PUBLIC_* are inlined into the client bundle at BUILD time, and the base
+    # prod compose passes no build args at all — so without these the prerender
+    # step dies with "@clerk/clerk-react: Missing publishableKey" and the image
+    # never gets built. Build args do not survive into a running container, which
+    # is why this block cannot be recovered from `docker inspect` after the fact.
+    build:
+      context: ..
+      dockerfile: docker/ui.Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:?}
+        NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:?}
+        NEXT_PUBLIC_CLERK_SIGN_IN_URL: ${NEXT_PUBLIC_CLERK_SIGN_IN_URL:-/login}
+        NEXT_PUBLIC_CLERK_SIGN_UP_URL: ${NEXT_PUBLIC_CLERK_SIGN_UP_URL:-/sign-up}
+        NEXT_PUBLIC_CLERK_JWT_TEMPLATE: ${NEXT_PUBLIC_CLERK_JWT_TEMPLATE:-redarch-km}
+
+  api:
+    env_file: ../.env
+
+  worker:
+    env_file: ../.env
+
+  celery-beat:
+    env_file: ../.env
+
+  # Base prod compose has no object storage; documents need it.
+  minio:
+    image: minio/minio:RELEASE.2024-10-13T13-34-11Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${STORAGE_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${STORAGE_SECRET_KEY:?}
+    volumes:
+      - minio-data:/data
+    networks: [km2]
+    healthcheck:
+      test: ["CMD-SHELL", "mc ready local || exit 1"]
+      interval: 10s
+      timeout: 5s
+      start_period: 10s
+      retries: 5
+    restart: unless-stopped
+
+  createbuckets:
+    image: minio/mc
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      STORAGE_ACCESS_KEY: ${STORAGE_ACCESS_KEY:-minioadmin}
+      STORAGE_SECRET_KEY: ${STORAGE_SECRET_KEY:?}
+      STORAGE_BUCKET: ${STORAGE_BUCKET:-km2-documents}
+    networks: [km2]
+    entrypoint: >
+      /bin/sh -c " until mc alias set k http://minio:9000 \"${STORAGE_ACCESS_KEY}\" \"${STORAGE_SECRET_KEY}\"; do echo 'waiting for minio...'; sleep 2; done; mc mb -p k/\"${STORAGE_BUCKET}\" || true; echo \"bucket ${STORAGE_BUCKET} ready\"; "
+
+volumes:
+  minio-data:
