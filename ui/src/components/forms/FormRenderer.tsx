@@ -344,9 +344,45 @@ function RecordListNode({
   const [rows, setRows] = useState<EntityRecord[] | null>(null);
   const [error, setError] = useState(false);
   const [busyRow, setBusyRow] = useState<string | null>(null);
+  // Plucked results of the element's auxiliary queries, keyed by lookup key —
+  // the `lookups.*` scope per-row visibility expressions evaluate against.
+  const [lookups, setLookups] = useState<Record<string, unknown[]>>({});
+  // Bumped after a row workflow completes so rows AND lookups refetch — the run
+  // almost certainly changed what this list shows (that's why the button exists).
+  const [runTick, setRunTick] = useState(0);
   // Serialize the declared filters to a stable string so the fetch effect re-runs
   // only when they actually change (not on every render's fresh array identity).
   const filtersKey = JSON.stringify(el.filters ?? []);
+  const lookupsKey = JSON.stringify(el.row_lookups ?? []);
+
+  useEffect(() => {
+    const declared = el.row_lookups ?? [];
+    if (declared.length === 0) return;
+    let alive = true;
+    void Promise.all(
+      declared.map(async (lk) => {
+        const res = await listRecords(lk.entity, {
+          limit: lk.limit ?? 200,
+          filters: (lk.filters ?? []).map((f) => ({
+            field: f.field,
+            op: f.op ?? "eq",
+            value: f.value == null ? undefined : String(f.value),
+          })),
+        });
+        return [lk.key, res.items.map((r) => r[lk.pluck])] as const;
+      }),
+    )
+      .then((entries) => {
+        if (alive) setLookups(Object.fromEntries(entries));
+      })
+      .catch(() => {
+        /* keep last known lookups; visibility rules fail open below */
+      });
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lookupsKey, runTick]);
 
   useEffect(() => {
     if (!el.entity) {
@@ -421,8 +457,9 @@ function RecordListNode({
     };
     // `filtersKey` (below) is `el.filters` serialized — a stable stand-in that
     // re-runs the effect when the filters change without the array's churn.
+    // `runTick` re-runs it after a row workflow completes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [el.entity, el.limit, el.sort_by, el.sort_dir, el.poll_ms, filtersKey]);
+  }, [el.entity, el.limit, el.sort_by, el.sort_dir, el.poll_ms, filtersKey, runTick]);
 
   // Columns: the explicit field list PLUS any column configured for presentation
   // only (additive, so `columns` never has to restate `fields`), else the field
@@ -454,10 +491,23 @@ function RecordListNode({
         inputs[k] = evaluate(expr, evalScope);
       }
       await onRunWorkflow(el.row_workflow_id, inputs, recordId);
+      // The run almost certainly changed what this list (or its lookups) shows —
+      // refetch both so e.g. an Enroll button flips to its hidden-state text.
+      setRunTick((t) => t + 1);
     } finally {
       setBusyRow(null);
     }
   };
+
+  // Per-row visibility for the row button/link: JsonLogic over the row's values
+  // merged onto the view scope, plus the lookup arrays. No rule = visible; a
+  // rule referencing a lookup that hasn't loaded yet evaluates against [] and
+  // corrects itself when the lookup lands.
+  const rowScope = (row: EntityRecord) => ({ ...scopeValues, ...row, lookups });
+  const rowActionVisible = (row: EntityRecord): boolean =>
+    el.row_workflow_visible_when == null || Boolean(evaluate(el.row_workflow_visible_when, rowScope(row)));
+  const rowLinkVisible = (row: EntityRecord): boolean =>
+    el.row_link_visible_when == null || Boolean(evaluate(el.row_link_visible_when, rowScope(row)));
 
   // Right-align a column when its values are numbers — scanning figures down a
   // ragged left edge is what makes a table look homemade. An explicit `align`
@@ -545,24 +595,32 @@ function RecordListNode({
                   ))}
                   {el.row_link_template ? (
                     <td className="px-3 py-2 text-right">
-                      <a
-                        href={fillTokens(el.row_link_template, row)}
-                        className="inline-block rounded-md border bg-background px-2 py-1 text-xs font-medium hover:bg-muted"
-                      >
-                        {el.row_link_label ?? "Open"}
-                      </a>
+                      {rowLinkVisible(row) ? (
+                        <a
+                          href={fillTokens(el.row_link_template, row)}
+                          className="inline-block rounded-md border bg-background px-2 py-1 text-xs font-medium hover:bg-muted"
+                        >
+                          {el.row_link_label ?? "Open"}
+                        </a>
+                      ) : null}
                     </td>
                   ) : null}
                   {el.row_workflow_id ? (
                     <td className="px-3 py-2 text-right">
-                      <button
-                        type="button"
-                        className="rounded-md border bg-background px-2 py-1 text-xs font-medium hover:bg-muted disabled:opacity-60"
-                        disabled={busyRow === String(row.id)}
-                        onClick={() => void runRow(row)}
-                      >
-                        {el.row_action_label ?? "Run"}
-                      </button>
+                      {rowActionVisible(row) ? (
+                        <button
+                          type="button"
+                          className="rounded-md border bg-background px-2 py-1 text-xs font-medium hover:bg-muted disabled:opacity-60"
+                          disabled={busyRow === String(row.id)}
+                          onClick={() => void runRow(row)}
+                        >
+                          {el.row_action_label ?? "Run"}
+                        </button>
+                      ) : el.row_workflow_hidden_text ? (
+                        <span className="whitespace-nowrap text-xs text-muted-foreground">
+                          {el.row_workflow_hidden_text}
+                        </span>
+                      ) : null}
                     </td>
                   ) : null}
                 </tr>
@@ -2563,11 +2621,16 @@ export function FormRenderer({
                       const href = fillHref(col.href_template, row);
                       return (
                         <td key={ci} className="px-2 py-1.5">
+                          {/* Button-look, not underlined text: these are the
+                              primary actions of their rows (open slides, read
+                              the source), and inline links read as an
+                              afterthought next to the styled inputs around
+                              them. Same recipe as the record_list row link. */}
                           <a
                             href={href}
                             target={col.new_tab ? "_blank" : undefined}
                             rel={col.new_tab ? "noopener noreferrer" : undefined}
-                            className="font-medium text-primary underline underline-offset-2 hover:no-underline"
+                            className="inline-block whitespace-nowrap rounded-md border bg-background px-2.5 py-1 text-xs font-medium hover:bg-muted"
                           >
                             {col.link_label ?? "Open"}
                           </a>

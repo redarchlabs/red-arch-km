@@ -2,6 +2,7 @@
 
 import { ChevronDown } from "lucide-react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 import { useOrg } from "@/context/OrgContext";
@@ -10,6 +11,7 @@ import { cn } from "@/lib/utils";
 export function OrgSwitcher() {
   const { orgs, currentOrg, setCurrentOrgId, isSiteAdmin, isLoading, error, refresh } = useOrg();
   const [open, setOpen] = useState(false);
+  const router = useRouter();
 
   if (orgs.length === 0 && isLoading) {
     return <div className="text-sm text-muted-foreground">Loading organizations…</div>;
@@ -71,8 +73,15 @@ export function OrgSwitcher() {
                 key={org.id}
                 type="button"
                 onClick={() => {
+                  const changed = org.id !== currentOrg?.id;
                   setCurrentOrgId(org.id);
                   setOpen(false);
+                  // Whatever page is open belongs to the OLD org — a record
+                  // detail, a course player, a filtered board — and re-renders
+                  // as a 404/empty under the new org's scoping, which reads as
+                  // a broken app rather than a completed switch. Home is the
+                  // only page valid in every org.
+                  if (changed) router.push("/home");
                 }}
                 className={cn(
                   "block w-full px-3 py-2 text-left text-sm hover:bg-accent",
