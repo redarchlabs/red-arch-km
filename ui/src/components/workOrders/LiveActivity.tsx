@@ -94,6 +94,16 @@ export function LiveActivityNode({
         next.push({ kind: "steer", text: event.content });
       } else if (event.type === "steer_queued") {
         next.push({ kind: "note", text: "Queued — the agent picks this up on its next turn." });
+      } else if (event.type === "steer_restarted") {
+        // The agents had stopped, so this became a reply and started a fresh run
+        // with the diary as context — which is what "here's more information, try
+        // again" has to mean on an order nobody is working.
+        next.push({ kind: "note", text: "The agents had stopped, so this started a new run on the work order." });
+      } else if (event.type === "steer_recorded") {
+        next.push({
+          kind: "note",
+          text: "Recorded on the work order. Nothing is running — start the order, or assign an agent, to have it worked.",
+        });
       } else if (event.type === "steer_rejected") {
         next.push({ kind: "note", text: `Not delivered: ${event.reason}` });
       } else if (event.type === "done") {

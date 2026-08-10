@@ -110,14 +110,31 @@ export async function listAgents(): Promise<Agent[]> {
   return (await apiClient.get<Agent[]>("/agents/")).data;
 }
 
+/** What an agent is doing right now. `working` is informational; `needs_you` means a
+ *  person is the blocker — an approval or a question — and wins when both are true. */
+export interface AgentActivity {
+  agent_id: string;
+  state: "working" | "needs_you";
+  live_runs: number;
+  waiting_on_you: number;
+}
+
+/** Only agents with something going on come back, so an empty list means idle. */
+export async function listAgentActivity(): Promise<AgentActivity[]> {
+  return (await apiClient.get<AgentActivity[]>("/agents/activity")).data;
+}
+
 export async function getAgentRun(runId: string): Promise<AgentRun> {
   return (await apiClient.get<AgentRun>(`/agents/runs/${runId}`)).data;
 }
 
 /** Transcript of a (possibly background) agent run — powers the workflow run
  * monitor's inline "what is the agent doing" view. */
-export async function listAgentRunSteps(runId: string): Promise<AgentRunStep[]> {
-  return (await apiClient.get<AgentRunStep[]>(`/agents/runs/${runId}/steps`)).data;
+export async function listAgentRunSteps(
+  runId: string,
+): Promise<AgentRunStep[]> {
+  return (await apiClient.get<AgentRunStep[]>(`/agents/runs/${runId}/steps`))
+    .data;
 }
 
 export async function getAgent(id: string): Promise<Agent> {
@@ -128,7 +145,10 @@ export async function createAgent(input: AgentCreateInput): Promise<Agent> {
   return (await apiClient.post<Agent>("/agents/", input)).data;
 }
 
-export async function updateAgent(id: string, input: AgentUpdateInput): Promise<Agent> {
+export async function updateAgent(
+  id: string,
+  input: AgentUpdateInput,
+): Promise<Agent> {
   return (await apiClient.patch<Agent>(`/agents/${id}`, input)).data;
 }
 
@@ -140,11 +160,19 @@ export async function listProviders(): Promise<ProviderInfo[]> {
   return (await apiClient.get<ProviderInfo[]>("/agents/providers")).data;
 }
 
-export async function setProviderCredential(provider: string, apiKey: string): Promise<void> {
-  await apiClient.post("/agents/providers/credentials", { provider, api_key: apiKey });
+export async function setProviderCredential(
+  provider: string,
+  apiKey: string,
+): Promise<void> {
+  await apiClient.post("/agents/providers/credentials", {
+    provider,
+    api_key: apiKey,
+  });
 }
 
-export async function deleteProviderCredential(provider: string): Promise<void> {
+export async function deleteProviderCredential(
+  provider: string,
+): Promise<void> {
   await apiClient.delete(`/agents/providers/${provider}/credentials`);
 }
 
@@ -164,6 +192,9 @@ export interface Approval {
    * (/workflows/{workflow_id}/runs?run={workflow_run_id}). */
   workflow_run_id: string | null;
   workflow_id: string | null;
+  /** Whose run is parked on this — lets a roster card claim its own approvals. */
+  agent_id: string | null;
+  agent_name: string | null;
 }
 
 export interface Notification {
@@ -183,14 +214,17 @@ export async function listApprovals(): Promise<Approval[]> {
 }
 
 export async function approveApproval(id: string): Promise<Approval> {
-  return (await apiClient.post<Approval>(`/agents/approvals/${id}/approve`)).data;
+  return (await apiClient.post<Approval>(`/agents/approvals/${id}/approve`))
+    .data;
 }
 
 export async function denyApproval(id: string): Promise<Approval> {
   return (await apiClient.post<Approval>(`/agents/approvals/${id}/deny`)).data;
 }
 
-export async function listNotifications(unresolvedOnly = false): Promise<Notification[]> {
+export async function listNotifications(
+  unresolvedOnly = false,
+): Promise<Notification[]> {
   return (
     await apiClient.get<Notification[]>("/agents/notifications", {
       params: { unresolved_only: unresolvedOnly },
@@ -199,7 +233,9 @@ export async function listNotifications(unresolvedOnly = false): Promise<Notific
 }
 
 export async function resolveNotification(id: string): Promise<Notification> {
-  return (await apiClient.post<Notification>(`/agents/notifications/${id}/resolve`)).data;
+  return (
+    await apiClient.post<Notification>(`/agents/notifications/${id}/resolve`)
+  ).data;
 }
 
 /** An agent is blocked waiting for an answer. Unlike an approval — which is a
@@ -217,6 +253,8 @@ export interface AgentQuestion {
   created_at: string;
   asked_by: string | null;
   target_agent: string | null;
+  /** The id behind `asked_by` — lets a roster card pick out its own questions. */
+  asked_by_agent_id: string | null;
 }
 
 export interface AnswerResult {
@@ -232,12 +270,22 @@ export async function listQuestions(): Promise<AgentQuestion[]> {
   return (await apiClient.get<AgentQuestion[]>("/agents/questions")).data;
 }
 
-export async function answerQuestion(id: string, answer: string): Promise<AnswerResult> {
-  return (await apiClient.post<AnswerResult>(`/agents/questions/${id}/answer`, { answer })).data;
+export async function answerQuestion(
+  id: string,
+  answer: string,
+): Promise<AnswerResult> {
+  return (
+    await apiClient.post<AnswerResult>(`/agents/questions/${id}/answer`, {
+      answer,
+    })
+  ).data;
 }
 
 /** Unblock the agent without answering — it is told to use its own judgement. */
-export async function declineQuestion(id: string, reason?: string): Promise<AnswerResult> {
+export async function declineQuestion(
+  id: string,
+  reason?: string,
+): Promise<AnswerResult> {
   return (
     await apiClient.post<AnswerResult>(`/agents/questions/${id}/decline`, {
       reason: reason || null,
@@ -249,10 +297,24 @@ export async function declineQuestion(id: string, reason?: string): Promise<Answ
 export type AgentConsoleEvent =
   | { type: "run_started"; run_id: string }
   | { type: "delta"; content: string }
-  | { type: "tool_call"; id?: string; name: string; arguments: Record<string, unknown> }
+  | {
+      type: "tool_call";
+      id?: string;
+      name: string;
+      arguments: Record<string, unknown>;
+    }
   | { type: "tool_result"; name: string; result: Record<string, unknown> }
-  | { type: "approval_required"; name: string; arguments: Record<string, unknown> }
-  | { type: "usage"; prompt_tokens: number; completion_tokens: number; total_tokens: number }
+  | {
+      type: "approval_required";
+      name: string;
+      arguments: Record<string, unknown>;
+    }
+  | {
+      type: "usage";
+      prompt_tokens: number;
+      completion_tokens: number;
+      total_tokens: number;
+    }
   /** The agent asked something and is waiting on the answer. The stream ends here —
    * an answer takes as long as a person takes — and the run continues in the
    * background once the question is answered from the inbox. */
@@ -278,8 +340,12 @@ export async function* streamAgentConsole(
   messages: AgentConsoleMessage[],
   options: { signal?: AbortSignal; documentIds?: string[] } = {},
 ): AsyncGenerator<AgentConsoleEvent> {
-  const baseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
-  const orgId = typeof window !== "undefined" ? localStorage.getItem("redarch:currentOrgId") : null;
+  const baseUrl =
+    process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
+  const orgId =
+    typeof window !== "undefined"
+      ? localStorage.getItem("redarch:currentOrgId")
+      : null;
   const token = await getToken();
 
   const response = await fetch(`${baseUrl}/agents/${agentId}/console/stream`, {

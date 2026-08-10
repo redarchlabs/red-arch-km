@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, ChevronUp, Loader2, X } from "lucide-react";
+import { AlertTriangle, Check, ChevronUp, Loader2, X } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -16,9 +16,11 @@ import {
   listAgentRunSteps,
   listAgents,
   listApprovals,
+  listNotifications,
   listQuestions,
+  resolveNotification,
 } from "@/lib/api/agents";
-import type { Agent, AgentQuestion, AgentRunStep, Approval } from "@/lib/api/agents";
+import type { Agent, AgentQuestion, AgentRunStep, Approval, Notification } from "@/lib/api/agents";
 import { getApiErrorMessage } from "@/lib/api/errors";
 import {
   assignWorkOrder,
@@ -420,6 +422,7 @@ interface ApprovalQueueProps {
 export function ApprovalQueueNode({
   scope,
   title,
+  workOrderId,
   hideWhenEmpty = true,
   pollMs,
   runIds,
@@ -427,6 +430,7 @@ export function ApprovalQueueNode({
 }: ApprovalQueueProps) {
   const [items, setItems] = useState<Approval[]>([]);
   const [asks, setAsks] = useState<AgentQuestion[]>([]);
+  const [alerts, setAlerts] = useState<Notification[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
@@ -441,13 +445,28 @@ export function ApprovalQueueNode({
     void listApprovals()
       .then((all) => setItems(mine(all)))
       .catch(() => setItems([]));
+    // Escalations: an order that stalled, blocked, or was started by agents that
+    // cannot do it. Nothing is waiting on a *decision*, so these were only ever
+    // written to the notifications list — which is why an order could sit blocked
+    // for five hours while this very panel said "nothing is waiting on you".
+    void listNotifications(true)
+      .then((all) =>
+        setAlerts(
+          all.filter(
+            (n) =>
+              n.kind === "escalation" &&
+              (scope === "org" || (workOrderId != null && n.work_order_id === workOrderId)),
+          ),
+        ),
+      )
+      .catch(() => setAlerts([]));
     if (!includeQuestions) return;
     void listQuestions()
       // Only questions aimed at a person: an agent-to-agent consult is answered by
       // the peer's own run, and showing it here would invite someone to answer for it.
       .then((all) => setAsks(mine(all.filter((q) => q.audience === "human" && q.status === "pending"))))
       .catch(() => setAsks([]));
-  }, [mine, includeQuestions]);
+  }, [mine, includeQuestions, scope, workOrderId]);
 
   useEffect(load, [load]);
   usePoll(load, pollMs);
@@ -483,12 +502,44 @@ export function ApprovalQueueNode({
     }
   };
 
-  if (items.length === 0 && asks.length === 0 && hideWhenEmpty) return null;
+  const dismiss = async (id: string) => {
+    setBusy(id);
+    setError(null);
+    try {
+      await resolveNotification(id);
+      load();
+    } catch {
+      setError("That alert was already cleared elsewhere.");
+      load();
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  if (items.length === 0 && asks.length === 0 && alerts.length === 0 && hideWhenEmpty) return null;
 
   return (
     <div className="space-y-2">
       {title ? <h3 className="text-sm font-medium">{title}</h3> : null}
       {error ? <p className="text-xs text-destructive">{error}</p> : null}
+      {/* Above the questions: an escalation means the work has already stopped,
+          while a question means it is about to. Red, not amber — this one is not a
+          request, it is a report that something is wrong. */}
+      {alerts.map((n) => (
+        <div
+          key={n.id}
+          className="flex items-start gap-3 rounded-md border border-destructive/40 bg-destructive/5 p-3"
+        >
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" aria-hidden />
+          <div className="min-w-0 flex-1">
+            <div className="text-sm font-medium">{n.title}</div>
+            {n.body ? <p className="mt-0.5 text-xs text-muted-foreground">{n.body}</p> : null}
+          </div>
+          <Button size="sm" variant="outline" disabled={busy === n.id} onClick={() => void dismiss(n.id)}>
+            Got it
+          </Button>
+        </div>
+      ))}
       {/* Questions first: an agent that asked something is stopped dead until you
           answer, and it has already told you exactly what it needs. */}
       {asks.map((q) => (

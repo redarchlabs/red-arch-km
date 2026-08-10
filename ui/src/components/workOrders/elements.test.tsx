@@ -21,6 +21,8 @@ const answerQuestion = vi.fn();
 const declineQuestion = vi.fn();
 const approveApproval = vi.fn();
 const denyApproval = vi.fn();
+const listNotifications = vi.fn();
+const resolveNotification = vi.fn();
 const getWorkOrderMap = vi.fn();
 const listAgentRunSteps = vi.fn();
 
@@ -45,6 +47,8 @@ vi.mock("@/lib/api/agents", () => ({
   declineQuestion: (...a: unknown[]) => declineQuestion(...a),
   approveApproval: (...a: unknown[]) => approveApproval(...a),
   denyApproval: (...a: unknown[]) => denyApproval(...a),
+  listNotifications: (...a: unknown[]) => listNotifications(...a),
+  resolveNotification: (...a: unknown[]) => resolveNotification(...a),
 }));
 
 const push = vi.fn();
@@ -88,9 +92,10 @@ const order = (over: Partial<WorkOrder> = {}): WorkOrder => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
-  // The approval queue now also asks for questions; nothing pending is the
-  // default for every test that is not about them.
+  // The approval queue also asks for questions and escalations; nothing pending
+  // is the default for every test that is not about them.
   listQuestions.mockResolvedValue([]);
+  listNotifications.mockResolvedValue([]);
 });
 
 describe("WorkOrderActionsNode", () => {
@@ -507,6 +512,54 @@ describe("WorkOrderActionsNode mode", () => {
 
     await screen.findByLabelText("Assigned agent");
     expect(screen.queryByLabelText("Agent mode")).toBeNull();
+  });
+});
+
+describe("ApprovalQueueNode escalations", () => {
+  const stalled = [
+    {
+      id: "n-1",
+      kind: "escalation",
+      run_id: null,
+      work_order_id: "wo-1",
+      recipient_role: "org_admin",
+      title: "“SEO check” is blocked",
+      body: "research-analyst marked T2 as blocked.",
+      status: "unread",
+      created_at: "2026-08-09T20:15:00Z",
+    },
+  ];
+
+  it("shows an escalation on the order it happened to", async () => {
+    // The failure this exists for: nine blocked steps, an escalation written and
+    // unread, and this panel saying nothing was waiting.
+    listApprovals.mockResolvedValue([]);
+    listNotifications.mockResolvedValue(stalled);
+
+    render(<ApprovalQueueNode scope="work_order" workOrderId="wo-1" runIds={new Set()} />);
+
+    expect(await screen.findByText(/is blocked/)).toBeTruthy();
+  });
+
+  it("leaves another order's escalation alone", async () => {
+    listApprovals.mockResolvedValue([]);
+    listNotifications.mockResolvedValue([{ ...stalled[0], work_order_id: "wo-2" }]);
+
+    const { container } = render(<ApprovalQueueNode scope="work_order" workOrderId="wo-1" runIds={new Set()} />);
+
+    await waitFor(() => expect(listNotifications).toHaveBeenCalled());
+    expect(container.textContent).toBe("");
+  });
+
+  it("clears one when a person acknowledges it", async () => {
+    listApprovals.mockResolvedValue([]);
+    listNotifications.mockResolvedValue(stalled);
+    resolveNotification.mockResolvedValue({ ...stalled[0], status: "resolved" });
+
+    render(<ApprovalQueueNode scope="work_order" workOrderId="wo-1" runIds={new Set()} />);
+    fireEvent.click(await screen.findByRole("button", { name: /Got it/ }));
+
+    await waitFor(() => expect(resolveNotification).toHaveBeenCalledWith("n-1"));
   });
 });
 

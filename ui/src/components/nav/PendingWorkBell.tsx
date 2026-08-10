@@ -4,20 +4,21 @@ import { Bell } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
-import { listApprovals, listQuestions } from "@/lib/api/agents";
+import { listApprovals, listNotifications, listQuestions } from "@/lib/api/agents";
 
 /** How often to re-check, when the tab is actually being looked at. */
 const POLL_MS = 20_000;
 
 /**
- * How many things are waiting on *you* — pending approvals plus questions agents
- * have asked a person.
+ * How many things are waiting on *you* — pending approvals, questions agents have
+ * asked a person, and unresolved escalations.
  *
- * Deliberately not the notification unread count: a notification is a record that
- * something happened, most of which needs nothing from you. A badge that counts
- * those trains people to ignore it, and then the one item that genuinely blocks
- * an agent goes unnoticed — which is exactly what happened with a run parked on
- * an approval nobody knew existed.
+ * Still not the notification unread count: most notifications are a record that
+ * something happened and need nothing from you, and a badge that counts those
+ * trains people to ignore it. Escalations are the exception and are counted —
+ * every one of them means work has already stopped. Leaving them out is how a
+ * work order sat blocked, with an escalation written and unread, under a bell
+ * that said nothing was waiting.
  *
  * Polling is gated on visibility: a background tab left open overnight would
  * otherwise make thousands of requests for a number nobody is reading.
@@ -28,8 +29,14 @@ export function PendingWorkBell() {
   const refresh = useCallback(async () => {
     if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
     try {
-      const [approvals, questions] = await Promise.all([listApprovals(), listQuestions()]);
-      setCount(approvals.length + questions.length);
+      const [approvals, questions, notifications] = await Promise.all([
+        listApprovals(),
+        listQuestions(),
+        listNotifications(true),
+      ]);
+      setCount(
+        approvals.length + questions.length + notifications.filter((n) => n.kind === "escalation").length,
+      );
     } catch {
       // A member without agent-admin rights gets 403 here, and an offline tab
       // gets a network error. Neither is worth a banner: the badge simply does

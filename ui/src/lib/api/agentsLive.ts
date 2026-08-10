@@ -24,7 +24,11 @@ export type LiveEvent =
   | { type: "done"; run_id: string; agent: string | null }
   | { type: "error"; error: string; run_id: string; agent: string | null }
   | { type: "steer_queued"; run_id: string; when: string }
-  | { type: "steer_rejected"; run_id?: string; reason: string }
+  // A message typed after every run finished: delivered to the work order instead
+  // of dropped, which either starts a fresh run or is recorded for whoever does.
+  | { type: "steer_restarted"; work_order_id: string }
+  | { type: "steer_recorded"; work_order_id: string }
+  | { type: "steer_rejected"; run_id?: string; work_order_id?: string; reason: string }
   | { type: "pong" };
 
 export async function mintLiveTicket(): Promise<LiveTicket> {
