@@ -176,8 +176,84 @@ class TestWhenTheServiceIsDown:
         assert "http" not in out["error"]
 
 
-class TestKnowledgeIsPerOrg:
-    def test_the_tool_says_it_cannot_reach_another_org(self) -> None:
-        """Told to "search the other org", an agent has no tool that can and nothing
-        that says so — so it goes looking for a route instead of saying no."""
-        assert "ONLY your own org" in knowledge.SEARCH_KNOWLEDGE.description
+class TestTheLocalOrgIsTheDefault:
+    """Cross-org reach exists, but only on an explicit instruction.
+
+    Pulling another org's material into this one's work order writes it into this
+    org's diary and artifacts, where it stays. That crossing should happen because
+    a person asked for it, not because a retrieval came back thin.
+    """
+
+    async def test_no_org_argument_searches_the_agents_own_org(self, captured) -> None:
+        ctx = _FakeCtx(agent=_FakeAgent(), actor_user_id=uuid.uuid4())
+
+        await knowledge.SEARCH_KNOWLEDGE.handler(ctx, {"query": "x"})
+
+        assert captured["tenant_id"] == str(ctx.org_id)
+
+    def test_the_tool_tells_the_model_its_own_org_is_the_default(self) -> None:
+        text = knowledge.SEARCH_KNOWLEDGE.description
+        assert "YOUR OWN org" in text
+        assert "ONLY when someone has asked you" in text
+
+    async def test_an_unattended_run_cannot_cross_orgs(self, captured) -> None:
+        """``knowledge_scope: "org"`` is a grant about *this* org. If it carried
+        across tenants, every schedule and webhook would become a system reader."""
+        ctx = _FakeCtx(agent=_FakeAgent(grants={"knowledge_scope": "org"}), actor_user_id=None)
+
+        out = await knowledge.SEARCH_KNOWLEDGE.handler(ctx, {"query": "x", "org": "Come Follow Me"})
+
+        assert "cannot search another" in out["error"]
+        assert "tenant_id" not in captured  # never reached brain-api
+
+
+class TestNamingTheOrgThatAnswered:
+    """An agent told "check the come follow me org" searched its own, found nothing,
+    and reported the material missing from the org it never touched — an empty
+    result from one tenant offered as proof of absence in another. The result now
+    carries the org that answered, so the model cannot attribute it elsewhere."""
+
+    async def test_the_result_names_the_org_searched(self, captured) -> None:
+        ctx = _FakeCtx(agent=_FakeAgent(), actor_user_id=uuid.uuid4())
+
+        out = await knowledge.SEARCH_KNOWLEDGE.handler(ctx, {"query": "x"})
+
+        assert out["searched_org"] == str(ctx.org_id)  # no session to resolve a name
+
+    def test_the_tool_forbids_claiming_an_org_it_did_not_search(self) -> None:
+        assert "never claim you searched one you did not" in knowledge.SEARCH_KNOWLEDGE.description
+
+
+class TestMatchingAnOrgByName:
+    """People say org names loosely ("in the come follow me org"). Matching is
+    forgiving about that, and strict about ties."""
+
+    class _Org:
+        def __init__(self, name: str, oid: uuid.UUID | None = None) -> None:
+            self.name = name
+            self.id = oid or uuid.uuid4()
+
+    def test_a_spoken_name_with_a_trailing_org_still_matches(self) -> None:
+        cfm = self._Org("Come Follow Me")
+
+        assert knowledge._match_orgs([cfm, self._Org("Robots")], "come follow me org") == [cfm]
+
+    def test_an_exact_name_beats_an_org_that_contains_it(self) -> None:
+        """ "Robots" is a substring of "Robots (OpenAI)" — naming it exactly must
+        still resolve to it rather than reporting an ambiguous tie."""
+        robots = self._Org("Robots")
+
+        assert knowledge._match_orgs([robots, self._Org("Robots (OpenAI)")], "Robots") == [robots]
+
+    def test_an_ambiguous_name_returns_every_candidate(self) -> None:
+        orgs = [self._Org("Robots (OpenAI)"), self._Org("Robots (Local)")]
+
+        assert len(knowledge._match_orgs(orgs, "robots")) == 2
+
+    def test_an_org_id_resolves_directly(self) -> None:
+        wanted = self._Org("Come Follow Me")
+
+        assert knowledge._match_orgs([wanted, self._Org("Robots")], str(wanted.id)) == [wanted]
+
+    def test_an_unknown_name_matches_nothing(self) -> None:
+        assert knowledge._match_orgs([self._Org("Robots")], "Payroll") == []

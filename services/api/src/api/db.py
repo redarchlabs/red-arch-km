@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
@@ -17,13 +18,24 @@ _session_factory: async_sessionmaker[AsyncSession] | None = None
 
 def _json_default(obj: Any) -> Any:
     """Make JSONB columns tolerate the value types that flow through them —
-    notably ``Decimal`` (numeric entity fields, e.g. a calculated total) and
-    ``datetime``/``date``. Without this, capturing a numeric record value into
-    ``workflow_outbox.after_data`` raises 'Decimal is not JSON serializable'."""
+    notably ``Decimal`` (numeric entity fields, e.g. a calculated total),
+    ``datetime``/``date``, and ``UUID`` (every record's own id). Without this,
+    capturing a numeric record value into ``workflow_outbox.after_data`` raises
+    'Decimal is not JSON serializable'.
+
+    ``UUID`` is here because an agent's ``list_records`` result carries each row's
+    id, and the run loop writes every tool result into ``agent_run_steps.content``
+    (JSONB). So the first time an agent listed records that actually existed, the
+    step insert raised and the sweep finalised the whole run as 'execution failed'
+    — with no steps saved, because the failing insert *was* the step. The tool
+    worked; persisting the evidence of it did not.
+    """
     if isinstance(obj, Decimal):
         return float(obj)
     if isinstance(obj, (datetime, date)):
         return obj.isoformat()
+    if isinstance(obj, uuid.UUID):
+        return str(obj)
     raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
 

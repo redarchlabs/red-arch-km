@@ -23,10 +23,11 @@ import uuid
 import pytest
 from api.models.org import Department, Org, Region
 from api.models.user import UserOrgMembership, UserProfile
+from api.services.agents.tools import knowledge
 from api.services.search_access import UNRESTRICTED_MASK, resolve_profile_access_keys
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .helpers import set_tenant
+from .helpers import set_bypass, set_tenant
 
 pytestmark = pytest.mark.integration
 
@@ -139,3 +140,91 @@ class TestActorScoping:
         assert keys_a is not None and keys_b is not None
         # Only the public sentinel is shared; the org-encoded masks differ.
         assert set(keys_a) & set(keys_b) == {UNRESTRICTED_MASK}
+
+
+class TestReachingAnotherOrg:
+    """Which orgs ``search_knowledge`` may be pointed at, resolved against real RLS.
+
+    The reach is the *actor's*, never the agent's grants: two people running the
+    same agent get two different answers here.
+    """
+
+    async def test_a_member_reaches_only_their_own_orgs(self, admin_session: AsyncSession) -> None:
+        mine = await _org(admin_session, permission_number=1)
+        theirs = await _org(admin_session, permission_number=2)
+        profile = await _member(admin_session, mine)
+        await set_bypass(admin_session, True)
+
+        reachable = {o.id for o in await knowledge._reachable_orgs(admin_session, profile.id)}
+
+        assert mine.id in reachable
+        assert theirs.id not in reachable
+
+    async def test_a_site_admin_reaches_orgs_they_are_not_a_member_of(self, admin_session: AsyncSession) -> None:
+        """Site-admin elevation already grants org-wide reach everywhere, so an
+        agent run by one is not held to a membership it never needed."""
+        org = await _org(admin_session)
+        suffix = uuid.uuid4().hex[:8]
+        profile = UserProfile(
+            auth_subject=f"sub-{suffix}",
+            username=f"user-{suffix}",
+            email=f"user-{suffix}@example.test",
+            is_site_admin=True,
+        )
+        admin_session.add(profile)
+        await admin_session.flush()
+        await set_bypass(admin_session, True)
+
+        reachable = {o.id for o in await knowledge._reachable_orgs(admin_session, profile.id)}
+
+        assert org.id in reachable
+
+    async def test_an_unknown_profile_reaches_nothing(self, admin_session: AsyncSession) -> None:
+        await set_bypass(admin_session, True)
+
+        assert await knowledge._reachable_orgs(admin_session, uuid.uuid4()) == []
+
+    async def test_a_tenant_pinned_session_cannot_see_the_other_orgs_membership(
+        self, admin_session: AsyncSession, session: AsyncSession
+    ) -> None:
+        """Why the resolver opens its own bypassed session.
+
+        An agent run is pinned to its own org, and ``user_org_memberships`` is one
+        of the tables RLS pins. Resolving another org's membership on the run's
+        session finds no row, which ``resolve_profile_access_keys`` reports as
+        ``[]`` — "you have no access" for an org the actor is in fact a member of.
+
+        Asserted on the ``app_user`` session, not the seeding one: the seeding
+        login is a superuser and bypasses RLS whatever the GUC says, so the same
+        assertions there pass vacuously.
+        """
+        home = await _org(admin_session, permission_number=1)
+        other = await _org(admin_session, permission_number=2)
+        profile = await _member(admin_session, other)
+        await admin_session.commit()
+
+        # As the run sees it: pinned to `home`, bypass off.
+        await set_tenant(session, str(home.id))
+        await set_bypass(session, False)
+        assert await resolve_profile_access_keys(session, other.id, profile.id) == []
+
+        # As the resolver sees it: bypassed, so the real membership is found.
+        await set_bypass(session, True)
+        assert await resolve_profile_access_keys(session, other.id, profile.id) != []
+
+    async def test_the_reachable_list_is_empty_without_the_bypass(
+        self, admin_session: AsyncSession, session: AsyncSession
+    ) -> None:
+        """The same trap one level up: reach resolved on the run's own session
+        would report the actor as belonging to nothing but the current org."""
+        home = await _org(admin_session, permission_number=1)
+        other = await _org(admin_session, permission_number=2)
+        profile = await _member(admin_session, other)
+        await admin_session.commit()
+
+        await set_tenant(session, str(home.id))
+        await set_bypass(session, False)
+        assert await knowledge._reachable_orgs(session, profile.id) == []
+
+        await set_bypass(session, True)
+        assert {o.id for o in await knowledge._reachable_orgs(session, profile.id)} == {other.id}
