@@ -32,11 +32,9 @@ import asyncio
 import json
 import logging
 import os
-import re
 import time
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
 
 from api.services.agents.tools.spec import Category, ToolContext, ToolSpec
 
@@ -222,99 +220,4 @@ RUN_CLAUDE_CODE = ToolSpec(
     category=Category.EXECUTE,
     handler=_run_claude_code,
     side_effecting=True,
-)
-
-
-# --- read-only web fetch ---------------------------------------------------
-
-# The CLI's only tool this is allowed to reach. NOT the deployment's configured
-# allow-list: that one is for the dev/ops tool and may include Read, Bash and
-# friends. Reading a public page must not become a way to read the host.
-_FETCH_ALLOWED_TOOLS = ["WebFetch"]
-
-# Hosts a page fetch must never reach. An agent that can name a URL can otherwise
-# name the machine it is running on — including this API's own internal routes and
-# the cloud metadata endpoint, which is the classic way a "fetch this page" feature
-# turns into credential exfiltration.
-_BLOCKED_HOSTS = re.compile(
-    r"^(localhost|127\.|0\.0\.0\.0|\[?::1\]?|10\.|192\.168\.|169\.254\.|"
-    r"172\.(1[6-9]|2\d|3[01])\.|.*\.local|.*\.internal)",
-    re.I,
-)
-
-
-def _public_http(raw: str) -> str | None:
-    """The URL to fetch, or None if it is not a public http(s) address."""
-    try:
-        parsed = urlparse(raw.strip())
-    except ValueError:
-        return None
-    if parsed.scheme not in ("http", "https") or not parsed.hostname:
-        return None
-    return None if _BLOCKED_HOSTS.match(parsed.hostname) else raw.strip()
-
-
-def _fetch_brief(url: str, question: str) -> str:
-    return (
-        f"Fetch {url} using WebFetch and answer this about it: {question}\n\n"
-        "Report only what the page actually contains. If the fetch fails, say so and give "
-        "the status code — do not describe what the page would probably say. Do not attempt "
-        "any other tool; you have only WebFetch."
-    )
-
-
-async def _fetch_web_page(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
-    settings = ctx.settings
-    url = _public_http(str(args.get("url") or ""))
-    question = str(args.get("question") or "").strip() or "Summarise the page, including its title and main headings."
-    if not url:
-        return {"error": "A public http(s) URL is required; private and loopback addresses are refused."}
-
-    binary = (settings.claude_cli_path or "").strip()
-    root = (settings.claude_cli_working_dir or "").strip()
-    if not binary or not root:
-        return {"error": "The local Claude CLI is not configured, so pages cannot be fetched this way."}
-    cwd = Path(root).expanduser().resolve()
-    if not cwd.is_dir():
-        return {"error": f"The configured working root does not exist: {cwd}"}
-
-    out = await _invoke(binary, _fetch_brief(url, question), cwd, _FETCH_ALLOWED_TOOLS, _FETCH_TIMEOUT_SECONDS)
-    if "error" in out:
-        return out
-    return {"url": url, "content": out.get("result"), "truncated": out.get("truncated", False)}
-
-
-# A single page fetch is fast. Kept well under the dev/ops budget so a hung fetch
-# cannot hold a research run open for five minutes.
-_FETCH_TIMEOUT_SECONDS = 120
-
-FETCH_WEB_PAGE = ToolSpec(
-    name="fetch_web_page",
-    description=(
-        "Open a public web page and report what is on it. Use this to inspect a specific URL — "
-        "a homepage, robots.txt, a sitemap, a competitor's pricing page. Reads the live web on "
-        "the owner's Claude subscription, so it needs no API key. Read-only: it cannot change "
-        "anything, run commands, or read local files. Give the exact URL plus what you want to "
-        "know about it."
-    ),
-    parameters={
-        "type": "object",
-        "properties": {
-            "url": {"type": "string", "description": "The full public http(s) URL to open."},
-            "question": {
-                "type": "string",
-                "description": "What to look for on the page. Defaults to a summary of its content.",
-            },
-        },
-        "required": ["url"],
-    },
-    # READ, like web_research and for the same reason: reading a public page is not
-    # acting on the world. This is the whole point of the tool existing separately
-    # from run_claude_code — that one is EXECUTE because it edits files and runs
-    # shell commands, and the kind-gate rightly bars an advisory agent from it. But
-    # that left a *research* agent unable to open a web page, which made the one
-    # role whose entire job is research the one role structurally incapable of it.
-    category=Category.READ,
-    handler=_fetch_web_page,
-    side_effecting=False,
 )

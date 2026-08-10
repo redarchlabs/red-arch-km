@@ -22,12 +22,9 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from api.models.agent import Agent
 from api.services.agents.authority import Decision, decide
-from api.services.agents.kind_gate import kind_gate
 from api.services.agents.tools.claude_code import (
-    FETCH_WEB_PAGE,
     RUN_CLAUDE_CODE,
     _child_env,
-    _fetch_web_page,
     _resolve_working_dir,
     _run_claude_code,
 )
@@ -233,93 +230,3 @@ def test_authority_only_granted_operator_may_run():
     for kind in ("coordinator", "advisory"):
         agent = _agent(kind, tools=["run_claude_code"])
         assert decide(agent, RUN_CLAUDE_CODE).decision is Decision.DENY
-
-
-# --- read-only web fetch ---------------------------------------------------
-
-
-class TestFetchWebPage:
-    """The tool that makes an advisory researcher able to research.
-
-    `run_claude_code` is EXECUTE — rightly, it edits files and runs shell commands —
-    and the kind-gate bars an advisory agent from EXECUTE before grants are even
-    read. That left research-analyst, whose entire job is research, unable to open a
-    web page: its only web tool was web_research, and with no key it could do
-    nothing at all. Observed live over seven hours and four re-plans.
-    """
-
-    def test_it_is_read_only_so_an_adviser_may_hold_it(self) -> None:
-        assert FETCH_WEB_PAGE.category == Category.READ
-        assert FETCH_WEB_PAGE.side_effecting is False
-        assert kind_gate("advisory", FETCH_WEB_PAGE) is None
-        assert kind_gate("coordinator", FETCH_WEB_PAGE) is None
-
-    def test_it_is_registered_beside_the_dev_tool(self) -> None:
-        enabled = SimpleNamespace(enable_claude_cli_tool=True)
-        names = {s.name for s in base_tool_specs(enabled)}
-        assert {"fetch_web_page", "run_claude_code"} <= names
-        assert "fetch_web_page" not in {s.name for s in base_tool_specs(SimpleNamespace(enable_claude_cli_tool=False))}
-
-    async def test_it_fetches_with_only_webfetch_allowed(self, tmp_path) -> None:
-        """Not the deployment's configured allow-list. That one is for the dev/ops
-        tool and may include Read and Bash; reading a public page must not become a
-        way to read the host."""
-        fake = _FakeProc(stdout=json.dumps({"result": "404 Not Found", "is_error": False}).encode())
-        with patch(_EXEC, AsyncMock(return_value=fake)) as m:
-            out = await _fetch_web_page(
-                _ctx(_settings(tmp_path, allowed=("Read", "Bash", "Edit"))),
-                {"url": "https://redarchlabs.com/robots.txt", "question": "what does it contain?"},
-            )
-
-        assert out["content"] == "404 Not Found"
-        argv, _ = m.call_args
-        assert "--allowedTools" in argv
-        assert argv[argv.index("--allowedTools") + 1] == "WebFetch"
-        assert "Bash" not in argv and "Edit" not in argv
-
-    @pytest.mark.parametrize(
-        "url",
-        [
-            "http://localhost:8000/api/internal/agents/advance-runs",
-            "http://127.0.0.1/secrets",
-            "http://169.254.169.254/latest/meta-data/",
-            "http://10.0.0.5/admin",
-            "http://192.168.1.1/",
-            "http://db.internal/dump",
-            "file:///etc/passwd",
-            "not a url",
-        ],
-    )
-    async def test_it_refuses_anything_that_is_not_a_public_page(self, tmp_path, url: str) -> None:
-        """An agent that can name a URL can otherwise name the machine it runs on —
-        including this API's own internal routes and the cloud metadata endpoint."""
-        with patch(_EXEC, AsyncMock()) as m:
-            out = await _fetch_web_page(_ctx(_settings(tmp_path)), {"url": url})
-
-        assert "public http(s) URL is required" in out["error"]
-        m.assert_not_called()
-
-    async def test_a_url_is_required(self, tmp_path) -> None:
-        out = await _fetch_web_page(_ctx(_settings(tmp_path)), {})
-        assert "error" in out
-
-    async def test_it_says_so_when_the_cli_is_not_configured(self, tmp_path) -> None:
-        out = await _fetch_web_page(_ctx(_settings(tmp_path, path="")), {"url": "https://example.com"})
-        assert "not configured" in out["error"]
-
-    async def test_the_brief_forbids_inventing_the_page(self, tmp_path) -> None:
-        # The failure this prevents is a model describing what a page probably says.
-        fake = _FakeProc(stdout=json.dumps({"result": "ok"}).encode())
-        with patch(_EXEC, AsyncMock(return_value=fake)) as m:
-            await _fetch_web_page(_ctx(_settings(tmp_path)), {"url": "https://example.com"})
-
-        prompt = m.call_args[0][2]
-        assert "do not describe what the page would probably say" in prompt.lower()
-
-    async def test_an_advisory_researcher_is_actually_offered_it(self) -> None:
-        """The whole point, at the authority layer: grants plus kind must resolve to
-        something other than DENY for the agent that needs it."""
-        analyst = _agent("advisory", tools=["fetch_web_page"])
-        assert decide(analyst, FETCH_WEB_PAGE).decision is not Decision.DENY
-        # …and it still cannot reach the dev/ops tool.
-        assert decide(_agent("advisory", tools=["run_claude_code"]), RUN_CLAUDE_CODE).decision is Decision.DENY

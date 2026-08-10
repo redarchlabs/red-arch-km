@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 
 from api.services.agents.tools.artifacts import artifact_tool_specs
 from api.services.agents.tools.batch_generate import BATCH_GENERATE, CHECK_BATCH
-from api.services.agents.tools.claude_code import FETCH_WEB_PAGE, RUN_CLAUDE_CODE
+from api.services.agents.tools.claude_code import RUN_CLAUDE_CODE
 from api.services.agents.tools.documents import CREATE_DOCUMENT
 from api.services.agents.tools.knowledge import SEARCH_KNOWLEDGE
 from api.services.agents.tools.records import (
@@ -22,6 +22,7 @@ from api.services.agents.tools.records import (
 )
 from api.services.agents.tools.run_detail import READ_RUN_DETAIL
 from api.services.agents.tools.spec import ToolSpec
+from api.services.agents.tools.web_page import FETCH_WEB_PAGE
 from api.services.agents.tools.web_research import WEB_RESEARCH
 from api.services.agents.tools.work_order_tasks import work_order_task_specs
 from api.services.agents.tools.workflows import LIST_WORKFLOWS, RUN_WORKFLOW
@@ -59,9 +60,9 @@ def base_tool_specs(settings: Settings | None = None) -> list[ToolSpec]:
     ]
     # Powerful local-exec tool: registered only when explicitly enabled, and even then
     # only ever *offered* to an agent that also holds the run_claude_code grant.
+    # Reading a public page needs no key and no subprocess, so it is always on
+    # offer; grants still decide who may call it.
+    specs.append(FETCH_WEB_PAGE)
     if settings is not None and settings.enable_claude_cli_tool:
         specs.append(RUN_CLAUDE_CODE)
-        # Read-only page fetch off the same CLI. Separate spec because it is READ:
-        # an advisory researcher may hold it, and holding it grants nothing else.
-        specs.append(FETCH_WEB_PAGE)
     return specs
