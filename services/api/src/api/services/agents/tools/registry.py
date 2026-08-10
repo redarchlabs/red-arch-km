@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 
 from api.services.agents.tools.artifacts import artifact_tool_specs
 from api.services.agents.tools.batch_generate import BATCH_GENERATE, CHECK_BATCH
-from api.services.agents.tools.claude_code import RUN_CLAUDE_CODE
+from api.services.agents.tools.claude_code import FETCH_WEB_PAGE, RUN_CLAUDE_CODE
 from api.services.agents.tools.documents import CREATE_DOCUMENT
 from api.services.agents.tools.knowledge import SEARCH_KNOWLEDGE
 from api.services.agents.tools.records import (
@@ -61,4 +61,7 @@ def base_tool_specs(settings: Settings | None = None) -> list[ToolSpec]:
     # only ever *offered* to an agent that also holds the run_claude_code grant.
     if settings is not None and settings.enable_claude_cli_tool:
         specs.append(RUN_CLAUDE_CODE)
+        # Read-only page fetch off the same CLI. Separate spec because it is READ:
+        # an advisory researcher may hold it, and holding it grants nothing else.
+        specs.append(FETCH_WEB_PAGE)
     return specs

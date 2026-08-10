@@ -4,6 +4,7 @@ import { Bell } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
+import { onPendingWorkChanged } from "@/lib/agents/pendingWork";
 import { listApprovals, listNotifications, listQuestions } from "@/lib/api/agents";
 
 /** How often to re-check, when the tab is actually being looked at. */
@@ -49,9 +50,14 @@ export function PendingWorkBell() {
     const timer = setInterval(() => void refresh(), POLL_MS);
     const onVisible = () => void refresh();
     document.addEventListener("visibilitychange", onVisible);
+    // Approving, answering, or resolving anywhere in the app settles something
+    // this badge counts. Waiting up to POLL_MS to notice reads as a click that
+    // did nothing — so re-read the moment one of them lands.
+    const unsubscribe = onPendingWorkChanged(() => void refresh());
     return () => {
       clearInterval(timer);
       document.removeEventListener("visibilitychange", onVisible);
+      unsubscribe();
     };
   }, [refresh]);
 

@@ -15,6 +15,8 @@ vi.mock("next/link", () => ({
   default: ({ children, ...rest }: { children: React.ReactNode }) => <a {...rest}>{children}</a>,
 }));
 
+import { pendingWorkChanged } from "@/lib/agents/pendingWork";
+
 import { PendingWorkBell } from "./PendingWorkBell";
 
 const escalation = (over: Record<string, unknown> = {}) => ({
@@ -55,6 +57,19 @@ describe("PendingWorkBell", () => {
 
     await waitFor(() => expect(listNotifications).toHaveBeenCalled());
     expect(screen.getByLabelText("Nothing waiting for you")).toBeTruthy();
+  });
+
+  it("drops the count as soon as the escalation is resolved elsewhere", async () => {
+    // Resolving on the approvals page used to leave the header saying "1 waiting
+    // on you" for up to a poll interval, which reads as a click that did nothing.
+    listNotifications.mockResolvedValue([escalation()]);
+    render(<PendingWorkBell />);
+    expect(await screen.findByLabelText("1 waiting for you")).toBeTruthy();
+
+    listNotifications.mockResolvedValue([]);
+    pendingWorkChanged();
+
+    expect(await screen.findByLabelText("Nothing waiting for you")).toBeTruthy();
   });
 
   it("adds escalations to approvals and questions", async () => {

@@ -6,6 +6,7 @@
  * uses fetch+SSE (EventSource can't send auth/org headers), mirroring `agent.ts`.
  */
 
+import { pendingWorkChanged } from "@/lib/agents/pendingWork";
 import { getToken } from "@/lib/auth/clerk";
 
 import apiClient from "./client";
@@ -213,13 +214,24 @@ export async function listApprovals(): Promise<Approval[]> {
   return (await apiClient.get<Approval[]>("/agents/approvals")).data;
 }
 
+// The four settle calls below announce on success — never before, so a failed
+// decision cannot make the bell drop a count that is still outstanding. Doing it
+// here rather than at each call site means every surface that settles work (this
+// page, the work-order panel, the roster dialog, the workflow run panel) keeps
+// the header honest without having to remember to.
 export async function approveApproval(id: string): Promise<Approval> {
-  return (await apiClient.post<Approval>(`/agents/approvals/${id}/approve`))
-    .data;
+  const approval = (
+    await apiClient.post<Approval>(`/agents/approvals/${id}/approve`)
+  ).data;
+  pendingWorkChanged();
+  return approval;
 }
 
 export async function denyApproval(id: string): Promise<Approval> {
-  return (await apiClient.post<Approval>(`/agents/approvals/${id}/deny`)).data;
+  const approval = (await apiClient.post<Approval>(`/agents/approvals/${id}/deny`))
+    .data;
+  pendingWorkChanged();
+  return approval;
 }
 
 export async function listNotifications(
@@ -233,9 +245,11 @@ export async function listNotifications(
 }
 
 export async function resolveNotification(id: string): Promise<Notification> {
-  return (
+  const notification = (
     await apiClient.post<Notification>(`/agents/notifications/${id}/resolve`)
   ).data;
+  pendingWorkChanged();
+  return notification;
 }
 
 /** An agent is blocked waiting for an answer. Unlike an approval — which is a
@@ -274,11 +288,13 @@ export async function answerQuestion(
   id: string,
   answer: string,
 ): Promise<AnswerResult> {
-  return (
+  const result = (
     await apiClient.post<AnswerResult>(`/agents/questions/${id}/answer`, {
       answer,
     })
   ).data;
+  pendingWorkChanged();
+  return result;
 }
 
 /** Unblock the agent without answering — it is told to use its own judgement. */
@@ -286,11 +302,13 @@ export async function declineQuestion(
   id: string,
   reason?: string,
 ): Promise<AnswerResult> {
-  return (
+  const result = (
     await apiClient.post<AnswerResult>(`/agents/questions/${id}/decline`, {
       reason: reason || null,
     })
   ).data;
+  pendingWorkChanged();
+  return result;
 }
 
 /** Events streamed by the interactive agent console over SSE. */
