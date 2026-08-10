@@ -84,25 +84,31 @@ async def _record_steer(
     run_id: uuid.UUID,
     text: str,
     document_ids: list[uuid.UUID] | None = None,
+    work_order_id: uuid.UUID | None = None,
 ) -> dict[str, Any]:
     """Queue a steer for ``run_id``. Opens a session, writes, releases.
 
     Returns the frame to send back. Acknowledged honestly as *queued*: the run
     picks it up at the top of its next turn, and nothing here aborts an in-flight
     stream to deliver sooner.
+
+    When the run has already finished, the message is **not** thrown away: on a work
+    order it becomes a reply, which records it in the diary and starts a fresh run
+    with the history as context. Rejecting it was the wrong shape of honest — the
+    box is the only one on the page, an order whose agents have stopped is exactly
+    when a person has something to add, and "not delivered: that run is already
+    done" left them retyping into a dead socket.
     """
     factory = get_session_factory(settings)
     async with factory() as session:
         await db_scope.enter_tenant(session, org_id)
         run = await AgentRunRepository(session, org_id).get_run(run_id)
-        if run is None:
-            return {"type": "steer_rejected", "run_id": str(run_id), "reason": "run not found"}
-        if run.status not in _STEERABLE:
-            return {
-                "type": "steer_rejected",
-                "run_id": str(run_id),
-                "reason": f"that run is already {run.status}",
-            }
+        if run is None or run.status not in _STEERABLE:
+            target = work_order_id or (run.work_order_id if run is not None else None)
+            if target is None:
+                reason = "run not found" if run is None else f"that run is already {run.status}"
+                return {"type": "steer_rejected", "run_id": str(run_id), "reason": reason}
+            return await _reply_instead(session, settings, org_id, profile_id, target, text, document_ids)
         # Attachments ride on the work order, not the steer row: the document is a
         # durable part of the order's record, and the message only has to name it.
         body = text
@@ -117,6 +123,53 @@ async def _record_steer(
         await AgentRunMessageRepository(session, org_id).add(run_id, body, sent_by_profile_id=profile_id)
         await session.commit()
     return {"type": "steer_queued", "run_id": str(run_id), "when": "next turn"}
+
+
+async def _reply_to_order(
+    settings: Settings,
+    granted: Any,
+    work_order_id: uuid.UUID,
+    text: str,
+    document_ids: list[uuid.UUID] | None,
+) -> dict[str, Any]:
+    """The no-run-to-aim-at path: open a session and reply to the order."""
+    factory = get_session_factory(settings)
+    async with factory() as session:
+        await db_scope.enter_tenant(session, granted.org_id)
+        return await _reply_instead(
+            session, settings, granted.org_id, granted.profile_id, work_order_id, text, document_ids
+        )
+
+
+async def _reply_instead(
+    session: Any,
+    settings: Settings,
+    org_id: uuid.UUID,
+    profile_id: uuid.UUID | None,
+    work_order_id: uuid.UUID,
+    text: str,
+    document_ids: list[uuid.UUID] | None,
+) -> dict[str, Any]:
+    """Deliver a message aimed at a finished run to the work order instead.
+
+    ``reply`` only starts a run on an order that is under way and assigned — a draft
+    or a finished order records the message and stays put — so the frame says which
+    of the two happened rather than claiming a restart that did not occur.
+    """
+    from api.services.agents.work_order_service import WorkOrderError, WorkOrderService
+
+    service = WorkOrderService(session, org_id, settings)
+    try:
+        await service.reply(work_order_id, text, actor_profile_id=profile_id, document_ids=document_ids)
+        started = await service.has_live_run(work_order_id)
+        await session.commit()
+    except WorkOrderError as exc:
+        await session.rollback()
+        return {"type": "steer_rejected", "work_order_id": str(work_order_id), "reason": str(exc)}
+    return {
+        "type": "steer_restarted" if started else "steer_recorded",
+        "work_order_id": str(work_order_id),
+    }
 
 
 @router.websocket("/live/ws")
@@ -194,12 +247,31 @@ async def live_socket(
             text = str(frame.get("text") or "").strip()[:MAX_STEER_CHARS]
             target = str(frame.get("run_id") or run_id)
             documents = _document_ids(frame)
-            if (not text and not documents) or not activity_scope_is_valid(target):
+            # A work order that has never run has no run id to aim at, and the box is
+            # still the obvious place to add something. Only a socket with neither is
+            # unaddressable.
+            if (not text and not documents) or not (
+                activity_scope_is_valid(target) or activity_scope_is_valid(work_order_id)
+            ):
                 await websocket.send_text(
                     json.dumps({"type": "steer_rejected", "reason": "a run_id and text are required"})
                 )
                 continue
-            reply = await _record_steer(settings, granted.org_id, granted.profile_id, uuid.UUID(target), text)
+            if not activity_scope_is_valid(target):
+                reply = await _reply_to_order(settings, granted, uuid.UUID(work_order_id), text, documents)
+                await websocket.send_text(json.dumps(reply))
+                continue
+            reply = await _record_steer(
+                settings,
+                granted.org_id,
+                granted.profile_id,
+                uuid.UUID(target),
+                text,
+                # Attachments were parsed and then dropped: a screenshot pasted with
+                # a steer never reached the run it was pasted into.
+                document_ids=documents,
+                work_order_id=uuid.UUID(work_order_id) if activity_scope_is_valid(work_order_id) else None,
+            )
             await websocket.send_text(json.dumps(reply))
     except WebSocketDisconnect:
         pass

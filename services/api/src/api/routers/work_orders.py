@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth.dependencies import OrgContext, require_org_access, require_org_admin
+from api.config import Settings, get_settings
 from api.dependencies import get_tenant_db
 from api.models.work_order import WorkOrder
 from api.schemas.work_order import (
@@ -145,11 +146,12 @@ async def set_status(
     body: WorkOrderStatusUpdate,
     ctx: Annotated[OrgContext, Depends(require_org_admin)],
     session: Annotated[AsyncSession, Depends(get_tenant_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
 ) -> WorkOrderRead:
     try:
         # Starting an assigned order queues a run for its agent, which reads the
         # knowledge base as the person who started it — never wider.
-        wo = await WorkOrderService(session, ctx.org_id).set_status(
+        wo = await WorkOrderService(session, ctx.org_id, settings).set_status(
             wo_id, body.status, actor_profile_id=ctx.user.profile_id
         )
     except WorkOrderError as exc:
@@ -163,11 +165,12 @@ async def assign(
     body: WorkOrderAssign,
     ctx: Annotated[OrgContext, Depends(require_org_admin)],
     session: Annotated[AsyncSession, Depends(get_tenant_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
 ) -> WorkOrderRead:
     try:
         # Assigning an already-started order dispatches it, so the actor is needed
         # here for the same reason as on status: the run reads as that person.
-        wo = await WorkOrderService(session, ctx.org_id).assign(
+        wo = await WorkOrderService(session, ctx.org_id, settings).assign(
             wo_id, body.assigned_agent_id, actor_profile_id=ctx.user.profile_id
         )
     except WorkOrderError as exc:
@@ -212,9 +215,10 @@ async def reply(
     # route that starts an agent is admin-gated.
     ctx: Annotated[OrgContext, Depends(require_org_admin)],
     session: Annotated[AsyncSession, Depends(get_tenant_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
 ) -> WorkOrderRead:
     try:
-        wo = await WorkOrderService(session, ctx.org_id).reply(
+        wo = await WorkOrderService(session, ctx.org_id, settings).reply(
             wo_id,
             body.text,
             actor_profile_id=ctx.user.profile_id,
@@ -284,9 +288,12 @@ async def set_tasks(
     body: TasksSet,
     ctx: Annotated[OrgContext, Depends(require_org_admin)],
     session: Annotated[AsyncSession, Depends(get_tenant_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
 ) -> list[TaskRead]:
     try:
-        tasks = await WorkOrderService(session, ctx.org_id).set_tasks(wo_id, [t.model_dump() for t in body.tasks])
+        tasks = await WorkOrderService(session, ctx.org_id, settings).set_tasks(
+            wo_id, [t.model_dump() for t in body.tasks]
+        )
     except WorkOrderError as exc:
         _raise_http(exc)
     return [TaskRead.model_validate(t) for t in tasks]

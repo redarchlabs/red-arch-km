@@ -13,6 +13,7 @@ while nothing was ever going to happen.
 from __future__ import annotations
 
 import json
+import logging
 import re
 import uuid
 from collections.abc import Sequence
@@ -20,13 +21,15 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.config import Settings
 from api.models.agent import Agent
-from api.models.agent_run import AgentApproval, AgentQuestion, AgentRun
+from api.models.agent_run import AgentApproval, AgentNotification, AgentQuestion, AgentRun
 from api.models.work_order import (
     WORK_ORDER_MODES,
+    WORK_ORDER_TASK_STATUSES,
     WorkOrder,
     WorkOrderArtifact,
     WorkOrderEntry,
@@ -36,7 +39,12 @@ from api.repositories.agent_run import AgentRunRepository
 from api.repositories.work_order import WorkOrderRepository
 from api.repositories.work_order_artifacts import WorkOrderArtifactRepository
 from api.schemas.work_order import MapEvent, MapLane, WorkOrderMap
+from api.services.agents.acceptance import check_acceptance
 from api.services.agents.attachments import mime_for
+from api.services.agents.capability import capability_warnings
+from api.services.agents.notify import create_notification
+
+logger = logging.getLogger(__name__)
 
 # Allowed status transitions (terminal states have none).
 _TRANSITIONS: dict[str, set[str]] = {
@@ -60,12 +68,57 @@ _LIVE_RUN_STATUSES = ("queued", "running", "waiting")
 # The lane a person occupies. Not an agent id, so it cannot collide with one.
 _HUMAN_LANE = "human"
 
+# The lane the platform itself writes in — stalls, capability gaps, blocked steps.
+# Matches ``run_executor._STALL_ROLE`` so all machine notices read as one voice.
+_SYSTEM_LANE = "system"
+
+# Diary prefixes. They are markers as well as prose: a notice already written is
+# found by prefix, which is how each of these stays once-per-situation instead of
+# once-per-poll. Changing one re-arms its notice for every open order.
+_CAPABILITY_MARKER = "⚠️ Capability gap:"
+_BLOCKED_MARKER = "⛔ Blocked:"
+_DONE_MARKER = "✅ Done:"
+_ACCEPTANCE_MARKER = "🎯 Did not answer the request:"
+
+# Shortest evidence that can say anything. Not a quality bar — a floor that "done",
+# "ok" and "finished" fall below, which is most of what an unforced field receives.
+_MIN_EVIDENCE_CHARS = 25
+
+# The step appended to a plan that owes somebody something. Matched by prefix when
+# deciding whether the plan already has one, so re-planning does not stack copies.
+DELIVERY_TASK_TITLE = "Attach the deliverable to this work order (document, CSV, or file) and say what it contains"
+
+# Words in a brief that promise an output a person will open. An order that only asks
+# for an opinion — "what do you think of our pricing" — owes a reply, not a file, and
+# adding a delivery step there is bureaucracy that teaches people to ignore the plan.
+_DELIVERABLE_WORDS = re.compile(
+    r"\b(report|audit|analysis|analyse|analyze|summary|summarise|summarize|write[ -]?up|deck|"
+    r"spreadsheet|csv|export|document|doc|spec|design|plan|proposal|draft|inventory|list of|"
+    r"screenshots?|deliverable)\b",
+    re.I,
+)
+
+# Steps that already promise delivery. Checked against the plan's own titles so an
+# agent that thought of it first is not given a duplicate.
+_DELIVERY_WORDS = re.compile(r"\b(attach|upload|deliver|hand over|publish|submit)\b", re.I)
+
+
+def wants_deliverable(text: str) -> bool:
+    """Does this brief promise something a person will open at the end?"""
+    return bool(_DELIVERABLE_WORDS.search(text))
+
+
+def has_delivery_step(titles: Sequence[str]) -> bool:
+    return any(_DELIVERY_WORDS.search(t) for t in titles)
+
+
 # How a run came to exist, as the label on its opening event. A consult and a
 # delegation both create a child run, but only a consult blocks the parent.
 _START_TITLES = {
     "work_order": "started the order",
     "consult": "consulted",
     "delegation": "took a delegated task",
+    "escalation": "picked up an escalation",
     "schedule": "started on schedule",
     "manual": "started",
 }
@@ -185,10 +238,14 @@ def _slugify(title: str) -> str:
 
 
 class WorkOrderService:
-    def __init__(self, session: AsyncSession, org_id: uuid.UUID) -> None:
+    def __init__(self, session: AsyncSession, org_id: uuid.UUID, settings: Settings | None = None) -> None:
         self._session = session
         self._org_id = org_id
         self._repo = WorkOrderRepository(session, org_id)
+        # Optional so the many callers that only read an order need not thread config
+        # through. Where it is present, notifications can also leave the app (email,
+        # the org's notify workflow) instead of only landing in the in-app inbox.
+        self._settings = settings
 
     @staticmethod
     def allowed_transitions(status: str) -> list[str]:
@@ -325,6 +382,73 @@ class WorkOrderService:
                 text=f"Started: queued a run for {agent.name}.",
             )
         )
+        await self._warn_on_capability_gap(wo, agent, run_id=run.id)
+
+    async def _warn_on_capability_gap(self, wo: WorkOrder, agent: Agent, *, run_id: uuid.UUID | None) -> None:
+        """Say at the start what the assignee's chain cannot do for this order.
+
+        Checked here rather than at assignment because starting is the moment the
+        order begins to look like work in progress, and this is the last point before
+        anyone is waiting on it. Never raises: a wrong or failed heuristic must not
+        stop an order a person deliberately started.
+        """
+        try:
+            warnings = await capability_warnings(
+                self._session,
+                self._org_id,
+                agent,
+                _brief(wo),
+                settings=self._settings,
+                autonomy=await self._org_autonomy(wo),
+            )
+        except Exception:  # noqa: BLE001 - advisory check, never fatal to a dispatch
+            logger.warning("capability check failed for work order %s", wo.id)
+            return
+        if not warnings or await self._already_said(wo.id, _CAPABILITY_MARKER):
+            return
+        text = f"{_CAPABILITY_MARKER} " + " ".join(warnings)
+        await self._repo.add_entry(WorkOrderEntry(work_order_id=wo.id, role=_SYSTEM_LANE, text=text))
+        await create_notification(
+            self._session,
+            self._org_id,
+            kind="escalation",
+            title=f"“{wo.title}” was started by an agent that may not be able to do it",
+            body=" ".join(warnings),
+            work_order_id=wo.id,
+            run_id=run_id,
+            recipient_role="org_admin",
+            settings=self._settings,
+        )
+
+    async def _org_autonomy(self, wo: WorkOrder) -> str:
+        from api.models.org import Org
+        from api.services.agents.authority import posture_for
+
+        org = (await self._session.execute(select(Org).where(Org.id == self._org_id))).scalar_one_or_none()
+        return posture_for(wo, getattr(org, "agent_autonomy", None) or "high_touch")
+
+    async def _already_said(self, wo_id: uuid.UUID, marker: str) -> bool:
+        """Has a notice with this prefix already been filed on this order?
+
+        The diary is the throttle: it survives restarts, it is per-order, and it is
+        the same place a person reads the notice — so "already told them" and "they
+        can see it" can never drift apart.
+        """
+        query = select(WorkOrderEntry.id).where(
+            WorkOrderEntry.work_order_id == wo_id,
+            WorkOrderEntry.org_id == self._org_id,
+            WorkOrderEntry.text.like(f"{marker}%"),
+        )
+        return (await self._session.execute(query)).first() is not None
+
+    async def has_live_run(self, wo_id: uuid.UUID) -> bool:
+        """Is an agent on this order right now?
+
+        Public because a caller that has just replied needs to tell a person whether
+        that started anything — "recorded" and "restarted" are different outcomes and
+        guessing between them is how a message looks delivered when it was not.
+        """
+        return await self._has_live_run(wo_id)
 
     async def _has_live_run(self, wo_id: uuid.UUID, *, ignore_run_id: uuid.UUID | None = None) -> bool:
         """Is another run already on this order?
@@ -556,8 +680,25 @@ class WorkOrderService:
         await self.get_work_order(wo_id)
         return await self._repo.list_tasks(wo_id)
 
-    async def set_tasks(self, wo_id: uuid.UUID, tasks: list[dict]) -> list[WorkOrderTask]:
+    async def set_tasks(
+        self,
+        wo_id: uuid.UUID,
+        tasks: list[dict],
+        *,
+        add_delivery_step: bool = False,
+    ) -> list[WorkOrderTask]:
+        """Replace the plan, optionally ensuring it ends by handing something over.
+
+        ``add_delivery_step`` is set by the planning tool when the order's brief
+        promises an output. A plan that produces a report and never says "attach it"
+        finishes with the report inside the agent's own transcript, which is the same
+        as not having written it. Appended rather than refused: the agent's plan is
+        still its plan, it just now owes a delivery, and one extra step it can see is
+        better than a rejection it has to guess its way out of.
+        """
         await self.get_work_order(wo_id)
+        if add_delivery_step and not has_delivery_step([str(t.get("title") or "") for t in tasks]):
+            tasks = [*tasks, {"title": DELIVERY_TASK_TITLE, "sort_order": len(tasks)}]
         models = [
             WorkOrderTask(
                 key=t.get("key") or f"T{i + 1}",
@@ -568,7 +709,276 @@ class WorkOrderService:
             )
             for i, t in enumerate(tasks)
         ]
-        return await self._repo.replace_tasks(wo_id, models)
+        replaced = await self._repo.replace_tasks(wo_id, models)
+        for task in replaced:
+            if task.status == "blocked":
+                await self.report_blocked(wo_id, task)
+        # Re-planning is how an order most often stops being blocked: the checklist is
+        # rewritten around the obstacle. The tasks the old alert named do not even
+        # exist any more, so leaving it open asks for help with work that is gone.
+        await self.clear_blocked_alert(wo_id, replaced)
+        return replaced
+
+    async def update_task_status(
+        self,
+        wo_id: uuid.UUID,
+        key: str,
+        status: str,
+        *,
+        agent: Agent | None = None,
+        run_id: uuid.UUID | None = None,
+        evidence: str | None = None,
+    ) -> WorkOrderTask:
+        """Move one task, and tell a person when the move is into ``blocked``.
+
+        Blocking is the one status change that is not progress — it is the agent
+        saying it cannot continue — and until this it raised nothing at all. An order
+        could go from running to nine-of-nine-blocked in a single turn and the only
+        trace was the checklist itself, which nobody is watching at 2am. The order's
+        own stall sweeper eventually noticed, but only after the run ended, and its
+        notification went to an inbox with no badge.
+
+        Raises ``WorkOrderValidationError`` for an unknown key or status so callers
+        (the tool, the API) render one message rather than each inventing their own.
+        """
+        if status not in WORK_ORDER_TASK_STATUSES:
+            raise WorkOrderValidationError(f"status must be one of: {', '.join(WORK_ORDER_TASK_STATUSES)}")
+        tasks = await self.list_tasks(wo_id)
+        target = next((t for t in tasks if t.key.lower() == key.strip().lower()), None)
+        if target is None:
+            # Name the keys that exist: a caller that guessed one has no other way to
+            # find the real one, and would otherwise abandon the update.
+            available = ", ".join(t.key for t in tasks) or "none"
+            raise WorkOrderValidationError(f"No task with key '{key}'. Keys on this work order: {available}.")
+        if status == "done":
+            await self._require_evidence(wo_id, target, tasks, evidence)
+            await self._gate_acceptance(wo_id, target, tasks)
+        was, target.status = target.status, status
+        await self._repo.flush()
+        if status == "done" and evidence:
+            await self._repo.add_entry(
+                WorkOrderEntry(
+                    work_order_id=wo_id,
+                    agent_id=agent.id if agent else None,
+                    agent_run_id=run_id,
+                    role=agent.name if agent else _SYSTEM_LANE,
+                    text=f"{_DONE_MARKER} {target.key} — {evidence}",
+                )
+            )
+        if status == "blocked" and was != "blocked":
+            await self.report_blocked(wo_id, target, agent=agent, run_id=run_id)
+        elif was == "blocked" and status != "blocked":
+            await self.clear_blocked_alert(wo_id, tasks)
+        return target
+
+    async def _require_evidence(
+        self,
+        wo_id: uuid.UUID,
+        target: WorkOrderTask,
+        tasks: Sequence[WorkOrderTask],
+        evidence: str | None,
+    ) -> None:
+        """Refuse a ``done`` that nothing backs up.
+
+        ``done`` used to be a string an agent wrote about itself, and no code path
+        anywhere could disagree. Seen live: nine steps marked done, an adversarial
+        review board passed, and the thing actually asked for — open this website and
+        audit it — was never attempted. The delivered work was a document about how one
+        would build a crawler. Nothing in the system could tell the difference, because
+        an agent's output is prose about work, and prose about work looks exactly like
+        work.
+
+        Two rules, both borrowed from a definition-of-done that already works:
+
+        * **Say what you produced.** A sentence naming the output and where it is. A
+          model that must write "produced X, attached as Y" is markedly less willing to
+          claim a step it did not take than one that need only write "done".
+        * **The last step cannot close on an empty order.** When every step is done and
+          the order has no attachment at all, the checklist is the only evidence that
+          anything happened — which is the failure this exists to catch.
+
+        Deliberately not a per-task artifact requirement: plenty of real steps ("agree
+        the scope with the filer") produce no file, and a rule that demanded one would
+        be routed around by attaching junk.
+        """
+        said = (evidence or "").strip()
+        if len(said) < _MIN_EVIDENCE_CHARS:
+            raise WorkOrderValidationError(
+                f"Marking {target.key} done needs 'evidence': one concrete sentence saying what you "
+                "produced and where it is — 'fetched robots.txt and 42 pages, CSV attached as "
+                "crawl.csv', not 'completed the task'. If the step produced nothing to point at, it "
+                "is not done: mark it blocked or carried, and say why."
+            )
+        others_done = all(t.status in ("done", "carried") for t in tasks if t.key != target.key)
+        if not others_done:
+            return
+        if await self._has_deliverable(wo_id):
+            return
+        wo = await self.get_work_order(wo_id)
+        # Only an order that owes a *file* is held to one. "Check out our SEO and tell
+        # me what you think" is answered by an answer — demanding an attachment there
+        # would make an agent produce a document nobody asked for, purely to satisfy
+        # a check. The plan having a delivery step counts too: the agent said it would.
+        if wants_deliverable(_brief(wo)) or has_delivery_step([t.title for t in tasks]):
+            raise WorkOrderValidationError(
+                f"{target.key} is the last open step, but this work order has nothing attached — no "
+                "document, no file, no artifact. A finished order whose only evidence is its own "
+                "checklist is the failure this check exists to catch. Attach the deliverable with "
+                "attach_document (create it first if you must), or leave this step open and escalate "
+                "saying what stopped you producing one."
+            )
+
+    async def _gate_acceptance(self, wo_id: uuid.UUID, target: WorkOrderTask, tasks: Sequence[WorkOrderTask]) -> None:
+        """The last question: does any of this answer what was asked?
+
+        Runs once, on the step that closes the order, because that is the only moment
+        the full delivery exists and the only moment refusing it costs nothing already
+        spent. See :mod:`api.services.agents.acceptance` for why the auditor is given
+        the original request and the result and nothing else.
+        """
+        if self._settings is None:
+            return
+        if not all(t.status in ("done", "carried") for t in tasks if t.key != target.key):
+            return
+        wo = await self.get_work_order(wo_id)
+        verdict = await check_acceptance(self._session, self._org_id, wo, self._settings)
+        if verdict.ok:
+            if not verdict.checked:
+                # A skip must never read as a pass. Silence here is how "the auditor
+                # was never configured" becomes "the auditor approved it".
+                logger.info("acceptance not checked for work order %s", wo_id)
+            return
+        await self._repo.add_entry(
+            WorkOrderEntry(
+                work_order_id=wo_id,
+                role=_SYSTEM_LANE,
+                text=f"{_ACCEPTANCE_MARKER} {verdict.gap}",
+            )
+        )
+        await create_notification(
+            self._session,
+            self._org_id,
+            kind="escalation",
+            title=f"“{wo.title}” finished without answering the request",
+            body=(
+                f"{verdict.gap}\n\nEvery step is complete, but the delivered work does not answer what "
+                "was asked. Nothing has been lost — the order is still open. Reply on it to redirect "
+                "the agents, or close it yourself if the auditor is wrong."
+            ),
+            work_order_id=wo_id,
+            recipient_role="org_admin",
+            settings=self._settings,
+        )
+        if not self._settings.agent_acceptance_enforce:
+            # Report-only mode, for trying the auditor on a live org before letting it
+            # refuse anything.
+            return
+        raise WorkOrderValidationError(
+            f"This step closes the order, but the delivered work does not answer the request: "
+            f"{verdict.gap} Re-read the work order's own description — not the task list, which may "
+            "have drifted from it — and either deliver what was asked, or leave this step open and "
+            "escalate saying why it cannot be delivered. A person has been told either way."
+        )
+
+    async def _has_deliverable(self, wo_id: uuid.UUID) -> bool:
+        """Has anything been attached to this order that a person could open?"""
+        row = (
+            await self._session.execute(
+                select(WorkOrderArtifact.id).where(
+                    WorkOrderArtifact.org_id == self._org_id,
+                    WorkOrderArtifact.work_order_id == wo_id,
+                    WorkOrderArtifact.kind == "output",
+                )
+            )
+        ).first()
+        return row is not None
+
+    async def clear_blocked_alert(self, wo_id: uuid.UUID, tasks: Sequence[WorkOrderTask] | None = None) -> None:
+        """Retract the "is blocked" alert once nothing on this order is blocked.
+
+        The alert says a person is needed before the order can continue. When the
+        agent unblocks the step itself, that stops being true — but the alert stayed
+        unresolved, so it kept asking for help that was no longer wanted. Seen live: a
+        step was blocked and marked done sixteen seconds later, and the alert outlived
+        both. Every stale alert costs the next real one some of its credibility.
+
+        Only when the *last* blocked step clears: an order with five blocked steps and
+        one unblocked still needs the same person for the same reason.
+        """
+        remaining = tasks if tasks is not None else await self.list_tasks(wo_id)
+        if any(t.status == "blocked" for t in remaining):
+            return
+        wo = await self.get_work_order(wo_id)
+        await self._session.execute(
+            update(AgentNotification)
+            .where(
+                AgentNotification.org_id == self._org_id,
+                AgentNotification.work_order_id == wo_id,
+                AgentNotification.title == f"“{wo.title}” is blocked",
+                AgentNotification.status != "resolved",
+            )
+            .values(status="resolved")
+        )
+
+    async def report_blocked(
+        self,
+        wo_id: uuid.UUID,
+        task: WorkOrderTask,
+        *,
+        agent: Agent | None = None,
+        run_id: uuid.UUID | None = None,
+    ) -> None:
+        """Record a blocked step in the diary and raise it once per order.
+
+        Per order, not per task: an agent that hits a missing capability usually
+        blocks every remaining step in the same turn, and nine notifications for one
+        cause is how a person learns to dismiss them unread. The diary keeps the
+        detail — every blocked step writes a line — while the notification fires on
+        the first one and stays quiet until someone resolves it and it happens again.
+        """
+        wo = await self.get_work_order(wo_id)
+        title = f"“{wo.title}” is blocked"
+        # Throttled on the notification rather than the diary: resolving the alert is
+        # a person saying "seen it", and an order that blocks *again* afterwards is
+        # news. A diary-based throttle would silence this order forever after one line.
+        outstanding = (
+            await self._session.execute(
+                select(AgentNotification.id).where(
+                    AgentNotification.org_id == self._org_id,
+                    AgentNotification.work_order_id == wo_id,
+                    AgentNotification.title == title,
+                    AgentNotification.status != "resolved",
+                )
+            )
+        ).first()
+        await self._repo.add_entry(
+            WorkOrderEntry(
+                work_order_id=wo_id,
+                agent_id=agent.id if agent else None,
+                agent_run_id=run_id,
+                role=_SYSTEM_LANE,
+                text=f"{_BLOCKED_MARKER} {task.key} — {task.title}",
+            )
+        )
+        if outstanding is not None:
+            return
+        tasks = await self.list_tasks(wo_id)
+        blocked = [t for t in tasks if t.status == "blocked"]
+        await create_notification(
+            self._session,
+            self._org_id,
+            kind="escalation",
+            title=title,
+            body=(
+                f"{agent.name if agent else 'An agent'} marked {task.key} — {task.title} — as blocked"
+                f"{f' ({len(blocked)} of {len(tasks)} steps blocked)' if len(blocked) > 1 else ''}. "
+                "The work order has the reason; it needs a person before it can continue."
+            ),
+            work_order_id=wo_id,
+            run_id=run_id,
+            recipient_role="org_admin",
+            settings=self._settings,
+        )
 
     async def add_entry(
         self,

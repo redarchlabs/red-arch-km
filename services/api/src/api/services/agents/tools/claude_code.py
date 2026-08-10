@@ -62,6 +62,27 @@ def _resolve_working_dir(root: str, requested: Any) -> Path | None:
     return candidate if candidate.is_relative_to(root_path) else None
 
 
+# Directory names listed back after a bad ``working_dir``. Enough to recognise the
+# right one, short enough not to eat the context window on a crowded root.
+_DIR_HINT_CAP = 25
+
+
+def _available_dirs(root: str) -> str:
+    """The subdirectories a caller may actually pick, for the not-found message."""
+    try:
+        names = sorted(p.name for p in Path(root).expanduser().resolve().iterdir() if p.is_dir())
+    except OSError:
+        return ""
+    if not names:
+        return "The working root has no subdirectories — omit working_dir to run at the root."
+    shown = ", ".join(names[:_DIR_HINT_CAP])
+    extra = f", and {len(names) - _DIR_HINT_CAP} more" if len(names) > _DIR_HINT_CAP else ""
+    return (
+        f"Directories under the working root: {shown}{extra}. "
+        "Omit working_dir to run at the root. This tool does not create directories."
+    )
+
+
 def _child_env() -> dict[str, str]:
     """A copy of the process env with subscription-overriding keys removed."""
     return {k: v for k, v in os.environ.items() if k not in _SUBSCRIPTION_OVERRIDE_ENV}
@@ -84,7 +105,11 @@ async def _run_claude_code(ctx: ToolContext, args: dict[str, Any]) -> dict[str, 
     if cwd is None:
         return {"error": "working_dir escapes the allow-listed root; refused."}
     if not cwd.is_dir():
-        return {"error": f"working_dir does not exist: {cwd}"}
+        # Name what is actually there. A bare "does not exist" leaves the model with
+        # nothing but another guess — observed live: it invented
+        # `github/seo-crawler-playwright`, was told only that it was missing, and gave
+        # up on the tool entirely rather than trying a directory that exists.
+        return {"error": f"working_dir does not exist: {cwd}. {_available_dirs(root)}"}
 
     cmd = [binary, "-p", task, "--output-format", "json"]
     allowed = settings.claude_cli_allowed_tools_list
@@ -110,7 +135,18 @@ async def _run_claude_code(ctx: ToolContext, args: dict[str, Any]) -> dict[str, 
     except TimeoutError:
         proc.kill()
         await proc.wait()
-        return {"error": f"Claude Code CLI timed out after {settings.claude_cli_timeout_seconds}s."}
+        # Say what to do instead. A bare timeout reads as "this tool does not work"
+        # and the model abandons it — which is how a two-minute page fetch became a
+        # design document about how one might fetch pages.
+        return {
+            "error": (
+                f"Claude Code CLI timed out after {settings.claude_cli_timeout_seconds}s. "
+                "That budget is one focused job — read some files, fetch and analyse a page, "
+                "make a contained edit — not building a project from scratch. Split the work and "
+                "call again with the smallest next step, or ask for the finding rather than the tool "
+                "that would produce it."
+            )
+        }
 
     duration_ms = int((time.monotonic() - started) * 1000)
     out = (stdout or b"").decode("utf-8", "replace")
@@ -144,22 +180,33 @@ async def _run_claude_code(ctx: ToolContext, args: dict[str, Any]) -> dict[str, 
 RUN_CLAUDE_CODE = ToolSpec(
     name="run_claude_code",
     description=(
-        "Delegate a coding, file, or shell/ops task to the local Claude Code CLI, which "
-        "runs on the owner's machine (their Max plan) inside an allow-listed working "
-        "directory. Give a clear, self-contained task; the CLI does the work and returns "
-        "a summary. This runs code on the host — describe the task precisely. Use only for "
-        "the owner's own dev/ops work."
+        "Delegate ONE focused coding, file, web or shell/ops job to the local Claude Code "
+        "CLI, which runs on the owner's machine (their Max plan) inside an allow-listed "
+        "working directory. It can read and edit files, run searches, and FETCH PAGES FROM "
+        "THE LIVE WEB — so it is a way to inspect a public URL when no web-research key is "
+        "configured. Each call is a single bounded invocation of a few minutes: ask for one "
+        "concrete outcome ('fetch https://example.com/robots.txt and report its contents', "
+        "'summarise the errors in app.log'), not for a project to be built. If a job is too "
+        "big, break it up and call again. This runs code on the host — describe the task "
+        "precisely, and use only for the owner's own dev/ops work."
     ),
     parameters={
         "type": "object",
         "properties": {
             "task": {
                 "type": "string",
-                "description": "A clear, self-contained instruction for the Claude Code CLI.",
+                "description": (
+                    "One concrete, self-contained job for the Claude Code CLI, sized to finish "
+                    "in a few minutes. State the outcome you want back, not the tooling to build."
+                ),
             },
             "working_dir": {
                 "type": "string",
-                "description": "Optional subdirectory (relative to the configured root) to run in.",
+                "description": (
+                    "Optional EXISTING subdirectory of the configured root to run in. It is not "
+                    "created for you — omit this to run at the root, which is right for anything "
+                    "that is not about a specific project's files."
+                ),
             },
         },
         "required": ["task"],

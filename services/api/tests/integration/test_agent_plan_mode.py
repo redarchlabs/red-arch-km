@@ -192,7 +192,11 @@ class TestApprovingThePlan:
         with pytest.raises(RunFinished) as raised:
             await SUBMIT_PLAN.handler(ctx, {"summary": "As listed."})
 
-        assert [t["title"] for t in raised.value.payload["tasks"]] == ["Crawl", "Report"]
+        titles = [t["title"] for t in raised.value.payload["tasks"]]
+        assert titles[:2] == ["Crawl", "Report"]
+        # "Audit the site" promises an output, so planning appends a delivery step —
+        # the plan a person approves is the plan including how they get the result.
+        assert "Attach the deliverable" in titles[-1]
 
 
 class TestRefusals:

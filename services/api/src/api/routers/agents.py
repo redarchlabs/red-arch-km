@@ -26,6 +26,7 @@ from api.models.agent_run import AgentSchedule
 from api.repositories.agent import AgentRepository
 from api.repositories.org_provider_credential import OrgProviderCredentialRepository
 from api.schemas.agent import (
+    AgentActivityRead,
     AgentCreate,
     AgentRead,
     AgentScheduleCreate,
@@ -38,6 +39,7 @@ from api.schemas.agent import (
 )
 from api.services.agents.llm.catalog import providers, valid_providers
 from api.services.agents.llm.keys import central_provider_key
+from api.services.agents.roster_activity import roster_activity
 from api.services.agents.service import (
     AgentConflictError,
     AgentError,
@@ -125,6 +127,29 @@ async def list_agents(
 ) -> list[AgentRead]:
     agents = await AgentService(session, ctx.org_id).list_agents()
     return [_to_read(a) for a in agents]
+
+
+@router.get("/activity", response_model=list[AgentActivityRead])
+async def list_agent_activity(
+    ctx: Annotated[OrgContext, Depends(require_org_admin)],
+    session: Annotated[AsyncSession, Depends(get_tenant_db)],
+) -> list[AgentActivityRead]:
+    """Which agents are mid-task, and which are blocked on a person.
+
+    Declared above ``/{agent_id}`` — FastAPI matches in declaration order, so a later
+    literal path is swallowed by the earlier parameterised one and "activity" arrives
+    as an agent id that fails UUID parsing.
+    """
+    rows = await roster_activity(session, ctx.org_id)
+    return [
+        AgentActivityRead(
+            agent_id=r.agent_id,
+            state=r.state,
+            live_runs=r.live_runs,
+            waiting_on_you=r.waiting_on_you,
+        )
+        for r in rows
+    ]
 
 
 @router.post("/", response_model=AgentRead, status_code=status.HTTP_201_CREATED)

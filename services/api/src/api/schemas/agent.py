@@ -123,6 +123,16 @@ class AgentRead(BaseModel):
     updated_at: datetime
 
 
+class AgentActivityRead(BaseModel):
+    """Live state for one agent on the roster page. Only agents with something going
+    on are returned, so an empty list means the whole roster is idle."""
+
+    agent_id: uuid.UUID
+    state: Literal["working", "needs_you"]
+    live_runs: int
+    waiting_on_you: int
+
+
 # --- provider catalog + credential status ----------------------------------
 
 

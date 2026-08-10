@@ -43,6 +43,7 @@ from api.repositories.agent import AgentRepository
 from api.repositories.agent_run import AgentRunRepository
 from api.services.agents import attachments, lifecycle
 from api.services.agents.authority import available_tools
+from api.services.agents.delegation import routable_colleagues
 from api.services.agents.live import bus
 from api.services.agents.llm.catalog import model_supports_vision
 from api.services.agents.llm.keys import resolve_provider_key
@@ -143,8 +144,10 @@ class AgentConsoleService:
                 return
             agent, key, run_id = prepared
 
+            async with self._work() as session:
+                reports, advisors = await routable_colleagues(session, self._org_id, agent)
             messages: list[dict[str, Any]] = [
-                {"role": "system", "content": build_system_prompt(agent)},
+                {"role": "system", "content": build_system_prompt(agent, reports=reports, advisors=advisors)},
                 *history[:-1],
             ]
             # Vision on arrival: only the last turn carries the image, and only

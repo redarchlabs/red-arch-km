@@ -17,6 +17,7 @@ from api.models.agent_run import AgentApproval, AgentNotification
 from api.repositories.agent_inbox import AgentApprovalRepository, AgentNotificationRepository
 from api.repositories.agent_run import AgentRunRepository
 from api.services.agents import lifecycle
+from api.services.agents.notify import settle_notifications
 
 
 class ApprovalError(Exception):
@@ -64,6 +65,18 @@ class ApprovalService:
             raise ApprovalNotFoundError(f"Approval {approval_id} not found")
         return approval
 
+    async def _close_the_notice(self, run_id: uuid.UUID) -> None:
+        """Clear the "needs approval" notice once this run has nothing left to decide.
+
+        The notice is a call to action; after the decision it is a receipt, and one
+        that stays ``unread`` turns the inbox into a list of chores already done.
+        Guarded on nothing else pending: a run can raise a second approval while the
+        first is being decided, and clearing that one would hide a real ask.
+        """
+        if any(a.run_id == run_id for a in await self._repo.list_pending()):
+            return
+        await settle_notifications(self._session, self._org_id, run_id, "approval")
+
     async def approve(self, approval_id: uuid.UUID, decided_by: uuid.UUID | None) -> AgentApproval:
         approval = await self._get(approval_id)
         _require_pending(approval)
@@ -76,6 +89,7 @@ class ApprovalService:
             approval.decided_by_profile_id = decided_by
             approval.decided_at = _now()
             await self._session.flush()
+            await self._close_the_notice(approval.run_id)
             return approval
 
         approval.status = "approved"
@@ -94,6 +108,7 @@ class ApprovalService:
             run.wait_kind = None
             run.last_activity_at = _now()
         await self._session.flush()
+        await self._close_the_notice(approval.run_id)
         return approval
 
     async def deny(self, approval_id: uuid.UUID, decided_by: uuid.UUID | None) -> AgentApproval:
@@ -109,6 +124,7 @@ class ApprovalService:
                 self._session, self._org_id, run, status="error", error=f"approval denied: {approval.tool_name}"
             )
         await self._session.flush()
+        await self._close_the_notice(approval.run_id)
         return approval
 
 

@@ -137,6 +137,52 @@ async def test_timeout_kills_process(tmp_path):
     assert fake.killed is True
 
 
+async def test_the_timeout_says_how_to_succeed_next_time(tmp_path):
+    """A bare timeout reads as "this tool does not work" and the model stops using it.
+    Observed live: an agent asked the CLI to build a crawler, blew the budget, then
+    told a person it could not reach the web at all — and wrote a design document
+    about crawling instead of fetching the page."""
+    fake = _FakeProc(hang=True)
+    with patch(_EXEC, AsyncMock(return_value=fake)):
+        out = await _run_claude_code(_ctx(_settings(tmp_path, timeout=0.01)), {"task": "build a crawler"})
+
+    assert "smallest next step" in out["error"]
+    assert "not building a project from scratch" in out["error"]
+
+
+async def test_a_missing_working_dir_names_the_ones_that_exist(tmp_path):
+    """Naming only what is absent leaves the model with another guess. It invented
+    `seo-crawler-playwright`, was told only that it did not exist, and gave up on the
+    tool rather than trying a directory that does."""
+    (tmp_path / "red-arch-km-2").mkdir()
+    (tmp_path / "reachy-virtual-robot").mkdir()
+
+    with patch(_EXEC, AsyncMock()) as m:
+        out = await _run_claude_code(
+            _ctx(_settings(tmp_path)), {"task": "crawl", "working_dir": "seo-crawler-playwright"}
+        )
+
+    assert "does not exist" in out["error"]
+    assert "red-arch-km-2" in out["error"] and "reachy-virtual-robot" in out["error"]
+    assert "does not create directories" in out["error"]
+    # Nothing was launched — the guess is refused before the subprocess.
+    m.assert_not_called()
+
+
+async def test_an_empty_root_says_to_run_at_the_root(tmp_path):
+    with patch(_EXEC, AsyncMock()):
+        out = await _run_claude_code(_ctx(_settings(tmp_path)), {"task": "x", "working_dir": "nope"})
+
+    assert "no subdirectories" in out["error"]
+
+
+def test_the_description_says_it_can_reach_the_web(tmp_path):
+    """The one fact that would have saved the SEO order: with no web-research key
+    configured, this tool is still a way to open a public URL."""
+    assert "LIVE WEB" in RUN_CLAUDE_CODE.description
+    assert "single bounded invocation" in RUN_CLAUDE_CODE.description
+
+
 async def test_requires_task(tmp_path):
     out = await _run_claude_code(_ctx(_settings(tmp_path)), {"task": "   "})
     assert out["error"] == "task is required"

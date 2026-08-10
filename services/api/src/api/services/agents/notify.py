@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.config import Settings
@@ -109,6 +109,38 @@ async def _try_notify_workflow(
     except Exception:  # noqa: BLE001 - notify fan-out must never fail the run
         logger.warning("agent notify-workflow failed for org %s", org_id)
         return False
+
+
+async def settle_notifications(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    run_id: uuid.UUID,
+    kind: str,
+) -> int:
+    """Resolve the ``kind`` notifications for ``run_id``. Returns how many were closed.
+
+    An approval or question notification exists to say "go and do this". Once the
+    approval is decided or the question answered, it is a receipt — but it stayed
+    ``unread``, so the inbox kept asking a person to tick off work they had already
+    done. Observed live: eleven open rows, of which eight were for items settled hours
+    earlier. A list of chores that are mostly already finished trains people to stop
+    reading it, which is the same failure the badge exists to prevent.
+
+    Callers settle one item and then call this only when nothing of that kind is left
+    pending on the run — a run can raise a second approval while the first is being
+    decided, and clearing that one would hide a real ask.
+    """
+    result = await session.execute(
+        update(AgentNotification)
+        .where(
+            AgentNotification.org_id == org_id,
+            AgentNotification.run_id == run_id,
+            AgentNotification.kind == kind,
+            AgentNotification.status != "resolved",
+        )
+        .values(status="resolved")
+    )
+    return int(result.rowcount or 0)
 
 
 async def create_notification(

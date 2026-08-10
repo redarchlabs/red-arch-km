@@ -63,6 +63,12 @@ class ApprovalRead(BaseModel):
     # (/workflows/{workflow_id}/runs?run={workflow_run_id}).
     workflow_run_id: uuid.UUID | None = None
     workflow_id: uuid.UUID | None = None
+    # Whose run is parked on this. The approval row itself only knows a run_id, so
+    # without this the roster page cannot tell which card an approval belongs to —
+    # and answering "needs you" where you saw it beats navigating to a shared inbox
+    # and finding the right row again.
+    agent_id: uuid.UUID | None = None
+    agent_name: str | None = None
 
 
 class NotificationRead(BaseModel):
@@ -98,6 +104,8 @@ class QuestionRead(BaseModel):
     # Resolved names, so the inbox can say "Ada asks" without a second round trip.
     asked_by: str | None = None
     target_agent: str | None = None
+    # The id behind ``asked_by``, so a roster card can pick out its own questions.
+    asked_by_agent_id: uuid.UUID | None = None
 
 
 class AnswerRequest(BaseModel):

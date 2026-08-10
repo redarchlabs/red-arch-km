@@ -27,7 +27,9 @@ _MAX_TASKS = 40
 def _service(ctx: ToolContext) -> Any:
     from api.services.agents.work_order_service import WorkOrderService
 
-    return WorkOrderService(ctx.session, ctx.org_id)
+    # Settings are passed so a step blocking here can also leave the app — the
+    # in-app inbox alone is what let a blocked order sit unnoticed for five hours.
+    return WorkOrderService(ctx.session, ctx.org_id, ctx.settings)
 
 
 def _no_work_order() -> dict[str, Any]:
@@ -52,15 +54,34 @@ async def _set_tasks(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
     if not titles:
         return {"error": "Every task was blank"}
 
+    from api.services.agents.work_order_service import DELIVERY_TASK_TITLE, wants_deliverable
+
+    service = _service(ctx)
+    # An order that promises a report, a CSV, a design — anything a person opens —
+    # gets a step for handing it over, if the plan does not already have one. A plan
+    # that produces a report and never says "attach it" ends with the report inside
+    # the agent's own transcript, which is the same as never having written it.
+    wo = await service.get_work_order(ctx.work_order_id)
+    owed = wants_deliverable(f"{wo.title}\n{wo.body or ''}")
+
     # Replaces the whole list rather than appending: a plan is a statement of the
     # work as it is now understood, and merging would silently keep steps the
     # agent has just decided against.
-    tasks = await _service(ctx).set_tasks(
-        ctx.work_order_id, [{"title": title, "sort_order": i} for i, title in enumerate(titles)]
+    tasks = await service.set_tasks(
+        ctx.work_order_id,
+        [{"title": title, "sort_order": i} for i, title in enumerate(titles)],
+        add_delivery_step=owed,
     )
+    added = any(t.title == DELIVERY_TASK_TITLE for t in tasks)
+    note = "This replaced the previous plan. Update each task as you finish it."
+    if added:
+        note += (
+            " This order promises something a person will open, so a delivery step was added — "
+            "the order cannot be finished with nothing attached to it."
+        )
     return {
         "tasks": [{"key": t.key, "title": t.title, "status": t.status} for t in tasks],
-        "note": "This replaced the previous plan. Update each task as you finish it.",
+        "note": note,
     }
 
 
@@ -71,20 +92,26 @@ async def _update_task(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]
     status = str(args.get("status") or "").strip()
     if not key or not status:
         return {"error": "Both 'key' and 'status' are required"}
-    if status not in WORK_ORDER_TASK_STATUSES:
-        return {"error": f"status must be one of: {', '.join(WORK_ORDER_TASK_STATUSES)}"}
+
+    from api.services.agents.work_order_service import WorkOrderValidationError
 
     service = _service(ctx)
+    try:
+        # The service owns the transition, because blocking a step has to reach a
+        # person and a tool handler is the wrong place to know that.
+        target = await service.update_task_status(
+            ctx.work_order_id,
+            key,
+            status,
+            agent=ctx.agent,
+            run_id=ctx.run_id,
+            evidence=str(args.get("evidence") or "").strip() or None,
+        )
+    except WorkOrderValidationError as exc:
+        # A bad key or status is the model's mistake to correct, not a run failure:
+        # returned as text so it can try again this turn.
+        return {"error": str(exc)}
     tasks = await service.list_tasks(ctx.work_order_id)
-    target = next((t for t in tasks if t.key.lower() == key.lower()), None)
-    if target is None:
-        # Name the keys that exist: a model that guessed one has no other way to
-        # find the real one, and would otherwise abandon the update.
-        available = ", ".join(t.key for t in tasks) or "none"
-        return {"error": f"No task with key '{key}'. Keys on this work order: {available}."}
-
-    target.status = status
-    await service.flush_tasks()
     remaining = [t.title for t in tasks if t.status not in ("done", "carried")]
     return {
         "updated": {"key": target.key, "title": target.title, "status": status},
@@ -135,7 +162,9 @@ UPDATE_WORK_ORDER_TASK = ToolSpec(
     name="update_work_order_task",
     description=(
         "Mark one checklist step's status as you go (in_progress, done, blocked, carried). "
-        "Percent complete comes from these, so an unupdated list reads as no progress."
+        "Percent complete comes from these, so an unupdated list reads as no progress. "
+        "Marking a step 'done' REQUIRES 'evidence': what you produced and where it is. A step "
+        "that produced nothing anyone can point at is not done — block it or carry it."
     ),
     parameters={
         "type": "object",
@@ -145,6 +174,14 @@ UPDATE_WORK_ORDER_TASK = ToolSpec(
                 "type": "string",
                 "enum": list(WORK_ORDER_TASK_STATUSES),
                 "description": "'carried' means deliberately not doing it on this order.",
+            },
+            "evidence": {
+                "type": "string",
+                "description": (
+                    "Required for 'done'. One concrete sentence: what you produced and where it "
+                    "is — 'fetched robots.txt and crawled 42 pages, CSV attached as crawl.csv'. "
+                    "Not 'completed the task'. It is shown to the person watching."
+                ),
             },
         },
         "required": ["key", "status"],

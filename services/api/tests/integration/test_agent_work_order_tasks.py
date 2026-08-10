@@ -46,11 +46,13 @@ class _Ctx:
     _extra: dict = field(default_factory=dict)
 
 
-async def _seed(admin_session: AsyncSession) -> tuple[Org, uuid.UUID]:
+async def _seed(admin_session: AsyncSession, *, title: str = "Tidy the shared inbox") -> tuple[Org, uuid.UUID]:
+    """Default title deliberately promises no output: an order that owes a report
+    gets a delivery step appended to its plan, which these assertions are not about."""
     org = Org(name=f"Tasks-{uuid.uuid4().hex[:8]}", permission_number=1)
     admin_session.add(org)
     await admin_session.flush()
-    wo = await WorkOrderService(admin_session, org.id).create_work_order(title="Audit the site")
+    wo = await WorkOrderService(admin_session, org.id).create_work_order(title=title)
     await admin_session.commit()
     return org, wo.id
 
@@ -104,7 +106,9 @@ class TestTracking:
         ctx = _Ctx(session=admin_session, org_id=org.id, work_order_id=wo_id)
         await SET_WORK_ORDER_TASKS.handler(ctx, {"tasks": ["One", "Two"]})
 
-        out = await UPDATE_WORK_ORDER_TASK.handler(ctx, {"key": "T1", "status": "done"})
+        out = await UPDATE_WORK_ORDER_TASK.handler(
+            ctx, {"key": "T1", "status": "done", "evidence": "Fetched all 12 pages and logged their status codes."}
+        )
 
         assert out["updated"]["status"] == "done"
         assert out["progress"] == 0.5
@@ -146,7 +150,9 @@ class TestTracking:
         org, wo_id = await _seed(admin_session)
         ctx = _Ctx(session=admin_session, org_id=org.id, work_order_id=wo_id)
         await SET_WORK_ORDER_TASKS.handler(ctx, {"tasks": ["One", "Two"]})
-        await UPDATE_WORK_ORDER_TASK.handler(ctx, {"key": "T1", "status": "done"})
+        await UPDATE_WORK_ORDER_TASK.handler(
+            ctx, {"key": "T1", "status": "done", "evidence": "Wrote the summary into the order diary."}
+        )
 
         out = await UPDATE_WORK_ORDER_TASK.handler(ctx, {"key": "T2", "status": "carried"})
 

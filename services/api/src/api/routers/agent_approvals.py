@@ -49,21 +49,24 @@ async def list_approvals(
     session: Annotated[AsyncSession, Depends(get_tenant_db)],
 ) -> list[ApprovalRead]:
     approvals = await ApprovalService(session, ctx.org_id).list_pending()
-    # One batch query maps each parked run to the workflow it blocks (if any),
-    # so an approval row can deep-link to /workflows/{wf}/runs?run={run}.
+    # One batch query resolves every parked run at once: who owns it (so a roster
+    # card can claim its own approvals) and, when it is a workflow step, which run it
+    # is blocking (so the row can deep-link to /workflows/{wf}/runs?run={run}).
     links: dict[uuid.UUID, tuple[uuid.UUID, uuid.UUID | None]] = {}
+    owners: dict[uuid.UUID, tuple[uuid.UUID | None, str | None]] = {}
     run_ids = {a.run_id for a in approvals}
     if run_ids:
-        from sqlalchemy import select
-
         from api.models.agent_run import AgentRun
 
         rows = await session.execute(
-            select(AgentRun.id, AgentRun.workflow_run_id, AgentRun.input).where(
-                AgentRun.id.in_(run_ids), AgentRun.workflow_run_id.is_not(None)
-            )
+            select(AgentRun.id, AgentRun.agent_id, Agent.name, AgentRun.workflow_run_id, AgentRun.input)
+            .outerjoin(Agent, Agent.id == AgentRun.agent_id)
+            .where(AgentRun.id.in_(run_ids))
         )
-        for rid, wf_run_id, run_input in rows.all():
+        for rid, agent_id, agent_name, wf_run_id, run_input in rows.all():
+            owners[rid] = (agent_id, agent_name)
+            if wf_run_id is None:
+                continue
             raw = ((run_input or {}).get("workflow") or {}).get("workflow_id")
             try:
                 wf_id = uuid.UUID(str(raw)) if raw else None
@@ -75,6 +78,8 @@ async def list_approvals(
             update={
                 "workflow_run_id": links.get(a.run_id, (None, None))[0],
                 "workflow_id": links.get(a.run_id, (None, None))[1],
+                "agent_id": owners.get(a.run_id, (None, None))[0],
+                "agent_name": owners.get(a.run_id, (None, None))[1],
             }
         )
         for a in approvals

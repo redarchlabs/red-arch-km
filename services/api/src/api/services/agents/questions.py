@@ -31,6 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.models.agent_run import AgentQuestion, AgentRun
 from api.repositories.agent_questions import AgentQuestionRepository
 from api.repositories.agent_run import AgentRunRepository
+from api.services.agents.notify import settle_notifications
 
 logger = logging.getLogger(__name__)
 
@@ -187,6 +188,29 @@ async def _inject_answer(
     return True
 
 
+async def _close_the_notice(session: AsyncSession, org_id: uuid.UUID, run_id: uuid.UUID) -> None:
+    """Clear the "has a question for you" notice once this run has none left open.
+
+    The notice asks a person to go and answer something. After they have, it is a
+    receipt — but it stayed ``unread``, so the inbox kept listing settled questions as
+    outstanding chores next to the real ones. Guarded on nothing else pending, since a
+    run is allowed a second question while the first is being answered.
+    """
+    open_left = await session.execute(
+        select(AgentQuestion.id)
+        .where(
+            AgentQuestion.run_id == run_id,
+            AgentQuestion.org_id == org_id,
+            AgentQuestion.status == "pending",
+            AgentQuestion.audience == "human",
+        )
+        .limit(1)
+    )
+    if open_left.first() is not None:
+        return
+    await settle_notifications(session, org_id, run_id, "question")
+
+
 async def record_answer(
     session: AsyncSession,
     org_id: uuid.UUID,
@@ -219,6 +243,7 @@ async def record_answer(
         # and acted on".
         question.status = "voided"
         await session.flush()
+    await _close_the_notice(session, org_id, question.run_id)
     return AnswerOutcome(question=question, resumed=resumed)
 
 
@@ -251,6 +276,7 @@ async def decline(
         {"answered": False, "answer": note, "guidance": "Proceed on your own judgement or escalate."},
     )
     await session.flush()
+    await _close_the_notice(session, org_id, question.run_id)
     return AnswerOutcome(question=question, resumed=resumed)
 
 
@@ -332,6 +358,9 @@ async def void_open_questions(session: AsyncSession, org_id: uuid.UUID, run_id: 
         )
         .values(status="voided", answered_at=_now())
     )
+    # The run is gone, so its "has a question for you" notice is asking a person to
+    # answer something nobody is listening for.
+    await _close_the_notice(session, org_id, run_id)
     # Any consult run spawned for one of those questions is now pointless work.
     await _cancel_orphaned_consults(session, org_id, run_id)
 

@@ -234,7 +234,10 @@ class TestDispatchOnStart:
         await svc.set_status(wo.id, "in_progress", actor_profile_id=profile.id)
         await admin_session.commit()
 
-        entries = await svc.list_entries(wo.id)
+        # The capability check writes its own line here (this "chief" is a
+        # coordinator with no reports, so it can do nothing), which is a separate
+        # notice — the dispatch entry is the one carrying the run.
+        entries = [e for e in await svc.list_entries(wo.id) if e.text.startswith("Started:")]
         assert len(entries) == 1
         assert "chief" in entries[0].text
         assert entries[0].agent_run_id == (await _runs_for(admin_session, wo.id))[0].id

@@ -84,6 +84,8 @@ def harness(monkeypatch):
         answers: list[dict[str, Any]] = []
         # What the asking run's trigger looks like (drives the consult depth cap).
         run_trigger: str = "manual"
+        # The calling run's stored input — carries the escalation hop count.
+        run_input: dict[str, Any] = {}
         # Whether recording an answer actually resumed the asker.
         resumed: bool = True
         pending_question: _FakeQuestion | None = None
@@ -91,6 +93,7 @@ def harness(monkeypatch):
     h = H()
     h.roster, h.runs, h.notes, h.questions, h.answers = [], [], [], [], []
     h.run_trigger, h.resumed, h.pending_question = "manual", True, None
+    h.run_input = {}
 
     async def _resolve(session, org_id, ref):
         wanted = str(ref).strip().lower()
@@ -105,7 +108,7 @@ def harness(monkeypatch):
             return type("R", (), {"id": uuid.uuid4()})()
 
         async def get_run(self, run_id):
-            return type("R", (), {"id": run_id, "trigger": h.run_trigger})()
+            return type("R", (), {"id": run_id, "trigger": h.run_trigger, "input": h.run_input})()
 
     class _Questions:
         def __init__(self, *a, **kw):
@@ -631,7 +634,9 @@ class TestRequestReviewAndEscalate:
         assert "required" in (await REQUEST_REVIEW.handler(FakeCtx(agent=worker), {}))["error"]
         assert harness.notes == []
 
-    async def test_escalation_routes_the_same_way(self, harness) -> None:
+    async def test_escalation_starts_a_run_for_the_supervisor(self, harness) -> None:
+        """The whole point: somebody has to wake up. A notification alone left the
+        report believing it had escalated while nothing ran and nobody was paged."""
         boss = FakeAgent("tpm", kind="coordinator")
         worker = FakeAgent("engineer", supervisor_id=boss.id)
         harness.roster = [boss, worker]
@@ -639,13 +644,96 @@ class TestRequestReviewAndEscalate:
         out = await ESCALATE.handler(FakeCtx(agent=worker), {"reason": "Needs a product call"})
 
         assert out["escalated_to"] == "tpm"
+        assert out["status"] == "queued"
+        assert harness.runs[0]["agent_id"] == boss.id
+        assert harness.runs[0]["trigger"] == "escalation"
+        assert harness.runs[0]["status"] == "queued"
+        assert "Needs a product call" in harness.runs[0]["input"]["task"]
         assert harness.notes[0]["kind"] == "escalation"
+        # Handled by an agent, so the admins are not also paged for it.
+        assert harness.notes[0]["recipient_role"] is None
+
+    async def test_the_escalation_run_carries_the_reporters_context(self, harness) -> None:
+        boss = FakeAgent("tpm", kind="coordinator")
+        worker = FakeAgent("engineer", supervisor_id=boss.id)
+        harness.roster = [boss, worker]
+
+        await ESCALATE.handler(
+            FakeCtx(agent=worker),
+            {"reason": "web_research has no key", "context": "Tried robots.txt and the sitemap."},
+        )
+
+        task = harness.runs[0]["input"]["task"]
+        assert "Tried robots.txt and the sitemap." in task
+        # It must read as an assignment, not a bulletin, or the supervisor restates it.
+        assert "yours to resolve" in task
+
+    async def test_the_escalation_run_is_linked_to_the_reporting_run(self, harness) -> None:
+        boss = FakeAgent("tpm", kind="coordinator")
+        worker = FakeAgent("engineer", supervisor_id=boss.id)
+        harness.roster = [boss, worker]
+        parent, order = uuid.uuid4(), uuid.uuid4()
+
+        await ESCALATE.handler(FakeCtx(agent=worker, run_id=parent, work_order_id=order), {"reason": "stuck"})
+
+        assert harness.runs[0]["parent_run_id"] == parent
+        assert harness.runs[0]["work_order_id"] == order
+
+    async def test_the_apex_escalates_to_a_person(self, harness) -> None:
+        apex = FakeAgent("chief-of-staff", kind="coordinator", supervisor_id=None)
+        harness.roster = [apex]
+
+        out = await ESCALATE.handler(FakeCtx(agent=apex), {"reason": "no key anywhere"})
+
+        assert out["escalated_to"] == "human reviewer"
+        assert out["status"] == "notified"
+        assert harness.runs == []
+        assert harness.notes[0]["recipient_role"] == "org_admin"
+
+    async def test_a_disabled_supervisor_is_the_same_dead_end_as_none(self, harness) -> None:
+        """Queueing a run for a disabled agent would never execute — that is the
+        original bug wearing a different hat."""
+        boss = FakeAgent("tpm", kind="coordinator", enabled=False)
+        worker = FakeAgent("engineer", supervisor_id=boss.id)
+        harness.roster = [boss, worker]
+
+        out = await ESCALATE.handler(FakeCtx(agent=worker), {"reason": "stuck"})
+
+        assert out["escalated_to"] == "human reviewer"
+        assert harness.runs == []
+        assert harness.notes[0]["recipient_role"] == "org_admin"
+
+    async def test_each_hop_is_counted(self, harness) -> None:
+        boss = FakeAgent("tpm", kind="coordinator")
+        worker = FakeAgent("engineer", supervisor_id=boss.id)
+        harness.roster = [boss, worker]
+        harness.run_input = {"escalation_hops": 1}
+
+        await ESCALATE.handler(FakeCtx(agent=worker, run_id=uuid.uuid4()), {"reason": "stuck"})
+
+        assert harness.runs[0]["input"]["escalation_hops"] == 2
+
+    async def test_a_blocker_that_keeps_climbing_stops_and_asks_a_person(self, harness) -> None:
+        """Passing the same problem along five times is not progress, and a
+        supervisor_id cycle drawn by hand would otherwise queue runs forever."""
+        boss = FakeAgent("tpm", kind="coordinator")
+        worker = FakeAgent("engineer", supervisor_id=boss.id)
+        harness.roster = [boss, worker]
+        harness.run_input = {"escalation_hops": delegation.MAX_ESCALATION_HOPS}
+
+        out = await ESCALATE.handler(FakeCtx(agent=worker, run_id=uuid.uuid4()), {"reason": "stuck"})
+
+        assert out["escalated_to"] == "human reviewer"
+        assert harness.runs == []
+        assert harness.notes[0]["recipient_role"] == "org_admin"
+        assert "without resolution" in harness.notes[0]["body"]
 
     async def test_escalation_requires_a_reason(self, harness) -> None:
         worker = FakeAgent("engineer", supervisor_id=uuid.uuid4())
         harness.roster = [worker]
 
         assert "required" in (await ESCALATE.handler(FakeCtx(agent=worker), {}))["error"]
+        assert harness.runs == []
 
 
 class TestKindGateCoversTheProtocol:

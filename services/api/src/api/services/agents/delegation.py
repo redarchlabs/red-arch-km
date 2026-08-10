@@ -2,7 +2,7 @@
 the ``supervisor_id`` org chart.
 
 * delegate_task  — supervisor → **direct report only**; queues a child run.
-* escalate       — report → its supervisor (or a human at the apex); notifies.
+* escalate       — report → its supervisor; queues a run for them (a human at the apex).
 * consult_peer   — cross-tree, **advisory-target only**; blocks for the answer.
 * reply_to_peer  — the other half of a consult: the advisor's answer.
 * request_review — report → supervisor; records a review request (a WO gate).
@@ -46,6 +46,14 @@ class DelegationError(Exception):
 # push the model's actual work out of the window with a wall of names.
 HINT_NAME_CAP = 20
 
+# How far an escalation may travel up the chart before it stops climbing and asks a
+# person instead. Escalation only ever moves up, so the chart's own depth normally
+# ends it — this bounds the pathological case (a supervisor_id cycle drawn by hand)
+# and the merely useless one, where five agents in a row each pass the same blocker
+# along because none of them can fix it either. Carried in the run's input rather
+# than derived from the chart, so the count survives however the chain is shaped.
+MAX_ESCALATION_HOPS = 4
+
 # Questions to a person per run. Two is a genuine blocker plus one follow-up;
 # past that an agent is interviewing rather than working, and every question ends
 # the run until somebody answers it.
@@ -87,6 +95,22 @@ async def _reports_hint(session: AsyncSession, org_id: uuid.UUID, caller: Agent)
     if not reports:
         return f"'{caller.name}' has no direct reports to delegate to."
     return f"Direct reports of '{caller.name}': {_name_list(reports)}."
+
+
+async def routable_colleagues(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    agent: Agent,
+) -> tuple[list[Agent], list[Agent]]:
+    """``(direct reports, consultable advisors)`` — who this agent can route work to.
+
+    Feeds the system prompt. Disabled reports are dropped: naming one costs the model
+    a turn discovering the run it queued will never execute.
+    """
+    repo = AgentRepository(session, org_id)
+    reports = [a for a in await repo.list_direct_reports(agent.id) if a.enabled]
+    advisors = await repo.list_consultable(exclude_id=agent.id)
+    return reports, advisors
 
 
 async def _diary(ctx: ToolContext, text: str) -> None:
@@ -171,11 +195,76 @@ async def _supervisor(ctx: ToolContext) -> Agent | None:
     return await AgentRepository(ctx.session, ctx.org_id).get(ctx.agent.supervisor_id)
 
 
+def _escalation_brief(reporter: str, reason: str, context: str | None) -> str:
+    """The task the supervisor's run wakes up to.
+
+    It has to say that the escalation is theirs to resolve, because a supervisor
+    handed a bare problem statement tends to restate it and stop. The three named
+    moves are the only ones that change anything: a different report, a different
+    approach, or a person.
+    """
+    body = f"{reporter} has escalated a blocker to you.\n\nBLOCKER: {reason}\n"
+    if context:
+        body += f"\nCONTEXT FROM {reporter}: {context}\n"
+    return (
+        body + "\nThis is now yours to resolve. "
+        f"{reporter} could not get past it, so repeating their approach will fail the same way. "
+        "Either delegate the work to a report whose tools can actually do it, find another route "
+        "to the same outcome, or — if nothing you can reach will work — escalate to your own "
+        "supervisor or ask a human, naming exactly what you need."
+    )
+
+
+async def _escalation_hops(ctx: ToolContext) -> int:
+    """How many escalations this run is already downstream of."""
+    if ctx.run_id is None:
+        return 0
+    run = await AgentRunRepository(ctx.session, ctx.org_id).get_run(ctx.run_id)
+    if run is None:
+        return 0
+    return int((getattr(run, "input", None) or {}).get("escalation_hops") or 0)
+
+
 async def _escalate(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
+    """Hand a blocker up the chart — and actually *wake* whoever it lands on.
+
+    This used to write a notification and nothing else. With a supervisor set the
+    row was addressed to no role, so no person saw it either: the report believed it
+    had escalated, the supervisor never ran, and the order sat still. Observed live —
+    an analyst offered "escalate to chief-of-staff for platform access", a person
+    picked it, and the escalation went nowhere while every remaining task was marked
+    blocked. An escalation that queues no run is a message dropped on the floor.
+    """
     reason = str(args.get("reason") or "").strip()
+    context = str(args.get("context") or "").strip() or None
     if not reason:
         return {"error": "'reason' is required"}
+
     supervisor = await _supervisor(ctx)
+    hops = await _escalation_hops(ctx)
+    # A disabled supervisor is the same dead end as no supervisor: nothing would run.
+    handler = supervisor if supervisor is not None and supervisor.enabled else None
+    if handler is not None and hops >= MAX_ESCALATION_HOPS:
+        handler = None
+        reason = f"{reason}\n\n(Escalated {hops} times without resolution; stopping here and asking a person.)"
+
+    child: AgentRun | None = None
+    if handler is not None:
+        child = await AgentRunRepository(ctx.session, ctx.org_id).create_run(
+            agent_id=handler.id,
+            provider=handler.provider,
+            model=handler.model,
+            trigger="escalation",
+            input={"task": _escalation_brief(ctx.agent.name, reason, context), "escalation_hops": hops + 1},
+            parent_run_id=ctx.run_id,
+            work_order_id=ctx.work_order_id,
+            # Same rule as delegation: the supervisor picks the work up on behalf of
+            # whoever started it, and reads with exactly that person's entitlement.
+            actor_user_id=ctx.actor_user_id,
+            status="queued",
+            label=f"Escalation from {ctx.agent.name}: {reason[:60]}",
+        )
+
     await create_notification(
         ctx.session,
         ctx.org_id,
@@ -184,11 +273,19 @@ async def _escalate(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
         body=reason,
         run_id=ctx.run_id,
         work_order_id=ctx.work_order_id,
-        recipient_role=None if supervisor else "org_admin",
+        # Only page the admins when no agent is picking this up — otherwise the
+        # notification is a record of a hand-off, not a request for help.
+        recipient_role=None if handler else "org_admin",
         settings=ctx.settings,
     )
-    await _diary(ctx, f"Escalated: {reason}")
-    return {"escalated_to": supervisor.name if supervisor else "human reviewer", "status": "notified"}
+    await _diary(ctx, f"Escalated to {handler.name if handler else 'a human'}: {reason}")
+    if handler is None:
+        return {"escalated_to": "human reviewer", "status": "notified"}
+    return {
+        "escalated_to": handler.name,
+        "status": "queued",
+        "supervisor_run_id": str(child.id) if child is not None else None,
+    }
 
 
 def _consult_brief(asker: str, question: str) -> str:
@@ -378,7 +475,7 @@ async def _peer_review_delivery(ctx: ToolContext, summary: str) -> dict[str, Any
     from api.services.agents import review_gate
     from api.services.agents.work_order_service import WorkOrderService
 
-    service = WorkOrderService(ctx.session, ctx.org_id)
+    service = WorkOrderService(ctx.session, ctx.org_id, ctx.settings)
     work_order = await service.get_work_order(ctx.work_order_id)
     digest = rb.fingerprint(summary)
     state = await review_gate.status(ctx, work_order.id, _DELIVERY_GATE, digest)
@@ -473,7 +570,11 @@ DELEGATE_TASK = ToolSpec(
 
 ESCALATE = ToolSpec(
     name="escalate",
-    description="Escalate a blocker to your supervisor (or a human if you are at the top).",
+    description=(
+        "Escalate a blocker to your supervisor — this starts a run for them, so they will "
+        "actually pick it up (a human is notified instead if you are at the top of the chart). "
+        "Use it when you cannot get past something with the tools you have."
+    ),
     parameters={
         "type": "object",
         "properties": {"reason": {"type": "string"}, "context": {"type": "string"}},

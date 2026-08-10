@@ -155,6 +155,17 @@ class Settings(BaseSettings):
     agent_web_research_model: str = Field(
         default="gemini/gemini-2.5-flash", validation_alias="AGENT_WEB_RESEARCH_MODEL"
     )
+    # Claude model used by web_research when an Anthropic key is available — the
+    # preferred backend, because its server-side tools include web_fetch and can open
+    # a URL the question names. Must be a model that supports the dynamic-filtering
+    # tool versions (Opus 4.6+ / Sonnet 4.6+); an older one is refused by the API.
+    agent_web_search_model: str = Field(default="claude-opus-5", validation_alias="AGENT_WEB_SEARCH_MODEL")
+    # The acceptance auditor: does the delivered work answer what was asked? One short
+    # call per closing order, reading only the request and the result — so a small
+    # model is the right default. Set AGENT_ACCEPTANCE_ENFORCE=false to record the
+    # verdict without blocking, which is how to try it out on a live org first.
+    agent_acceptance_model: str = Field(default="gpt-5-mini", validation_alias="AGENT_ACCEPTANCE_MODEL")
+    agent_acceptance_enforce: bool = Field(default=True, validation_alias="AGENT_ACCEPTANCE_ENFORCE")
     # Batch single-shot generation (batch_generate tool): how often to poll the
     # Anthropic Message Batch and how long to wait before returning a batch id.
     agent_batch_poll_interval_seconds: int = Field(default=10, validation_alias="AGENT_BATCH_POLL_INTERVAL_SECONDS")

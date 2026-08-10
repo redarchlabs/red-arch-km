@@ -30,6 +30,7 @@ from api.repositories.agent_run import AgentRunRepository
 from api.repositories.agent_run_messages import AgentRunMessageRepository
 from api.services.agents import attachments, lifecycle
 from api.services.agents.authority import Posture, available_tools, posture_for
+from api.services.agents.delegation import routable_colleagues
 from api.services.agents.live.activity import RunActivityPublisher
 from api.services.agents.llm.catalog import model_supports_vision
 from api.services.agents.llm.keys import resolve_provider_key
@@ -209,7 +210,7 @@ class AgentRunExecutor:
 
         notified = 0
         for wo in rows:
-            service = WorkOrderService(session, wo.org_id)
+            service = WorkOrderService(session, wo.org_id, self._settings)
             tasks = await service.list_tasks(wo.id)
             outstanding = [t for t in tasks if t.status not in ("done", "carried")]
             if not outstanding:
@@ -358,10 +359,16 @@ class AgentRunExecutor:
             task = str(run.input.get("task") or run.input.get("message") or "").strip() or "Proceed."
             # A work-order run is watched through a task list the agent has to fill
             # in; without the title it does not know it is on one.
+            # Who this agent can hand work to. Without it a coordinator cannot name a
+            # single colleague, so "route this through engineering" becomes an
+            # escalation to a person rather than a delegation.
+            reports, advisors = await routable_colleagues(session, org_id, agent)
             system = build_system_prompt(
                 agent,
                 work_order_title=work_order.title if work_order else None,
                 plan_only=autonomy == Posture.PLAN_ONLY,
+                reports=reports,
+                advisors=advisors,
             )
             if linkage is not None:
                 from api.services.agents.tools.bridge import workflow_system_addendum, wrap_workflow_task
@@ -619,7 +626,7 @@ class AgentRunExecutor:
         """
         if run.work_order_id is None:
             return None
-        service = WorkOrderService(session, org_id)
+        service = WorkOrderService(session, org_id, self._settings)
         tasks = await service.list_tasks(run.work_order_id)
         outstanding = [t for t in tasks if t.status not in ("done", "carried")]
         if not tasks or not outstanding:

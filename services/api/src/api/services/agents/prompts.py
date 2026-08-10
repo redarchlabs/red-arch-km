@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from shared_config import current_date_line
 
 from api.models.agent import Agent
@@ -36,7 +38,21 @@ _WORK_ORDER_GUIDANCE = (
     "same decision.\n"
     "When you do ask, use ask_human rather than ending your turn with a question in "
     "prose: the run ends when you stop, and a finished run cannot be replied to, so "
-    "a question asked that way reaches nobody."
+    "a question asked that way reaches nobody.\n"
+    "You do not self-declare done. Marking a step done requires saying what you produced "
+    "and where it is, and the order cannot be finished with nothing attached to it — a "
+    "checklist of ticks is not a deliverable. If the request implies something a person "
+    "will open, produce it and attach it with attach_document. Writing about the work is "
+    "not the work: a document describing how one would do the task does not complete the "
+    "task, however good the document is.\n"
+    "'blocked' means one specific step cannot proceed and needs someone else — it is "
+    "not how you end your turn. Mark only the step that is actually stuck, and say what "
+    "would unstick it; leave the steps you simply have not reached as pending. Sweeping "
+    "the rest of the list to blocked hides which one needs help and reads to the person "
+    "watching as though the whole order has failed. If the obstacle is one your "
+    "supervisor could clear — a tool you lack, access you do not have, a call above your "
+    "level — escalate instead: that starts a run for them, and they pick the work up "
+    "from where you left it."
 )
 
 
@@ -57,11 +73,62 @@ _PLAN_ONLY_GUIDANCE = (
 )
 
 
+# What each kind can be handed, said from the delegator's side of the chart.
+_REPORT_NOTES = {
+    "coordinator": "coordinator — cannot act directly, but plans and delegates further down their own branch",
+    "operator": "operator — does hands-on work with the tools they hold",
+    "advisory": "advisory — researches and recommends; cannot act and cannot delegate onward",
+}
+
+# Names before the list truncates. A large org would otherwise push the actual work
+# out of the context window with a wall of colleagues.
+ROSTER_CAP = 20
+
+
+def _names(agents: Sequence[Agent]) -> str:
+    shown = [a.name for a in agents[:ROSTER_CAP]]
+    extra = len(agents) - len(shown)
+    return ", ".join(shown) + (f", and {extra} more" if extra > 0 else "")
+
+
+def _roster_guidance(reports: Sequence[Agent], advisors: Sequence[Agent]) -> str:
+    """Name the colleagues an agent can actually route work to.
+
+    Nothing used to tell an agent who its reports were — the roster appeared only
+    inside the error you get for naming the wrong one, which an agent has to guess a
+    name to see. Seen live: a chief-of-staff told to "route the crawl through the
+    engineering chain" worked out that it wanted the technical-project-manager, could
+    not name anyone to send it to, and escalated to a human instead — twice — then
+    marked the order blocked. It had a delegate_task away from a working route.
+    """
+    lines: list[str] = []
+    if reports:
+        lines.append(
+            "YOUR DIRECT REPORTS — delegate_task reaches these and only these:\n"
+            + "\n".join(f"- {a.name} ({_REPORT_NOTES.get(a.kind, a.kind)})" for a in reports[:ROSTER_CAP])
+        )
+        if len(reports) > ROSTER_CAP:
+            lines.append(f"(…and {len(reports) - ROSTER_CAP} more reports.)")
+        # The load-bearing sentence. Without it an agent that needs a skill two levels
+        # down concludes it cannot be reached, rather than handing it to the branch
+        # that owns it — which is how a delegating org is supposed to work.
+        lines.append(
+            "If the skill you need sits further down than this list, that is not a dead end: "
+            "delegate to the coordinator whose branch owns it and say what you need. Passing it "
+            "on is their job, and they can see their own reports the way you see yours."
+        )
+    if advisors:
+        lines.append(f"Advisory agents you can consult_peer anywhere in the org: {_names(advisors)}.")
+    return "\n\n".join(lines)
+
+
 def build_system_prompt(
     agent: Agent,
     *,
     work_order_title: str | None = None,
     plan_only: bool = False,
+    reports: Sequence[Agent] | None = None,
+    advisors: Sequence[Agent] | None = None,
 ) -> str:
     """Compose the system prompt from the agent's identity, kind, and persona."""
     name = agent.display_name or agent.name
@@ -71,6 +138,9 @@ def build_system_prompt(
     ]
     if agent.persona:
         parts.append(agent.persona.strip())
+    roster = _roster_guidance(reports or [], advisors or [])
+    if roster:
+        parts.append(roster)
     if work_order_title:
         parts.append(_WORK_ORDER_GUIDANCE.format(title=work_order_title))
     if plan_only:

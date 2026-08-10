@@ -147,7 +147,7 @@ async def _submit_plan(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]
 
     from api.services.agents.work_order_service import WorkOrderService
 
-    service = WorkOrderService(ctx.session, ctx.org_id)
+    service = WorkOrderService(ctx.session, ctx.org_id, ctx.settings)
     tasks = await service.list_tasks(ctx.work_order_id)
     work_order = await service.get_work_order(ctx.work_order_id)
 
