@@ -3,6 +3,7 @@
 import { Check, X } from "lucide-react";
 import { useState } from "react";
 
+import { Markdown } from "@/components/common/Markdown";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
@@ -112,11 +113,17 @@ export function NeedsYouDialog({
 
         {questions.map((q) => (
           <div key={q.id} className="rounded-md border p-3">
-            <p className="whitespace-pre-wrap text-sm">{q.question}</p>
+            {/* The same question the approvals page shows, and it needs the same
+                rendering: an agent laying out numbered options collapses into an
+                unreadable line without it. stripImages because the text is
+                LLM-authored. */}
+            <Markdown content={q.question} stripImages />
             {q.context ? (
-              <p className="mt-1 whitespace-pre-wrap text-xs text-muted-foreground">
-                {q.context}
-              </p>
+              <Markdown
+                content={q.context}
+                stripImages
+                className="mt-1 text-xs text-muted-foreground"
+              />
             ) : null}
             <Textarea
               className="mt-2"

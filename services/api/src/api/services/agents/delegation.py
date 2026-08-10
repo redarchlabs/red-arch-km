@@ -577,7 +577,19 @@ ESCALATE = ToolSpec(
     ),
     parameters={
         "type": "object",
-        "properties": {"reason": {"type": "string"}, "context": {"type": "string"}},
+        "properties": {
+            "reason": {
+                "type": "string",
+                "description": (
+                    "What you are stuck on, in Markdown — it is rendered as Markdown for "
+                    "whoever picks it up. One line per point rather than a single paragraph."
+                ),
+            },
+            "context": {
+                "type": "string",
+                "description": "What you have already tried and what you need. Markdown.",
+            },
+        },
         "required": ["reason"],
     },
     category=Category.ESCALATE,
@@ -634,10 +646,22 @@ ASK_HUMAN = ToolSpec(
     parameters={
         "type": "object",
         "properties": {
-            "question": {"type": "string", "description": "One specific, answerable question."},
+            "question": {
+                "type": "string",
+                "description": (
+                    "One specific, answerable question, written in Markdown — it is rendered as "
+                    "Markdown for the reader. If you are offering choices, put each on its own "
+                    "list line ('1. Grant …'), not inline. A question laid out as one long "
+                    "paragraph of '1) … 2) … 3) …' arrives as a wall of text somebody has to "
+                    "parse before they can answer it."
+                ),
+            },
             "context": {
                 "type": "string",
-                "description": "What you are working on and why you are stuck — they lack your context.",
+                "description": (
+                    "What you are working on and why you are stuck — they lack your context. "
+                    "Markdown, same as the question."
+                ),
             },
         },
         "required": ["question"],

@@ -4,6 +4,7 @@ import { ArrowLeft, Bell, Check, MessageCircleQuestion, X } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
+import { Markdown } from "@/components/common/Markdown";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -185,16 +186,33 @@ export default function AgentApprovalsPage() {
             <Card key={q.id}>
               <CardContent className="space-y-3 pt-6">
                 <div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium">{q.question}</span>
+                  {/* An agent asking a real question writes a real question:
+                      options, trade-offs, what it has already tried. As one flat
+                      line that arrived as an unreadable wall — "1) grant... 2)
+                      provision... 3) run..." — with the numbers inline and the
+                      whole thing wrapped as prose. It was Markdown all along;
+                      nothing was rendering it. */}
+                  <div className="flex items-start justify-between gap-2">
+                    <Markdown
+                      content={q.question}
+                      // LLM-authored: an image URL a poisoned document talked the
+                      // model into emitting would otherwise be fetched by the
+                      // reader's browser.
+                      stripImages
+                      className="min-w-0 flex-1 font-medium"
+                    />
                     {q.asked_by ? (
-                      <Badge variant="outline">{q.asked_by}</Badge>
+                      <Badge variant="outline" className="shrink-0">
+                        {q.asked_by}
+                      </Badge>
                     ) : null}
                   </div>
                   {q.context ? (
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      {q.context}
-                    </p>
+                    <Markdown
+                      content={q.context}
+                      stripImages
+                      className="mt-1 text-xs text-muted-foreground"
+                    />
                   ) : null}
                 </div>
                 <Textarea
@@ -249,9 +267,11 @@ export default function AgentApprovalsPage() {
                     <Badge variant="outline">{n.kind}</Badge>
                   </div>
                   {n.body ? (
-                    <p className="mt-1 text-sm text-muted-foreground">
-                      {n.body}
-                    </p>
+                    <Markdown
+                      content={n.body}
+                      stripImages
+                      className="mt-1 text-muted-foreground"
+                    />
                   ) : null}
                 </div>
                 <Button
