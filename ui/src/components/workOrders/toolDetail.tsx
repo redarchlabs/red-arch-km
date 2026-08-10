@@ -10,56 +10,13 @@
  * chose to say about the work. The live view is supposed to be the other thing —
  * what is happening, in the agent's own arguments, before anyone has narrated it.
  *
- * The arguments and results were already on the wire; the panel was dropping them.
+ * The payloads were already on the wire; the panel was dropping them. How they are
+ * laid out lives in payloadView.tsx.
  */
 
-/** Longest single value shown before it is cut. Enough for a page's text excerpt or
- *  a long delegation brief; short of pasting a whole document into the panel. */
-const MAX_CHARS = 4_000;
+import { PayloadView } from "./payloadView";
 
-/** Height a payload gets before it scrolls inside itself, so one big result cannot
- *  push every other step off the screen. */
-const BOX = "max-h-48";
-
-export function formatPayload(value: unknown): string {
-  if (value === undefined || value === null) return "";
-  if (typeof value === "string") return value;
-  // A tool called with no arguments prints "{}", which is a heading and a pair of
-  // braces telling the reader nothing. Empty is empty.
-  if (typeof value === "object" && Object.keys(value as object).length === 0)
-    return "";
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    // Circular or otherwise unserialisable — better to show its shape than to
-    // drop the step's only evidence.
-    return String(value);
-  }
-}
-
-function clamp(text: string): { body: string; cut: number } {
-  if (text.length <= MAX_CHARS) return { body: text, cut: 0 };
-  return { body: text.slice(0, MAX_CHARS), cut: text.length - MAX_CHARS };
-}
-
-function Payload({ label, value }: { label: string; value: unknown }) {
-  const text = formatPayload(value);
-  if (!text.trim()) return null;
-  const { body, cut } = clamp(text);
-  return (
-    <div className="mt-1">
-      <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
-        {label}
-      </div>
-      <pre
-        className={`${BOX} overflow-auto whitespace-pre-wrap break-all rounded bg-muted/60 p-1.5 font-mono text-[11px] leading-snug`}
-      >
-        {body}
-        {cut > 0 ? `\n… ${cut.toLocaleString()} more characters` : ""}
-      </pre>
-    </div>
-  );
-}
+export { formatPayload } from "./payloadView";
 
 /** One tool call: its name, whether it has come back, and both payloads. */
 export function ToolDetail({
@@ -97,8 +54,8 @@ export function ToolDetail({
               : "done"}
         </span>
       </div>
-      <Payload label="arguments" value={args} />
-      <Payload label="result" value={result} />
+      <PayloadView label="arguments" value={args} />
+      <PayloadView label="result" value={result} />
     </div>
   );
 }
