@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api import db_scope
 from api.config import Settings
 from api.dependencies import get_redis_client
-from api.models.agent_run import AgentApproval, AgentRun
+from api.models.agent_run import AgentApproval, AgentNotification, AgentRun
 from api.models.work_order import WorkOrder, WorkOrderEntry
 from api.repositories.agent import AgentRepository
 from api.repositories.agent_run import AgentRunRepository
@@ -44,6 +44,10 @@ from api.services.agents.tools.spec import ToolContext, ToolSpec
 from api.services.agents.work_order_service import WorkOrderService
 
 logger = logging.getLogger(__name__)
+
+# The backstop reminder's title, used to find its own prior rows. Matched exactly, so
+# changing it orphans every reminder currently open.
+_REMINDER_TITLE = "Reminder: an agent run is still waiting for you"
 
 # A stall notice in the diary, and the lane it is filed under. Text rather than a
 # column so the whole story of an order stays in the one place people read.
@@ -131,9 +135,16 @@ class AgentRunExecutor:
 
     async def _backstop(self, session: AsyncSession, limit: int) -> int:
         """Re-bubble runs that have been ``waiting`` longer than the escalation
-        timeout, so a stalled approval/escalation isn't silently forgotten. Throttled
-        by bumping ``last_activity_at``, so each stale run re-notifies at most once per
-        timeout window rather than every sweep."""
+        timeout, so a stalled approval/escalation isn't silently forgotten.
+
+        One open reminder per run, always. Bumping ``last_activity_at`` throttles it to
+        once per timeout window, but each window still wrote a *new* row and left the
+        last one open — so a run waiting overnight grew a column of identical reminders,
+        and an inbox that repeats itself is one people stop reading. Each new reminder
+        now supersedes its predecessors, and a run that has stopped waiting has its
+        reminder retired here rather than needing every resume path to remember.
+        """
+        await self._retire_reminders(session)
         cutoff = datetime.now(UTC) - timedelta(seconds=self._settings.agent_escalation_timeout_seconds)
         rows = (
             (
@@ -155,11 +166,14 @@ class AgentRunExecutor:
             .all()
         )
         for run in rows:
+            # Supersede first: the new row carries the same message with a current
+            # timestamp, so keeping the old one adds nothing but noise.
+            await self._close_reminders(session, AgentRun.id == run.id)
             await create_notification(
                 session,
                 run.org_id,
                 kind="escalation",
-                title="Reminder: an agent run is still waiting for you",
+                title=_REMINDER_TITLE,
                 body=f"Run {run.id} has been waiting ({run.wait_kind}) past the timeout.",
                 run_id=run.id,
                 work_order_id=run.work_order_id,
@@ -168,6 +182,28 @@ class AgentRunExecutor:
             )
             run.last_activity_at = datetime.now(UTC)
         return len(rows)
+
+    async def _close_reminders(self, session: AsyncSession, *conditions: Any) -> None:
+        """Resolve the backstop reminders for the runs matching ``conditions``."""
+        await session.execute(
+            update(AgentNotification)
+            .where(
+                AgentNotification.title == _REMINDER_TITLE,
+                AgentNotification.status != "resolved",
+                AgentNotification.run_id.in_(select(AgentRun.id).where(*conditions)),
+            )
+            .values(status="resolved")
+        )
+
+    async def _retire_reminders(self, session: AsyncSession) -> None:
+        """Clear reminders for runs that are no longer waiting on anybody.
+
+        Answering the question or approving the action is the person doing exactly
+        what the reminder asked; leaving it open then turns a nudge into a chore.
+        Swept here rather than hooked into every resume path, because the paths that
+        take a run out of ``waiting`` are many and the sweep is one cheap statement.
+        """
+        await self._close_reminders(session, AgentRun.status != "waiting")
 
     async def _stalled_orders(self, session: AsyncSession, limit: int) -> int:
         """Work orders whose agents have all stopped with the job unfinished.
