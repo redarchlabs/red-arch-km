@@ -178,6 +178,10 @@ class InputElement(_Element):
     step: float | None = None
     # choices (control = select)
     options: list[InputOption] = Field(default_factory=list)
+    # Where a ``select``'s choices come from, when they are records rather than a
+    # list the author typed. Set this and ``options`` is ignored — see
+    # :class:`InputOptionSource`.
+    options_from: InputOptionSource | None = None
 
 
 class LiveValueElement(_Element):
@@ -421,6 +425,33 @@ class RecordListFilter(BaseModel):
     field: str
     op: Literal["eq", "ne", "gt", "gte", "lt", "lte", "in", "contains", "isnull"] = "eq"
     value: Any = None
+
+
+class InputOptionSource(BaseModel):
+    """Populate a ``select`` from an entity's records instead of a typed-out list.
+
+    A static ``options`` list is a copy of the data, and copies go stale: the
+    instructor console that starts a robot lesson listed one week's lesson, so
+    adding next week's meant editing the view. This reads the choices at render
+    time, so a new record is a new choice with no authoring step.
+
+    ``value`` is the field slug whose value the form stores under the input's
+    ``key`` (what a workflow-button input then references); ``label`` is what the
+    person reads, defaulting to ``value`` when omitted. ``filters`` narrows the
+    rows exactly like a ``record_list``'s, which is how a picker offers only the
+    records that are ready to pick — a lesson still in ``draft`` should not be
+    startable in front of a class.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    entity: str  # entity slug to read the choices from
+    value: str  # field slug supplying each option's stored value
+    label: str | None = None  # field slug shown to the person; defaults to ``value``
+    filters: list[RecordListFilter] = Field(default_factory=list)
+    sort_by: str | None = None  # field slug; defaults to the record endpoint's own order
+    sort_dir: Literal["asc", "desc"] = "asc"
+    limit: int = 100
 
 
 class RecordListLookup(BaseModel):
@@ -1231,6 +1262,10 @@ FormElement = Annotated[
 ]
 
 # Resolve forward references now that every element type is defined.
+# ``InputElement`` is here for the same reason as the containers: its
+# ``options_from`` names ``InputOptionSource``, which is declared later because it
+# reuses ``RecordListFilter``.
+InputElement.model_rebuild()
 Tab.model_rebuild()
 TabGroupElement.model_rebuild()
 PanelElement.model_rebuild()

@@ -14,6 +14,7 @@ import {
   type FormSubmit,
   type ImageElement,
   type InputElement,
+  type InputOption,
   type LiveValueElement,
   type PuzzlePadElement,
   type RecordListElement,
@@ -1774,6 +1775,59 @@ function InputNode({
     </label>
   ) : null;
 
+  // Entity-sourced choices (`options_from`). Fetched here rather than baked into the
+  // saved layout so adding a record adds a choice — the whole point of the source.
+  // `null` = still loading, which is distinct from `[]` = loaded and genuinely empty:
+  // an empty picker should say so rather than look like a picker that has not arrived.
+  const [sourced, setSourced] = useState<InputOption[] | null>(null);
+  const [sourceFailed, setSourceFailed] = useState(false);
+  const source = el.options_from ?? null;
+  // Serialize so the effect re-runs on a real config change, not on each render's
+  // fresh object identity.
+  const sourceKey = JSON.stringify(source);
+
+  useEffect(() => {
+    if (!source) return;
+    let alive = true;
+    setSourceFailed(false);
+    void listRecords(source.entity, {
+      limit: source.limit ?? 100,
+      orderBy: source.sort_by || undefined,
+      orderDir: source.sort_dir ?? "asc",
+      filters: (source.filters ?? []).map((f) => ({
+        field: f.field,
+        op: f.op ?? "eq",
+        value: f.value == null ? undefined : String(f.value),
+      })),
+    })
+      .then((res) => {
+        if (!alive) return;
+        const seen = new Set<string>();
+        const opts: InputOption[] = [];
+        for (const row of res.items) {
+          const raw = row[source.value];
+          if (raw == null || raw === "") continue; // no value to store = not a choice
+          const v = String(raw);
+          if (seen.has(v)) continue; // two records, one stored value — offer it once
+          seen.add(v);
+          const shown = source.label ? row[source.label] : null;
+          opts.push({ value: v, label: shown == null ? v : String(shown) });
+        }
+        setSourced(opts);
+      })
+      .catch(() => {
+        if (!alive) return;
+        // Say the choices failed rather than render an empty select, which reads as
+        // "there are no lessons" when it means "the list did not load".
+        setSourced([]);
+        setSourceFailed(true);
+      });
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sourceKey]);
+
   let control: ReactNode;
   switch (el.control) {
     case "textarea":
@@ -1842,16 +1896,21 @@ function InputNode({
         </button>
       );
       break;
-    case "select":
+    case "select": {
+      // An entity source replaces the static list outright rather than merging:
+      // two origins for one dropdown would make a stale typed-out option
+      // indistinguishable from a live record.
+      const loading = source != null && sourced == null;
+      const choices = source ? (sourced ?? []) : (el.options ?? []);
       control = (
         <select
           className={base}
-          disabled={disabled}
+          disabled={disabled || loading}
           value={value == null ? "" : String(value)}
           onChange={(e) => onChange(e.target.value)}
         >
-          <option value="">—</option>
-          {(el.options ?? []).map((opt) => (
+          <option value="">{loading ? "Loading…" : "—"}</option>
+          {choices.map((opt) => (
             <option key={opt.value} value={opt.value}>
               {opt.label ?? opt.value}
             </option>
@@ -1859,6 +1918,7 @@ function InputNode({
         </select>
       );
       break;
+    }
     default:
       control = (
         <input
@@ -1875,6 +1935,9 @@ function InputNode({
     <div>
       {label}
       {control}
+      {sourceFailed ? (
+        <p className="mt-1 text-xs text-destructive">Could not load the choices for this list.</p>
+      ) : null}
       {el.help_text ? <p className="mt-1 text-xs text-muted-foreground">{el.help_text}</p> : null}
     </div>
   );

@@ -87,6 +87,29 @@ export interface InputOption {
 }
 
 /**
+ * Where a `select`'s choices come from when they are records rather than a list the
+ * author typed. Set on an input, this wins over `options`.
+ *
+ * A static list is a copy of the data, and copies go stale — the instructor console
+ * that starts a robot lesson listed one week, so adding the next one meant editing
+ * the view. These are read at render time, so a new record is a new choice.
+ *
+ * `value` is the field slug stored under the input's `key` (what a workflow-button
+ * input then references); `label` is what the person reads, defaulting to `value`.
+ * `filters` narrows the rows exactly like a record_list's, which is how a picker
+ * offers only records that are ready to pick.
+ */
+export interface InputOptionSource {
+  entity: string;
+  value: string;
+  label?: string | null;
+  filters?: RecordListFilterConfig[];
+  sort_by?: string | null;
+  sort_dir?: "asc" | "desc";
+  limit?: number;
+}
+
+/**
  * A standalone (unbound) input — its value lives in form state under `key`, NOT tied to
  * an entity field. Reference it from a button's `inputs` or a `calculated` expression as
  * `{ var: "<key>" }`. Enables sliders/toggles/free-text in a standalone view that feed a
@@ -106,6 +129,8 @@ export interface InputElement extends ElementBase {
   max?: number | null;
   step?: number | null;
   options?: InputOption[];
+  /** Entity-sourced choices for `control: "select"`. Takes precedence over `options`. */
+  options_from?: InputOptionSource | null;
 }
 
 /** Display-only readout that polls a CORS-reachable endpoint and shows a JSON value. */

@@ -719,23 +719,116 @@ function InputEditor({ el, onChange }: { el: InputEl; onChange: (el: FormElement
         </Row>
       ) : null}
       {el.control === "select" ? (
-        <Row label="Options">
-          <input
-            className={input}
-            placeholder="a, b, c"
-            value={(el.options ?? []).map((o) => o.value).join(", ")}
-            onChange={(e) =>
-              onChange({
-                ...el,
-                options: e.target.value
-                  .split(",")
-                  .map((s) => s.trim())
-                  .filter(Boolean)
-                  .map((v) => ({ value: v })),
-              })
-            }
-          />
-        </Row>
+        <>
+          <Row label="Choices from">
+            <select
+              className={input}
+              value={el.options_from ? "entity" : "list"}
+              onChange={(e) =>
+                onChange(
+                  e.target.value === "entity"
+                    ? { ...el, options_from: { entity: "", value: "" } }
+                    : { ...el, options_from: null },
+                )
+              }
+            >
+              <option value="list">A list I type</option>
+              <option value="entity">Records of an entity</option>
+            </select>
+          </Row>
+          {el.options_from ? (
+            <>
+              <Row label="Entity">
+                <input
+                  className={input}
+                  placeholder="lesson"
+                  value={el.options_from.entity}
+                  onChange={(e) =>
+                    onChange({
+                      ...el,
+                      options_from: { ...el.options_from!, entity: e.target.value },
+                    })
+                  }
+                />
+              </Row>
+              <Row label="Value / Label field">
+                <div className="flex gap-1">
+                  <input
+                    className={input}
+                    placeholder="week_number"
+                    value={el.options_from.value}
+                    onChange={(e) =>
+                      onChange({
+                        ...el,
+                        options_from: { ...el.options_from!, value: e.target.value },
+                      })
+                    }
+                  />
+                  <input
+                    className={input}
+                    placeholder="title"
+                    value={el.options_from.label ?? ""}
+                    onChange={(e) =>
+                      onChange({
+                        ...el,
+                        options_from: { ...el.options_from!, label: e.target.value || null },
+                      })
+                    }
+                  />
+                </div>
+              </Row>
+              <Row label="Sort by">
+                <div className="flex gap-1">
+                  <input
+                    className={input}
+                    placeholder="week_number"
+                    value={el.options_from.sort_by ?? ""}
+                    onChange={(e) =>
+                      onChange({
+                        ...el,
+                        options_from: { ...el.options_from!, sort_by: e.target.value || null },
+                      })
+                    }
+                  />
+                  <select
+                    className={input}
+                    value={el.options_from.sort_dir ?? "asc"}
+                    onChange={(e) =>
+                      onChange({
+                        ...el,
+                        options_from: {
+                          ...el.options_from!,
+                          sort_dir: e.target.value as "asc" | "desc",
+                        },
+                      })
+                    }
+                  >
+                    <option value="asc">ascending</option>
+                    <option value="desc">descending</option>
+                  </select>
+                </div>
+              </Row>
+            </>
+          ) : (
+            <Row label="Options">
+              <input
+                className={input}
+                placeholder="a, b, c"
+                value={(el.options ?? []).map((o) => o.value).join(", ")}
+                onChange={(e) =>
+                  onChange({
+                    ...el,
+                    options: e.target.value
+                      .split(",")
+                      .map((s) => s.trim())
+                      .filter(Boolean)
+                      .map((v) => ({ value: v })),
+                  })
+                }
+              />
+            </Row>
+          )}
+        </>
       ) : null}
       <Row label="Default">
         <input
