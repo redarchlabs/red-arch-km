@@ -116,3 +116,68 @@ class TestValidation:
         out = await knowledge.SEARCH_KNOWLEDGE.handler(ctx, {"query": "   "})
 
         assert "required" in out["error"]
+
+
+class TestWhenTheServiceIsDown:
+    """What the model *does* with the error matters more than what it says.
+
+    The raw exception was an httpx repr — a 500, an internal URL and a link to the
+    httpx docs. An agent reading that concluded it had no way to search local
+    knowledge at all, asked the person who filed the order for "the exact
+    knowledge-graph or internal host so I can query it directly", and parked the
+    order on a request nobody can fulfil. The search layer was simply down.
+    """
+
+    @pytest.fixture
+    def broken(self, monkeypatch):
+        class _Client:
+            def __init__(self, _settings): ...
+
+            async def vector_chat(self, **kwargs):
+                raise RuntimeError(
+                    "Server error '500 Internal Server Error' for url "
+                    "'http://localhost:8020/api/vector-chat'\nFor more information check: "
+                    "https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/500"
+                )
+
+        async def _model(_session, _org):
+            return None
+
+        async def _keys(_session, _org, profile_id):
+            return [0, 99]
+
+        monkeypatch.setattr("api.services.brain_client.BrainAPIClient", _Client)
+        monkeypatch.setattr("api.services.org_llm.org_default_llm_model", _model)
+        monkeypatch.setattr("api.services.search_access.resolve_profile_access_keys", _keys)
+
+    async def test_it_says_the_platform_broke_not_that_the_agent_cannot(self, broken) -> None:
+        ctx = _FakeCtx(agent=_FakeAgent(), actor_user_id=uuid.uuid4())
+
+        out = await knowledge.SEARCH_KNOWLEDGE.handler(ctx, {"query": "x"})
+
+        assert "fault in the platform" in out["error"]
+        assert "You DO have" in out["error"]
+
+    async def test_it_forbids_asking_a_person_for_a_host(self, broken) -> None:
+        ctx = _FakeCtx(agent=_FakeAgent(), actor_user_id=uuid.uuid4())
+
+        out = await knowledge.SEARCH_KNOWLEDGE.handler(ctx, {"query": "x"})
+
+        assert "Do not ask a person for a host" in out["error"]
+
+    async def test_the_internal_url_does_not_reach_the_model(self, broken) -> None:
+        # The URL is what the agent latched onto. It belongs in the log, not the
+        # transcript — and never in a question put to a person.
+        ctx = _FakeCtx(agent=_FakeAgent(), actor_user_id=uuid.uuid4())
+
+        out = await knowledge.SEARCH_KNOWLEDGE.handler(ctx, {"query": "x"})
+
+        assert "localhost:8020" not in out["error"]
+        assert "http" not in out["error"]
+
+
+class TestKnowledgeIsPerOrg:
+    def test_the_tool_says_it_cannot_reach_another_org(self) -> None:
+        """Told to "search the other org", an agent has no tool that can and nothing
+        that says so — so it goes looking for a route instead of saying no."""
+        assert "ONLY your own org" in knowledge.SEARCH_KNOWLEDGE.description

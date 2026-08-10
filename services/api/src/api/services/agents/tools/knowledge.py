@@ -19,9 +19,12 @@ rather than a silent default.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from api.services.agents.tools.spec import Category, ToolContext, ToolSpec
+
+logger = logging.getLogger(__name__)
 
 # grants.knowledge_scope
 SCOPE_ACTOR = "actor"  # default: see what the run's actor can see
@@ -80,7 +83,26 @@ async def _search_knowledge(ctx: ToolContext, args: dict[str, Any]) -> dict[str,
             model=await org_default_llm_model(ctx.session, ctx.org_id),
         )
     except Exception as exc:  # noqa: BLE001 - surface as a tool error, don't crash the run
-        return {"error": f"knowledge search failed: {exc}"}
+        # What the model does with this matters more than what it says. The raw
+        # exception was an httpx repr — a 500, an internal URL and a link to the
+        # httpx docs — and an agent reading it concluded it had no way to search
+        # local knowledge at all. It then asked the person who filed the order for
+        # "the exact knowledge-graph or internal host so I can query it directly",
+        # which is not a thing anyone can supply, and parked the order on it. The
+        # search layer was simply down (an embedding-width mismatch after a
+        # config change); the tool was right, the service was broken.
+        logger.warning("knowledge search failed for org %s", ctx.org_id, exc_info=True)
+        return {
+            "error": (
+                "The knowledge service failed to answer — this is a fault in the platform, not a "
+                "missing capability and not something you lack permission for. You DO have "
+                "knowledge search; it is temporarily unavailable. Try once more, and if it fails "
+                "again say so plainly and carry on with what you can do without it. Do not ask a "
+                "person for a host, a URL, an endpoint or database access: there is nothing they "
+                "can give you that would change this. "
+                f"({type(exc).__name__})"
+            )
+        }
     answer = result.get("answer") or result.get("response") or result.get("result")
     sources = result.get("sources") or result.get("citations") or []
     # Trim source payloads so the tool result stays compact for the model.
@@ -94,7 +116,13 @@ async def _search_knowledge(ctx: ToolContext, args: dict[str, Any]) -> dict[str,
 
 SEARCH_KNOWLEDGE = ToolSpec(
     name="search_knowledge",
-    description="Answer a question using the organization's knowledge base (RAG).",
+    description=(
+        "Answer a question using THIS organization's knowledge base (RAG) — the documents, notes "
+        "and files uploaded to the org you belong to. The right first move for anything that "
+        "might already be written down here. It searches your own org and ONLY your own org: "
+        "knowledge is per-organization and there is no route to another one, whoever asks. If the "
+        "material lives in a different org, say so plainly instead of hunting for a way in."
+    ),
     parameters=_SEARCH_PARAMS,
     category=Category.READ,
     handler=_search_knowledge,
