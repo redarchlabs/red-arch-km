@@ -30,6 +30,7 @@ from api.repositories.agent_run import AgentRunRepository
 from api.repositories.agent_run_messages import AgentRunMessageRepository
 from api.services.agents import attachments, lifecycle
 from api.services.agents.authority import Posture, available_tools, posture_for
+from api.services.agents.capability import WEB_TOOL, web_research_usable
 from api.services.agents.delegation import routable_colleagues
 from api.services.agents.live.activity import RunActivityPublisher
 from api.services.agents.llm.catalog import model_supports_vision
@@ -453,6 +454,12 @@ class AgentRunExecutor:
             await load_agent_tools(session, org_id, agent, self._settings, actor_user_id=run.actor_user_id),
             autonomy=autonomy,
         )
+        if any(s.name == WEB_TOOL for s in specs) and not await web_research_usable(session, org_id, self._settings):
+            # Withheld rather than left to fail at call time: a tool the agent can see
+            # is a tool it will build a plan around, and a plan step that depends on a
+            # dead backend can never be closed. capability_warnings still tells the
+            # human what to configure — this only stops the agent planning on it.
+            specs = [s for s in specs if s.name != WEB_TOOL]
         if autonomy == Posture.PLAN_ONLY:
             # The exit from plan mode, and only offered there: submitting a plan on
             # an order already being worked would mean nothing.

@@ -88,10 +88,13 @@ class TestItDoesNotShout:
         assert len([e for e in entries if e.text.startswith("⛔ Blocked:")]) == 4
 
     async def test_re_blocking_the_same_step_says_nothing_new(self, admin_session: AsyncSession) -> None:
+        # Now refused outright rather than merely silenced: re-writing a status a step
+        # already has is the shape a stalled turn takes, and it never reaches the alert.
         org, wo, agent, svc = await _seed(admin_session, tasks=["A"])
 
         await svc.update_task_status(wo.id, "T1", "blocked", agent=agent)
-        await svc.update_task_status(wo.id, "T1", "blocked", agent=agent)
+        with pytest.raises(WorkOrderValidationError):
+            await svc.update_task_status(wo.id, "T1", "blocked", agent=agent)
 
         assert len(await _alerts(admin_session, org.id)) == 1
 

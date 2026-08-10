@@ -170,3 +170,34 @@ class TestAttachingFromAReply:
 
         assert await svc.list_artifacts(wo.id) == []
         assert await DocumentRepository(admin_session, org.id).get(doc.id) is not None
+
+
+class TestAnAdvisoryAgentCanHandItsWorkOver:
+    """Attaching your own report is delivery, not mutation.
+
+    As a WRITE tool the kind-gate barred `attach_document` to every advisory agent —
+    and in the org this surfaced in, not one agent of twenty-three had been granted
+    it at all. So a research analyst finished an SEO audit, was told by the completion
+    gate that the order could not close with nothing attached, and had no tool that
+    could attach anything. It escalated twice and stopped.
+    """
+
+    def test_the_kind_gate_lets_an_advisory_agent_deliver(self) -> None:
+        from api.services.agents.kind_gate import kind_gate
+        from api.services.agents.tools.artifacts import ATTACH_DOCUMENT
+
+        assert kind_gate("advisory", ATTACH_DOCUMENT) is None
+
+    def test_delivery_does_not_wait_on_a_grant(self) -> None:
+        # A rule that an order cannot close with nothing attached is unsatisfiable in
+        # an org where nobody happens to hold the tool that attaches things.
+        from api.services.agents.tools.artifacts import ATTACH_DOCUMENT
+
+        assert ATTACH_DOCUMENT.always_allowed
+
+    def test_mutating_the_business_is_still_barred(self) -> None:
+        # Widening delivery must not widen action.
+        from api.services.agents.kind_gate import kind_gate
+        from api.services.agents.tools.records import CREATE_RECORD
+
+        assert kind_gate("advisory", CREATE_RECORD) is not None

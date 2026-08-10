@@ -186,8 +186,21 @@ ATTACH_DOCUMENT = ToolSpec(
         },
         "required": ["title", "content"],
     },
-    category=Category.WRITE,
+    # PLAN, not WRITE: handing back your own work product on the order you were
+    # assigned is reporting, not acting. As WRITE it was barred to every advisory
+    # agent by the kind-gate — the same reasoning that already put task lists and
+    # diary entries in PLAN, one step further. The gap that exposed it: a research
+    # analyst finished an SEO audit, was told by the completion gate that the order
+    # could not close with nothing attached, and had no tool that could attach
+    # anything. It escalated twice, then stopped. An agent that may write its
+    # findings into the diary but may not hand them over as a document is being
+    # denied delivery, not denied mutation.
+    category=Category.PLAN,
     handler=_attach_document,
+    # Delivery must not depend on someone having remembered to grant it. In the org
+    # this failed in, not one agent of twenty-three held this tool, so the rule that
+    # an order owing a deliverable cannot close was unsatisfiable by anyone in it.
+    always_allowed=True,
     side_effecting=False,  # internal org content, not an outbound action
 )
 

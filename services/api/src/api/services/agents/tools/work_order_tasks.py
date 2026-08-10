@@ -64,6 +64,10 @@ async def _set_tasks(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
     wo = await service.get_work_order(ctx.work_order_id)
     owed = wants_deliverable(f"{wo.title}\n{wo.body or ''}")
 
+    rejected = await _unworkable(ctx, wo, titles)
+    if rejected is not None:
+        return rejected
+
     # Replaces the whole list rather than appending: a plan is a statement of the
     # work as it is now understood, and merging would silently keep steps the
     # agent has just decided against.
@@ -82,6 +86,46 @@ async def _set_tasks(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
     return {
         "tasks": [{"key": t.key, "title": t.title, "status": t.status} for t in tasks],
         "note": note,
+    }
+
+
+# How many times one run may have a plan sent back. Once. A second opinion from the
+# same judge on a plan the same model just rewrote is unlikely to differ, and a
+# planner trapped in rework cannot plan at all — which is a worse failure than the
+# bad plan, and one the acceptance gate never gets a chance to catch.
+_MAX_REWORKS = 1
+_REWORKS_KEY = "plan_reworks"
+
+
+async def _unworkable(ctx: ToolContext, wo: Any, titles: list[str]) -> dict[str, Any] | None:
+    """Send the plan back if this org cannot carry it out. See plan_check.py.
+
+    Returned as a tool error rather than raised, so the model re-plans inside the turn
+    it planned in — the alternative is a run that ends and a continuation that starts
+    from the same brief with none of the reason it was refused.
+    """
+    from api.services.agents.plan_check import check_plan
+
+    if ctx.settings is None or ctx.extras.get(_REWORKS_KEY, 0) >= _MAX_REWORKS:
+        return None
+    verdict = await check_plan(
+        ctx.session,
+        ctx.org_id,
+        brief=f"{wo.title}\n{wo.body or ''}".strip(),
+        titles=titles,
+        settings=ctx.settings,
+    )
+    if verdict.ok:
+        return None
+    ctx.extras[_REWORKS_KEY] = ctx.extras.get(_REWORKS_KEY, 0) + 1
+    return {
+        "error": (
+            f"This plan was not saved: {verdict.problem}\n\n"
+            "Call set_work_order_tasks again with a plan you can actually finish using the tools "
+            "you have. Steps you cannot do are not steps — drop them, or say in the plan that you "
+            "will report what could not be checked and why. It is better to answer the request "
+            "partially and say what is missing than to plan work nobody here can do."
+        )
     }
 
 

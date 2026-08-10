@@ -223,6 +223,17 @@ def _cli_hint(names: list[str]) -> str:
     )
 
 
+async def web_research_usable(session: AsyncSession, org_id: uuid.UUID, settings: Settings) -> bool:
+    """Public so the runtime can withhold a tool that cannot work.
+
+    A granted tool that errors on every call is worse than an absent one: the agent
+    plans around it. Seen live — a researcher wrote 'backlink summary using free
+    tools' into its checklist, discovered at call time that web_research had no
+    backend, and then had a step in its plan that nothing could ever close.
+    """
+    return await _web_key_configured(session, org_id, settings)
+
+
 async def _web_key_configured(session: AsyncSession, org_id: uuid.UUID, settings: Settings) -> bool:
     """Either backend will do — the tool falls back on its own (see web_research)."""
     from api.services.agents.llm.keys import resolve_provider_key

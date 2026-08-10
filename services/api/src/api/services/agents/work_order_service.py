@@ -836,6 +836,20 @@ class WorkOrderService:
             # find the real one, and would otherwise abandon the update.
             available = ", ".join(t.key for t in tasks) or "none"
             raise WorkOrderValidationError(f"No task with key '{key}'. Keys on this work order: {available}.")
+        if agent is not None and target.status == status:
+            # Writing a status a step already has is the shape a stalled turn takes.
+            # Seen live: the step could not be advanced (it needed a tool nobody had),
+            # so the agent set it to in_progress, failed, set it to in_progress again,
+            # wrote a summary and stopped — a turn that cost money and changed nothing,
+            # repeated by every continuation after it. Succeeding here is what let that
+            # read as work. Refusing forces the one decision that ends the loop.
+            raise WorkOrderValidationError(
+                f"{target.key} is already '{status}', so that changed nothing. Repeating a status is "
+                "not progress. Either do the step and mark it done with evidence, or — if you cannot "
+                "advance it — mark it blocked saying specifically what stopped you, mark it carried "
+                "if it should not be done at all, or re-plan with set_work_order_tasks. Do not end "
+                "your turn having only restated where things stand."
+            )
         if status == "done":
             await self._require_evidence(wo_id, target, tasks, evidence)
             await self._gate_acceptance(wo_id, target, tasks)

@@ -386,3 +386,35 @@ class TestItSurfacesAtDispatch:
 
         entries = await svc.list_entries(wo.id)
         assert len([e for e in entries if e.text.startswith("⚠️ Capability gap:")]) == 1
+
+
+class TestWithholdingADeadTool:
+    """A granted tool with no backend is worse than an absent one: the agent plans
+    around it. From the live run — a researcher wrote 'backlink summary using free
+    tools' into its checklist, discovered at call time that web_research had no key,
+    and was left with a step that nothing could ever close."""
+
+    async def test_no_key_means_the_tool_is_not_usable(self, admin_session: AsyncSession) -> None:
+        from api.config import get_settings
+        from api.services.agents.capability import web_research_usable
+
+        settings = get_settings()
+        if settings.gemini_api_key.get_secret_value() or settings.anthropic_api_key.get_secret_value():
+            pytest.skip("this environment has a key for one of the web backends")  # pragma: no cover
+        org = await _org(admin_session)
+
+        assert not await web_research_usable(admin_session, org.id, settings)
+
+    async def test_either_backend_is_enough(self, monkeypatch, admin_session: AsyncSession) -> None:
+        # The tool falls back between backends on its own, so one key settles it.
+        from api.config import get_settings
+        from api.services.agents.capability import web_research_usable
+
+        org = await _org(admin_session)
+
+        async def _has_gemini(session, org_id, provider, settings):
+            return "key" if provider == "gemini" else None
+
+        monkeypatch.setattr("api.services.agents.llm.keys.resolve_provider_key", _has_gemini)
+
+        assert await web_research_usable(admin_session, org.id, get_settings())

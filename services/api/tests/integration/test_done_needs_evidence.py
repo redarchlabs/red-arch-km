@@ -86,6 +86,10 @@ class TestSayWhatYouProduced:
         """Every other transition is the agent working, and demanding evidence to say
         "I have started" is the bureaucracy that gets a rule routed around."""
         org, wo, agent, svc = await _seed(admin_session, tasks=["A", "B"])
+        if status == "pending":
+            # Every task starts pending, and re-writing a status a step already has is
+            # refused as a no-op — so reaching pending has to be a real move.
+            await svc.update_task_status(wo.id, "T1", "in_progress", agent=agent)
 
         await svc.update_task_status(wo.id, "T1", status, agent=agent)
 

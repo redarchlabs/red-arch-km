@@ -159,6 +159,68 @@ class TestTracking:
         assert out["progress"] == 1.0
 
 
+class TestRestatingIsNotProgress:
+    """Writing a status a step already has is the shape a stalled turn takes.
+
+    From a live run: the analyst could not advance T2 (it needed a crawler nobody
+    had), so it set T2 to in_progress, failed, set T2 to in_progress *again*, wrote a
+    summary and stopped. The run ended `done` with six steps open. Every continuation
+    after it did the same thing. Succeeding on that second write is what let a turn
+    that changed nothing read as work.
+    """
+
+    async def _agent(self, admin_session: AsyncSession, org_id: uuid.UUID):
+        from api.models.agent import Agent
+
+        agent = Agent(name="analyst", provider="openai", model="m", kind="operator", org_id=org_id)
+        admin_session.add(agent)
+        await admin_session.flush()
+        return agent
+
+    async def test_setting_the_status_a_step_already_has_is_refused(self, admin_session: AsyncSession) -> None:
+        org, wo_id = await _seed(admin_session)
+        agent = await self._agent(admin_session, org.id)
+        ctx = _Ctx(session=admin_session, org_id=org.id, work_order_id=wo_id, agent=agent)
+        await SET_WORK_ORDER_TASKS.handler(ctx, {"tasks": ["One", "Two"]})
+        await UPDATE_WORK_ORDER_TASK.handler(ctx, {"key": "T1", "status": "in_progress"})
+
+        out = await UPDATE_WORK_ORDER_TASK.handler(ctx, {"key": "T1", "status": "in_progress"})
+
+        assert "changed nothing" in out["error"]
+
+    async def test_the_refusal_names_the_ways_out(self, admin_session: AsyncSession) -> None:
+        # An error with no move in it is a stall with extra steps.
+        org, wo_id = await _seed(admin_session)
+        agent = await self._agent(admin_session, org.id)
+        ctx = _Ctx(session=admin_session, org_id=org.id, work_order_id=wo_id, agent=agent)
+        await SET_WORK_ORDER_TASKS.handler(ctx, {"tasks": ["One"]})
+
+        out = await UPDATE_WORK_ORDER_TASK.handler(ctx, {"key": "T1", "status": "pending"})
+
+        assert "blocked" in out["error"] and "carried" in out["error"]
+
+    async def test_a_real_move_still_goes_through(self, admin_session: AsyncSession) -> None:
+        org, wo_id = await _seed(admin_session)
+        agent = await self._agent(admin_session, org.id)
+        ctx = _Ctx(session=admin_session, org_id=org.id, work_order_id=wo_id, agent=agent)
+        await SET_WORK_ORDER_TASKS.handler(ctx, {"tasks": ["One"]})
+
+        out = await UPDATE_WORK_ORDER_TASK.handler(ctx, {"key": "T1", "status": "in_progress"})
+
+        assert out["updated"]["status"] == "in_progress"
+
+    async def test_a_person_may_still_re_apply_a_status(self, admin_session: AsyncSession) -> None:
+        """The rule is about an agent burning a turn, not about the API being strict:
+        a human setting a status idempotently is not stalling anything."""
+        org, wo_id = await _seed(admin_session)
+        service = WorkOrderService(admin_session, org.id)
+        await service.set_tasks(wo_id, [{"title": "One", "sort_order": 0}])
+
+        moved = await service.update_task_status(wo_id, "T1", "pending")
+
+        assert moved.status == "pending"
+
+
 class TestScope:
     async def test_a_run_with_no_work_order_is_told_why(self, admin_session: AsyncSession) -> None:
         """A console chat or a scheduled run has no order. Failing silently would
