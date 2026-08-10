@@ -29,11 +29,16 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.models.agent_run import AgentQuestion, AgentRun
+from api.models.work_order import WorkOrderEntry
 from api.repositories.agent_questions import AgentQuestionRepository
 from api.repositories.agent_run import AgentRunRepository
 from api.services.agents.notify import settle_notifications
 
 logger = logging.getLogger(__name__)
+
+# The lane a person writes in on a work order. Mirrors WorkOrderService._HUMAN_LANE;
+# duplicated rather than imported because that module imports this one.
+_HUMAN_LANE = "human"
 
 
 class QuestionError(Exception):
@@ -211,6 +216,41 @@ async def _close_the_notice(session: AsyncSession, org_id: uuid.UUID, run_id: uu
     await settle_notifications(session, org_id, run_id, "question")
 
 
+async def _diary_the_answer(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    question: AgentQuestion,
+    text: str,
+    *,
+    delivered: bool,
+) -> None:
+    """Put a person's reply on the work order, under their own name.
+
+    ``ask_human`` writes "Asked a human: …" the moment the question is raised, and
+    nothing wrote the reply — so the diary showed an agent asking and then silence,
+    while the answer sat in a table nobody reads and the run quietly carried on. To
+    someone watching the order it looked as though their reply had been swallowed.
+
+    Only for questions addressed to a *person*: an agent-to-agent consult is already
+    written by ``reply_to_peer`` and would otherwise appear twice. The role is the
+    human lane, matching how a reply typed into the live box appears, so the diary
+    reads as one conversation rather than two systems talking past each other.
+    """
+    if question.work_order_id is None or question.audience != "human":
+        return
+    note = "" if delivered else "\n\n(The agent had already stopped waiting, so this did not reach it.)"
+    session.add(
+        WorkOrderEntry(
+            work_order_id=question.work_order_id,
+            agent_run_id=question.run_id,
+            role=_HUMAN_LANE,
+            text=f"{text}{note}",
+            org_id=org_id,
+        )
+    )
+    await session.flush()
+
+
 async def record_answer(
     session: AsyncSession,
     org_id: uuid.UUID,
@@ -243,6 +283,7 @@ async def record_answer(
         # and acted on".
         question.status = "voided"
         await session.flush()
+    await _diary_the_answer(session, org_id, question, answer, delivered=resumed)
     await _close_the_notice(session, org_id, question.run_id)
     return AnswerOutcome(question=question, resumed=resumed)
 
@@ -276,6 +317,13 @@ async def decline(
         {"answered": False, "answer": note, "guidance": "Proceed on your own judgement or escalate."},
     )
     await session.flush()
+    await _diary_the_answer(
+        session,
+        org_id,
+        question,
+        reason or "Told the agent to use its own judgement.",
+        delivered=resumed,
+    )
     await _close_the_notice(session, org_id, question.run_id)
     return AnswerOutcome(question=question, resumed=resumed)
 

@@ -22,11 +22,13 @@ from api.config import get_settings
 from api.models.agent import Agent
 from api.models.agent_run import AgentQuestion, AgentRun
 from api.models.org import Org
+from api.models.work_order import WorkOrderEntry
 from api.repositories.agent_questions import AgentQuestionRepository
 from api.services.agents import lifecycle, questions
 from api.services.agents.delegation import ASK_HUMAN, CONSULT_PEER, REPLY_TO_PEER
 from api.services.agents.runtime import RunFinished, RunParked
 from api.services.agents.tools.spec import ToolContext
+from api.services.agents.work_order_service import WorkOrderService
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -449,3 +451,121 @@ class TestInboxRoutes:
             await answer_route(row.id, AnswerRequest(answer="x"), _Ctx(other_org_id), admin_session, get_settings())
 
         assert exc.value.status_code == 404
+
+
+async def _seed_wo_question(admin_session: AsyncSession, *, audience: str = "human"):
+    """A work order with a run parked on one question against it."""
+    org = Org(name=f"Diary-{uuid.uuid4().hex[:8]}", permission_number=1)
+    admin_session.add(org)
+    await admin_session.flush()
+    agent = Agent(name="analyst", provider="openai", model="m", kind="advisory", org_id=org.id)
+    admin_session.add(agent)
+    await admin_session.flush()
+    svc = WorkOrderService(admin_session, org.id)
+    wo = await svc.create_work_order(title="Audit the site", assigned_agent_id=agent.id)
+    run = AgentRun(
+        agent_id=agent.id,
+        provider="openai",
+        model="m",
+        status="waiting",
+        wait_kind="question",
+        work_order_id=wo.id,
+        input={"resume": {"messages": [], "pending": [], "approved": []}},
+        org_id=org.id,
+    )
+    admin_session.add(run)
+    await admin_session.flush()
+    question = await questions.create_question(
+        admin_session,
+        org.id,
+        run_id=run.id,
+        tool_call_id="call_1",
+        asked_by_agent_id=agent.id,
+        question="Can I reach the web?",
+        audience=audience,
+        work_order_id=wo.id,
+    )
+    return org, run, wo, question
+
+
+async def _entries(admin_session: AsyncSession, wo_id: uuid.UUID):
+    rows = (
+        (
+            await admin_session.execute(
+                select(WorkOrderEntry).where(WorkOrderEntry.work_order_id == wo_id).order_by(WorkOrderEntry.created_at)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return list(rows)
+
+
+async def _entry_texts(admin_session: AsyncSession, wo_id: uuid.UUID) -> list[str]:
+    return [r.text for r in await _entries(admin_session, wo_id)]
+
+
+class TestTheAnswerIsOnTheRecord:
+    """A person's reply belongs in the diary next to the question.
+
+    ``ask_human`` writes "Asked a human: …" the moment it parks. Nothing wrote the
+    reply, so the order showed an agent asking and then silence — while the answer
+    sat in a table nobody reads and the run quietly carried on. Reported live as
+    "why is my response not in the diary": it had been recorded, delivered, and the
+    run had resumed, and none of that was visible.
+    """
+
+    async def test_an_answer_appears_in_the_diary(self, admin_session: AsyncSession) -> None:
+        org, run, wo, question = await _seed_wo_question(admin_session)
+
+        await questions.record_answer(admin_session, org.id, question, answer="use fetch_web_page")
+
+        texts = await _entry_texts(admin_session, wo.id)
+        assert any("use fetch_web_page" in t for t in texts)
+
+    async def test_it_is_filed_as_the_person_speaking(self, admin_session: AsyncSession) -> None:
+        # The same lane a reply typed into the live box uses, so the diary reads as
+        # one conversation rather than two systems talking past each other.
+        org, run, wo, question = await _seed_wo_question(admin_session)
+
+        await questions.record_answer(admin_session, org.id, question, answer="go ahead")
+
+        rows = await _entries(admin_session, wo.id)
+        assert [r.role for r in rows if "go ahead" in r.text] == ["human"]
+
+    async def test_declining_is_recorded_too(self, admin_session: AsyncSession) -> None:
+        org, run, wo, question = await _seed_wo_question(admin_session)
+
+        await questions.decline(admin_session, org.id, question, reason="your call, use judgement")
+
+        assert any("your call" in t for t in await _entry_texts(admin_session, wo.id))
+
+    async def test_an_answer_nobody_received_says_so(self, admin_session: AsyncSession) -> None:
+        """Recorded but not delivered. Showing it plainly beats a diary entry that
+        implies the agent acted on something it never saw."""
+        org, run, wo, question = await _seed_wo_question(admin_session)
+        run.status = "cancelled"
+        await admin_session.flush()
+
+        await questions.record_answer(admin_session, org.id, question, answer="too late")
+
+        texts = await _entry_texts(admin_session, wo.id)
+        assert any("did not reach it" in t for t in texts)
+
+    async def test_a_peer_consult_is_not_written_twice(self, admin_session: AsyncSession) -> None:
+        # reply_to_peer already diaries "Answered the consult: …".
+        org, run, wo, question = await _seed_wo_question(admin_session, audience="agent")
+
+        await questions.record_answer(admin_session, org.id, question, answer="my advice")
+
+        assert not any("my advice" in t for t in await _entry_texts(admin_session, wo.id))
+
+    async def test_a_question_off_a_work_order_writes_nothing(self, admin_session: AsyncSession) -> None:
+        # Console and scheduled runs have no order to write to.
+        org, run, wo, question = await _seed_wo_question(admin_session)
+        question.work_order_id = None
+        await admin_session.flush()
+
+        await questions.record_answer(admin_session, org.id, question, answer="fine")
+
+        assert not any("fine" in t for t in await _entry_texts(admin_session, wo.id))
