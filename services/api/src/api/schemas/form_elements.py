@@ -418,7 +418,15 @@ class RecordListFilter(BaseModel):
     ``entity_records_helpers.parse_filters``). ``value`` may be the sentinel ``@me``
     on a to-one relation field, which the endpoint resolves to the caller's OWN
     record id (matched by email, like ``record_id=me``) — so a board can show just
-    the current user's rows without the author hard-coding an id."""
+    the current user's rows without the author hard-coding an id.
+
+    ``value`` may also be a JsonLogic **expression** over the enclosing view's
+    values (``{"var": "week"}``), evaluated in the browser before the fetch. That is
+    what lets one board answer for whichever record a picker on the page has
+    selected, instead of needing a view per record. An expression that resolves to
+    nothing means the person has not chosen yet: the board holds and says so rather
+    than dropping the filter, because a dropped filter fetches unfiltered and shows
+    every record at once — the opposite of what was asked for."""
 
     model_config = ConfigDict(extra="forbid")
 

@@ -26,6 +26,7 @@ import {
   TEXT_DISPLAYS,
 } from "@/lib/api/forms";
 import { createRecord, listRecords, type EntityRecord } from "@/lib/api/entityRecords";
+import type { FilterOp } from "@/lib/api/filterOps";
 import { runReport, type AggregateResult, type Visualization } from "@/lib/api/reports";
 import { formatValue } from "@/components/reports/ReportChart";
 import { streamRunTokens } from "@/lib/api/runStream";
@@ -341,6 +342,15 @@ class ElementErrorBoundary extends Component<{ children: ReactNode }, { failed: 
   }
 }
 
+/**
+ * Whether a record_list filter's `value` is a JsonLogic expression rather than a
+ * literal. Filters have always taken plain scalars (and the `@me` sentinel), so a
+ * non-null object is unambiguous — no existing layout can be caught by this.
+ */
+function isExpressionValue(value: unknown): boolean {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 /** Read-only "status board": lists an entity's records (newest-first or by
  * sort_by), optionally re-polling to stay live, with an optional per-row workflow
  * button that runs against that row's record. */
@@ -364,9 +374,34 @@ function RecordListNode({
   // Bumped after a row workflow completes so rows AND lookups refetch — the run
   // almost certainly changed what this list shows (that's why the button exists).
   const [runTick, setRunTick] = useState(0);
-  // Serialize the declared filters to a stable string so the fetch effect re-runs
-  // only when they actually change (not on every render's fresh array identity).
-  const filtersKey = JSON.stringify(el.filters ?? []);
+  // A filter value may be a literal OR an expression over the enclosing view's
+  // values, so a picker on the page can drive the board (`{"var": "week"}` against
+  // a lesson dropdown). Resolved here rather than in the fetch effect so the effect
+  // re-runs when the *resolved* value changes — picking a different lesson refetches.
+  //
+  // `pending` is the case that matters: an expression that resolves to nothing means
+  // the person has not chosen yet. Dropping the filter would fetch UNFILTERED and
+  // show every lesson's rows at once, which reads as a bug and is worse than empty —
+  // so the board holds and says what it is waiting for instead.
+  const { resolvedFilters, pending } = useMemo(() => {
+    const out: { field: string; op: FilterOp; value?: string }[] = [];
+    for (const f of el.filters ?? []) {
+      const op = f.op ?? "eq";
+      const raw = isExpressionValue(f.value) ? evaluate(f.value, scopeValues ?? {}) : f.value;
+      if (op !== "isnull" && (raw == null || raw === "")) {
+        // `isnull` legitimately carries no value; anything else with nothing to
+        // match on is an unanswered question, not an absent filter.
+        return { resolvedFilters: [], pending: true };
+      }
+      out.push({ field: f.field, op, value: raw == null ? undefined : String(raw) });
+    }
+    return { resolvedFilters: out, pending: false };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [JSON.stringify(el.filters ?? []), JSON.stringify(scopeValues ?? {})]);
+
+  // Serialize the RESOLVED filters so the fetch effect re-runs when the picker
+  // changes, not merely when the author edits the layout.
+  const filtersKey = JSON.stringify(resolvedFilters) + String(pending);
   const lookupsKey = JSON.stringify(el.row_lookups ?? []);
 
   useEffect(() => {
@@ -403,6 +438,13 @@ function RecordListNode({
       setError(true);
       return;
     }
+    if (pending) {
+      // Nothing picked yet. Clear any rows from a previous selection rather than
+      // leaving the last lesson's plan on screen under a blank picker.
+      setRows([]);
+      setError(false);
+      return;
+    }
     let alive = true;
     let timer: number | undefined;
     let failures = 0;
@@ -412,12 +454,10 @@ function RecordListNode({
     // poll_ms turns the board live; 0 => fetch once.
     const base = el.poll_ms ? Math.max(500, el.poll_ms) : 0;
     // Author-declared server-side filters (ANDed). `@me` resolves to the caller's
-    // own record server-side; `isnull` carries no value.
-    const filters = (el.filters ?? []).map((f) => ({
-      field: f.field,
-      op: f.op ?? "eq",
-      value: f.value == null ? undefined : String(f.value),
-    }));
+    // own record server-side; `isnull` carries no value. A filter value may also be
+    // an expression over the enclosing view's values, so a picker elsewhere on the
+    // page can drive the board — that is what `resolvedFilters` computed above is.
+    const filters = resolvedFilters;
 
     const fetchOnce = async () => {
       // Pause while the tab is hidden — don't hammer the DB for a board no one sees.
@@ -577,7 +617,12 @@ function RecordListNode({
       ) : rows.length === 0 ? (
         <div className="flex flex-col items-center gap-2 px-4 py-8 text-center">
           <Inbox className="h-8 w-8 text-muted-foreground/50" />
-          <p className="text-sm text-muted-foreground">{el.empty_text ?? "No records yet."}</p>
+          {/* "Nothing chosen" and "nothing found" are different answers, and the
+              second is a lie when the first is true. `empty_text` is the author's
+              words for an empty result, so it does not apply to an unmade choice. */}
+          <p className="text-sm text-muted-foreground">
+            {pending ? "Make a selection to see these." : (el.empty_text ?? "No records yet.")}
+          </p>
         </div>
       ) : (
         <div className="overflow-x-auto">
