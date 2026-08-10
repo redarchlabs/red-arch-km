@@ -22,7 +22,7 @@ class WorkerSettings(BaseSettings):
     openai_api_key: str = Field(default="", validation_alias="OPENAI_API_KEY")
 
     # Model used for OpenAI vision OCR (the "ai" translation method).
-    openai_ocr_model: str = Field(default="gpt-5-mini", validation_alias="OPENAI_OCR_MODEL")
+    openai_ocr_model: str = Field(default="gpt-5.6-luna", validation_alias="OPENAI_OCR_MODEL")
 
     # Extraction (OCR / vision) is slow and, for the AI path, paid — give it a
     # dedicated timeout separate from the brain-api POST timeout.

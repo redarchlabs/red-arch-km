@@ -311,7 +311,7 @@ export interface ChatAnswerControls {
   concise?: boolean;
   /** Speak = have the robot say the answer aloud (forwarded as `inputs.speak`). */
   speak?: boolean;
-  /** Selectable answer models (first entry is the default). e.g. ["gpt-5-nano","gpt-5-mini"]. */
+  /** Selectable answer models (first entry is the default). e.g. ["gpt-5-nano","gpt-5.6-luna"]. */
   models?: string[];
   concise_words?: number;
   verbose_words?: number;

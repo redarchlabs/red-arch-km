@@ -226,7 +226,7 @@ See [RBAC.md](RBAC.md).
 
 | ID | Requirement | Pri |
 |----|-------------|-----|
-| FR-10.1 | The system shall answer natural-language questions from retrieved context using an LLM (`gpt-5-mini`, `temperature=0.3`, `max_tokens≈1000`) | M |
+| FR-10.1 | The system shall answer natural-language questions from retrieved context using an LLM (`gpt-5.6-luna`, `temperature=0.3`, `max_tokens≈1000`) | M |
 | FR-10.2 | The system shall run **hybrid retrieval**: vector chunk search (default top-5) plus optional knowledge-graph facts, deduped to unique source documents | M |
 | FR-10.3 | The LLM shall answer **only** from provided context, with inline bracketed `[n]` citations and no outside knowledge | M |
 | FR-10.4 | The system shall **stream** answers over Server-Sent Events with event types `sources`, `graph`, `delta`, `done`, `error` | M |
@@ -471,8 +471,8 @@ See [CHANGE_MANAGEMENT.md](CHANGE_MANAGEMENT.md).
 | LiteLLM | — | Multi-provider model routing for the agent org |
 | Tesseract / poppler / antiword | — | Free OCR and legacy document text extraction (worker image) |
 
-**Models:** chat/summary/claims `gpt-5-mini`; embeddings `text-embedding-3-small`
-(1536-dim); AI OCR `gpt-5-mini` (vision); agent org tiered
+**Models:** chat/claims `gpt-5.6-luna`, summary `gpt-5-nano`; embeddings `text-embedding-3-small`
+(1536-dim); AI OCR `gpt-5.6-luna` (vision); agent org tiered
 Opus/Sonnet/Haiku (Anthropic), `gpt-5*` (OpenAI), `gemini-2.5-*` (Google).
 
 ---

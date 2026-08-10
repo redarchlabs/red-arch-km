@@ -71,6 +71,17 @@ class TestReasoningEffort:
         assert reasoning_effort_for("o3-mini", "minimal") == "low"
         assert reasoning_effort_for("o3-mini", "high") == "high"
 
+    def test_the_5_6_family_has_no_minimal_tier_either(self) -> None:
+        # sol/terra/luna 400 on "minimal"; "low" is their floor.
+        assert reasoning_effort_for("gpt-5.6-luna", "minimal") == "low"
+        assert reasoning_effort_for("openai/gpt-5.6-terra", "minimal") == "low"
+        assert reasoning_effort_for("gpt-5.6-sol", "high") == "high"
+
+    def test_the_5_6_family_still_reasons_by_default(self) -> None:
+        assert is_reasoning_model("gpt-5.6-luna")
+        assert reasoning_effort_for("openai/gpt-5.6-luna") == DEFAULT_EFFORT
+
+
     def test_a_non_reasoning_model_is_sent_none_even_when_asked(self) -> None:
         assert reasoning_effort_for("anthropic/claude-sonnet-5", "high") is None
         assert reasoning_effort_for("gpt-5-chat-latest", "low") is None
@@ -182,6 +193,35 @@ class TestProviderSendsTheRightParams:
 
         assert captured["temperature"] == 0.2
         assert "reasoning_effort" not in captured
+
+    @pytest.mark.asyncio
+    async def test_a_5_6_agent_turn_keeps_its_effort_alongside_tools(self, captured) -> None:
+        # The shape of a real agent step: tools present, an effort on the row.
+        # 5.6 accepts both together (verified live), so nothing is downgraded.
+        stream = LLMProvider().stream(
+            model="openai/gpt-5.6-luna",
+            messages=[{"role": "user", "content": "go"}],
+            tools=[{"type": "function", "function": {"name": "search", "parameters": {}}}],
+            reasoning_effort="high",
+        )
+        [_ async for _ in stream]
+
+        assert captured["tools"]
+        assert captured["reasoning_effort"] == "high"
+
+    @pytest.mark.asyncio
+    async def test_a_5_6_agent_row_asking_for_minimal_is_floored_not_failed(self, captured) -> None:
+        # "minimal" is the one tier 5.6 rejects outright; an agent row carrying it
+        # must not 400 the run.
+        stream = LLMProvider().stream(
+            model="openai/gpt-5.6-luna",
+            messages=[{"role": "user", "content": "go"}],
+            tools=[{"type": "function", "function": {"name": "search", "parameters": {}}}],
+            reasoning_effort="minimal",
+        )
+        [_ async for _ in stream]
+
+        assert captured["reasoning_effort"] == "low"
 
     @pytest.mark.asyncio
     async def test_the_same_rules_hold_for_a_single_shot_completion(self, captured) -> None:

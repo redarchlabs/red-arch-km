@@ -70,7 +70,7 @@ class Settings(BaseSettings):
     # OpenAI (the in-API agent's tool-calling loop). The central key is a
     # fallback; an org's own key (orgs.openai_api_key) takes precedence.
     openai_api_key: SecretStr = Field(default=SecretStr(""), validation_alias="OPENAI_API_KEY")
-    openai_model: str = Field(default="gpt-5-mini", validation_alias="OPENAI_CHAT_MODEL")
+    openai_model: str = Field(default="gpt-5.6-luna", validation_alias="OPENAI_CHAT_MODEL")
     # A smaller/cheaper/faster model for short auxiliary calls (e.g. the workflow
     # `summarize` action that compresses a RAG answer into one spoken line for a
     # robot). Falls back to the chat model if the env var is unset.
@@ -164,7 +164,7 @@ class Settings(BaseSettings):
     # call per closing order, reading only the request and the result — so a small
     # model is the right default. Set AGENT_ACCEPTANCE_ENFORCE=false to record the
     # verdict without blocking, which is how to try it out on a live org first.
-    agent_acceptance_model: str = Field(default="gpt-5-mini", validation_alias="AGENT_ACCEPTANCE_MODEL")
+    agent_acceptance_model: str = Field(default="gpt-5.6-luna", validation_alias="AGENT_ACCEPTANCE_MODEL")
     agent_acceptance_enforce: bool = Field(default=True, validation_alias="AGENT_ACCEPTANCE_ENFORCE")
     # Batch single-shot generation (batch_generate tool): how often to poll the
     # Anthropic Message Batch and how long to wait before returning a batch id.

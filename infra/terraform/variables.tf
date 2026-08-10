@@ -235,7 +235,7 @@ variable "clerk_jwt_template" {
 variable "openai_chat_model" {
   description = "OpenAI chat model."
   type        = string
-  default     = "gpt-5-mini"
+  default     = "gpt-5.6-luna"
 }
 
 variable "openai_embedding_model" {

@@ -13,7 +13,7 @@ from brain_sdk.llm.protocol import LLMMessage, as_provider_messages
 class OpenAILLMClient:
     """LLMClient backed by the OpenAI Chat Completions API."""
 
-    def __init__(self, api_key: str, model: str = "gpt-5-mini", *, base_url: str | None = None) -> None:
+    def __init__(self, api_key: str, model: str = "gpt-5.6-luna", *, base_url: str | None = None) -> None:
         self._client = OpenAI(api_key=api_key, base_url=base_url)
         self._model = model
 

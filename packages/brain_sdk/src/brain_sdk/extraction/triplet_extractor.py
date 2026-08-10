@@ -31,7 +31,7 @@ def _clean_json_response(text: str) -> str:
 class TripletExtractor:
     """Extract knowledge graph triplets from text via LLM."""
 
-    def __init__(self, api_key: str, model: str = "gpt-5-mini", base_url: str | None = None) -> None:
+    def __init__(self, api_key: str, model: str = "gpt-5.6-luna", base_url: str | None = None) -> None:
         # Explicit base_url — see ChunkSummarizer for why this is never left to default.
         self._client = OpenAI(api_key=api_key, base_url=_clean_base_url(base_url))
         self._model = model

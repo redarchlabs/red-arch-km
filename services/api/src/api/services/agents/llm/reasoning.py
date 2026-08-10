@@ -36,6 +36,23 @@ _REASONING_PREFIXES = ("gpt-5", "o1", "o3", "o4")
 # The o-series predates the "minimal" tier and 400s on it; "low" is its floor.
 _O_SERIES_PREFIXES = ("o1", "o3", "o4")
 
+# The 5.6 family (sol/terra/luna) also dropped "minimal" — it 400s with
+# "reasoning_effort=minimal is not supported for this model", and "low" is the
+# floor. 5.6 matches the "gpt-5" prefix above, so it is already treated as a
+# reasoning model; the floor is the only thing special about it.
+#
+# Checked against the live API rather than taken on report, because a widely
+# repeated claim says 5.6 additionally refuses an effort tier and function tools
+# in the same chat-completions call. It does not: low/medium/high/xhigh each
+# return tool calls normally with a tools array present. Do not add a tools-aware
+# downgrade on the strength of that claim — it would spend the reasoning quality
+# 5.6 was chosen for to dodge a 400 the API does not raise.
+#
+# The tiers 5.6 adds beyond EFFORTS ("none", "xhigh") are accepted by the API but
+# deliberately not offered: EFFORTS is shared with the 5-series and the o-series,
+# which reject them.
+_GPT_56_PREFIXES = ("gpt-5.6",)
+
 
 def is_reasoning_model(model: str) -> bool:
     """Whether ``model`` spends hidden reasoning tokens and takes an effort tier."""
@@ -55,7 +72,10 @@ def reasoning_effort_for(model: str, requested: str | None = None) -> str | None
     if not is_reasoning_model(model):
         return None
     effort = requested if requested in EFFORTS else DEFAULT_EFFORT
-    if effort == "minimal" and bare_model(model).lower().startswith(_O_SERIES_PREFIXES):
+    if effort != "minimal":
+        return effort
+    name = bare_model(model).lower()
+    if name.startswith(_O_SERIES_PREFIXES) or name.startswith(_GPT_56_PREFIXES):
         return "low"
     return effort
 

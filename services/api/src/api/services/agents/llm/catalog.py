@@ -59,6 +59,17 @@ PROVIDERS: tuple[ProviderDef, ...] = (
         "openai",
         "OpenAI (GPT)",
         (
+            # The 5.6 family leads: Luna is both cheaper and stronger on the
+            # agentic benchmarks than the 5-series mini it replaces, so it is the
+            # default an operator should land on. Sol and Terra are its larger
+            # siblings, listed for the rare order that warrants the spend.
+            ModelDef("gpt-5.6-luna", "GPT-5.6 Luna", vision=True),
+            ModelDef("gpt-5.6-terra", "GPT-5.6 Terra", vision=True),
+            ModelDef("gpt-5.6-sol", "GPT-5.6 Sol", vision=True),
+            # The 5-series stays listed rather than being dropped: agent rows
+            # pinned to it predate the switch, and an id missing from this table
+            # answers False to model_supports_vision — which would silently
+            # downgrade every pasted image to text instead of erroring.
             ModelDef("gpt-5", "GPT-5", vision=True),
             ModelDef("gpt-5-mini", "GPT-5 mini", vision=True),
             ModelDef("gpt-5-nano", "GPT-5 nano", vision=True),

@@ -196,7 +196,7 @@ export function newElement(kind: PaletteKind): FormElement {
           fast_mode: true,
           knowledge_graph: false,
           concise: true,
-          models: ["gpt-5-nano", "gpt-5-mini"],
+          models: ["gpt-5-nano", "gpt-5.6-luna"],
           concise_words: 20,
           verbose_words: 45,
         },

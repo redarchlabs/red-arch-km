@@ -32,7 +32,7 @@ class BrainAPISettings(BaseSettings):
     neo4j_password: str = Field(default="", validation_alias="NEO4J_PASSWORD")
 
     openai_api_key: str = Field(default="", validation_alias="OPENAI_API_KEY")
-    openai_chat_model: str = Field(default="gpt-5-mini", validation_alias="OPENAI_CHAT_MODEL")
+    openai_chat_model: str = Field(default="gpt-5.6-luna", validation_alias="OPENAI_CHAT_MODEL")
     # Point the OpenAI SDK at an OpenAI-compatible server (Ollama, vLLM, llama.cpp)
     # instead of api.openai.com. Empty (the default) keeps the hosted behaviour, so
     # existing deployments are unaffected; a fully-local instance sets it.

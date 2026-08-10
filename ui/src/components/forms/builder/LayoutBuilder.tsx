@@ -1440,7 +1440,7 @@ function ChatAnswerControlsEditor({ el, onChange }: { el: ChatEl; onChange: (el:
           <Row label="Models">
             <input
               className={input}
-              placeholder="gpt-5-nano, gpt-5-mini"
+              placeholder="gpt-5-nano, gpt-5.6-luna"
               value={(ac.models ?? []).join(", ")}
               onChange={(e) =>
                 patch({

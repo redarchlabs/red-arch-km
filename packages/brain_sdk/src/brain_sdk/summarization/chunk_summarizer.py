@@ -57,7 +57,7 @@ class ChunkSummarizer:
     def __init__(
         self,
         api_key: str,
-        model: str = "gpt-5-mini",
+        model: str = "gpt-5.6-luna",
         *,
         max_workers: int = 8,
         group_size: int = 10,

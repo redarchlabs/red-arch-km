@@ -124,7 +124,7 @@ catalog (`llm/catalog.py`) maps a LiteLLM model id to its provider;
 | Provider | Example models (`llm/catalog.py`) |
 |----------|-----------------------------------|
 | Anthropic | `anthropic/claude-opus-4-8`, `anthropic/claude-sonnet-5`, `anthropic/claude-haiku-4-5-20251001` |
-| OpenAI | `gpt-5`, `gpt-5-mini`, `gpt-5-nano` |
+| OpenAI | `gpt-5.6-luna`, `gpt-5.6-terra`, `gpt-5.6-sol`, `gpt-5`, `gpt-5-mini`, `gpt-5-nano` |
 | Google | `gemini/gemini-2.5-pro`, `gemini/gemini-2.5-flash` |
 
 **Cost tiering** (applied by the provisioner) assigns models by role — reasoning where it
