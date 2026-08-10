@@ -8,6 +8,258 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — An acceptance auditor: does the delivered work answer what was asked?
+
+The gap the other completion checks cannot close. Evidence proves *something* was
+produced; the deliverable rule proves *something* was attached. Neither can tell whether
+the something is what the person wanted.
+
+The case: a person filed **"Check out SEO on redarchlabs.com and tell me what you
+think."** Four levels of delegation each restated it slightly more abstractly — audit
+the site → run a crawl → design a crawler → write up the crawler design — until the work
+underway was crawler architecture. An adversarial review board of three agents then read
+that design and argued about render-completeness heuristics and threat models for four
+rounds. Every reviewer judged the design on its own terms. None asked whether anybody
+wanted a crawler. Nine steps closed green and the website was never opened. No single
+hop was unreasonable, which is exactly why no reviewer inside the chain could catch it:
+each agent evaluates against the brief it was handed, and the brief is what drifted.
+
+- **`services/agents/acceptance.py`** runs once, on the step that closes an order, and
+  is built to be uncontaminated: it reads the **original title and body as the person
+  typed them** — the one artifact in the system that never changed — plus the attached
+  artifacts and the closing report. Never the task list (re-planned four times), never
+  the delegation briefs, never the reasoning transcript. A reviewer that reads the
+  author's reasoning adopts it, which is the documented failure mode of the existing
+  review board. Platform notices (⛔/✅/⚠️/🏛️) are filtered out of what it sees, since a
+  diary of bookkeeping reads as activity.
+- **On FAIL the order does not close**: the transition is refused with the gap named, a
+  diary line is written, and the org admins are told. Nothing is lost — the order stays
+  open, so a person can redirect it or overrule the auditor.
+- **It fails open.** No key, a model error, or a reply with no verdict all let the
+  transition through and record that no check happened — a skip must never read as a
+  pass. `AGENT_ACCEPTANCE_ENFORCE=false` records verdicts without blocking, which is how
+  to try it on a live org first. Model is `AGENT_ACCEPTANCE_MODEL` (default
+  `gpt-5-mini`): one short call per closing order.
+
+Verified against the real order: `FAIL — asked for an SEO review of redarchlabs.com and
+received an engineering buildability/rendering-completion report unrelated to SEO.`
+
+### Fixed — An opinion order is not made to produce paperwork
+
+The "last step needs something attached" rule shipped moments earlier applied to every
+order, including *"tell me what you think"* — which is answered by an answer. It now
+applies only when the brief promises a file, or when the agent's own plan said it would
+attach one. Demanding an attachment otherwise makes an agent produce a document nobody
+asked for purely to satisfy a check, which is the same drift-into-paperwork the
+surrounding work exists to stop.
+
+### Added — An agent cannot declare its own work done
+
+An SEO work order finished with nine steps marked `done`, an adversarial review board
+passed, and the thing actually asked for — open this website and audit it — never
+attempted. What was delivered was a well-argued document about how one would build a
+crawler. Nothing in the system could tell the difference: `done` was a string an agent
+wrote about itself, and no code path anywhere could disagree. An agent's output is prose
+about work, so prose about work is indistinguishable from work unless something refuses
+it. These rules are taken from a definition-of-done that already works in practice
+(`redarchlabs-agents/docs/agent-org/definition-of-done.md`) — *you never self-declare
+done*, enforced at the transition rather than asked for in a prompt.
+
+- **`done` requires evidence.** `update_work_order_task` takes a required sentence
+  naming what was produced and where it is, which is recorded in the diary under the
+  agent's own name. "done", "ok" and "completed the task" fall below the floor. Only
+  `done` is gated — demanding evidence to say "I have started" is the bureaucracy that
+  gets a rule routed around.
+- **The last step cannot close an order with nothing attached.** When every other step
+  is done or carried and the order has no output artifact, the final transition is
+  refused and the agent is told to attach the deliverable or leave the step open and say
+  what stopped it. Not a per-task artifact rule: plenty of real steps produce no file,
+  and that rule would be satisfied by attaching junk.
+- **A plan that owes an output gets a step for handing it over.** When the brief promises
+  something a person opens — report, audit, CSV, design, summary — `set_work_order_tasks`
+  appends a delivery step unless the agent already planned one. A plan that produces a
+  report and never says "attach it" ends with the report inside the agent's own
+  transcript, which is the same as never having written it. Orders that only want an
+  opinion are left alone.
+- The work-order prompt now states the rule up front, including the sentence that names
+  the actual failure: *writing about the work is not the work.*
+
+### Added — The Agents page shows who is working and who needs you
+
+The roster rendered identically during a live run and at 3am — name, kind, provider,
+model, all true whether or not anything was happening. The only way to learn an agent
+was mid-task, or had been sitting on a question for an hour, was to open the work order
+it happened to be attached to.
+
+- **Two badges, `GET /api/agents/activity`** (`services/agents/roster_activity.py`):
+  **Working** (green, spinner) when a run of theirs is queued or running, **Needs you**
+  (amber, matching the header bell) when a person is the blocker — a pending approval or
+  a question asked of a human. `needs_you` wins when both are true, since a second run
+  can be underway while the first sits parked, and only one of those is something you
+  can act on. Counts are shown when there is more than one.
+- **A run parked on a peer consult is not "needs you"** — nobody is asking a person
+  anything, and a badge that calls for help when none is wanted stops being read.
+- Idle agents get no badge at all: a row of "idle" chips makes the two that matter
+  harder to find. The endpoint returns only agents with something going on, polled every
+  8s and gated on tab visibility.
+- **The busy ones sort to the top** — needs-you, then working, then the rest in name
+  order. An alphabetical roster buries the one agent that is stuck behind fourteen that
+  are asleep. The sort is stable, so agents inside a band hold their position instead of
+  reshuffling under the cursor on every poll.
+- **"Needs you" is clickable and answerable in place.** It opens the agent's own pending
+  approvals and questions with the same approve / deny / answer / let-it-decide actions
+  the inbox has — the badge already said which agent was stuck, and making someone leave
+  for a shared inbox to find that row again among everyone else's is where "I'll deal
+  with it later" comes from. `ApprovalRead` gained `agent_id`/`agent_name` and
+  `QuestionRead` gained `asked_by_agent_id` so a card can claim its own items.
+- **A stale badge corrects itself instead of opening an empty box.** The badge is up to
+  one poll behind, so it can still say "needs you" about something settled seconds ago
+  in another tab. Clicking through to an empty dialog is a worse answer than closing it,
+  refreshing the badge, and saying so in one line.
+
+### Fixed — The inbox stops asking you to tick off work already done
+
+Every approval and question notification stayed `unread` after its item was settled, and
+the inbox's escalation section listed notifications of *every* kind — so the same
+approval appeared twice, once as a real decision and once as a "Resolve" chore that did
+nothing but clear the row. Observed live: eleven open rows, eight of them for items
+decided hours earlier.
+
+- **A notice settles with its item** (`notify.settle_notifications`). Deciding an
+  approval or answering, declining, or voiding a question resolves that run's matching
+  notification — guarded on nothing else of that kind being left pending, since a run may
+  raise a second ask while the first is being decided. Escalations are untouched: they
+  mean work stopped, and only a person decides those are done.
+- **The escalation section lists escalations and reviews only.** Approvals and questions
+  already have their own sections, with buttons that do something.
+- **Unblocking a step retracts its alert** (`WorkOrderService.clear_blocked_alert`). The
+  "needs a person before it can continue" alert stopped being true the moment the agent
+  freed the step itself, but it stayed open — seen live, a step was blocked and marked
+  done sixteen seconds later and the alert outlived both. Fires only when the *last*
+  blocked step clears (four blocked and one freed still needs the same person), and on
+  re-planning, which is how an order most often stops being blocked. Blocking again
+  afterwards still alerts: the retraction is not a permanent silence.
+
+### Fixed — `run_claude_code` tells the model how to succeed with it
+
+An agent asked the CLI to build a Playwright crawler, hit the 300s ceiling, and
+concluded from the bare timeout that it "cannot access the public web from this
+environment" — then wrote a design document about crawling instead of fetching the page.
+The tool could have opened that URL in fourteen seconds.
+
+- **The description says what it is for**: one bounded job of a few minutes, and
+  explicitly that it can fetch pages from the live web — which makes it the way to
+  inspect a public URL when no web-research key is configured. `working_dir` now says it
+  must already exist and is not created for you.
+- **The timeout says what to do next** instead of only what failed: split the work, ask
+  for the smallest next step, ask for the finding rather than the tooling that would
+  produce it.
+- **A missing `working_dir` lists the directories that do exist.** Naming only what is
+  absent leaves the model with another guess; it invented `seo-crawler-playwright`, was
+  told just that it was missing, and abandoned the tool rather than trying a real one.
+
+### Fixed — An agent can see who its colleagues are
+
+Nothing told an agent who its direct reports were. The roster existed in exactly one
+place: the error you get back for naming a colleague that is not yours — which an agent
+has to guess a name to see. Caught on the SEO work order: a chief-of-staff told to
+"route the crawl through the engineering chain" reasoned its way to wanting the
+technical-project-manager, could name nobody to send it to, escalated to a human twice,
+and marked every remaining step blocked. Its own direct report owned that branch.
+
+- **The system prompt names the direct reports and their kind** — coordinator, operator
+  or advisory — because the kind is the routing fact: a coordinator passes work on, an
+  advisory agent is a leaf. Consultable advisors are listed separately (`consult_peer`
+  reaches any of them org-wide). Both lists cap at 20 names so a large org cannot push
+  the actual work out of the context window; disabled reports are dropped, since
+  delegating to one queues a run that never executes.
+- **And it says that a skill further down is still reachable**: delegate to the
+  coordinator whose branch owns it and let them pass it on. Without that sentence an
+  agent reads a direct-reports-only list literally, concludes two levels down cannot be
+  reached, and escalates instead of delegating.
+
+### Fixed — `escalate` now wakes the supervisor it escalates to
+
+An agent that escalated wrote a notification and nothing else. With a supervisor set,
+that row was addressed to no role — so no person saw it — and no run was ever queued,
+so the supervisor never woke up either. The report got back `{"status": "notified"}` and
+believed it had handed the problem over. Caught live: a research-analyst offered its
+human "escalate to chief-of-staff for platform access", the human picked it, the
+escalation went nowhere, and the analyst then marked every remaining step `blocked`.
+
+- **Escalating queues a run for the supervisor** (`trigger: "escalation"`, linked by
+  `parent_run_id`, carrying the reporter's reason and context), the same mechanism
+  delegation already used. The brief says the blocker is theirs to resolve and names the
+  only three moves that change anything — a different report, a different route, or a
+  person — because a supervisor handed a bare problem statement restates it and stops.
+- **A human is paged only when no agent picks it up**: at the apex, when the supervisor
+  is disabled (queueing a run for a disabled agent is the original bug in a new hat), or
+  after `MAX_ESCALATION_HOPS`. The hop count rides in the run's input, so a
+  `supervisor_id` cycle drawn by hand cannot queue runs forever, and five agents passing
+  the same blocker along end at a person instead of at each other.
+- **The capability warning names the keyless web route.** When an order is about the
+  live web and `web_research` has no key (or nobody in reach holds it), the warning now
+  also names the reachable agents that could open a page through `run_claude_code`,
+  which reaches the web on the owner's Claude subscription and needs no API key. Only
+  operators are listed — it is `EXECUTE`, so the kind-gate denies it to the advisory
+  researcher that is the obvious agent to hand web work to. "Buy a key" was the wrong
+  advice when the fix was picking a different agent.
+- **Blocked means one step, not the whole list.** A run that could not finish was
+  sweeping every step it had not reached to `blocked`, which hides which one actually
+  needs help and reads as total failure. The work-order prompt now says to block only
+  the stuck step, say what would unstick it, and escalate when a supervisor could clear
+  it.
+
+### Fixed — A blocked work order reaches a person
+
+Seen live: "Check out SEO on redarchlabs.com" ran for five hours, asked four rounds of
+questions, and ended with eight of nine steps `blocked`. Nothing said so. The stall
+sweeper did write an escalation — into a list with no badge on it, on a page nobody was
+on. The work order's own "Waiting on you" panel said nothing was waiting.
+
+- **Escalations now surface where the work is.** The work order's approval queue lists
+  unresolved escalations for that order, and the header bell counts them. It still does
+  not count notifications generally — most are a record of something that happened and
+  need nothing from you — but an escalation means work has already stopped.
+- **Blocking a step raises an alert.** `update_work_order_task` moving a step to
+  `blocked` writes a diary line and notifies, throttled to one alert per order until
+  somebody clears it (an agent that hits a missing capability usually blocks every
+  remaining step in the same turn). Blocking again after it is cleared alerts again.
+- **A work order says at dispatch what its agents cannot do**
+  (`services/agents/capability.py`). Reachability follows what the runtime actually
+  enforces — `delegate_task` is direct-reports-only and barred to advisory agents, so an
+  advisory agent is a leaf and anyone under it is unreachable. An order about the live
+  web with no `web_research` in reach, a coordinator with no reports, or a request to
+  change something with no operator in the chain each write one diary line and one
+  notification, once. Advisory only: a wrong refusal would block real work.
+- **`web_research` is `READ`, not `EXECUTE`.** The kind-gate reads `EXECUTE` as
+  operator-only, so *no advisory agent could ever browse the web* whatever its grants —
+  which is what left a research-analyst unable to open a single page. It is still
+  grant-gated and still `side_effecting=False`.
+- **Notifications from these paths can leave the app.** `WorkOrderService` now takes
+  `Settings`, so a blocked step or capability gap goes out by email / the org's notify
+  workflow when they are configured, instead of in-app only.
+- **A message typed after the run ended is no longer thrown away.** The live panel's
+  box steers a *run*; once every run had finished, the steer was refused ("that run is
+  already done") and the text dropped on the floor — exactly when a person has
+  something to add. It now becomes a reply on the work order: recorded in the diary,
+  with a fresh run started from that history. The same fix passes through pasted
+  attachments, which were parsed off the steer frame and then discarded.
+
+### Added — `web_research` works on an Anthropic key, not just a Gemini one
+
+- **Two backends, chosen by whichever key resolves.** Anthropic is preferred: the
+  Messages API's server-side `web_search` **and** `web_fetch` mean it can open a
+  *specific URL the question names*, which search-grounding cannot — and "audit this
+  page" is most of what anyone asks a researcher for. Gemini's Google Search grounding
+  (free tier, 1,500/day) stays as the fallback. Both return the same
+  `{answer, sources, grounded}`, so nothing downstream knows which answered.
+- Model is `AGENT_WEB_SEARCH_MODEL` (default `claude-opus-5`); paused server-tool turns
+  are resumed, bounded; a tool-result error object is read as an error rather than
+  iterated as results; a classifier refusal is reported instead of returning empty.
+- With neither key configured the error **names both**, instead of sending whoever
+  reads it to sign up for a vendor they may already have.
+
 ### Added — Agents can ask a question and actually get an answer
 
 - **`ask_human` — an agent blocks for a person's typed answer.** Distinct from an approval,

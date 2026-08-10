@@ -160,7 +160,8 @@ a tool never grants it).
 |-------|-------|-------------------|
 | **Read** (always available) | `search_knowledge` (RAG over the org's docs), `list_records`, `get_record`, `list_workflows` | `READ`, `always_allowed` |
 | **Write** (operator + `records_write`) | `create_record`, `update_record`, `create_document` (auto-ingested into RAG) | `WRITE`, `side_effecting=False` — internal, runs free |
-| **Execute** (operator-only via kind-gate) | `run_workflow` (side-effecting), `web_research`, `batch_generate` / `check_batch`, connected MCP tools, opt-in `run_claude_code` | `EXECUTE`; grant-gated |
+| **Execute** (operator-only via kind-gate) | `run_workflow` (side-effecting), `batch_generate` / `check_batch`, connected MCP tools, opt-in `run_claude_code` | `EXECUTE`; grant-gated |
+| **Web research** (any kind, grant-gated) | `web_research` | `READ`, `side_effecting=False` — reading the public web is not acting on the world |
 | **Coordination** (role-provided) | `delegate_task`, `escalate`, `consult_peer`, `request_review` | `DELEGATE` / `ESCALATE`; kind-gated |
 
 The write tools reuse the exact validation + inline-workflow + ingest paths the
@@ -168,18 +169,26 @@ first-party UI uses (`tools/records.py`, `tools/documents.py`).
 
 ### Web research — `web_research` (`tools/web_research.py`)
 
-Live-web research with citations via **Gemini + Google Search grounding** on the AI
-Studio **free tier (1,500 grounding requests/day)** through the wired `GEMINI_API_KEY`
-(or the org's own Gemini key). Because Gemini cannot mix Google Search with function
-tools in one request, this is a dedicated **tool-less** call
-(`LLMProvider.complete` with only the `googleSearch` tool) that returns
-`{answer, sources, grounded}` (title + url), mirroring `search_knowledge` so citations
-flow through the normal `tool_result` path and persist in `AgentRunStep`. `EXECUTE` +
-**`side_effecting=False`** (read-only → runs free under high-touch), operator-only,
-grant-gated; provisioned to research/content operators. On quota exhaustion it returns a
-clear message rather than silently spending. Model is `AGENT_WEB_RESEARCH_MODEL`
-(default `gemini/gemini-2.5-flash`). (Vertex is a future switchable backend — paid, no
-free quota — not wired here.)
+Live-web research with citations. **Two backends, chosen by which key resolves** —
+tying the only live-web capability to one vendor's key meant an org without that key
+could not read the web at all:
+
+| Backend | When | What it can do |
+|---|---|---|
+| **Anthropic** (preferred) | an `anthropic` key resolves (`ANTHROPIC_API_KEY` or the org's key) | Messages API server-side `web_search` **and** `web_fetch` — so it can open a *specific URL the question names*, not just search for pages about it. `AGENT_WEB_SEARCH_MODEL` (default `claude-opus-5`; needs Opus 4.6+ / Sonnet 4.6+ for the dynamic-filtering tool versions). Handles `pause_turn` by resuming, bounded. |
+| **Gemini** (fallback) | only a `gemini` key resolves | Google Search grounding on the AI Studio **free tier (1,500 grounding requests/day)**. Gemini cannot mix Google Search with function tools, so this is a dedicated tool-less call. `AGENT_WEB_RESEARCH_MODEL` (default `gemini/gemini-2.5-flash`). |
+
+Both return `{answer, sources, grounded}` (title + url), mirroring `search_knowledge`,
+so citations flow through the normal `tool_result` path and persist in `AgentRunStep` —
+the agent never learns which backend answered. With neither key the error names both,
+rather than sending the reader to sign up for a vendor they may already have.
+
+`READ` + **`side_effecting=False`** (runs free under high-touch), grant-gated;
+provisioned to whichever agents are meant to research. It was `EXECUTE` at first, which
+the kind-gate reads as operator-only — so an *advisory* research agent could never call
+it no matter its grants, and a research-analyst told to audit a website blocked the
+whole order instead. Quota/rate-limit exhaustion returns a clear message rather than
+silently spending.
 
 ### Batch generation — `batch_generate` / `check_batch` (`tools/batch_generate.py`)
 
@@ -264,6 +273,22 @@ Coordinators delegate to direct reports via `delegate_task`, which spawns a chil
 / `consult_peer`); unresolved work reaches the human `org_admin`. A delegated child
 records its result back on the work order for its supervisor.
 
+**An agent's system prompt names its routable colleagues** — direct reports with their
+kind, plus the consultable advisors — via `delegation.routable_colleagues`. Until it
+did, the roster appeared only inside the error for naming the wrong colleague, so an
+agent that needed a skill two levels down had no name to delegate to and escalated
+instead. The prompt also states the rule that makes a deep chart usable: delegate to the
+coordinator whose branch owns the skill and let them pass it on.
+
+**`escalate` queues a run for the supervisor** (`trigger: "escalation"`, linked by
+`parent_run_id`) — it is a hand-off, not a bulletin. It wrote only a notification once,
+and because that row was addressed to no role when a supervisor existed, an escalation
+reached neither the supervisor nor a person: the reporter saw `{"status": "notified"}`
+and stopped. A human is paged instead when nobody will pick it up — at the apex, when
+the supervisor is disabled, or after `MAX_ESCALATION_HOPS` (the count rides in the run's
+input, which bounds a hand-drawn `supervisor_id` cycle and ends a blocker that is merely
+being passed along).
+
 Every gated action lands in the org's **approvals inbox**
 (`GET /api/agents/approvals`, approve/deny via
 `POST /api/agents/approvals/{id}/{approve|deny}`, router `agent_approvals.py`) with a
@@ -272,6 +297,61 @@ preview. Notifications fan out via `services/agents/notify.py`: an out-of-band e
 (`orgs.agent_notify_workflow_id`, migration `031_org_agent_notify_workflow`) for
 Slack/Teams/SMS delivery. In-app notifications are served from
 `GET /api/agents/notifications`.
+
+### When work finishes, something has to back it up
+
+`done` was a string an agent wrote about itself and no code path could disagree — so an
+order closed nine-for-nine having never attempted the thing it was filed for. Three gates
+now stand between an agent and a green checklist, each catching what the one before it
+cannot:
+
+| Gate | Question | Where |
+|------|----------|-------|
+| Evidence | What did you produce, and where is it? | `update_work_order_task` requires it for `done` |
+| Deliverable | Is there anything a person can open? | last step, when the brief or the plan promised a file |
+| Acceptance | Does it answer what was actually asked? | `services/agents/acceptance.py`, once, on the closing step |
+
+The acceptance auditor is deliberately isolated from the chain that did the work. It
+reads the **original title and body as the person typed them** — the one thing that never
+changed while four levels of delegation restated the brief — plus the artifacts and the
+closing report. It never sees the task list, the delegation briefs, or the reasoning: a
+reviewer given the author's reasoning adopts it, which is why the peer review board
+passed a crawler design that nobody had asked for. It fails open (no key, model error, or
+a reply with no verdict lets the transition through and records that no check ran), and
+`AGENT_ACCEPTANCE_ENFORCE=false` reports without blocking.
+
+A plan whose brief promises an output also gains a delivery step, because a plan that
+produces a report and never says "attach it" ends with the report inside the agent's own
+transcript.
+
+### When work stops, somebody is told
+
+Three separate silences were possible here, and each is now closed:
+
+| Situation | What happens |
+|-----------|--------------|
+| A step moves to `blocked` | Diary line + one escalation per order (re-armed once someone resolves it), so a turn that blocks eight steps does not send eight alerts |
+| Every run finished with tasks open | `run_executor._stalled_orders` sweeps for it (detection only — nothing is restarted) |
+| The assigned chain cannot do the job | `services/agents/capability.py` checks at dispatch and files one diary line + one notification |
+
+The capability check reasons about **reachability as the runtime enforces it**, not the
+org chart as drawn: `delegate_task` targets direct reports only and is barred to
+advisory agents, so an advisory agent is a leaf and anything under it is unreachable.
+`consult_peer` reaches any advisory agent org-wide, so peers count for "can anyone look
+this up" and never for "can anyone act". It warns — it never refuses — because the
+triggers are heuristics over the brief and a wrong refusal would block real work.
+
+A web warning also names who *can* already do it: `run_claude_code` reaches the live web
+on the owner's Claude subscription with no API key at all, so when a reachable operator
+holds it the warning says so instead of asking for a key. Operators only — the tool is
+`EXECUTE`, and the kind-gate denies it to the advisory researcher that is otherwise the
+obvious agent to hand web work to.
+
+Escalations surface in two places a person is already looking: the work order's own
+"Waiting on you" panel (`approval_queue` element) and the header bell, which counts
+pending approvals, questions, and unresolved escalations. It deliberately does *not*
+count notifications in general — most need nothing from you, and a badge that counts
+those is a badge people learn to ignore.
 
 ## 9. Provisioner & the autonomous company
 
