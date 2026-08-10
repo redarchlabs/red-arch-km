@@ -7,9 +7,14 @@ import { AttachmentChips } from "@/components/common/AttachmentChips";
 import { Markdown } from "@/components/common/Markdown";
 import { Button } from "@/components/ui/button";
 import { listAgentRunSteps } from "@/lib/api/agents";
-import { liveSocketUrl, mintLiveTicket, type LiveEvent } from "@/lib/api/agentsLive";
+import {
+  liveSocketUrl,
+  mintLiveTicket,
+  type LiveEvent,
+} from "@/lib/api/agentsLive";
 import { getWorkOrderMap } from "@/lib/api/workOrders";
 import { readableStep } from "./runSteps";
+import { ToolDetail } from "./toolDetail";
 import { usePasteAttach } from "@/lib/usePasteAttach";
 import { cn } from "@/lib/utils";
 
@@ -18,7 +23,13 @@ import { cn } from "@/lib/utils";
  *  a list of fragments. */
 type Block =
   | { kind: "assistant"; agent: string | null; text: string }
-  | { kind: "tool"; agent: string | null; name: string; args: unknown; result?: unknown }
+  | {
+      kind: "tool";
+      agent: string | null;
+      name: string;
+      args: unknown;
+      result?: unknown;
+    }
   | { kind: "steer"; text: string }
   | { kind: "note"; text: string };
 
@@ -78,14 +89,30 @@ export function LiveActivityNode({
         if (last && last.kind === "assistant" && last.agent === event.agent) {
           next[next.length - 1] = { ...last, text: last.text + event.content };
         } else {
-          next.push({ kind: "assistant", agent: event.agent, text: event.content });
+          next.push({
+            kind: "assistant",
+            agent: event.agent,
+            text: event.content,
+          });
         }
-      } else if (event.type === "tool_call" || event.type === "approval_required") {
-        next.push({ kind: "tool", agent: event.agent, name: event.name, args: event.arguments });
+      } else if (
+        event.type === "tool_call" ||
+        event.type === "approval_required"
+      ) {
+        next.push({
+          kind: "tool",
+          agent: event.agent,
+          name: event.name,
+          args: event.arguments,
+        });
       } else if (event.type === "tool_result") {
         for (let i = next.length - 1; i >= 0; i--) {
           const b = next[i];
-          if (b.kind === "tool" && b.name === event.name && b.result === undefined) {
+          if (
+            b.kind === "tool" &&
+            b.name === event.name &&
+            b.result === undefined
+          ) {
             next[i] = { ...b, result: event.result };
             break;
           }
@@ -93,12 +120,18 @@ export function LiveActivityNode({
       } else if (event.type === "steer") {
         next.push({ kind: "steer", text: event.content });
       } else if (event.type === "steer_queued") {
-        next.push({ kind: "note", text: "Queued — the agent picks this up on its next turn." });
+        next.push({
+          kind: "note",
+          text: "Queued — the agent picks this up on its next turn.",
+        });
       } else if (event.type === "steer_restarted") {
         // The agents had stopped, so this became a reply and started a fresh run
         // with the diary as context — which is what "here's more information, try
         // again" has to mean on an order nobody is working.
-        next.push({ kind: "note", text: "The agents had stopped, so this started a new run on the work order." });
+        next.push({
+          kind: "note",
+          text: "The agents had stopped, so this started a new run on the work order.",
+        });
       } else if (event.type === "steer_recorded") {
         next.push({
           kind: "note",
@@ -131,33 +164,72 @@ export function LiveActivityNode({
       try {
         const map = await getWorkOrderMap(workOrderId);
         if (cancelled) return;
-        setAnyLive(map.lanes.some((lane) => LIVE_STATUSES.has(lane.status ?? "")));
-        const runIds = [...new Set(map.events.map((e) => e.run_id).filter((v): v is string => !!v))];
+        setAnyLive(
+          map.lanes.some((lane) => LIVE_STATUSES.has(lane.status ?? "")),
+        );
+        const runIds = [
+          ...new Set(
+            map.events.map((e) => e.run_id).filter((v): v is string => !!v),
+          ),
+        ];
         // Newest runs only: an order with a long history should not fetch every
         // step it ever produced to fill one panel.
         const recent = runIds.slice(-HISTORY_RUNS);
-        const perRun = await Promise.all(recent.map((id) => listAgentRunSteps(id).catch(() => [])));
+        const perRun = await Promise.all(
+          recent.map((id) => listAgentRunSteps(id).catch(() => [])),
+        );
         if (cancelled) return;
         const blocks: Block[] = [];
         for (const steps of perRun) {
           for (const step of steps) {
             const readable = readableStep(step);
-            if (step.kind === "tool_call" || step.kind === "approval_required") {
-              blocks.push({ kind: "tool", agent: null, name: step.name ?? readable.title, args: null });
+            if (
+              step.kind === "tool_call" ||
+              step.kind === "approval_required"
+            ) {
+              blocks.push({
+                kind: "tool",
+                agent: null,
+                name: step.name ?? readable.title,
+                // The stored step holds the same payloads the socket carries, so a
+                // replayed call shows what a live one shows. Reading `content`
+                // directly rather than the readable summary: this panel is the raw
+                // account, and `readableStep` exists to shorten things for the map.
+                args:
+                  (step.content as { arguments?: unknown })?.arguments ?? null,
+              });
             } else if (step.kind === "tool_result") {
               for (let i = blocks.length - 1; i >= 0; i--) {
                 const b = blocks[i];
-                if (b.kind === "tool" && b.name === (step.name ?? "") && b.result === undefined) {
-                  blocks[i] = { ...b, result: readable.body ?? "" };
+                if (
+                  b.kind === "tool" &&
+                  b.name === (step.name ?? "") &&
+                  b.result === undefined
+                ) {
+                  blocks[i] = {
+                    ...b,
+                    result:
+                      (step.content as { result?: unknown })?.result ??
+                      readable.body ??
+                      "",
+                  };
                   break;
                 }
               }
             } else if (readable.body) {
-              blocks.push({ kind: "assistant", agent: null, text: readable.body });
+              blocks.push({
+                kind: "assistant",
+                agent: null,
+                text: readable.body,
+              });
             }
           }
         }
-        if (blocks.length) blocks.push({ kind: "note", text: "— above is the recorded history —" });
+        if (blocks.length)
+          blocks.push({
+            kind: "note",
+            text: "— above is the recorded history —",
+          });
         setBlocks((prev) => [...blocks, ...prev]);
         if (recent.length) setLastRunId(recent[recent.length - 1]);
       } catch {
@@ -186,7 +258,10 @@ export function LiveActivityNode({
         // replay the last one.
         const { ticket } = await mintLiveTicket();
         const socket = new WebSocket(
-          liveSocketUrl(ticket, { work_order_id: workOrderId ?? "", run_id: runId ?? "" }),
+          liveSocketUrl(ticket, {
+            work_order_id: workOrderId ?? "",
+            run_id: runId ?? "",
+          }),
         );
         socketRef.current = socket;
         socket.onopen = () => {
@@ -205,13 +280,20 @@ export function LiveActivityNode({
           setConnected(false);
           socketRef.current = null;
           if (closed) return;
-          timer = setTimeout(() => void connect(), RETRY_MS[Math.min(attempt++, RETRY_MS.length - 1)]);
+          timer = setTimeout(
+            () => void connect(),
+            RETRY_MS[Math.min(attempt++, RETRY_MS.length - 1)],
+          );
         };
         socket.onerror = () => socket.close();
       } catch {
         // Minting failed (offline, 403). Back off and try again — a live view that
         // cannot connect must degrade to an empty panel, never to a broken page.
-        if (!closed) timer = setTimeout(() => void connect(), RETRY_MS[Math.min(attempt++, RETRY_MS.length - 1)]);
+        if (!closed)
+          timer = setTimeout(
+            () => void connect(),
+            RETRY_MS[Math.min(attempt++, RETRY_MS.length - 1)],
+          );
       }
     };
 
@@ -234,16 +316,30 @@ export function LiveActivityNode({
     const target = runId || lastRunId;
     const socket = socketRef.current;
     // An attachment on its own is a message: "look at this" with a screenshot.
-    if ((!text && paste.documentIds.length === 0) || !socket || socket.readyState !== WebSocket.OPEN || !target) {
+    if (
+      (!text && paste.documentIds.length === 0) ||
+      !socket ||
+      socket.readyState !== WebSocket.OPEN ||
+      !target
+    ) {
       return;
     }
-    socket.send(JSON.stringify({ type: "steer", run_id: target, text, document_ids: paste.documentIds }));
+    socket.send(
+      JSON.stringify({
+        type: "steer",
+        run_id: target,
+        text,
+        document_ids: paste.documentIds,
+      }),
+    );
     setSteer("");
     paste.clear();
   };
 
   if (!workOrderId && !runId) {
-    return <p className="text-sm text-muted-foreground">No work order selected.</p>;
+    return (
+      <p className="text-sm text-muted-foreground">No work order selected.</p>
+    );
   }
 
   // Steering needs a run to steer. Before anything has been seen there is no way
@@ -256,7 +352,12 @@ export function LiveActivityNode({
       <div className="flex items-center gap-2">
         {title ? <h3 className="text-sm font-medium">{title}</h3> : null}
         <span className="ml-auto flex items-center gap-1.5 text-xs text-muted-foreground">
-          <span className={cn("h-2 w-2 rounded-full", connected ? "bg-emerald-500" : "bg-muted-foreground/40")} />
+          <span
+            className={cn(
+              "h-2 w-2 rounded-full",
+              connected ? "bg-emerald-500" : "bg-muted-foreground/40",
+            )}
+          />
           {connected ? "Live" : "Reconnecting…"}
         </span>
       </div>
@@ -264,7 +365,9 @@ export function LiveActivityNode({
         ref={boxRef}
         onScroll={() => {
           const box = boxRef.current;
-          if (box) pinned.current = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+          if (box)
+            pinned.current =
+              box.scrollHeight - box.scrollTop - box.clientHeight < 40;
         }}
         className={`space-y-2 overflow-y-auto rounded-md border p-3 ${HEIGHTS[height] ?? HEIGHTS.md}`}
       >
@@ -291,28 +394,43 @@ export function LiveActivityNode({
             if (block.kind === "assistant") {
               return (
                 <div key={index} className="rounded-md border bg-muted/20 p-2">
-                  <div className="mb-1 text-[10px] font-medium text-muted-foreground">{block.agent ?? "agent"}</div>
+                  <div className="mb-1 text-[10px] font-medium text-muted-foreground">
+                    {block.agent ?? "agent"}
+                  </div>
                   {/* Model-authored. Images stripped for the same reason as the
                       diary: one emitted via a poisoned document would make the
                       reader's browser fetch an attacker's URL. */}
-                  <Markdown content={block.text} stripImages className="text-sm" />
+                  <Markdown
+                    content={block.text}
+                    stripImages
+                    className="text-sm"
+                  />
                 </div>
               );
             }
             if (block.kind === "tool") {
+              // The arguments and the result, not just the name: this panel is meant
+              // to show what is happening, and a row saying "fetch_web_page done"
+              // tells you less than the diary entry written afterwards.
               return (
-                <div key={index} className="rounded-md border border-dashed p-2 text-xs">
-                  <span className="font-medium">{block.name}</span>
-                  <span className="ml-2 text-muted-foreground">
-                    {block.result === undefined ? "running…" : "done"}
-                  </span>
-                </div>
+                <ToolDetail
+                  key={index}
+                  name={block.name}
+                  args={block.args}
+                  result={block.result}
+                  agent={block.agent}
+                />
               );
             }
             if (block.kind === "steer") {
               return (
-                <div key={index} className="rounded-md border bg-sky-50/60 p-2 text-sm dark:bg-sky-950/30">
-                  <div className="mb-1 text-[10px] font-medium text-muted-foreground">you</div>
+                <div
+                  key={index}
+                  className="rounded-md border bg-sky-50/60 p-2 text-sm dark:bg-sky-950/30"
+                >
+                  <div className="mb-1 text-[10px] font-medium text-muted-foreground">
+                    you
+                  </div>
                   {block.text}
                 </div>
               );
@@ -326,33 +444,49 @@ export function LiveActivityNode({
         )}
       </div>
       {allowSteer ? (
-        <div className="space-y-1" onDrop={paste.onDrop} onDragOver={(e) => e.preventDefault()}>
-          <AttachmentChips attachments={paste.attachments} onRemove={paste.remove} />
-          <div className="flex items-end gap-2">
-          <textarea
-            value={steer}
-            onChange={(e) => setSteer(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key !== "Enter" || e.shiftKey) return;
-              // preventDefault twice over: this sits inside the renderer's form.
-              e.preventDefault();
-              send();
-            }}
-            onPaste={paste.onPaste}
-            placeholder={target ? "Say something — paste a screenshot to attach it…" : "Nothing running to steer yet"}
-            aria-label="Steer the agent"
-            rows={2}
-            disabled={!target}
-            className="w-full rounded-md border bg-background px-2 py-1.5 text-sm disabled:opacity-60"
+        <div
+          className="space-y-1"
+          onDrop={paste.onDrop}
+          onDragOver={(e) => e.preventDefault()}
+        >
+          <AttachmentChips
+            attachments={paste.attachments}
+            onRemove={paste.remove}
           />
-          <Button
-            type="button"
-            size="sm"
-            onClick={send}
-            disabled={!target || !connected || paste.busy || (!steer.trim() && paste.documentIds.length === 0)}
-          >
-            <Send className="h-3 w-3" />
-          </Button>
+          <div className="flex items-end gap-2">
+            <textarea
+              value={steer}
+              onChange={(e) => setSteer(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key !== "Enter" || e.shiftKey) return;
+                // preventDefault twice over: this sits inside the renderer's form.
+                e.preventDefault();
+                send();
+              }}
+              onPaste={paste.onPaste}
+              placeholder={
+                target
+                  ? "Say something — paste a screenshot to attach it…"
+                  : "Nothing running to steer yet"
+              }
+              aria-label="Steer the agent"
+              rows={2}
+              disabled={!target}
+              className="w-full rounded-md border bg-background px-2 py-1.5 text-sm disabled:opacity-60"
+            />
+            <Button
+              type="button"
+              size="sm"
+              onClick={send}
+              disabled={
+                !target ||
+                !connected ||
+                paste.busy ||
+                (!steer.trim() && paste.documentIds.length === 0)
+              }
+            >
+              <Send className="h-3 w-3" />
+            </Button>
           </div>
         </div>
       ) : null}

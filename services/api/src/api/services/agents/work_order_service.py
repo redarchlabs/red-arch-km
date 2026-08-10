@@ -79,6 +79,7 @@ _CAPABILITY_MARKER = "⚠️ Capability gap:"
 _BLOCKED_MARKER = "⛔ Blocked:"
 _DONE_MARKER = "✅ Done:"
 _ACCEPTANCE_MARKER = "🎯 Did not answer the request:"
+_CONTINUE_MARKER = "▶️ Continuing:"
 
 # Shortest evidence that can say anything. Not a quality bar — a floor that "done",
 # "ok" and "finished" fall below, which is most of what an unforced field receives.
@@ -119,6 +120,7 @@ _START_TITLES = {
     "consult": "consulted",
     "delegation": "took a delegated task",
     "escalation": "picked up an escalation",
+    "continuation": "picked the order back up",
     "schedule": "started on schedule",
     "manual": "started",
 }
@@ -177,6 +179,44 @@ def _reply_brief(wo: WorkOrder, history: Sequence[WorkOrderEntry], reply: str) -
         "--- The person who filed it has just replied ---\n"
         f"{reply}\n\n"
         "Continue the work order from here, taking their reply as the instruction."
+    )
+
+
+# How many times an order may be picked up again after its agents stop. High enough
+# for a real multi-step job that closes a few steps per run, low enough that a chain
+# which cannot finish stops costing money and asks a person instead.
+MAX_CONTINUATIONS = 8
+
+
+def _continuation_brief(wo: WorkOrder, tasks: Sequence[WorkOrderTask], history: Sequence[WorkOrderEntry]) -> str:
+    """The brief for picking an order back up where its last agent left it.
+
+    A run ends when the model stops calling tools, which is not the same as the work
+    being finished — an agent routinely closes one step, sets the next to in_progress,
+    writes a tidy summary and stops. Nothing then continued the order, so a nine-step
+    job needed nine separate human nudges. This is the brief that replaces the nudge.
+
+    It leads with the checklist, because the observed failure of a restarted run is
+    re-planning from scratch: told only "carry on", a model rewrites the task list and
+    the order loses the work already done.
+    """
+    done = [t for t in tasks if t.status in ("done", "carried")]
+    outstanding = [t for t in tasks if t.status not in ("done", "carried")]
+    lines = [f"{e.role}: {e.text.strip()}" for e in history if e.text.strip()]
+    return (
+        f"{_brief(wo)}\n\n"
+        "--- This work order is already under way. You are continuing it, not starting it. ---\n"
+        "ALREADY DONE (do not repeat, do not re-plan):\n"
+        + ("\n".join(f"  {t.key} [{t.status}] {t.title}" for t in done) or "  (nothing yet)")
+        + "\n\nSTILL OPEN — this is your work:\n"
+        + "\n".join(f"  {t.key} [{t.status}] {t.title}" for t in outstanding)
+        + "\n\n--- What has happened so far ---\n"
+        + "\n\n".join(lines[-_REPLY_CONTEXT_ENTRIES:])
+        + "\n\nKeep the existing task list — do not call set_work_order_tasks unless the plan is "
+        "genuinely wrong. Work the open steps and mark each one as you finish it. Do not stop to "
+        "report progress: a summary is not a step, and the order continues only while there is work "
+        "you can still do. If you truly cannot proceed, block the specific step and say what would "
+        "unblock it, or escalate."
     )
 
 
@@ -440,6 +480,52 @@ class WorkOrderService:
             WorkOrderEntry.text.like(f"{marker}%"),
         )
         return (await self._session.execute(query)).first() is not None
+
+    async def continue_order(self, wo: WorkOrder, tasks: Sequence[WorkOrderTask]) -> AgentRun | None:
+        """Pick a stalled order back up, or return None with the reason left in place.
+
+        Only the sweeper calls this, and only for an order that is in progress, has
+        open steps and has nobody working it. The judgement about *whether* to
+        continue lives in the caller; this owns the how.
+        """
+        if wo.assigned_agent_id is None:
+            return None
+        agent = (
+            await self._session.execute(
+                select(Agent).where(Agent.id == wo.assigned_agent_id, Agent.org_id == self._org_id)
+            )
+        ).scalar_one_or_none()
+        if agent is None or not agent.enabled:
+            return None
+        history = (await self.list_entries_page(wo.id, limit=_REPLY_CONTEXT_ENTRIES)).entries
+        settled = sum(1 for t in tasks if t.status in ("done", "carried"))
+        run = await AgentRunRepository(self._session, self._org_id).create_run(
+            agent_id=agent.id,
+            provider=agent.provider,
+            model=agent.model,
+            trigger="continuation",
+            input={
+                "task": _continuation_brief(wo, tasks, history),
+                # Carried so the next sweep can tell a continuation that moved the
+                # work from one that only restated it. A loop that makes no progress
+                # is a loop that will not make any, and it bills for every turn.
+                "_continuation_progress": settled,
+            },
+            work_order_id=wo.id,
+            actor_user_id=wo.created_by_profile_id,
+            status="queued",
+            label=f"Continuing: {wo.title[:70]}",
+        )
+        await self._repo.add_entry(
+            WorkOrderEntry(
+                work_order_id=wo.id,
+                agent_id=agent.id,
+                agent_run_id=run.id,
+                role=_SYSTEM_LANE,
+                text=f"{_CONTINUE_MARKER} picked the order back up ({settled} of {len(tasks)} steps settled).",
+            )
+        )
+        return run
 
     async def has_live_run(self, wo_id: uuid.UUID) -> bool:
         """Is an agent on this order right now?

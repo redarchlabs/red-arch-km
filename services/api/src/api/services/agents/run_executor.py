@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api import db_scope
 from api.config import Settings
 from api.dependencies import get_redis_client
-from api.models.agent_run import AgentApproval, AgentNotification, AgentRun
+from api.models.agent_run import AgentApproval, AgentNotification, AgentQuestion, AgentRun
 from api.models.work_order import WorkOrder, WorkOrderEntry
 from api.repositories.agent import AgentRepository
 from api.repositories.agent_run import AgentRunRepository
@@ -41,7 +41,7 @@ from api.services.agents.prompts import build_system_prompt
 from api.services.agents.runtime import RunCancelled, RunFinished, RunParked, run_agent_loop
 from api.services.agents.tools.loader import load_agent_tools
 from api.services.agents.tools.spec import ToolContext, ToolSpec
-from api.services.agents.work_order_service import WorkOrderService
+from api.services.agents.work_order_service import MAX_CONTINUATIONS, WorkOrderService
 
 logger = logging.getLogger(__name__)
 
@@ -214,9 +214,27 @@ class AgentRunExecutor:
         other stall in this system surfaces (a waiting run, a pending approval);
         this one was invisible, which made it the easiest to lose.
 
-        Detection only. Nothing is restarted: an agent that stopped may have been
-        right to, and quietly re-running it would spend money on a decision a person
-        has not seen yet.
+        Detection was all this did, on the reasoning that an agent which stopped may
+        have been right to. That reasoning was wrong in the common case. A run ends
+        when the model stops calling tools, and an agent routinely closes one step,
+        sets the next to in_progress, writes a tidy summary and stops — with nothing
+        blocking it and nobody asked for anything. Nine steps then needed nine human
+        nudges, and every one of them looked to the person nudging like the system
+        being unable to do the work.
+
+        So an order that has stopped with work outstanding is now picked back up,
+        under four conditions that between them keep this from becoming a loop that
+        bills forever:
+
+        * nobody is waiting on a person — a pending question or approval means the
+          agent stopped for a reason, and restarting it would talk over the answer;
+        * every remaining step is not already blocked — blocked means it needs
+          someone else, and running the same agent at it again changes nothing;
+        * fewer than ``MAX_CONTINUATIONS`` pickups so far;
+        * the last pickup actually moved a step. A continuation that settles nothing
+          will not settle anything next time either.
+
+        When any of those fails it does what it always did: tells a person, once.
         """
         live = (
             select(AgentRun.work_order_id)
@@ -251,6 +269,9 @@ class AgentRunExecutor:
             outstanding = [t for t in tasks if t.status not in ("done", "carried")]
             if not outstanding:
                 continue
+            if await self._continued(session, service, wo, tasks, outstanding):
+                notified += 1
+                continue
             if await self._already_flagged(session, wo):
                 continue
             done = len(tasks) - len(outstanding)
@@ -278,6 +299,63 @@ class AgentRunExecutor:
             )
             notified += 1
         return notified
+
+    async def _continued(
+        self,
+        session: AsyncSession,
+        service: WorkOrderService,
+        wo: WorkOrder,
+        tasks: list[Any],
+        outstanding: list[Any],
+    ) -> bool:
+        """Pick the order back up if that is the right thing to do. See _stalled_orders."""
+        if all(t.status == "blocked" for t in outstanding):
+            return False
+        if await self._awaiting_a_person(session, wo):
+            return False
+
+        settled = len(tasks) - len(outstanding)
+        priors = (
+            (
+                await session.execute(
+                    select(AgentRun.input)
+                    .where(AgentRun.work_order_id == wo.id, AgentRun.trigger == "continuation")
+                    .order_by(AgentRun.created_at.desc())
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if len(priors) >= MAX_CONTINUATIONS:
+            return False
+        if priors:
+            before = (priors[0] or {}).get("_continuation_progress")
+            if isinstance(before, int) and settled <= before:
+                # The last pickup closed nothing. Another one will not either, and a
+                # person is better placed to say why than the agent that just failed.
+                return False
+        return await service.continue_order(wo, tasks) is not None
+
+    async def _awaiting_a_person(self, session: AsyncSession, wo: WorkOrder) -> bool:
+        """Is a human the thing this order is stopped on?"""
+        runs = select(AgentRun.id).where(AgentRun.work_order_id == wo.id).scalar_subquery()
+        pending_question = (
+            await session.execute(
+                select(AgentQuestion.id).where(
+                    AgentQuestion.run_id.in_(runs),
+                    AgentQuestion.status == "pending",
+                    AgentQuestion.audience == "human",
+                )
+            )
+        ).first()
+        if pending_question is not None:
+            return True
+        pending_approval = (
+            await session.execute(
+                select(AgentApproval.id).where(AgentApproval.run_id.in_(runs), AgentApproval.status == "pending")
+            )
+        ).first()
+        return pending_approval is not None
 
     async def _already_flagged(self, session: AsyncSession, wo: WorkOrder) -> bool:
         """Has this stall already been reported since the last run finished?
