@@ -1,6 +1,7 @@
 "use client";
 
 import { Loader2, Send } from "lucide-react";
+import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { AttachmentChips } from "@/components/common/AttachmentChips";
@@ -29,6 +30,15 @@ type Block =
       name: string;
       args: unknown;
       result?: unknown;
+      /** The authority gate stopped this call to ask a person. */
+      awaitingApproval?: boolean;
+    }
+  /** The run has stopped and a person is the only thing that can restart it. */
+  | {
+      kind: "waiting";
+      agent: string | null;
+      waitKind: string | null;
+      detail: string;
     }
   | { kind: "steer"; text: string }
   | { kind: "note"; text: string };
@@ -95,15 +105,45 @@ export function LiveActivityNode({
             text: event.content,
           });
         }
-      } else if (
-        event.type === "tool_call" ||
-        event.type === "approval_required"
-      ) {
+      } else if (event.type === "tool_call") {
         next.push({
           kind: "tool",
           agent: event.agent,
           name: event.name,
           args: event.arguments,
+        });
+      } else if (event.type === "approval_required") {
+        // The runtime emits tool_call and THEN approval_required for the same call,
+        // so pushing a block here rendered every gated call twice. Mark the block
+        // that is already there instead.
+        let marked = false;
+        for (let i = next.length - 1; i >= 0; i--) {
+          const b = next[i];
+          if (
+            b.kind === "tool" &&
+            b.name === event.name &&
+            b.result === undefined
+          ) {
+            next[i] = { ...b, awaitingApproval: true };
+            marked = true;
+            break;
+          }
+        }
+        if (!marked) {
+          next.push({
+            kind: "tool",
+            agent: event.agent,
+            name: event.name,
+            args: event.arguments,
+            awaitingApproval: true,
+          });
+        }
+      } else if (event.type === "parked") {
+        next.push({
+          kind: "waiting",
+          agent: event.agent,
+          waitKind: event.wait_kind,
+          detail: event.detail,
         });
       } else if (event.type === "tool_result") {
         for (let i = next.length - 1; i >= 0; i--) {
@@ -408,6 +448,34 @@ export function LiveActivityNode({
                 </div>
               );
             }
+            if (block.kind === "waiting") {
+              // The one state a person watching most needs to be told about, and
+              // the one the panel used to render as "running…" forever.
+              return (
+                <div
+                  key={index}
+                  className="rounded-md border border-amber-300 bg-amber-50/80 p-2 text-xs dark:border-amber-800 dark:bg-amber-950/40"
+                >
+                  <div className="font-medium text-amber-900 dark:text-amber-100">
+                    Waiting on you
+                    {block.agent ? ` — ${block.agent} has stopped here` : ""}
+                  </div>
+                  <p className="mt-0.5 text-amber-900/80 dark:text-amber-100/80">
+                    {block.waitKind === "question"
+                      ? "It asked a question and cannot continue until you answer."
+                      : block.waitKind === "approval"
+                        ? `It needs your approval for: ${block.detail}`
+                        : block.detail}
+                  </p>
+                  <Link
+                    href="/agents/approvals"
+                    className="mt-1 inline-block font-medium text-amber-900 underline underline-offset-2 dark:text-amber-100"
+                  >
+                    Answer it
+                  </Link>
+                </div>
+              );
+            }
             if (block.kind === "tool") {
               // The arguments and the result, not just the name: this panel is meant
               // to show what is happening, and a row saying "fetch_web_page done"
@@ -419,6 +487,7 @@ export function LiveActivityNode({
                   args={block.args}
                   result={block.result}
                   agent={block.agent}
+                  awaitingApproval={block.awaitingApproval}
                 />
               );
             }

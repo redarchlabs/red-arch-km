@@ -67,11 +67,13 @@ export function ToolDetail({
   args,
   result,
   agent,
+  awaitingApproval = false,
 }: {
   name: string;
   args: unknown;
   result?: unknown;
   agent?: string | null;
+  awaitingApproval?: boolean;
 }) {
   const running = result === undefined;
   return (
@@ -88,7 +90,11 @@ export function ToolDetail({
               : "text-muted-foreground"
           }
         >
-          {running ? "running…" : "done"}
+          {awaitingApproval && running
+            ? "waiting for your approval"
+            : running
+              ? "running…"
+              : "done"}
         </span>
       </div>
       <Payload label="arguments" value={args} />

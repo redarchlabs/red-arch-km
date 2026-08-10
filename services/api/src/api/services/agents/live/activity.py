@@ -44,7 +44,9 @@ DELTA_FLUSH_SECONDS = 0.05
 
 # Events worth carrying live. A whitelist, because the emit vocabulary is internal
 # and free to grow, and an unrecognised event should not reach a browser.
-LIVE_EVENTS = frozenset({"delta", "tool_call", "tool_result", "approval_required", "usage", "done", "error", "steer"})
+LIVE_EVENTS = frozenset(
+    {"delta", "tool_call", "tool_result", "approval_required", "parked", "usage", "done", "error", "steer"}
+)
 
 
 def run_channel(org_id: uuid.UUID, run_id: uuid.UUID) -> str:

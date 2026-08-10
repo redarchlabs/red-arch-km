@@ -55,6 +55,16 @@ _STALL_MARKER = "⚠️ Stalled:"
 _STALL_ROLE = "system"
 
 
+def _parked_detail(parked: RunParked) -> str:
+    """One line naming what a person has to do, from whatever the park carried."""
+    payload = parked.payload if isinstance(parked.payload, dict) else {}
+    for key in ("tool", "question", "peer"):
+        value = payload.get(key)
+        if value:
+            return str(value)
+    return parked.wait_kind or "a decision"
+
+
 class AgentRunExecutor:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
@@ -654,6 +664,17 @@ class AgentRunExecutor:
                     "answers": {k: v for k, v in resume_answers.items() if k in still_pending},
                 },
             }
+            # Say so on the live channel. Without this a parked run is simply a tool
+            # call that never returns: the panel showed "running…" against an agent
+            # that had stopped and was waiting on a person, which is the one state a
+            # person watching most needs to be told about.
+            await emit(
+                {
+                    "type": "parked",
+                    "wait_kind": parked.wait_kind,
+                    "detail": _parked_detail(parked),
+                }
+            )
             await run_repo.mark_waiting(
                 run,
                 parked.wait_kind,

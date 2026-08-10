@@ -28,13 +28,17 @@ describe("ToolDetail", () => {
   });
 
   it("marks a call done once it comes back", () => {
-    render(<ToolDetail name="get_record" args={{ id: 1 }} result={{ ok: true }} />);
+    render(
+      <ToolDetail name="get_record" args={{ id: 1 }} result={{ ok: true }} />,
+    );
 
     expect(screen.getByText("done")).toBeTruthy();
   });
 
   it("names the agent when several are working the order", () => {
-    render(<ToolDetail name="delegate_task" args={{}} agent="chief-of-staff" />);
+    render(
+      <ToolDetail name="delegate_task" args={{}} agent="chief-of-staff" />,
+    );
 
     expect(screen.getByText("chief-of-staff")).toBeTruthy();
   });
@@ -73,5 +77,36 @@ describe("formatPayload", () => {
   it("treats null and undefined as nothing to show", () => {
     expect(formatPayload(null)).toBe("");
     expect(formatPayload(undefined)).toBe("");
+  });
+});
+
+describe("a call the authority gate stopped", () => {
+  it("says it is waiting for approval rather than running", () => {
+    // The runtime emits tool_call and then approval_required for the same call, so
+    // a gated delegation used to render twice, both saying "running…" — against an
+    // agent that had in fact stopped and was waiting on a person.
+    render(
+      <ToolDetail
+        name="delegate_task"
+        args={{ agent: "research-analyst" }}
+        awaitingApproval
+      />,
+    );
+
+    expect(screen.getByText("waiting for your approval")).toBeTruthy();
+    expect(screen.queryByText("running…")).toBeNull();
+  });
+
+  it("goes back to plain done once it is approved and returns", () => {
+    render(
+      <ToolDetail
+        name="delegate_task"
+        args={{}}
+        result={{ status: "queued" }}
+        awaitingApproval
+      />,
+    );
+
+    expect(screen.getByText("done")).toBeTruthy();
   });
 });
