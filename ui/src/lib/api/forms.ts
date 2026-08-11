@@ -305,9 +305,22 @@ export interface RecordListElement extends ElementBase {
   row_workflow_visible_when?: Expression;
   /** Muted text shown in place of a hidden row button — e.g. "Enrolled ✓". */
   row_workflow_hidden_text?: string | null;
+  /** Further per-row buttons, drawn after `row_workflow_id`'s. A row is often a
+   * thing you do several things to — greet this person, or take them off the
+   * register — and one button per list cannot express that. */
+  row_actions?: RecordListRowActionConfig[];
   /** Per-row visibility for the row link, same scope as the button rule. */
   row_link_visible_when?: Expression;
   width?: FieldWidth | null;
+}
+
+export interface RecordListRowActionConfig {
+  workflow_id: string;
+  label?: string;
+  /** JsonLogic per input, over `{...viewScope, ...row}` — `{var: "id"}` is the row id. */
+  inputs?: Record<string, Expression>;
+  visible_when?: Expression;
+  hidden_text?: string | null;
 }
 
 /** One auxiliary `record_list` query (mirrors backend `RecordListLookup`): fetch

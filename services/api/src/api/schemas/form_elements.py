@@ -411,6 +411,30 @@ class RecordListColumn(BaseModel):
     badge_map: dict[str, Literal["neutral", "success", "warning", "destructive", "info"]] = Field(default_factory=dict)
 
 
+class RecordListRowAction(BaseModel):
+    """One extra per-row button on a ``record_list``.
+
+    ``row_workflow_id`` gives a list a single row button, which is enough right up
+    until a row is a *thing you do several things to* — a person on a register you
+    might greet or take off it. Rather than overload the one button or split the list
+    in two, a list may carry any number of these, drawn beside the original.
+
+    Deliberately additive: ``row_workflow_id`` keeps working exactly as before and is
+    drawn first, so every existing list is untouched. Same evaluation rules as the
+    original — ``inputs`` and ``visible_when`` are JsonLogic over the ROW's values
+    merged onto the enclosing view's, so ``{"var": "id"}`` is the row id."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    workflow_id: uuid.UUID
+    label: str = "Run"
+    inputs: dict[str, Expression] = Field(default_factory=dict)
+    visible_when: Expression = None
+    # Shown in place of the button when ``visible_when`` says no — "Enrolled" where
+    # the Enrol button was. Without it the cell is simply empty.
+    hidden_text: str | None = None
+
+
 class RecordListFilter(BaseModel):
     """One server-side filter narrowing a ``record_list``'s rows.
 
@@ -536,6 +560,8 @@ class RecordListElement(_Element):
     row_workflow_visible_when: Expression = None
     # Shown (muted, no button) in place of a hidden row action — "Enrolled ✓".
     row_workflow_hidden_text: str | None = None
+    # Further per-row buttons, drawn after the one above. See RecordListRowAction.
+    row_actions: list[RecordListRowAction] = Field(default_factory=list)
     row_link_visible_when: Expression = None
     width: FieldWidth | None = None
 

@@ -20,6 +20,7 @@ import {
   type RecordListElement,
   type ReportElement,
   type RecordListColumn,
+  type RecordListRowActionConfig,
   type SectionElement,
   type StatElement,
   type TableElement,
@@ -531,8 +532,26 @@ function RecordListNode({
         : [];
   const colConfig = new Map<string, RecordListColumn>(configured.map((c) => [c.slug, c]));
 
-  const runRow = async (row: EntityRecord) => {
-    if (!el.row_workflow_id || !onRunWorkflow) return;
+  // Every per-row button as one list, so the header, the cell and the run handler
+  // stop caring which of the two shapes an action was declared in. `row_workflow_id`
+  // is drawn first and keeps its exact old behaviour.
+  const rowActions: RecordListRowActionConfig[] = [
+    ...(el.row_workflow_id
+      ? [
+          {
+            workflow_id: el.row_workflow_id,
+            label: el.row_action_label ?? "Run",
+            inputs: el.row_workflow_inputs ?? {},
+            visible_when: el.row_workflow_visible_when,
+            hidden_text: el.row_workflow_hidden_text,
+          },
+        ]
+      : []),
+    ...(el.row_actions ?? []),
+  ];
+
+  const runRow = async (row: EntityRecord, action: RecordListRowActionConfig) => {
+    if (!onRunWorkflow) return;
     const recordId = String(row.id);
     setBusyRow(recordId);
     try {
@@ -541,10 +560,10 @@ function RecordListNode({
       // `{var: <parent field>}` a value from the enclosing view (e.g. `email`).
       const evalScope = { ...scopeValues, ...row };
       const inputs: Record<string, unknown> = {};
-      for (const [k, expr] of Object.entries(el.row_workflow_inputs ?? {})) {
+      for (const [k, expr] of Object.entries(action.inputs ?? {})) {
         inputs[k] = evaluate(expr, evalScope);
       }
-      await onRunWorkflow(el.row_workflow_id, inputs, recordId);
+      await onRunWorkflow(action.workflow_id, inputs, recordId);
       // The run almost certainly changed what this list (or its lookups) shows —
       // refetch both so e.g. an Enroll button flips to its hidden-state text.
       setRunTick((t) => t + 1);
@@ -558,8 +577,8 @@ function RecordListNode({
   // rule referencing a lookup that hasn't loaded yet evaluates against [] and
   // corrects itself when the lookup lands.
   const rowScope = (row: EntityRecord) => ({ ...scopeValues, ...row, lookups });
-  const rowActionVisible = (row: EntityRecord): boolean =>
-    el.row_workflow_visible_when == null || Boolean(evaluate(el.row_workflow_visible_when, rowScope(row)));
+  const rowActionVisible = (row: EntityRecord, action: RecordListRowActionConfig): boolean =>
+    action.visible_when == null || Boolean(evaluate(action.visible_when, rowScope(row)));
   const rowLinkVisible = (row: EntityRecord): boolean =>
     el.row_link_visible_when == null || Boolean(evaluate(el.row_link_visible_when, rowScope(row)));
 
@@ -635,7 +654,7 @@ function RecordListNode({
                   </th>
                 ))}
                 {el.row_link_template ? <th className="w-24 px-3 py-2" /> : null}
-                {el.row_workflow_id ? <th className="w-24 px-3 py-2" /> : null}
+                {rowActions.length > 0 ? <th className="w-24 px-3 py-2" /> : null}
               </tr>
             </thead>
             <tbody>
@@ -664,22 +683,33 @@ function RecordListNode({
                       ) : null}
                     </td>
                   ) : null}
-                  {el.row_workflow_id ? (
+                  {rowActions.length > 0 ? (
                     <td className="px-3 py-2 text-right">
-                      {rowActionVisible(row) ? (
-                        <button
-                          type="button"
-                          className="rounded-md border bg-background px-2 py-1 text-xs font-medium hover:bg-muted disabled:opacity-60"
-                          disabled={busyRow === String(row.id)}
-                          onClick={() => void runRow(row)}
-                        >
-                          {el.row_action_label ?? "Run"}
-                        </button>
-                      ) : el.row_workflow_hidden_text ? (
-                        <span className="whitespace-nowrap text-xs text-muted-foreground">
-                          {el.row_workflow_hidden_text}
-                        </span>
-                      ) : null}
+                      {/* One row is one unit of work: while any of its buttons is
+                          running they all disable, because they act on the same record
+                          and a second press mid-run is a race, not impatience. */}
+                      <div className="flex justify-end gap-1">
+                        {rowActions.map((action, i) =>
+                          rowActionVisible(row, action) ? (
+                            <button
+                              key={`${action.workflow_id}-${i}`}
+                              type="button"
+                              className="rounded-md border bg-background px-2 py-1 text-xs font-medium hover:bg-muted disabled:opacity-60"
+                              disabled={busyRow === String(row.id)}
+                              onClick={() => void runRow(row, action)}
+                            >
+                              {action.label ?? "Run"}
+                            </button>
+                          ) : action.hidden_text ? (
+                            <span
+                              key={`${action.workflow_id}-${i}`}
+                              className="whitespace-nowrap text-xs text-muted-foreground"
+                            >
+                              {action.hidden_text}
+                            </span>
+                          ) : null,
+                        )}
+                      </div>
                     </td>
                   ) : null}
                 </tr>
