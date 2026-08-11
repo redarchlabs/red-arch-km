@@ -145,7 +145,13 @@ def _definition(port: int, *, synthesize: bool = True) -> dict:
                         "method": "POST",
                         "url": f"{robot}/gesture",
                         "headers": hdr,
-                        "body": {"name": "{{vars.decision.gesture}}"},
+                        # Idempotency key, so a retry over a lossy link is not a second
+                        # command. Templated here (rather than on /say) because this
+                        # node's body is asserted by key, not by whole-dict equality.
+                        "body": {
+                            "name": "{{vars.decision.gesture}}",
+                            "request_id": "{{run.id}}:{{node.id}}",
+                        },
                     },
                 },
             },
@@ -255,6 +261,13 @@ async def test_workflow_drives_robot_end_to_end(admin_session: AsyncSession, rob
     # Steering within rails: the commanded gesture is a member of the robot's vocabulary.
     assert gesture["body"]["name"] == "celebrate" and gesture["body"]["name"] in GESTURES
     assert gesture["command_key"] == COMMAND_KEY
+    # The command carries an idempotency key the robot can deduplicate on, proving the
+    # whole chain — engine passes node.id, runner puts it on the context, the template
+    # renders it — reaches the wire. Speech is not idempotent, so without this a retry
+    # over a lossy link makes the robot perform the same command twice.
+    run_id, _, node_id = gesture["body"]["request_id"].partition(":")
+    assert node_id == "gesture"  # names the NODE, so siblings never share a key
+    assert uuid.UUID(run_id)  # names the RUN, so a later run is never deduplicated away
 
 
 async def test_retrieval_only_single_llm_path_drives_robot(

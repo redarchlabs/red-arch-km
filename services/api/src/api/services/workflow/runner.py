@@ -113,6 +113,9 @@ class ActionExecutor:
         origin_run_id: uuid.UUID,
         inputs: dict[str, Any] | None = None,
         variables: dict[str, Any] | None = None,
+        # Which graph node this is. Optional so non-engine callers (dry-run/test
+        # paths) keep working; it only feeds the ``{{ node.id }}`` template token.
+        node_id: str | None = None,
     ) -> ActionResult:
         """Run one action handler; never raises — failures come back on the result."""
         handler = ACTION_REGISTRY.get(action_type)
@@ -142,6 +145,8 @@ class ActionExecutor:
             after=after,
             inputs=inputs or {},
             vars=variables or {},
+            run_id=origin_run_id,
+            node_id=node_id,
             config=config or {},
             trigger_repo=_trigger_repo,
             repo_for_slug=_repo_for_slug,

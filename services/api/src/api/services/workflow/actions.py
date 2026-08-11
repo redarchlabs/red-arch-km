@@ -64,6 +64,15 @@ class ActionContext:
     # ``capture`` key). Addressable as ``vars.<key>`` / ``{{ vars.<key> }}`` so a
     # later action can consume an earlier step's result (e.g. speak a KB answer).
     vars: dict[str, Any] = field(default_factory=dict)
+    # Identity of the step being executed, addressable as ``{{ run.id }}`` /
+    # ``{{ node.id }}``. Together they name ONE node in ONE run, and a retry of
+    # that node re-templates to the same pair — which is exactly what an
+    # idempotency key needs: stable across attempts, unique across runs. A
+    # non-idempotent downstream (the robot's /say and /perform actually speak)
+    # can then tell a genuine second request from a retry of a request whose
+    # response was lost, and decline to say the line twice.
+    run_id: uuid.UUID | None = None
+    node_id: str | None = None
     # Allow-listed webhook hosts (SSRF guard).
     webhook_allowlist: tuple[str, ...] = ()
     # Hosts explicitly trusted to reach a private/loopback address (e.g. a
@@ -168,6 +177,10 @@ def _trigger_context(ctx: ActionContext) -> dict[str, Any]:
 
     ``now``/``today`` are read at context-build time; two steps in one run may see
     timestamps a few ms apart (same ``today``), which is fine for date stamping.
+
+    ``run.id`` / ``node.id`` name the step itself. Unlike every other token here
+    they are deliberately CONSTANT across a retry of the same node, so a template
+    can build an idempotency key — see ``ActionContext.run_id``.
     """
     stamp = dt.datetime.now(dt.UTC)
     return {
@@ -177,6 +190,8 @@ def _trigger_context(ctx: ActionContext) -> dict[str, Any]:
         "vars": ctx.vars or {},
         "now": stamp.isoformat(),
         "today": stamp.date().isoformat(),
+        "run": {"id": str(ctx.run_id) if ctx.run_id else ""},
+        "node": {"id": ctx.node_id or ""},
     }
 
 
@@ -263,7 +278,7 @@ def _resolve_value_map(values: dict[str, Any], context: dict[str, Any]) -> dict[
 # (e.g. knowledge_search's {answer, sources}). One capture group = the full lookup
 # path (``now``/``today`` resolve as single-segment keys via :func:`_lookup`).
 _TEMPLATE_TOKEN = re.compile(
-    r"\{\{\s*((?:before|after|inputs|vars)\.[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*|now|today)\s*\}\}"
+    r"\{\{\s*((?:before|after|inputs|vars|run|node)\.[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*|now|today)\s*\}\}"
 )
 
 

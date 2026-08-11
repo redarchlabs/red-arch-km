@@ -528,6 +528,7 @@ class TokenEngine:
             variables=run.variables or {},
             entity_definition_id=await self._entity_of(run),
             origin_run_id=run.id,
+            node_id=node.id,
         )
         if result.ok:
             step.status = "succeeded"
