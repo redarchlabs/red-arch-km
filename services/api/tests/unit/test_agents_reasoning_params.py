@@ -81,7 +81,6 @@ class TestReasoningEffort:
         assert is_reasoning_model("gpt-5.6-luna")
         assert reasoning_effort_for("openai/gpt-5.6-luna") == DEFAULT_EFFORT
 
-
     def test_a_non_reasoning_model_is_sent_none_even_when_asked(self) -> None:
         assert reasoning_effort_for("anthropic/claude-sonnet-5", "high") is None
         assert reasoning_effort_for("gpt-5-chat-latest", "low") is None
