@@ -2665,17 +2665,22 @@ export function FormRenderer({
   }) {
     const text = value == null ? "" : String(value);
     if (!text.trim()) return null;
+    // `whitespace-pre-wrap` throughout: a slide body is authored WITH its line breaks —
+    // a numbered list of thinking traps, a scene card, a set of options — and HTML would
+    // otherwise collapse every one of them into a single run-on paragraph that cannot be
+    // read from the back of a room. The author's line breaks are the layout.
     const body = {
-      headline: "text-4xl font-semibold leading-tight tracking-tight text-foreground",
-      prose: "text-2xl leading-relaxed text-foreground",
+      headline: "whitespace-pre-wrap text-4xl font-semibold leading-tight tracking-tight text-foreground",
+      prose: "whitespace-pre-wrap text-2xl leading-relaxed text-foreground",
       // A scripture is quoted material and reads as such — the rule carries that, so the
       // words themselves need no quotation marks added by the author.
-      quote: "border-l-4 border-primary/60 pl-6 text-2xl italic leading-relaxed text-foreground",
-      caption: "text-xl leading-relaxed text-muted-foreground",
+      quote:
+        "whitespace-pre-wrap border-l-4 border-primary/60 pl-6 text-2xl italic leading-relaxed text-foreground",
+      caption: "whitespace-pre-wrap text-xl leading-relaxed text-muted-foreground",
       // A transcript grows all lesson; cap it and let it scroll rather than pushing the
       // slide off the screen it is supposed to be supporting.
       log: "max-h-[32vh] overflow-y-auto whitespace-pre-wrap text-base leading-relaxed text-muted-foreground",
-    }[display] ?? "text-2xl leading-relaxed text-foreground";
+    }[display] ?? "whitespace-pre-wrap text-2xl leading-relaxed text-foreground";
     return (
       <div className="space-y-2">
         {label ? (
