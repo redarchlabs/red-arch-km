@@ -45,7 +45,7 @@ make migrate
 make dev
 
 # 5. Open the UI
-open http://localhost:3000
+open http://localhost:3002
 ```
 
 ## Architecture

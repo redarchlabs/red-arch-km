@@ -72,11 +72,11 @@ uv sync --all-packages --extra dev
 ./run-stack.sh
 
 # 5. Open the UI
-open http://localhost:3000
+open http://localhost:3002
 ```
 
 On first run, check `/tmp/km2_api_dev.log` for the setup-token banner, then open
-`http://localhost:3000/setup`.
+`http://localhost:3002/setup`.
 
 The fully-dockerized alternative (`make dev`) also works and is described under
 [Make command reference](#make-command-reference); it differs from the hybrid
@@ -223,7 +223,7 @@ cache reuse or a smaller prompt, not a faster vector store.
 
 | Service | Port | URL / notes |
 |---------|------|-------------|
-| UI (Next.js) | 3000 | http://localhost:3000 — host `next dev` (hybrid) or `km2_ui` container (`make dev`). |
+| UI (Next.js) | 3002 | http://localhost:3002 — host `next dev` (hybrid) or `km2_ui` container (`make dev`). Deliberately NOT 3000: that is Next's default, so every other Next app on the machine wants it, and `run-stack.sh stop` frees this port by killing whoever holds it. Override with `UI_PORT=…`. |
 | API (FastAPI) | 8000 | http://localhost:8000 — host `uvicorn`, `.env.host`. Health: `/healthz`, `/readyz`. |
 | API interactive docs | 8000 | `/docs`, `/redoc` (only when `API_DEBUG=true`); `/api/v1/docs` gated by `API_DOCS_ENABLED`. |
 | Brain API | 8020 | http://localhost:8020 — `km2_brain_api`. Health: `/healthz`. |
@@ -325,7 +325,7 @@ outbox (see [Debugging](#debugging)).
 ```bash
 cd ui
 npm install
-npm run dev            # http://localhost:3000
+npm run dev            # http://localhost:3000 (PORT=3002 to match run-stack.sh)
 ```
 
 The UI uses **npm** (`ui/package-lock.json`). Scripts: `dev`, `build`, `lint`

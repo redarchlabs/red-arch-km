@@ -10,11 +10,11 @@
 #
 # Start ALWAYS kills any existing host API/UI first, so a stale dev server
 # (e.g. one still serving an out-of-date .next build after a rebuild) can never
-# linger on :8000/:3000 and shadow the fresh one.
+# linger on :8000/:$UI_PORT and shadow the fresh one.
 #
 # The dev stack is a hybrid:
 #   docker : postgres(5433) redis qdrant neo4j | brain-api(8020) | celery worker + beat
-#   host   : FastAPI api via uvicorn (8000)    | Next.js UI dev server (3000)
+#   host   : FastAPI api via uvicorn (8000)    | Next.js UI dev server ($UI_PORT, default 3002)
 #
 # Host processes read .env.host (localhost URLs, Clerk issuer, e2e test mode);
 # containers read .env. Keep OPENAI_API_KEY/BRAIN_API_KEY in sync between them.
@@ -24,6 +24,12 @@ cd "$(dirname "$0")"
 ENV_HOST=.env.host
 API_LOG=/tmp/km2_api_dev.log
 UI_LOG=/tmp/km2_ui_dev.log
+# Which port the Next dev server binds. NOT 3000: that is Next's own default, so
+# every other Next project on this machine wants it too — and `stop` frees this
+# port by killing whatever LISTENs on it, which on a shared 3000 means killing
+# somebody else's dev server. Owning an unfashionable port is what makes that
+# safe. Override with `UI_PORT=3005 ./run-stack.sh` when 3002 is taken as well.
+UI_PORT="${UI_PORT:-3002}"
 # Args: an optional mode (start|restart|stop) plus an optional --rebuild flag,
 # in any order. `rebuild` on its own means "rebuild then start".
 MODE=start
@@ -44,14 +50,14 @@ COMPOSE_OVERRIDE=()
 say() { printf '\033[1;36m[stack]\033[0m %s\n' "$*"; }
 
 api_up() { curl -sf -m 2 http://localhost:8000/healthz >/dev/null 2>&1; }
-ui_up()  { curl -sf -m 2 -o /dev/null http://localhost:3000/login 2>/dev/null; }
+ui_up()  { curl -sf -m 2 -o /dev/null "http://localhost:${UI_PORT}/login" 2>/dev/null; }
 # brain-api warms the query path (one embedding + one chat completion) before it
 # binds :8020. Against local llama.cpp that is ~10s, well past the point where
 # next dev answers — so it has to be waited on, not just probed once.
 brain_up() { curl -sf -m 2 http://localhost:8020/healthz >/dev/null 2>&1; }
 
 # Free the given TCP port by killing whatever LISTENs on it (this stack owns
-# :8000 and :3000). TERM first, then KILL if it clings.
+# :8000 and :$UI_PORT). TERM first, then KILL if it clings.
 free_port() {
   local port="$1" pids
   pids="$(lsof -ti "tcp:${port}" -sTCP:LISTEN 2>/dev/null || true)"
@@ -69,11 +75,16 @@ stop_host() {
   free_port 8000 && say "stopped api" || true
 
   # UI: kill THIS repo's Next dev launcher (repo-scoped path, so we never touch
-  # another project's dev server), then free :3000 — the detached 'next-server'
-  # child that actually holds the port does NOT contain 'next dev' in its
-  # cmdline, which is why 'pkill -f "next dev"' left stale servers behind.
+  # another project's dev server), then free :$UI_PORT — the detached
+  # 'next-server' child that actually holds the port does NOT contain 'next dev'
+  # in its cmdline, which is why 'pkill -f "next dev"' left stale servers behind.
+  #
+  # free_port is indiscriminate: it kills whoever holds the port, ours or not.
+  # That is only safe while this stack owns the port outright, which is the whole
+  # reason UI_PORT defaults off 3000 — every Next project defaults there, so on
+  # 3000 this line would reach into a neighbouring app and stop it.
   pkill -f "$PWD/ui/node_modules/.bin/next" 2>/dev/null || true
-  free_port 3000 && say "stopped ui" || true
+  free_port "$UI_PORT" && say "stopped ui" || true
 }
 
 if [ "$MODE" = "stop" ]; then
@@ -191,7 +202,9 @@ setsid nohup .venv/bin/uvicorn api.main:app \
 
 # --- 5. UI (next dev) ----------------------------------------------------------
 say "ui…"
-(cd ui && setsid nohup npm run dev >"$UI_LOG" 2>&1 </dev/null &)
+# PORT is how `next dev` is told where to bind without editing package.json, so
+# the port stays a property of how the stack is RUN rather than of the app.
+(cd ui && PORT="$UI_PORT" setsid nohup npm run dev >"$UI_LOG" 2>&1 </dev/null &)
 
 # --- 6. wait + report -----------------------------------------------------------
 say "waiting for health…"
@@ -203,7 +216,7 @@ done
 status() { if eval "$2"; then echo "  ✅ $1"; else echo "  ❌ $1  (log: $3)"; fi; }
 echo
 status "api        http://localhost:8000" api_up "$API_LOG"
-status "ui         http://localhost:3000" ui_up "$UI_LOG"
+status "ui         http://localhost:${UI_PORT}" ui_up "$UI_LOG"
 status "brain-api  http://localhost:8020" brain_up "docker logs km2_brain_api"
 status "mailpit    http://localhost:8025" "curl -sf -m 2 -o /dev/null http://localhost:8025" "docker logs km2_mailpit"
 status "worker" "docker ps --format '{{.Names}}' | grep -q km2_worker_fixed" "docker logs km2_worker_fixed"
