@@ -26,6 +26,11 @@ from api.services.email import is_valid_email
 # dispatch DB transaction (holding a pooled connection + the claimed outbox row
 # lock), so a slow endpoint directly bounds how long those resources are held.
 WEBHOOK_TIMEOUT_SECONDS = 10.0
+# Ceiling for a step that widens its own timeout via ``config.timeout_seconds``.
+# A connector that does real work before answering (the robot bridge renders a whole
+# /perform timeline to speech first) needs more than the default, but no step may pin
+# a worker slot indefinitely.
+MAX_OUTBOUND_TIMEOUT_SECONDS = 300.0
 
 
 @dataclass
@@ -792,6 +797,21 @@ class SendWebhook:
         }
 
 
+def _outbound_timeout(value: Any) -> float:
+    """Seconds this call may wait, from ``config.timeout_seconds``.
+
+    Anything unusable (absent, non-numeric, zero or negative) falls back to the shared
+    default rather than raising: a malformed timeout must not be the reason a step fails.
+    """
+    try:
+        seconds = float(value)  # designer JSON round-trips numbers as strings
+    except (TypeError, ValueError):
+        return WEBHOOK_TIMEOUT_SECONDS
+    if seconds <= 0:
+        return WEBHOOK_TIMEOUT_SECONDS
+    return min(seconds, MAX_OUTBOUND_TIMEOUT_SECONDS)
+
+
 async def call_connection(
     ctx: ActionContext,
     *,
@@ -802,6 +822,7 @@ async def call_connection(
     body: Any = None,
     headers: dict[str, str] | None = None,
     action: str,
+    timeout: float | None = None,
 ) -> dict[str, Any]:
     """One authenticated HTTP call through a stored connection.
 
@@ -828,7 +849,7 @@ async def call_connection(
 
     import httpx
 
-    async with httpx.AsyncClient(timeout=WEBHOOK_TIMEOUT_SECONDS) as client:
+    async with httpx.AsyncClient(timeout=timeout if timeout is not None else WEBHOOK_TIMEOUT_SECONDS) as client:
         resp = await client.request(method, str(target), headers=sent, json=body if body is not None else None)
     try:
         parsed_body: Any = resp.json()
@@ -867,6 +888,7 @@ class HttpRequest:
             body=body,
             headers=headers,
             action="http_request",
+            timeout=_outbound_timeout(ctx.config.get("timeout_seconds")),
         )
 
     def simulate(self, ctx: ActionContext) -> dict[str, Any]:

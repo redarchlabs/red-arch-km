@@ -41,6 +41,9 @@ interface ViewRuntimeProps {
 /** Runtime viewer: renders a view through the shared `FormRenderer`. Buttons run
  * workflows or navigate; embedded forms render inline. Shared by the normal
  * in-app viewer and the chrome-free kiosk route. */
+/** Ceiling for one inline manual run — matches the API's own outbound cap. */
+const RUN_TIMEOUT_MS = 300_000;
+
 export function ViewRuntime({ id, kiosk = false, token }: ViewRuntimeProps) {
   // An entity-bound view can target a specific record via `?record_id=` — its
   // fields prefill, and run_workflow buttons run against that record (so an
@@ -161,12 +164,22 @@ export function ViewRuntime({ id, kiosk = false, token }: ViewRuntimeProps) {
       // reference after.*) and `inputs` (manual-trigger workflows whose declared
       // inputs read inputs.*). The backend routes to the right one by trigger
       // type and drops undeclared keys, so sending both is safe.
-      const result = await runWorkflow(workflowId, {
-        operation: "update",
-        record_id: target,
-        after: inputs,
-        inputs,
-      });
+      const result = await runWorkflow(
+        workflowId,
+        {
+          operation: "update",
+          record_id: target,
+          after: inputs,
+          inputs,
+        },
+        // A manual run executes INLINE, so this request stays open for the whole workflow —
+        // not the length of an ordinary API call. The client default (30s) is far too short
+        // for a step that does real work: a robot presentation pre-renders minutes of speech
+        // before /perform answers, and the button reported "timeout of 30000ms exceeded" over
+        // a run that went on to succeed. Bounded rather than infinite so a genuinely wedged
+        // run still releases the button.
+        RUN_TIMEOUT_MS,
+      );
       // The run endpoint executes inline and reports the outcome — surface it
       // instead of the old fire-and-forget "Workflow started", which read as
       // "nothing happened" when a click actually did its job.

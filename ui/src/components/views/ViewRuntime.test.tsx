@@ -70,6 +70,22 @@ describe("ViewRuntime run feedback", () => {
     await waitFor(() => expect(getViewRender).toHaveBeenCalledTimes(2));
   });
 
+  it("gives a synchronous run far longer than the client's default timeout", async () => {
+    // A manual run executes INLINE: the request is open for as long as the workflow takes.
+    // A robot presentation pre-renders minutes of speech before its one step returns — well
+    // past the 30s client default, which surfaced as "timeout of 30000ms exceeded" on a run
+    // that was in fact succeeding.
+    getViewRender.mockResolvedValue(makeRender("initial"));
+    runWorkflow.mockResolvedValue({ run_id: "r1", status: "succeeded", error: null });
+
+    rtlRender(<ViewRuntime id="v1" />);
+    fireEvent.click(await screen.findByRole("button", { name: "trigger-run" }));
+
+    await waitFor(() => expect(runWorkflow).toHaveBeenCalled());
+    const timeoutMs = runWorkflow.mock.calls[0][2];
+    expect(timeoutMs).toBeGreaterThanOrEqual(180_000);
+  });
+
   it("surfaces a failed run as an error", async () => {
     getViewRender.mockResolvedValue(makeRender("initial"));
     runWorkflow.mockResolvedValue({ run_id: "r1", status: "failed", error: "learner not found" });

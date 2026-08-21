@@ -248,6 +248,11 @@ against the **trusted-hosts allowlist**.
 
 Because it's real I/O, **Retry on failure** and **Continue on failure** matter
 here.
+
+The call waits **10 seconds** for a response by default. If the far end does real
+work before it answers — the robot bridge renders an entire \`/perform\` timeline to
+speech before returning — set **\`timeout_seconds\`** on the step (max 300), or the
+step fails while the work carries on regardless.
 `,
   ),
   log: topic(

@@ -661,6 +661,14 @@ TOOLS: list[dict[str, Any]] = [
                                     "type": "object",
                                     "description": "http_request: optional request headers.",
                                 },
+                                "timeout_seconds": {
+                                    "type": "number",
+                                    "description": (
+                                        "http_request: seconds to wait for a response (default 10, max 300). "
+                                        "Raise it for a connector that does real work before answering — the "
+                                        "robot bridge renders a whole /perform timeline to speech first."
+                                    ),
+                                },
                                 "to": {
                                     "type": "string",
                                     "description": "send_email: recipient address (or an after.<slug> reference).",
