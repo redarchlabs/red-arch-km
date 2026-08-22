@@ -93,7 +93,7 @@ services:
       dockerfile: docker/ui.Dockerfile
     container_name: km2_ui
     ports:
-      - "3000:3000"
+      - "3002:3002"
     environment:
       # Point UI to Go API
       NEXT_PUBLIC_API_URL: http://localhost:8000
@@ -103,7 +103,7 @@ services:
     healthcheck:
       test:
         - "CMD-SHELL"
-        - "node -e \"require('http').get('http://localhost:3000', r => process.exit(r.statusCode < 500 ? 0 : 1)).on('error', () => process.exit(1))\""
+        - "node -e \"require('http').get('http://localhost:3002', r => process.exit(r.statusCode < 500 ? 0 : 1)).on('error', () => process.exit(1))\""
       interval: 10s
       timeout: 5s
       retries: 5

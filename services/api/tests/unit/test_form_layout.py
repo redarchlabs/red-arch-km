@@ -482,7 +482,7 @@ def test_button_copy_link_href_and_host_scheme_guarded():
                     "action": {
                         "kind": "copy_link",
                         "href": "/views/{quiz_view_slug}/kiosk?record_id={id}",
-                        "host": "http://192.168.0.30:3000",
+                        "host": "http://192.168.1.50:3002",
                         "success_message": "Link copied",
                     },
                 }
@@ -834,7 +834,7 @@ def test_qr_code_is_unbound_but_declares_its_url_tokens(ids, fields_by_entity, r
                 {
                     "type": "qr_code",
                     "url": "/views/abc/kiosk?record_id={id}&crew={name}",
-                    "host": "http://192.168.0.30:3000",
+                    "host": "http://192.168.1.50:3002",
                     "label": "Connect the iPad",
                 }
             ],

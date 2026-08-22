@@ -43,7 +43,7 @@ services are the live/authoritative implementation; a Go rewrite exists in
         ┌─────▼─────┐             ┌──────▼──────┐
         │    ui     │  Bearer JWT │     api     │  FastAPI, :8000
         │ Next.js   │────────────▶│  (Clerk)    │
-        │  :3000    │             └──┬───────┬──┘
+        │  :3002    │             └──┬───────┬──┘
         └───────────┘                │       │  X-Internal-API-Key
                                      │       └──────────────┐
                      ┌───────────────┤                      │
@@ -64,7 +64,7 @@ services are the live/authoritative implementation; a Go rewrite exists in
 | `brain-api`   | `ghcr.io/redarchlabs/km2-brain-api:2.0.0` | 8020 | Ingest, embeddings, vector search, knowledge graph, RAG chat |
 | `worker`      | `ghcr.io/redarchlabs/km2-worker:2.0.0`  | —    | Celery worker: document processing, workflow/agent execution |
 | `celery-beat` | `ghcr.io/redarchlabs/km2-worker:2.0.0`  | —    | Celery Beat scheduler (same image, `beat` command) |
-| `ui`          | `ghcr.io/redarchlabs/km2-ui:2.0.0`      | 3000 | Next.js frontend |
+| `ui`          | `ghcr.io/redarchlabs/km2-ui:2.0.0`      | 3002 | Next.js frontend |
 | `postgres`    | `postgres:18`                           | 5432 | Primary store with Row-Level Security |
 | `redis`       | `redis:7.4-alpine`                      | 6379 | Celery broker/result backend + rate-limit counters |
 | `qdrant`      | `qdrant/qdrant:v1.12.4`                  | 6333 | Vector store (chunks/documents collections) |
@@ -205,7 +205,7 @@ var (`env_prefix="API_"` in `config.py`).
 |----------|---------|----------|
 | `API_SECRET_KEY` | JWT signing secret (random) | **Yes** |
 | `API_DEBUG` | Debug mode. Default `false` | No |
-| `API_CORS_ORIGINS` | JSON array of allowed origins. Default `["http://localhost:3000"]` | No (default) |
+| `API_CORS_ORIGINS` | JSON array of allowed origins. Default `["http://localhost:3002"]` | No (default) |
 | `API_RATE_LIMIT_PER_MINUTE` | Per-session request quota. Default `60` | No (default) |
 | `API_PUBLIC_URL` | Public URL of this API; builds the MCP OAuth redirect URI. Default `http://localhost:8000` | Yes (MCP) |
 | `API_BRAIN_API_URL` | Where the API reaches brain-api. Default `http://localhost:8020`; set `http://brain-api:8020` in-cluster | Yes (in-cluster) |
@@ -597,7 +597,7 @@ curl -X POST -H "X-Internal-API-Key: ${INTERNAL_API_KEY}" \
 |---------|------------------|-------|
 | `api` | `GET /healthz` (also `GET /readyz`) | `/readyz` currently returns a static `ok` (real dependency probes deferred) |
 | `brain-api` | `GET /healthz` | On port 8020 |
-| `ui` | Node HTTP GET on `:3000` | `node:22-alpine` ships no curl; the healthcheck uses node's `http` module |
+| `ui` | Node HTTP GET on `:3002` | `node:22-alpine` ships no curl; the healthcheck uses node's `http` module |
 | `postgres` | `pg_isready` | |
 | `redis` | `redis-cli ping` | |
 | `neo4j` | TCP connect to Bolt `:7687` | Lightweight `/dev/tcp` check — avoids cold-starting a cypher-shell JVM each interval |
@@ -659,7 +659,7 @@ re-ingest documents to rebuild Qdrant/Neo4j (or restore their snapshots).
 ## TLS and ingress
 
 The compose stacks do not include a reverse proxy — terminate TLS at an external
-proxy (nginx, a cloud load balancer, etc.) that routes `/` to `ui:3000` and `/api/`
+proxy (nginx, a cloud load balancer, etc.) that routes `/` to `ui:3002` and `/api/`
 to `api:8000`. Only the `ui` service publishes a port in prod; keep `api`,
 `brain-api`, and the datastores on the internal `km2_network` and unexposed. Example
 nginx location split:
@@ -673,7 +673,7 @@ map $http_upgrade $connection_upgrade {
     ''      close;
 }
 
-location /     { proxy_pass http://ui:3000;  proxy_set_header Host $host; }
+location /     { proxy_pass http://ui:3002;  proxy_set_header Host $host; }
 
 location /api/ {
     proxy_pass http://api:8000/;

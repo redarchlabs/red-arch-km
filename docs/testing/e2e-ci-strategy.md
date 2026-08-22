@@ -53,8 +53,8 @@ automates the same recipe:
 4. Write `ui/.env.local` from CI **secrets** (never committed — see below).
 5. `bunx playwright install --with-deps` then run the scoped specs with
    `E2E_WITH_BACKEND=1` and `E2E_TEST_SECRET` == the server's `API_E2E_TEST_SECRET`.
-   Playwright's `webServer` starts its own `next dev` on `:3000` (reads
-   `ui/.env.local`); the compose `ui` container is **not** started (port `:3000`
+   Playwright's `webServer` starts its own `next dev` on `:3002` (reads
+   `ui/.env.local`); the compose `ui` container is **not** started (port `:3002`
    collision — see the recipe doc's "Port collision" note).
 
 ## SCOPE of the CI job

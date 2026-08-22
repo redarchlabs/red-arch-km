@@ -8,7 +8,7 @@ import { expect, test } from "./fixtures";
  * services/api/scripts/seed_e2e.py and docs/testing/e2e-seeded-auth.md).
  *
  * These specs drive the Python API DIRECTLY (via the `e2eState.apiUrl` origin,
- * :8000), NOT the UI origin (:3000). The UI has no `/api` rewrite or route
+ * :8000), NOT the UI origin (:3002). The UI has no `/api` rewrite or route
  * handlers, so hitting `baseURL` 404s and never reaches the API (RED-10 fix).
  * Every org-scoped endpoint additionally requires the `X-Org-ID` header
  * (api.dependencies.get_org_id), so we pass `e2eState.orgId` on each request.

@@ -77,7 +77,7 @@ calls Clerk `signOut({ redirectUrl: "/login" })` after clearing the current-org 
 ### 2.2 Token → API
 
 Clerk session tokens are short-lived (~60s) and auto-refreshed by the Clerk SDK; the
-UI attaches a fresh one on every call. Because the UI (`:3000`) and API (`:8000`) are
+UI attaches a fresh one on every call. Because the UI (`:3002`) and API (`:8000`) are
 cross-origin, the token travels as a bearer header, not a cookie:
 
 - `ui/src/lib/auth/clerk.ts` `getToken()` reads `window.Clerk.session.getToken(...)`,

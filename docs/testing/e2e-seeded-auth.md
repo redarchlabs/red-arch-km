@@ -77,7 +77,7 @@ E2E_TEST_SECRET="<same value as API_E2E_TEST_SECRET>" \
 | `E2E_WITH_BACKEND` | Un-skips the seeded specs; enables `global-setup.ts` | (unset) |
 | `E2E_TEST_SECRET` | Must match server `API_E2E_TEST_SECRET` | (required) |
 | `E2E_API_URL` | API base for `global-setup.ts` | `http://localhost:8000` |
-| `E2E_UI_URL` | UI base recorded into `.state.json` | `http://localhost:3000` |
+| `E2E_UI_URL` | UI base recorded into `.state.json` | `http://localhost:3002` |
 | `E2E_TEST_USER` | Admin identity for global setup | `e2e_admin:e2e_admin@e2e.local` |
 | `BASE_URL` | If set, Playwright targets it and skips `next dev` | (unset -> starts dev) |
 
@@ -93,15 +93,15 @@ read it; org-scoping via an `X-Org-ID` header is a RED-9 follow-up.)
 
 - **✅ RESOLVED IN T3 (commit `49dd674`) — the blocker below is historical.**
   T3 repointed every `request.*` call in `auth.spec.ts` and `rbac.spec.ts` from
-  `baseURL` (`:3000`) to `e2eState.apiUrl` (`:8000`), eliminating the 404
+  `baseURL` (`:3002`) to `e2eState.apiUrl` (`:8000`), eliminating the 404
   phantom-route tautology. The specs now genuinely exercise the Python API, so
   the T3 green result (auth 8/8, rbac 10/10) is a real correctness signal, not a
   vacuous one. The original note is kept below for history.
 - **⚠ (HISTORICAL) KNOWN T3 BLOCKER — request-based specs target the UI origin, not the API.**
   `auth.spec.ts` and `rbac.spec.ts` make their `request.get/post(...)` calls
-  against `baseURL` (`playwright.config.ts` -> `http://localhost:3000`, the UI),
+  against `baseURL` (`playwright.config.ts` -> `http://localhost:3002`, the UI),
   but `ui/next.config.ts` has **no `/api` rewrite** and there are no
-  `app/api/*` route handlers — so `http://localhost:3000/api/...` is served by
+  `app/api/*` route handlers — so `http://localhost:3002/api/...` is served by
   `next dev` and **404s** instead of reaching the Python API on `:8000`. Under
   this recipe those specs' positive assertions (e.g. admin `expect(res.ok())`)
   will fail, and the `[403,404]` deny-pairs pass for the *wrong* reason
@@ -111,13 +111,13 @@ read it; org-scoping via an `X-Org-ID` header is a RED-9 follow-up.)
   `/api/:path* -> http://localhost:8000/api/:path*`, or (b) point the
   request-based specs at the API origin (`E2E_API_URL` / `e2eState.apiUrl`)
   instead of `baseURL`. The browser/Page-Object specs (documents-full,
-  folders-full, brain-api, chat-rag) correctly drive the UI on `:3000` and are
+  folders-full, brain-api, chat-rag) correctly drive the UI on `:3002` and are
   unaffected.
 - **Port collision:** do NOT also start the compose `ui` container (`make dev`
-  brings it up on `:3000`) while running `npx playwright test` — Playwright's
-  `webServer` starts its own `next dev` on `:3000` and the two collide. For the
-  local recipe run infra + API only and let Playwright own `:3000` (or set
-  `BASE_URL=http://localhost:3000` against an already-running UI to skip
+  brings it up on `:3002`) while running `npx playwright test` — Playwright's
+  `webServer` starts its own `next dev` on `:3002` and the two collide. For the
+  local recipe run infra + API only and let Playwright own `:3002` (or set
+  `BASE_URL=http://localhost:3002` against an already-running UI to skip
   Playwright's `webServer`).
 - **Runtime protocol:** the actual full seeded run (T3) executes in the MAIN
   worktree, not an isolated worktree (isolated worktrees can't fetch/seed

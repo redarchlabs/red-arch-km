@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 
 pytestmark = pytest.mark.unit
 
-_ALLOWED = ["http://localhost:3000"]
+_ALLOWED = ["http://localhost:3002"]
 
 
 def _app() -> FastAPI:
@@ -41,11 +41,11 @@ def _app() -> FastAPI:
 def test_unhandled_500_carries_cors_headers_for_allowed_origin() -> None:
     # raise_server_exceptions=False so the handler runs instead of re-raising.
     client = TestClient(_app(), raise_server_exceptions=False)
-    resp = client.get("/boom", headers={"Origin": "http://localhost:3000"})
+    resp = client.get("/boom", headers={"Origin": "http://localhost:3002"})
 
     assert resp.status_code == 500
     assert resp.json() == {"detail": "Internal server error"}
-    assert resp.headers["access-control-allow-origin"] == "http://localhost:3000"
+    assert resp.headers["access-control-allow-origin"] == "http://localhost:3002"
     assert resp.headers["access-control-allow-credentials"] == "true"
 
 

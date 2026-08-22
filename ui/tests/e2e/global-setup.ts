@@ -11,7 +11,7 @@ import * as path from "node:path";
  *
  * Required env vars when E2E_WITH_BACKEND=1:
  *   - E2E_API_URL    (default http://localhost:8000)
- *   - E2E_UI_URL     (default http://localhost:3000)
+ *   - E2E_UI_URL     (default http://localhost:3002)
  *   - E2E_TEST_SECRET (must match API_E2E_TEST_SECRET server-side)
  *   - E2E_TEST_USER  (default "e2e_admin:e2e_admin@e2e.local")
  */
@@ -21,7 +21,7 @@ async function globalSetup(_config: FullConfig) {
   }
 
   const apiUrl = process.env.E2E_API_URL ?? "http://localhost:8000";
-  const uiUrl = process.env.E2E_UI_URL ?? "http://localhost:3000";
+  const uiUrl = process.env.E2E_UI_URL ?? "http://localhost:3002";
   const secret = process.env.E2E_TEST_SECRET ?? "";
   const testUser = process.env.E2E_TEST_USER ?? "e2e_admin:e2e_admin@e2e.local";
 

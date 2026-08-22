@@ -22,7 +22,7 @@ from jose import JWTError, jwk, jwt
 
 ISSUER = "https://clerk.example.com"
 KID = "test-key-id"
-ALLOWED = ["http://localhost:3000"]
+ALLOWED = ["http://localhost:3002"]
 
 
 def _priv_pem(key: rsa.RSAPrivateKey) -> str:
@@ -67,7 +67,7 @@ def _sign(key: rsa.RSAPrivateKey, **overrides: Any) -> str:
     claims: dict[str, Any] = {
         "sub": "user_2abc",
         "iss": ISSUER,
-        "azp": "http://localhost:3000",
+        "azp": "http://localhost:3002",
         "email": "alice@example.com",
         "username": "alice",
         "exp": int(time.time()) + 3600,
@@ -145,7 +145,7 @@ def _attack_claims() -> dict[str, Any]:
     return {
         "sub": "user_2abc",
         "iss": ISSUER,
-        "azp": "http://localhost:3000",
+        "azp": "http://localhost:3002",
         "exp": int(time.time()) + 3600,
         "iat": int(time.time()),
     }
@@ -197,11 +197,11 @@ async def test_get_current_user_rejects_missing_sub(
 
     async def _fake_verify(token: str, settings: Settings) -> dict[str, Any]:
         # Valid-looking claims but no `sub`.
-        return {"azp": "http://localhost:3000", "email": "alice@example.com"}
+        return {"azp": "http://localhost:3002", "email": "alice@example.com"}
 
     monkeypatch.setattr(dependencies, "_verify_bearer_token", _fake_verify)
 
-    settings = Settings(secret_key="x", clerk_jwt_issuer=ISSUER, clerk_allowed_azp="http://localhost:3000")
+    settings = Settings(secret_key="x", clerk_jwt_issuer=ISSUER, clerk_allowed_azp="http://localhost:3002")
     creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials="token")
 
     with pytest.raises(HTTPException) as exc:
@@ -220,7 +220,7 @@ async def test_get_current_user_rejects_missing_credentials() -> None:
     from api.config import Settings
     from fastapi import HTTPException
 
-    settings = Settings(secret_key="x", clerk_jwt_issuer=ISSUER, clerk_allowed_azp="http://localhost:3000")
+    settings = Settings(secret_key="x", clerk_jwt_issuer=ISSUER, clerk_allowed_azp="http://localhost:3002")
 
     with pytest.raises(HTTPException) as exc:
         await dependencies.get_current_user(settings=settings, credentials=None)
@@ -239,7 +239,7 @@ async def test_verify_bearer_rejects_unknown_issuer(rsa_key: rsa.RSAPrivateKey) 
     from api.auth import dependencies
     from api.config import Settings
 
-    settings = Settings(secret_key="x", clerk_jwt_issuer=ISSUER, clerk_allowed_azp="http://localhost:3000")
+    settings = Settings(secret_key="x", clerk_jwt_issuer=ISSUER, clerk_allowed_azp="http://localhost:3002")
     token = _sign(rsa_key, iss="https://attacker.example.com")
 
     with pytest.raises(JWTError, match="does not match the configured auth provider"):
@@ -264,7 +264,7 @@ async def test_get_current_user_handles_jwks_outage(
 
     monkeypatch.setattr(clerk, "get_clerk_jwks", _boom)
 
-    settings = Settings(secret_key="x", clerk_jwt_issuer=ISSUER, clerk_allowed_azp="http://localhost:3000")
+    settings = Settings(secret_key="x", clerk_jwt_issuer=ISSUER, clerk_allowed_azp="http://localhost:3002")
     creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials=_sign(rsa_key))
 
     with pytest.raises(HTTPException) as exc:
@@ -281,5 +281,5 @@ def test_config_requires_azp_when_clerk_enabled() -> None:
     with pytest.raises(ValidationError):
         Settings(secret_key="x", clerk_jwt_issuer=ISSUER, clerk_allowed_azp="")
     # With an allowlist it constructs fine.
-    s = Settings(secret_key="x", clerk_jwt_issuer=ISSUER, clerk_allowed_azp="http://localhost:3000")
-    assert s.clerk_allowed_azp_list == ["http://localhost:3000"]
+    s = Settings(secret_key="x", clerk_jwt_issuer=ISSUER, clerk_allowed_azp="http://localhost:3002")
+    assert s.clerk_allowed_azp_list == ["http://localhost:3002"]

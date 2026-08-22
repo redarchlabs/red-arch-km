@@ -233,7 +233,7 @@ kiosk view.
   address **this page** was opened at. Open the console at \`localhost\` and the
   code will say \`localhost\`, which means *the tablet* to the tablet — it scans
   fine and then fails. Set Host to the machine's network address (e.g.
-  \`http://192.168.0.30:3000\`) and the code works no matter how you opened the
+  \`http://<your-lan-ip>:3002\`) and the code works no matter how you opened the
   console. The card warns you when the link is only reachable locally.
 - **Show as** — a button that opens a popup (good for a console that stays open
   all day), or always on screen.

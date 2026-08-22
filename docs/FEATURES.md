@@ -28,7 +28,7 @@ entities, forms, views, dashboards, reports), a BPMN workflow engine, an AI agen
 org, and enterprise controls (fine-grained RBAC, org API keys, release promotion,
 site admin). It runs as four authoritative Python/TypeScript services — `api`
 (port 8000), `brain_api` (port 8020), `worker` (Celery), and `ui` (Next.js, port
-3000). A Go rewrite of the three backend services is in progress and not yet
+3002). A Go rewrite of the three backend services is in progress and not yet
 authoritative; see [ARCHITECTURE.md](ARCHITECTURE.md) §"Go Migration Status".
 
 ## Knowledge & RAG

@@ -55,7 +55,7 @@ open http://localhost:3002
 | **api** | 8000 | FastAPI REST API (auth, RBAC, entities, forms/views, workflows, agents, change management, `/api/v1`) |
 | **brain-api** | 8020 | Knowledge brain (ingest, vector search, RAG chat, knowledge graph) |
 | **worker** | — | Celery workers + beat (document processing, workflow outbox, agent schedules) |
-| **ui** | 3000 | Next.js frontend |
+| **ui** | 3002 | Next.js frontend |
 
 **Infrastructure:** PostgreSQL 18 (with RLS), Qdrant, Neo4j, Redis, MinIO
 

@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     # App-scoped settings (read from API_*)
     debug: bool = Field(default=False)
     secret_key: SecretStr = Field(description="JWT signing secret")
-    cors_origins: list[str] = Field(default=["http://localhost:3000"])
+    cors_origins: list[str] = Field(default=["http://localhost:3002"])
     rate_limit_per_minute: int = Field(default=60)
 
     # Enterprise API (/api/v1, authenticated by org API keys).
@@ -233,7 +233,7 @@ class Settings(BaseSettings):
 
     # Public base URL for user-facing links the backend mints (e.g. intake-form
     # links emailed to external users). Points at the Next.js app, not the API.
-    public_base_url: str = Field(default="http://localhost:3000", validation_alias="PUBLIC_BASE_URL")
+    public_base_url: str = Field(default="http://localhost:3002", validation_alias="PUBLIC_BASE_URL")
 
     # Outbound email (SMTP) for intake-form invitations. Email is disabled unless
     # smtp_host and smtp_from are both set, so dev/test never tries to send.

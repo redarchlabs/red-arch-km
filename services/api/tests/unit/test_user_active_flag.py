@@ -39,7 +39,7 @@ def _settings(**overrides: Any) -> Settings:
     defaults: dict[str, Any] = {
         "secret_key": "x",
         "clerk_jwt_issuer": ISSUER,
-        "clerk_allowed_azp": "http://localhost:3000",
+        "clerk_allowed_azp": "http://localhost:3002",
     }
     defaults.update(overrides)
     return Settings(**defaults)

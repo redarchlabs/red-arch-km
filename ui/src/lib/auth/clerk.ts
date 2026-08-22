@@ -4,7 +4,7 @@
  * that run outside React read the global Clerk instance that `<ClerkProvider>`
  * mounts on `window`.
  *
- * API calls are cross-origin (:3000 → :8000), so Clerk's same-origin session
+ * API calls are cross-origin (:3002 → :8000), so Clerk's same-origin session
  * cookie is insufficient — we must attach `Authorization: Bearer <getToken()>`.
  * Clerk session tokens are short-lived (~60s) and `getToken()` transparently
  * refreshes them, so there is no manual refresh step.

@@ -18,7 +18,7 @@ const apiClient: AxiosInstance = axios.create({
 
 apiClient.interceptors.request.use(async (config) => {
   // Clerk's getToken() transparently refreshes the short-lived session JWT.
-  // Cross-origin (:3000 → :8000), so the Bearer header is required.
+  // Cross-origin (:3002 → :8000), so the Bearer header is required.
   const token = await getToken();
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
