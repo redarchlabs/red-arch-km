@@ -18,8 +18,14 @@ RUN = uuid.UUID("11111111-2222-3333-4444-555555555555")
 
 def _ctx(**kw) -> ActionContext:
     return ActionContext(
-        org_id=RUN, record_id=None, before=None, after=None, config={},
-        trigger_repo=None, repo_for_slug=None, **kw,
+        org_id=RUN,
+        record_id=None,
+        before=None,
+        after=None,
+        config={},
+        trigger_repo=None,
+        repo_for_slug=None,
+        **kw,
     )
 
 
@@ -37,9 +43,7 @@ def test_body_templates_an_idempotency_key() -> None:
 
 
 def test_whitespace_inside_the_token_is_tolerated() -> None:
-    rendered = _resolve_value_map(
-        {"k": "{{ run.id }}:{{ node.id }}"}, _trigger_context(_ctx(run_id=RUN, node_id="n1"))
-    )
+    rendered = _resolve_value_map({"k": "{{ run.id }}:{{ node.id }}"}, _trigger_context(_ctx(run_id=RUN, node_id="n1")))
     assert rendered["k"] == f"{RUN}:n1"
 
 
@@ -47,6 +51,7 @@ def test_key_is_stable_across_attempts_but_differs_per_node_and_run() -> None:
     """The whole contract in one assertion set: a retry of the same node in the
     same run re-templates to the SAME key (so it deduplicates), while a different
     node, or the same node in a later run, does not (so it still speaks)."""
+
     def key(run_id, node_id):
         return _resolve_value_map(
             {"k": "{{run.id}}:{{node.id}}"}, _trigger_context(_ctx(run_id=run_id, node_id=node_id))
