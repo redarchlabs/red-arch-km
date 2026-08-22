@@ -1,4 +1,4 @@
-import { getToken } from "@/lib/auth/clerk";
+import { authHeaders } from "@/lib/auth/headers";
 
 import apiClient from "./client";
 
@@ -142,13 +142,13 @@ export async function* streamAgentChat(
   const orgId =
     typeof window !== "undefined" ? localStorage.getItem("redarch:currentOrgId") : null;
 
-  const token = await getToken();
+  const auth = await authHeaders();
 
   const response = await fetch(`${baseUrl}/search/chat/agent/stream`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...auth,
       ...(orgId ? { "X-Org-ID": orgId } : {}),
     },
     body: JSON.stringify({
@@ -225,13 +225,13 @@ export async function* streamChat(
   const orgId =
     typeof window !== "undefined" ? localStorage.getItem("redarch:currentOrgId") : null;
 
-  const token = await getToken();
+  const auth = await authHeaders();
 
   const response = await fetch(`${baseUrl}/search/chat/stream`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...auth,
       ...(orgId ? { "X-Org-ID": orgId } : {}),
     },
     body: JSON.stringify({

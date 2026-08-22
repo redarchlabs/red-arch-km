@@ -1,4 +1,4 @@
-import { getToken } from "@/lib/auth/clerk";
+import { authHeaders } from "@/lib/auth/headers";
 
 import type { RunSnapshot } from "@/components/workflows/runOverlay";
 
@@ -50,12 +50,12 @@ export async function* streamRunTokens(
 ): AsyncGenerator<RunTokenEvent> {
   const baseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
   const orgId = typeof window !== "undefined" ? localStorage.getItem("redarch:currentOrgId") : null;
-  const token = await getToken();
+  const auth = await authHeaders();
 
   const response = await fetch(`${baseUrl}/workflows/runs/live/${streamToken}`, {
     method: "GET",
     headers: {
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...auth,
       ...(orgId ? { "X-Org-ID": orgId } : {}),
     },
     signal: options.signal,
@@ -114,12 +114,12 @@ export async function* streamRun(
 ): AsyncGenerator<RunStreamEvent> {
   const baseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
   const orgId = typeof window !== "undefined" ? localStorage.getItem("redarch:currentOrgId") : null;
-  const token = await getToken();
+  const auth = await authHeaders();
 
   const response = await fetch(`${baseUrl}/workflows/runs/${runId}/stream`, {
     method: "GET",
     headers: {
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...auth,
       ...(orgId ? { "X-Org-ID": orgId } : {}),
     },
     signal: options.signal,

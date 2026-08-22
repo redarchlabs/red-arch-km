@@ -7,7 +7,7 @@
  */
 
 import { pendingWorkChanged } from "@/lib/agents/pendingWork";
-import { getToken } from "@/lib/auth/clerk";
+import { authHeaders } from "@/lib/auth/headers";
 
 import apiClient from "./client";
 
@@ -364,13 +364,13 @@ export async function* streamAgentConsole(
     typeof window !== "undefined"
       ? localStorage.getItem("redarch:currentOrgId")
       : null;
-  const token = await getToken();
+  const auth = await authHeaders();
 
   const response = await fetch(`${baseUrl}/agents/${agentId}/console/stream`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...auth,
       ...(orgId ? { "X-Org-ID": orgId } : {}),
     },
     body: JSON.stringify({ messages, document_ids: options.documentIds ?? [] }),

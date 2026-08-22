@@ -4,7 +4,7 @@
 
 import axios, { type AxiosInstance } from "axios";
 
-import { getToken } from "@/lib/auth/clerk";
+import { authHeaders } from "@/lib/auth/headers";
 
 const STORAGE_KEY = "redarch:currentOrgId";
 
@@ -17,11 +17,11 @@ const apiClient: AxiosInstance = axios.create({
 });
 
 apiClient.interceptors.request.use(async (config) => {
-  // Clerk's getToken() transparently refreshes the short-lived session JWT.
-  // Cross-origin (:3002 → :8000), so the Bearer header is required.
-  const token = await getToken();
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
+  // Cross-origin (:3002 → :8000), so a same-origin session cookie is no use and the
+  // credentials must ride on headers. Normally a Clerk bearer token, which getToken()
+  // transparently refreshes; under offline bypass, the API's test-user pair instead.
+  for (const [name, value] of Object.entries(await authHeaders())) {
+    config.headers[name] = value;
   }
 
   // Attach org scope for endpoints that require it. A per-request X-Org-ID

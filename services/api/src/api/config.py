@@ -334,6 +334,29 @@ class Settings(BaseSettings):
             )
         return self
 
+    @model_validator(mode="after")
+    def _warn_e2e_test_mode(self) -> "Settings":
+        """Warn (don't fail) when the auth bypass is on outside debug.
+
+        ``e2e_test_mode`` lets anyone holding ``E2E_TEST_SECRET`` authenticate as ANY user
+        via ``X-Test-User``, with no token from the identity provider — so it being on
+        outside local dev is worth a line in the logs. The UI's offline bypass mode depends
+        on this door, which is a legitimate use, but it does not make the exposure smaller.
+
+        Deliberately a warning and NOT a hard failure: deployments already exist that run
+        with this enabled, and refusing to start would take them down on their next deploy
+        rather than telling anyone the flag is the problem. Follows
+        :meth:`_warn_org_encryption_key` above.
+        """
+        if self.e2e_test_mode and not self.debug:
+            logger.warning(
+                "E2E_TEST_MODE is enabled with DEBUG off: anyone holding E2E_TEST_SECRET "
+                "can authenticate as any user via the X-Test-User header, bypassing the "
+                "identity provider entirely. Disable it unless this deployment is "
+                "deliberately serving the offline UI bypass."
+            )
+        return self
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

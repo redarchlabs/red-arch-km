@@ -1,4 +1,4 @@
-import { getToken } from "@/lib/auth/clerk";
+import { authHeaders } from "@/lib/auth/headers";
 
 /** Events emitted by the in-API configuration agent over SSE. */
 export type AgentEvent =
@@ -25,13 +25,13 @@ export async function* streamConfigAgent(
   const baseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
   const orgId =
     typeof window !== "undefined" ? localStorage.getItem("redarch:currentOrgId") : null;
-  const token = await getToken();
+  const auth = await authHeaders();
 
   const response = await fetch(`${baseUrl}/agent/chat/stream`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...auth,
       ...(orgId ? { "X-Org-ID": orgId } : {}),
     },
     body: JSON.stringify({ messages }),
