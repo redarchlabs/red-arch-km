@@ -676,8 +676,23 @@ class Tab(BaseModel):
 
 
 class TabGroupElement(_Element):
+    """Tabs: one child list visible at a time, chosen from a tab strip.
+
+    Only the active tab's children are mounted, so a polling ``live_value`` or a
+    ``report`` sitting in a tab nobody has opened costs nothing until it is."""
+
     type: Literal["tab_group"] = "tab_group"
     tabs: list[Tab] = Field(default_factory=list)
+    # Which tab is selected on first render (0-based). Clamped at render time, so
+    # deleting a tab can never leave a saved screen pointing past the end.
+    default_tab: int = 0
+
+    @field_validator("default_tab")
+    @classmethod
+    def _default_tab_in_range(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError("default_tab must be 0 or greater")
+        return v
 
 
 class PanelElement(_Element):
@@ -716,8 +731,30 @@ class AccordionPane(BaseModel):
 
 
 class AccordionElement(_Element):
+    """Stacked collapsible panes — tabs' sibling, for when the reader wants to see
+    two groups side by side, or none at all.
+
+    Like ``tab_group``, a closed pane's children are unmounted rather than hidden."""
+
     type: Literal["accordion"] = "accordion"
     panes: list[AccordionPane] = Field(default_factory=list)
+    # Let several panes stand open at once. The default keeps panes mutually
+    # exclusive (opening one closes the rest), which is the tidier reading order
+    # for a long screen; a control panel usually wants ``True``.
+    multi: bool = False
+    # Which panes start open, 0-based. ``[0]`` (the default) opens the first pane,
+    # matching how accordions behaved before this was authorable; ``[]`` starts the
+    # whole stack collapsed. Out-of-range indices are dropped at render, so deleting
+    # a pane cannot strand the screen on a pane that no longer exists. With
+    # ``multi=False`` only the first entry is honoured.
+    default_open: list[int] = Field(default_factory=lambda: [0])
+
+    @field_validator("default_open")
+    @classmethod
+    def _default_open_in_range(cls, v: list[int]) -> list[int]:
+        if any(i < 0 for i in v):
+            raise ValueError("default_open indices must be 0 or greater")
+        return v
 
 
 class ColumnDef(BaseModel):

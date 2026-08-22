@@ -351,21 +351,34 @@ Reach for this when a child needs more than a row of columns.
   tab_group: topic(
     "Tabs element",
     `
-Splits content into **tabs** the user switches between — good for breaking a long
-form into digestible sections.
+Splits content into **tabs** the user switches between — the usual cure for a
+console that has grown into one long scroll.
 
 - **Add tab** — create a new tab and name it.
-- Each tab holds its own nested elements.
+- **Opens on** — which tab is selected when the screen first loads.
+- Each tab holds its own nested elements, and nests further (a tab can hold an
+  accordion, cards, columns).
+
+Only the open tab is rendered. A \`live_value\`, \`report\` or \`chat\` parked in a
+tab nobody has opened does no polling and costs nothing until someone opens it —
+so tabs make a heavy screen cheaper, not just tidier. The flip side: switching
+away and back re-mounts that tab, so anything unsaved in it starts over.
 `,
   ),
   accordion: topic(
     "Accordion element",
     `
-**Collapsible panes** stacked vertically — like tabs, but expandable, and handy
-for optional or advanced sections.
+**Collapsible panes** stacked vertically — tabs' sibling, for when the reader
+wants to see two groups at once, or none at all.
 
 - **Add pane** — create a collapsible section and name it.
-- Each pane holds its own nested elements.
+- **Let several panes stand open at once** — off keeps the panes mutually
+  exclusive (opening one closes the rest); on suits a control panel.
+- **Open at start** — which panes are open on load. Tick nothing to have the
+  whole stack start collapsed.
+- Clicking an open pane's header closes it.
+
+Like tabs, a closed pane isn't rendered at all.
 `,
   ),
   columns: topic(

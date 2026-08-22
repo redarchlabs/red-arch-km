@@ -151,7 +151,10 @@ function collectInputs(elements: FormElement[]): InputElement[] {
     for (const el of els) {
       if (el.type === "input") out.push(el);
       else if (el.type === "columns") el.columns.forEach((c) => walk(c.elements));
-      else if (el.type === "panel") walk(el.elements);
+      // `card` belongs here with `panel`: it is a pure layout container too, and
+      // leaving it out meant an input inside a dashboard tile never got its
+      // authored default. Mirrors `container_child_lists` on the server.
+      else if (el.type === "panel" || el.type === "card") walk(el.elements);
       else if (el.type === "tab_group") el.tabs.forEach((t) => walk(t.elements));
       else if (el.type === "accordion") el.panes.forEach((p) => walk(p.elements));
     }
@@ -2033,7 +2036,7 @@ export function FormRenderer({
 
   const [values, setValues] = useState<Values>(() => ({ ...render.values }));
   const [related, setRelated] = useState<Record<string, RelatedState>>(() => initRelated(render));
-  const [ui, setUi] = useState<Record<string, number | boolean>>({});
+  const [ui, setUi] = useState<Record<string, number | boolean | number[]>>({});
 
   // What the viewer has EDITED. A live refresh (a view's `config.refresh_ms` makes the
   // page re-fetch) re-seeds values from the server, and must never overwrite something
@@ -2224,13 +2227,28 @@ export function FormRenderer({
   // InputNode, LiveValueNode, EmbeddedForm) stay real components with stable identity.
   const renderList = (elements: FormElement[], scope: Scope) => (
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-12">
-      {elements.map((el, i) => (
-        <Fragment key={el.id ?? `${scope.keyPrefix}-${i}`}>{ElementNode({ el, scope })}</Fragment>
-      ))}
+      {elements.map((el, i) => {
+        // One key for both jobs: React's reconciliation and the `ui` slot that
+        // holds this element's open/active state. Deriving them separately let
+        // two id-less tab groups in the same scope share one slot and switch
+        // together.
+        const nodeKey = el.id ?? `${scope.keyPrefix}-${i}`;
+        return <Fragment key={nodeKey}>{ElementNode({ el, scope, nodeKey })}</Fragment>;
+      })}
     </div>
   );
 
-  function ElementNode({ el, scope }: { el: FormElement; scope: Scope }): ReactNode {
+  function ElementNode({
+    el,
+    scope,
+    nodeKey,
+  }: {
+    el: FormElement;
+    scope: Scope;
+    // Stable per-position identity, supplied by `renderList`. Only the stateful
+    // containers need it; everything else ignores it.
+    nodeKey?: string;
+  }): ReactNode {
     // Conditional visibility: an element with a `visible_when` expression renders
     // only when it evaluates truthy against the enclosing scope's values. `null`/
     // absent is always visible. Used to gate flow (e.g. show the quiz only when
@@ -2595,9 +2613,9 @@ export function FormRenderer({
         );
       }
       case "tab_group":
-        return TabGroupNode({ el, scope });
+        return TabGroupNode({ el, scope, nodeKey });
       case "accordion":
-        return AccordionNode({ el, scope });
+        return AccordionNode({ el, scope, nodeKey });
       case "section":
         return SectionNode({ el });
       case "table":
@@ -2781,18 +2799,52 @@ export function FormRenderer({
     );
   }
 
-  function TabGroupNode({ el, scope }: { el: Extract<FormElement, { type: "tab_group" }>; scope: Scope }) {
-    const key = el.id ?? "tabs";
-    const active = (ui[`tab-${key}`] as number) ?? 0;
+  function TabGroupNode({
+    el,
+    scope,
+    nodeKey,
+  }: {
+    el: Extract<FormElement, { type: "tab_group" }>;
+    scope: Scope;
+    nodeKey?: string;
+  }) {
+    const key = `tab-${nodeKey ?? el.id ?? "tabs"}`;
+    const last = el.tabs.length - 1;
+    if (last < 0) return null;
+    // Clamp both the authored default and the live selection: a screen saved with
+    // four tabs and later cut to two must not render a blank body.
+    const clamp = (n: number) => Math.min(Math.max(n, 0), last);
+    const active = clamp((ui[key] as number) ?? el.default_tab ?? 0);
+    const select = (i: number) => setUi((p) => ({ ...p, [key]: clamp(i) }));
+
     return (
       <div className="sm:col-span-12 space-y-3">
-        <div className="flex gap-1 border-b">
+        {/* Tabs are laid out in one scrolling row rather than wrapping: a control
+            panel can carry eight of them, and a second row of tabs reads as a
+            second, subordinate level of navigation that isn't there. */}
+        <div role="tablist" className="flex gap-1 overflow-x-auto border-b">
           {el.tabs.map((tab, i) => (
             <button
               key={i}
               type="button"
-              onClick={() => setUi((p) => ({ ...p, [`tab-${key}`]: i }))}
-              className={`px-3 py-1.5 text-sm font-medium ${
+              role="tab"
+              id={`${key}-tab-${i}`}
+              aria-selected={i === active}
+              aria-controls={`${key}-panel-${i}`}
+              // Only the selected tab is in the tab order; arrow keys move within
+              // the strip. That is the roving-tabindex pattern screen readers and
+              // keyboard users expect of a tablist.
+              tabIndex={i === active ? 0 : -1}
+              onClick={() => select(i)}
+              onKeyDown={(e) => {
+                if (e.key === "ArrowRight") select(active === last ? 0 : active + 1);
+                else if (e.key === "ArrowLeft") select(active === 0 ? last : active - 1);
+                else if (e.key === "Home") select(0);
+                else if (e.key === "End") select(last);
+                else return;
+                e.preventDefault();
+              }}
+              className={`whitespace-nowrap px-3 py-1.5 text-sm font-medium ${
                 i === active ? "border-b-2 border-primary" : "text-muted-foreground"
               }`}
             >
@@ -2800,29 +2852,68 @@ export function FormRenderer({
             </button>
           ))}
         </div>
-        {el.tabs[active] ? renderList(el.tabs[active].elements, scope) : null}
+        <div role="tabpanel" id={`${key}-panel-${active}`} aria-labelledby={`${key}-tab-${active}`}>
+          {renderList(el.tabs[active].elements, scope)}
+        </div>
       </div>
     );
   }
 
-  function AccordionNode({ el, scope }: { el: Extract<FormElement, { type: "accordion" }>; scope: Scope }) {
-    const key = el.id ?? "acc";
-    const open = (ui[`acc-${key}`] as number) ?? 0;
+  function AccordionNode({
+    el,
+    scope,
+    nodeKey,
+  }: {
+    el: Extract<FormElement, { type: "accordion" }>;
+    scope: Scope;
+    nodeKey?: string;
+  }) {
+    const key = `acc-${nodeKey ?? el.id ?? "acc"}`;
+    const multi = el.multi ?? false;
+    // Drop indices that no longer name a pane, so trimming the accordion can't
+    // leave it opening nothing.
+    const authored = (el.default_open ?? [0]).filter((i) => i >= 0 && i < el.panes.length);
+    const initial = multi ? authored : authored.slice(0, 1);
+    const stored = ui[key];
+    const open = Array.isArray(stored) ? stored : initial;
+
+    const toggle = (i: number) =>
+      setUi((p) => {
+        const cur = Array.isArray(p[key]) ? (p[key] as number[]) : initial;
+        // Clicking the open pane closes it. Without this the header was inert
+        // once opened and the stack could never be fully collapsed.
+        if (cur.includes(i)) return { ...p, [key]: cur.filter((n) => n !== i) };
+        return { ...p, [key]: multi ? [...cur, i] : [i] };
+      });
+
     return (
       <div className="sm:col-span-12 space-y-2">
-        {el.panes.map((pane, i) => (
-          <div key={i} className="rounded-md border">
-            <button
-              type="button"
-              onClick={() => setUi((p) => ({ ...p, [`acc-${key}`]: i }))}
-              className="flex w-full items-center justify-between px-3 py-2 text-sm font-medium"
-            >
-              {pane.label}
-              <span>{i === open ? "−" : "+"}</span>
-            </button>
-            {i === open ? <div className="border-t p-3">{renderList(pane.elements, scope)}</div> : null}
-          </div>
-        ))}
+        {el.panes.map((pane, i) => {
+          const isOpen = open.includes(i);
+          return (
+            <div key={i} className="rounded-md border">
+              <button
+                type="button"
+                aria-expanded={isOpen}
+                aria-controls={`${key}-pane-${i}`}
+                onClick={() => toggle(i)}
+                className="flex w-full items-center gap-2 px-3 py-2 text-sm font-medium"
+              >
+                {/* Same disclosure affordance as `panel`, so the two collapsibles
+                    don't teach the reader two different signs for one idea. */}
+                <ChevronRight
+                  className={`h-4 w-4 shrink-0 transition-transform ${isOpen ? "rotate-90" : ""}`}
+                />
+                {pane.label}
+              </button>
+              {isOpen ? (
+                <div id={`${key}-pane-${i}`} className="border-t p-3">
+                  {renderList(pane.elements, scope)}
+                </div>
+              ) : null}
+            </div>
+          );
+        })}
       </div>
     );
   }

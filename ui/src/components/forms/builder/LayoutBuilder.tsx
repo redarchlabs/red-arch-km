@@ -2241,6 +2241,19 @@ function TabGroupEditor({
 }) {
   return (
     <div className="space-y-2">
+      <Row label="Opens on">
+        <select
+          className={input}
+          value={Math.min(el.default_tab ?? 0, Math.max(el.tabs.length - 1, 0))}
+          onChange={(e) => onChange({ ...el, default_tab: Number(e.target.value) })}
+        >
+          {el.tabs.map((t, i) => (
+            <option key={i} value={i}>
+              {t.label || `Tab ${i + 1}`}
+            </option>
+          ))}
+        </select>
+      </Row>
       {el.tabs.map((tab, ti) => (
         <div key={ti} className="rounded-md border p-2">
           <input
@@ -2288,8 +2301,49 @@ function AccordionEditor({
   allow: "all" | "leaf" | "view";
   onChange: (el: FormElement) => void;
 }) {
+  // `default_open` is absent on every accordion authored before it existed; the
+  // renderer reads that as "first pane open", so the editor must show the same.
+  const open = el.default_open ?? [0];
+  const setOpen = (next: number[]) => onChange({ ...el, default_open: next.sort((a, b) => a - b) });
+
   return (
     <div className="space-y-2">
+      <label className="flex items-center gap-1 text-xs">
+        <input
+          type="checkbox"
+          checked={!!el.multi}
+          onChange={(e) => {
+            const multi = e.target.checked;
+            // Leaving multi-open mode can strand several open panes in a stack
+            // that only shows one, so keep the first and drop the rest.
+            onChange({ ...el, multi, default_open: multi ? open : open.slice(0, 1) });
+          }}
+        />
+        Let several panes stand open at once
+      </label>
+      <div className="space-y-1 text-xs">
+        <span className="text-muted-foreground">Open at start</span>
+        {el.panes.map((pane, pi) => (
+          <label key={pi} className="flex items-center gap-1">
+            <input
+              type={el.multi ? "checkbox" : "radio"}
+              name={`acc-open-${el.id ?? "new"}`}
+              checked={open.includes(pi)}
+              onChange={(e) => {
+                if (!el.multi) return setOpen(e.target.checked ? [pi] : []);
+                setOpen(e.target.checked ? [...open, pi] : open.filter((n) => n !== pi));
+              }}
+              // A radio can't be un-checked by clicking it, so single-open mode
+              // needs an explicit way back to "start fully collapsed".
+              onClick={() => {
+                if (!el.multi && open.includes(pi)) setOpen([]);
+              }}
+            />
+            {pane.label || `Section ${pi + 1}`}
+          </label>
+        ))}
+        {open.length === 0 ? <span className="text-muted-foreground">Starts fully collapsed.</span> : null}
+      </div>
       {el.panes.map((pane, pi) => (
         <div key={pi} className="rounded-md border p-2">
           <input

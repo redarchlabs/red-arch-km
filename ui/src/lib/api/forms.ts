@@ -675,6 +675,8 @@ export interface Tab {
 export interface TabGroupElement extends ElementBase {
   type: "tab_group";
   tabs: Tab[];
+  /** 0-based tab selected on first render; clamped to the tabs that exist. */
+  default_tab?: number;
 }
 
 export interface PanelElement extends ElementBase {
@@ -701,6 +703,11 @@ export interface AccordionPane {
 }
 export interface AccordionElement extends ElementBase {
   type: "accordion";
+  /** Several panes may stand open at once; otherwise opening one closes the rest. */
+  multi?: boolean;
+  /** 0-based panes open on first render. `[]` starts fully collapsed; out-of-range
+   * indices are dropped. Defaults to `[0]` when absent. */
+  default_open?: number[];
   panes: AccordionPane[];
 }
 
