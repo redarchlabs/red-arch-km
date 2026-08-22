@@ -12,6 +12,7 @@ from brain_sdk.reranking.protocol import Reranker
 from openai import OpenAI
 from openai.types.chat import ChatCompletionMessageParam
 from shared_config import current_date_line, get_tracer
+from shared_config.model_params import chat_kwargs
 
 from brain_api.config import BrainAPISettings
 from brain_api.observability import get_metrics
@@ -85,6 +86,21 @@ def _snippet(text: str, max_chars: int = _SNIPPET_MAX_CHARS) -> str:
     return cut.rstrip() + "…"
 
 
+# The warm-up asks for one throwaway reply, so the cap only needs to be big enough
+# to get one. It was 1, which a reasoning model can never satisfy: its hidden
+# reasoning tokens are billed against max_completion_tokens too, so the call comes
+# back "Could not finish the message because max_tokens ... was reached" having
+# produced nothing. 24 is enough for a greeting on gpt-5.6 (checked live) and is a
+# rounding error either way — this runs once per process.
+_WARMUP_MAX_TOKENS = 24
+
+
+def _reason(exc: Exception) -> str:
+    """A short, safe explanation of a failed LLM call for the client frame."""
+    text = str(exc).strip() or exc.__class__.__name__
+    return text if len(text) <= 300 else text[:297] + "..."
+
+
 class SearchService:
     """Vector search and hybrid RAG chat."""
 
@@ -131,10 +147,11 @@ class SearchService:
         except Exception as e:  # noqa: BLE001
             logger.info("warm-up graph path skipped: %s", e)
         try:
+            warm_model = self._settings.openai_chat_model
             self._llm.chat.completions.create(
-                model=self._settings.openai_chat_model,
+                model=warm_model,
                 messages=[{"role": "user", "content": "hi"}],
-                max_tokens=1,
+                **chat_kwargs(warm_model, max_tokens=_WARMUP_MAX_TOKENS),
             )
         except Exception as e:  # noqa: BLE001
             logger.info("warm-up chat path skipped: %s", e)
@@ -396,8 +413,7 @@ class SearchService:
             response = client.chat.completions.create(
                 model=chat_model,
                 messages=messages,
-                max_tokens=1000,
-                temperature=0.3,
+                **chat_kwargs(chat_model, max_tokens=1000, temperature=0.3),
             )
             answer = response.choices[0].message.content or ""
         except Exception as e:
@@ -483,9 +499,8 @@ class SearchService:
             stream = client.chat.completions.create(
                 model=chat_model,
                 messages=messages,
-                max_tokens=1000,
-                temperature=0.3,
                 stream=True,
+                **chat_kwargs(chat_model, max_tokens=1000, temperature=0.3),
             )
             for chunk in stream:
                 if not chunk.choices:
@@ -495,7 +510,13 @@ class SearchService:
                     yield {"type": "delta", "content": delta}
         except Exception as e:
             logger.error("LLM stream failed: %s", e)
-            yield {"type": "error", "message": "Streaming failed"}
+            # Say WHY in the frame the client renders, not only in the log. A bare
+            # "Streaming failed" under a full list of sources reads as a network
+            # blip, so the actual cause — a provider 400 on a parameter, a refused
+            # key, a model that is not served — costs a log dig every time. The
+            # provider's own message is included, bounded: these are parameter and
+            # model complaints, and they name no credential.
+            yield {"type": "error", "message": f"Streaming failed: {_reason(e)}"}
             return
 
         yield {"type": "done"}
