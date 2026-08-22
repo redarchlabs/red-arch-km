@@ -101,6 +101,7 @@ Full documentation lives in [`docs/`](docs/). Start with
 | [MCP_AND_INTEGRATIONS.md](docs/MCP_AND_INTEGRATIONS.md) | MCP servers, inbound webhooks, outbound connections |
 | [SITE_ADMIN.md](docs/SITE_ADMIN.md) | Cross-org instance administration console |
 | [LMS.md](docs/LMS.md) | How the LMS reference app is built from platform primitives |
+| [ROBOT.md](docs/ROBOT.md) | Driving the Reachy robot — and where the robot code and presentation scripts actually live (another repo) |
 
 ### Build guides (cookbooks)
 

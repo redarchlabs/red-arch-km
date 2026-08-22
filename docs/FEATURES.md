@@ -218,6 +218,7 @@ Step-by-step recipes for building these (and similar apps) live in
 | MCP & integrations | [MCP_AND_INTEGRATIONS.md](MCP_AND_INTEGRATIONS.md) |
 | Site admin console | [SITE_ADMIN.md](SITE_ADMIN.md) |
 | LMS reference application | [LMS.md](LMS.md) |
+| Robot integration (code + scripts live in another repo) | [ROBOT.md](ROBOT.md) |
 | Build guides (ticketing, HRMS, LMS) | [guides/README.md](guides/README.md) |
 | Database & schema | [DATABASE.md](DATABASE.md) |
 | Deployment | [DEPLOYMENT.md](DEPLOYMENT.md) |
