@@ -2714,7 +2714,7 @@ class AgentService:
                         "IMPORTANT: a relative url resolves against the address the PAGE was opened at, "
                         "so a console opened at localhost produces a QR saying 'localhost' — which means "
                         "'this tablet' to the tablet and fails. Set `host` to the machine's LAN address "
-                        "(e.g. 'http://192.168.0.30:3000') to make the code independent of that."
+                        "(e.g. 'http://<your-lan-ip>:3002') to make the code independent of that."
                     ),
                 },
                 "slides": {

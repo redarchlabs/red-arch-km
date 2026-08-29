@@ -44,7 +44,7 @@ that own each subsystem in depth.
                                      │ HTTPS
                               ┌──────▼──────┐        ┌─────────────┐
                               │  Next.js UI │◄──────►│    Clerk    │
-                              │   (3000)    │  OIDC  │  (External) │
+                              │   (3002)    │  OIDC  │  (External) │
                               └──────┬──────┘        └─────────────┘
                     Bearer JWT + X-Org-ID │  (SSE for chat/agents)
                                      │            km2_… API key ──► /api/v1
@@ -182,7 +182,7 @@ Shared `_ingest_common` retries only on 5xx/429/network and posts a best-effort
 status callback to the API's internal router. The worker image bundles
 `tesseract-ocr`, `poppler-utils`, and `antiword`.
 
-### 2.4 UI — `ui/` (Next.js 15, port 3000)
+### 2.4 UI — `ui/` (Next.js 15, port 3002)
 
 App Router, React 18, TypeScript, Tailwind v4. Auth via `@clerk/nextjs`. **No React
 Query** — data fetching is imperative via an axios singleton (`lib/api/client.ts`)
@@ -609,7 +609,7 @@ Compose files live in `docker/`; `docker-compose.infra.yml` is the shared base
 | Worker | `docker/worker.Dockerfile` | — | Celery worker; Tesseract/poppler/antiword |
 | Beat | `docker/worker.Dockerfile` | — | Celery Beat; workflow/agent poll + partition maintenance |
 | Flower | `mher/flower:2.0` | 5555 | Celery task monitor |
-| UI | `docker/ui.Dockerfile` | 3000 | Next.js standalone |
+| UI | `docker/ui.Dockerfile` | 3002 | Next.js standalone |
 | pgAdmin | `dpage/pgadmin4` | 81→80 | Profile `dev-tools` only |
 
 **Stacks:**
@@ -620,7 +620,7 @@ Compose files live in `docker/`; `docker-compose.infra.yml` is the shared base
   api-go 8000, brain-api-go 8020, worker-go, plus the Python UI).
 - `run-stack.sh` — the primary **hybrid** dev launcher: dockerized infra +
   Python Brain/worker/beat, with host `uvicorn` (`:8000`, no reload) and
-  `next dev` (`:3000`).
+  `next dev` (`:3002`).
 - `docker/docker-compose.prod.yml` — self-contained Python prod template (pinned
   registry tags via `${REGISTRY}`/`${TAG}`, resource limits, strict healthchecks,
   required secrets via `${VAR:?}`). It ships api, brain-api, worker, celery-beat,

@@ -88,7 +88,7 @@ jobs:
 
       # --- Infra + API on :8000 (compose pulls in postgres+redis via depends_on).
       #     The `ui` compose service is intentionally NOT started — Playwright's
-      #     webServer owns :3000 (port collision otherwise; see recipe doc). ---
+      #     webServer owns :3002 (port collision otherwise; see recipe doc). ---
       - name: Start infra + API
         run: docker compose --env-file .env -f docker/docker-compose.yml up -d --build api
 

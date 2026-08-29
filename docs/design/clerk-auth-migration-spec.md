@@ -162,7 +162,7 @@ Sources: Clerk manual JWT verification, clerk-sdk-go/v2 `jwt.Verify`, clerk-back
 | Middleware | **new** `ui/src/middleware.ts` with `clerkMiddleware()` + matcher (real route protection — an improvement over today's client-only gate) |
 | Sign-in/up | replace `(auth)/login/page.tsx` redirect-stub with Clerk `<SignIn/>` (and `<SignUp/>` route) or hosted pages |
 | Auth state | `useAuth()`/`useUser()` from Clerk replace custom `AuthContext`; `(authenticated)/layout.tsx` gate uses `isSignedIn` (or `auth.protect()` in middleware) |
-| Token → API | **integration-critical:** API calls are **cross-origin** (`:3000`→`:8000`), so Clerk's same-origin cookie is insufficient → must attach `Authorization: Bearer <getToken()>`. Replace `getKeycloak().token`/`refreshToken()` in `client.ts` and `search.ts` with Clerk `getToken()` (client comp: `useAuth().getToken()`; non-React axios module: `window.Clerk?.session?.getToken()`). `azp` must include the UI origin; CORS already allows it. |
+| Token → API | **integration-critical:** API calls are **cross-origin** (`:3002`→`:8000`), so Clerk's same-origin cookie is insufficient → must attach `Authorization: Bearer <getToken()>`. Replace `getKeycloak().token`/`refreshToken()` in `client.ts` and `search.ts` with Clerk `getToken()` (client comp: `useAuth().getToken()`; non-React axios module: `window.Clerk?.session?.getToken()`). `azp` must include the UI origin; CORS already allows it. |
 | Logout | `Header.tsx`: `useClerk().signOut()` (still clear `redarch:currentOrgId` first) or `<UserButton/>` |
 | 401 redirect | keep, target Clerk sign-in URL |
 
@@ -255,7 +255,7 @@ Recommendation: keep the existing bypass-based suites unchanged (cheap, fast, al
 |---|---|---|
 | **R1** | Keycloak `sub` ≠ Clerk `sub` → orphaned memberships | §6 remap (email-relink/greenfield/import); test against `seed_e2e.py` users before cutover |
 | **R2** | Missing/incorrect **`azp`** check → token-origin confusion (security) **or** all-401 | Mandatory `CLERK_ALLOWED_AZP` allowlist; assert in Go unit test; security-analyst review of the verify path |
-| **R3** | Cross-origin token attach in non-React axios module | Specified getter (`window.Clerk?.session?.getToken()`); verify Bearer reaches `:8000`; CORS already allows `:3000` |
+| **R3** | Cross-origin token attach in non-React axios module | Specified getter (`window.Clerk?.session?.getToken()`); verify Bearer reaches `:8000`; CORS already allows `:3002` |
 | **R4** | **External SaaS hard dependency for login** (was self-hosted) — availability, residency, lock-in, cost | Decision D2 (human-owned); document SLA/data-processing terms; dual-verify (D4) enables fast rollback to Keycloak |
 | **R5** | Default Clerk token lacks `email`/`username`; ~60s lifetime | §7 JWT template or Backend-API fetch; rely on SDK auto-refresh |
 | **R6** | **No Go CI job** → `api-go` auth change unguarded | Add Go test job in Phase 5; run `make go-test` locally on the auth change |
@@ -320,7 +320,7 @@ Dual-verify (D4) makes rollback a **config flip**: point the UI back at Keycloak
 - **AC-3.1** `<ClerkProvider>` wraps the app (replaces `AuthProvider`); `OrgProvider` still nested and functional.
 - **AC-3.2** New `ui/src/middleware.ts` (`clerkMiddleware()` + matcher) protects authenticated routes; unauthenticated access redirects to Clerk sign-in.
 - **AC-3.3** `<SignIn/>`/`<SignUp/>` render (email+password + Google per D5); the old redirect-stub login page is replaced.
-- **AC-3.4 (cross-origin, R3)** API calls to `NEXT_PUBLIC_API_URL` (`:3000`→`:8000`) attach `Authorization: Bearer <Clerk getToken()>` in **both** the axios interceptor (`client.ts`) and the streaming `fetch` (`search.ts`); `X-Org-ID` still attached. A real request reaches `api-go` and authenticates end-to-end.
+- **AC-3.4 (cross-origin, R3)** API calls to `NEXT_PUBLIC_API_URL` (`:3002`→`:8000`) attach `Authorization: Bearer <Clerk getToken()>` in **both** the axios interceptor (`client.ts`) and the streaming `fetch` (`search.ts`); `X-Org-ID` still attached. A real request reaches `api-go` and authenticates end-to-end.
 - **AC-3.5** Logout uses `useClerk().signOut()` (clears `redarch:currentOrgId` first); 401 interceptor targets Clerk sign-in.
 - **AC-3.6** `keycloak-js` removed from `ui/package.json` (Phase 6); `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` wired; `bun run type-check` green.
 

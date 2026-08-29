@@ -68,7 +68,7 @@ export interface Config {
 
 export function loadConfig(): Config {
   return {
-    appUrl: env("KM2_APP_URL", "http://localhost:3000").replace(/\/+$/, ""),
+    appUrl: env("KM2_APP_URL", "http://localhost:3002").replace(/\/+$/, ""),
     apiUrl: env("KM2_API_URL", "http://localhost:8000/api").replace(/\/+$/, ""),
     clerkJwtTemplate: process.env.KM2_CLERK_JWT_TEMPLATE || undefined,
     orgStorageKey: env("KM2_ORG_STORAGE_KEY", "redarch:currentOrgId"),

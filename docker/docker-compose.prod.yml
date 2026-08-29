@@ -171,7 +171,7 @@ services:
       context: ..
       dockerfile: docker/ui.Dockerfile
     ports:
-      - "3000:3000"
+      - "3002:3002"
     depends_on:
       api:
         condition: service_healthy
@@ -179,7 +179,7 @@ services:
     healthcheck:
       test:
         - "CMD-SHELL"
-        - "node -e \"require('http').get('http://localhost:3000', r => process.exit(r.statusCode < 500 ? 0 : 1)).on('error', () => process.exit(1))\""
+        - "node -e \"require('http').get('http://localhost:3002', r => process.exit(r.statusCode < 500 ? 0 : 1)).on('error', () => process.exit(1))\""
       interval: 15s
       timeout: 5s
       retries: 5

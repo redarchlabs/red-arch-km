@@ -5,6 +5,7 @@ import type { ReactNode } from "react";
 import { ThemedToaster } from "@/components/ThemedToaster";
 import { OrgProvider } from "@/context/OrgContext";
 import { ThemeProvider } from "@/context/ThemeContext";
+import { isBypassEnabled } from "@/lib/auth/bypass";
 
 import "./globals.css";
 
@@ -30,23 +31,36 @@ interface RootLayoutProps {
 }
 
 export default function RootLayout({ children }: RootLayoutProps) {
+  const shell = (
+    /* suppressHydrationWarning: the inline script sets data-theme before
+       hydration, so the server-rendered <html> attributes never match. */
+    <html lang="en" suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
+      </head>
+      <body>
+        <ThemeProvider>
+          {/* OrgProvider reads auth via useAuth(), so it must nest inside ClerkProvider
+              whenever Clerk is the provider. */}
+          <OrgProvider>{children}</OrgProvider>
+          {/* Global toast portal, theme-aware (see ThemedToaster). */}
+          <ThemedToaster />
+        </ThemeProvider>
+      </body>
+    </html>
+  );
+
+  // Offline bypass must not MOUNT ClerkProvider, not merely ignore it: this is the ROOT
+  // layout, so its script fetch to clerk.accounts.dev would fire on every page — the
+  // anonymous /s/<token> kiosk included — and with no internet that is a hang, not a
+  // no-op. useAuth() has already been swapped to the Clerk-free implementation.
+  if (isBypassEnabled()) {
+    return shell;
+  }
+
   return (
     <ClerkProvider signInUrl="/login" signUpUrl="/sign-up" afterSignOutUrl="/login">
-      {/* suppressHydrationWarning: the inline script sets data-theme before
-          hydration, so the server-rendered <html> attributes never match. */}
-      <html lang="en" suppressHydrationWarning>
-        <head>
-          <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
-        </head>
-        <body>
-          <ThemeProvider>
-            {/* OrgProvider reads Clerk auth via useAuth(), so it must nest inside ClerkProvider. */}
-            <OrgProvider>{children}</OrgProvider>
-            {/* Global toast portal, theme-aware (see ThemedToaster). */}
-            <ThemedToaster />
-          </ThemeProvider>
-        </body>
-      </html>
+      {shell}
     </ClerkProvider>
   );
 }

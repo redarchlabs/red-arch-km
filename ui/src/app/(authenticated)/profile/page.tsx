@@ -10,6 +10,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useOrg } from "@/context/OrgContext";
 import { fetchMe, type CurrentUser } from "@/lib/api/users";
 import { getApiErrorMessage } from "@/lib/api/errors";
+import { isBypassEnabled } from "@/lib/auth/bypass";
 
 /** A newly-registered user with no JWT template lands with this email suffix. */
 const PLACEHOLDER_EMAIL_SUFFIX = "@placeholder.invalid";
@@ -25,8 +26,59 @@ function DetailRow({ label, value }: { label: string; value: React.ReactNode }) 
   );
 }
 
-export default function ProfilePage() {
+/**
+ * The Clerk-backed half of this page: the identity Clerk holds, and its account editor.
+ *
+ * Split into its own component so `useUser()` is never called in offline bypass mode,
+ * where there is no <ClerkProvider> in the tree for it to read.
+ */
+function ClerkIdentitySection() {
   const { user, isLoaded } = useUser();
+
+  return (
+    <>
+      <Card>
+        <CardContent className="space-y-4 pt-6">
+          <h2 className="text-lg font-semibold">Clerk identity</h2>
+          {!isLoaded || !user ? (
+            <Skeleton className="h-24 w-full" />
+          ) : (
+            <div className="space-y-2">
+              <DetailRow label="Clerk user ID" value={<code className="text-xs">{user.id}</code>} />
+              <DetailRow label="Username" value={user.username} />
+              <DetailRow label="Full name" value={user.fullName} />
+              <DetailRow label="Primary email" value={user.primaryEmailAddress?.emailAddress} />
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <div>
+        <h2 className="mb-3 text-lg font-semibold">Account settings</h2>
+        {/* Hash routing keeps Clerk's editor on this single page — no catch-all
+            route needed. This is the source of truth for name/email/password. */}
+        <UserProfile routing="hash" />
+      </div>
+    </>
+  );
+}
+
+/** Offline stand-in: says why the identity section is missing rather than omitting it. */
+function OfflineIdentityNotice() {
+  return (
+    <Card>
+      <CardContent className="space-y-1 pt-6 text-sm">
+        <p className="font-medium">Identity settings unavailable offline</p>
+        <p className="text-muted-foreground">
+          This build is signed in with an offline access key, so there is no identity
+          provider to show or edit. Name, email and password are managed there when online.
+        </p>
+      </CardContent>
+    </Card>
+  );
+}
+
+export default function ProfilePage() {
   const { orgs, isSiteAdmin } = useOrg();
   const [me, setMe] = useState<CurrentUser | null>(null);
   const [meError, setMeError] = useState<string | null>(null);
@@ -48,8 +100,9 @@ export default function ProfilePage() {
       <div>
         <h1 className="text-2xl font-semibold">Your profile</h1>
         <p className="text-sm text-muted-foreground">
-          Manage your name, email, and password in Clerk. Your Red Arch account syncs from these
-          values the next time you sign in.
+          {isBypassEnabled()
+            ? "Signed in with an offline access key. Identity settings are managed by the identity provider, which is unreachable in this mode."
+            : "Manage your name, email, and password in Clerk. Your Red Arch account syncs from these values the next time you sign in."}
         </p>
       </div>
 
@@ -106,31 +159,7 @@ export default function ProfilePage() {
         </CardContent>
       </Card>
 
-      <Card>
-        <CardContent className="space-y-4 pt-6">
-          <h2 className="text-lg font-semibold">Clerk identity</h2>
-          {!isLoaded || !user ? (
-            <Skeleton className="h-24 w-full" />
-          ) : (
-            <div className="space-y-2">
-              <DetailRow label="Clerk user ID" value={<code className="text-xs">{user.id}</code>} />
-              <DetailRow label="Username" value={user.username} />
-              <DetailRow label="Full name" value={user.fullName} />
-              <DetailRow
-                label="Primary email"
-                value={user.primaryEmailAddress?.emailAddress}
-              />
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      <div>
-        <h2 className="mb-3 text-lg font-semibold">Account settings</h2>
-        {/* Hash routing keeps Clerk's editor on this single page — no catch-all
-            route needed. This is the source of truth for name/email/password. */}
-        <UserProfile routing="hash" />
-      </div>
+      {isBypassEnabled() ? <OfflineIdentityNotice /> : <ClerkIdentitySection />}
     </div>
   );
 }

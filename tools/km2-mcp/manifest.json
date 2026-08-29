@@ -15,7 +15,7 @@
       "command": "node",
       "args": ["${__dirname}/dist/index.js"],
       "env": {
-        "KM2_APP_URL": "http://localhost:3000",
+        "KM2_APP_URL": "http://localhost:3002",
         "KM2_API_URL": "http://localhost:8000/api",
         "KM2_CLERK_JWT_TEMPLATE": "redarch-km",
         "KM2_BROWSER_CHANNEL": "chrome"

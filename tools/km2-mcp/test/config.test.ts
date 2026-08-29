@@ -34,7 +34,7 @@ function withEnv(env: Record<string, string | undefined>, fn: () => void): void 
 test("defaults are dev-friendly and secret-free", () => {
   withEnv({}, () => {
     const cfg = loadConfig();
-    assert.equal(cfg.appUrl, "http://localhost:3000");
+    assert.equal(cfg.appUrl, "http://localhost:3002");
     assert.equal(cfg.apiUrl, "http://localhost:8000/api");
     assert.equal(cfg.orgStorageKey, "redarch:currentOrgId");
     assert.equal(cfg.clerkJwtTemplate, undefined);

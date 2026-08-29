@@ -86,7 +86,7 @@ operations are intentionally **not** exposed — use the web UI for those.
 
 The repo-root [`.mcp.json`](../.mcp.json) registers this server as `km2` at project
 scope, so Claude Code prompts to approve it. It points at a local dev stack
-(`KM2_APP_URL=http://localhost:3000`, `KM2_API_URL=http://localhost:8000/api`,
+(`KM2_APP_URL=http://localhost:3002`, `KM2_API_URL=http://localhost:8000/api`,
 `KM2_BROWSER_CHANNEL=chrome`). All config is via env vars and holds no secrets; see
 `src/config.ts` (`loadConfig`) and the tool's own `README.md` for the full table.
 Typical flow: `km2_login` → `km2_status` → any resource tool.

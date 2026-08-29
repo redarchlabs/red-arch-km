@@ -20,7 +20,7 @@ export default defineConfig({
   globalSetup: process.env.E2E_WITH_BACKEND ? "./tests/e2e/global-setup.ts" : undefined,
 
   use: {
-    baseURL: process.env.BASE_URL ?? "http://localhost:3000",
+    baseURL: process.env.BASE_URL ?? "http://localhost:3002",
     trace: "on-first-retry",
     screenshot: "only-on-failure",
   },
@@ -36,7 +36,7 @@ export default defineConfig({
     ? undefined
     : {
         command: "npm run dev",
-        url: "http://localhost:3000",
+        url: "http://localhost:3002",
         reuseExistingServer: !process.env.CI,
         timeout: 60_000,
       },

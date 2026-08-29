@@ -2,6 +2,7 @@ import { auth } from "@clerk/nextjs/server";
 import { redirect } from "next/navigation";
 
 import { Landing } from "@/components/landing/Landing";
+import { isBypassEnabled } from "@/lib/auth/bypass";
 
 /**
  * Root route. Signed-in users are sent straight to the app (preserving the old
@@ -12,6 +13,12 @@ import { Landing } from "@/components/landing/Landing";
  * session for logged-out visitors.
  */
 export default async function Home() {
+  // Offline bypass has no server-side session to read, and calling Clerk's auth() with no
+  // internet stalls the request. Show the landing page; the authenticated layout sends a
+  // signed-in operator on from there.
+  if (isBypassEnabled()) {
+    return <Landing />;
+  }
   const { userId } = await auth();
   if (userId) redirect("/documents");
   return <Landing />;

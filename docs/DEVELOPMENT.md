@@ -122,14 +122,14 @@ token maps to the Postgres `app_user` RLS role.
 docker : postgres(5433→5432) redis qdrant neo4j minio mailpit
          brain-api(8020) | celery worker + beat
 host   : FastAPI api via uvicorn (8000, reads .env.host)
-         Next.js UI dev server (3000)
+         Next.js UI dev server (3002)
 ```
 
 Modes:
 
 | Command | Effect |
 |---------|--------|
-| `./run-stack.sh` (or `restart`) | Start everything. Always kills any host API/UI on `:8000`/`:3000` first so a stale process can't shadow the fresh one; infra + `make migrate` run idempotently. |
+| `./run-stack.sh` (or `restart`) | Start everything. Always kills any host API/UI on `:8000`/`:3002` first so a stale process can't shadow the fresh one; infra + `make migrate` run idempotently. |
 | `./run-stack.sh stop` | Stop the host API/UI and the `km2_brain_api` / `km2_worker_fixed` / `km2_beat` containers. Infra containers keep running (`make down` stops those). |
 | `./run-stack.sh --rebuild` | Rebuild the brain-api + worker images from source and recreate their containers, then start. Combine with a mode, e.g. `restart --rebuild`. Use after changing worker/brain-api code. |
 
@@ -325,7 +325,7 @@ outbox (see [Debugging](#debugging)).
 ```bash
 cd ui
 npm install
-npm run dev            # http://localhost:3000 (PORT=3002 to match run-stack.sh)
+npm run dev            # http://localhost:3002 (set PORT to override)
 ```
 
 The UI uses **npm** (`ui/package-lock.json`). Scripts: `dev`, `build`, `lint`
@@ -490,7 +490,7 @@ running web app and harvests a fresh Clerk token per call via
 `window.Clerk.session.getToken()` — it stores **no** secrets and rides your live
 session with your permissions (RLS/org-scoping still enforced server-side).
 
-Build it once (requires the KM2 stack running on `:3000` / `:8000`):
+Build it once (requires the KM2 stack running on `:3002` / `:8000`):
 
 ```bash
 cd tools/km2-mcp

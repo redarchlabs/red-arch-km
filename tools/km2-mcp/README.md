@@ -23,7 +23,7 @@ It is created `0700` and is gitignored — **never commit it.**
 ## Prerequisites
 
 - Node.js ≥ 20 (tested on 24).
-- The KM2 stack running locally: web app on `http://localhost:3000`, API on
+- The KM2 stack running locally: web app on `http://localhost:3002`, API on
   `http://localhost:8000/api` (the defaults; see `run-stack.sh`).
 - A Clerk account that is a **member of at least one org** (the "No organizations"
   state can't make org-scoped calls — that's surfaced as a clear error).
@@ -80,7 +80,7 @@ All optional — the defaults target a local dev stack. **No secrets here.**
 
 | Env var | Default | Purpose |
 |---|---|---|
-| `KM2_APP_URL` | `http://localhost:3000` | KM2 web app (the Clerk origin tokens are harvested from) |
+| `KM2_APP_URL` | `http://localhost:3002` | KM2 web app (the Clerk origin tokens are harvested from) |
 | `KM2_API_URL` | `http://localhost:8000/api` | KM2 backend base URL (includes `/api`) |
 | `KM2_CLERK_JWT_TEMPLATE` | *(unset)* | Mirror `NEXT_PUBLIC_CLERK_JWT_TEMPLATE` if the app sets one |
 | `KM2_ORG_ID` | *(unset)* | Hard override for `X-Org-ID` (wins over the app's active org) |

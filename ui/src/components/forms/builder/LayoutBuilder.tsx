@@ -967,7 +967,7 @@ function QrCodeEditor({ el, onChange }: { el: QrCodeElement; onChange: (el: Form
       <Row label="Host">
         <input
           className={input}
-          placeholder="(optional) http://192.168.0.30:3000"
+          placeholder="(optional) http://<your-lan-ip>:3002"
           value={el.host ?? ""}
           onChange={(e) => onChange({ ...el, host: e.target.value || null })}
         />
@@ -1674,7 +1674,7 @@ function ButtonEditor({ el, onChange }: { el: ButtonElement; onChange: (el: Butt
           <Row label="Host">
             <input
               className={input}
-              placeholder="http://192.168.0.30:3000 — only if this page runs on localhost"
+              placeholder="http://<your-lan-ip>:3002 — only if this page runs on localhost"
               value={el.action.host ?? ""}
               onChange={(e) => {
                 const action = el.action.kind === "copy_link" ? el.action : { kind: "copy_link" as const, href: "" };
