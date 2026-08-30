@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 
 import type { Model3dElement } from "@/lib/api/forms";
 import { fillTokens } from "@/lib/forms/href";
+import { boxProjectUvs, makePlatingCanvas } from "@/lib/forms/hullTexture";
 
 /**
  * A 3D model, rendered with three.js.
@@ -39,6 +40,8 @@ export function Model3dNode({
   const spin = el.spin_seconds ?? 18;
   const angle = el.angle ?? 0;
   const colorProp = el.color ?? null;
+  const finish = el.finish ?? "smooth";
+  const panelScale = el.panel_scale ?? 0.12;
 
   useEffect(() => {
     const host = hostRef.current;
@@ -86,6 +89,23 @@ export function Model3dNode({
         metalness: 0.25,
       });
 
+      // Plating is generated, not loaded: an STL has no UVs and no material, so
+      // both halves have to be produced here. The same sheet drives `map` and
+      // `bumpMap` — the seams that darken the colour are the seams that should
+      // catch the light, and one canvas doing both keeps them in register.
+      let plating: import("three").Texture | null = null;
+      if (finish === "panelled") {
+        plating = new THREE.CanvasTexture(makePlatingCanvas());
+        plating.wrapS = THREE.RepeatWrapping;
+        plating.wrapT = THREE.RepeatWrapping;
+        plating.anisotropy = renderer.capabilities.getMaxAnisotropy();
+        plating.colorSpace = THREE.SRGBColorSpace;
+        material.map = plating;
+        material.bumpMap = plating;
+        material.bumpScale = 0.6;
+        material.needsUpdate = true;
+      }
+
       const controls = new OrbitControls(camera, renderer.domElement);
       controls.enableDamping = false; // damping fights a manual render loop
       controls.enablePan = false;
@@ -109,6 +129,7 @@ export function Model3dNode({
         window.removeEventListener("resize", onResize);
         controls.dispose();
         mesh?.geometry.dispose();
+        plating?.dispose();
         material.dispose();
         renderer.dispose();
         renderer.domElement.remove();
@@ -125,6 +146,18 @@ export function Model3dNode({
           geometry.center();
           geometry.computeBoundingSphere();
           const r = geometry.boundingSphere?.radius ?? 1;
+
+          if (plating) {
+            // Panel size is expressed as a fraction of the model, so plating
+            // stays the same apparent size whether the STL is authored in
+            // millimetres or metres.
+            const pos = geometry.getAttribute("position");
+            const uv = boxProjectUvs(
+              { array: pos.array as ArrayLike<number>, count: pos.count },
+              Math.max(r * panelScale, 1e-4)
+            );
+            geometry.setAttribute("uv", new THREE.BufferAttribute(uv, 2));
+          }
 
           mesh = new THREE.Mesh(geometry, material);
           // Z-up model into three's Y-up world, then a slight downward tilt so
@@ -168,7 +201,7 @@ export function Model3dNode({
       disposed = true;
       cleanup?.();
     };
-  }, [url, height, spin, angle, colorProp]);
+  }, [url, height, spin, angle, colorProp, finish, panelScale]);
 
   return (
     <div className="w-full">

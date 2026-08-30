@@ -2891,11 +2891,16 @@ class AgentService:
                         "spin_seconds",
                         "angle",
                         "color",
+                        "finish",
+                        "panel_scale",
                         "width",
                         "visible_when",
                     ],
                     "notes": (
-                        "A binary STL shown as a slowly turning solid. url takes {token} "
+                        "A binary STL shown as a slowly turning solid. finish "
+                        "'panelled' generates hull plating and projects it onto the "
+                        "mesh (an STL stores triangles only -- no texture coordinates); "
+                        "panel_scale sizes the plating relative to the model. url takes {token} "
                         "placeholders filled from the bound record ({id}, {field_slug}), so "
                         "one element serves every record: '/models/{registry}.stl'. Meant "
                         "for a few hundred triangles on a status display, not a CAD viewer."

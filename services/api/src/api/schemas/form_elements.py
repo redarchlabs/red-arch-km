@@ -1389,6 +1389,14 @@ class Model3dElement(_Element):
     height: int = Field(default=260, ge=120, le=1200)
     # Seconds per revolution; 0 holds it still at ``angle``.
     spin_seconds: float = Field(default=18.0, ge=0, le=600)
+    # Surface treatment. ``smooth`` is a plain lit solid. ``panelled`` generates a
+    # plating texture (panel seams, per-panel tonal variation, a little wear) and
+    # projects it onto the mesh, which an STL cannot carry itself: the format
+    # stores triangles and nothing else, no texture coordinates.
+    finish: Literal["smooth", "panelled"] = "smooth"
+    # Panel size relative to the model, so plating stays the same physical size
+    # whether the mesh is authored in millimetres or metres.
+    panel_scale: float = Field(default=0.12, gt=0.005, le=2.0)
     angle: float = Field(default=0.0, ge=-360, le=360)
     color: str | None = None
 

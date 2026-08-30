@@ -320,6 +320,9 @@ export interface Model3dElement extends ElementBase {
   spin_seconds?: number;
   angle?: number;
   color?: string | null;
+  /** `panelled` generates plating and projects it; an STL carries no UVs. */
+  finish?: "smooth" | "panelled";
+  panel_scale?: number;
 }
 
 /** A numeric entry pad that runs a workflow with what was typed. */
