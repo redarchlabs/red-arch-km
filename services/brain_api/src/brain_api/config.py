@@ -109,7 +109,7 @@ class BrainAPISettings(BaseSettings):
     # NOT free to raise without limit, and the ceiling is a QUALITY one, not latency.
     # Measured on the Robots corpus, two runs per setting: at 10, "what ships do we
     # have" reliably gained a seventh, non-existent ship — the 10th slot admitted a
-    # template document ("Ship name: **Vessel Horizon** (change to your simulator's
+    # template document ("Unit name: **Vessel Horizon** (change to your simulator's
     # ship)"), which the model then read as fact. 8 and 9 both answer correctly. 8 is
     # the default rather than 9 to keep a slot of margin below that cliff instead of
     # sitting exactly on one corpus's edge.
