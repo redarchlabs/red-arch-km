@@ -5,6 +5,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { BYPASS_USER, setBypassSecret } from "@/lib/auth/bypass";
+import { currentReturnTo, safeReturnTo } from "@/lib/auth/returnTo";
 
 /**
  * Offline sign-in: the operator types the API's shared secret, which is held in
@@ -19,6 +20,18 @@ export function BypassSignIn() {
   const [secret, setSecret] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  // Captured on mount: by the time the form is submitted the address bar still
+  // shows the requested page (this gate renders in place, it does not redirect),
+  // but reading it once keeps the value stable if that ever changes.
+  // The 401 interceptor redirects HERE, so the requested page arrives as `?next=`
+  // rather than being readable from the address bar. Fall back to the current
+  // location for the case where this form is reached directly.
+  const [returnTo] = useState(() => {
+    if (typeof window === "undefined") return "";
+    const next = new URLSearchParams(window.location.search).get("next");
+    return next ?? currentReturnTo();
+  });
 
   async function onSubmit(event: React.FormEvent) {
     event.preventDefault();
@@ -61,7 +74,12 @@ export function BypassSignIn() {
 
     // Full load, not router.push: useAuth() reads the secret in a mount effect, so the
     // tree has to be built afresh for the app to see the new session.
-    window.location.href = "/documents";
+    //
+    // Back to whatever was asked for, not a fixed landing page. This gate replaces
+    // the requested page, so sending everyone to /documents silently discarded every
+    // deep link — a station on a wall display, a view someone was sent — and left the
+    // operator on a page with no clue where their link went.
+    window.location.href = safeReturnTo(returnTo, "/documents");
   }
 
   return (

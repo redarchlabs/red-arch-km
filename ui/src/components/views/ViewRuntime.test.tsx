@@ -11,8 +11,13 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(),
 }));
 
+// A signed-in kiosk with its org already resolved. The runtime waits for that
+// before fetching, because the org header is read from storage by the axios
+// interceptor and is not there until /users/me returns.
+const orgState = { currentOrg: null, currentOrgId: "o1" as string | null, isLoading: false };
+
 vi.mock("@/context/OrgContext", () => ({
-  useOrg: () => ({ currentOrg: null }),
+  useOrg: () => orgState,
 }));
 
 vi.mock("@/lib/api/views", () => ({
@@ -52,6 +57,8 @@ function makeRender(marker: string) {
 }
 
 beforeEach(() => {
+  orgState.currentOrgId = "o1";
+  orgState.isLoading = false;
   getViewRender.mockReset();
   runWorkflow.mockReset();
 });
@@ -95,5 +102,30 @@ describe("ViewRuntime run feedback", () => {
 
     expect(await screen.findByText("learner not found")).toBeInTheDocument();
     expect(getViewRender).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("ViewRuntime org gating", () => {
+  // A deep link opened in a cold browser used to render "X-Org-ID header is
+  // required": the fetch fired before OrgContext had resolved the org into
+  // storage, where the axios interceptor reads it from.
+  it("does not fetch until the org is resolved", async () => {
+    orgState.isLoading = true;
+    orgState.currentOrgId = null;
+    getViewRender.mockResolvedValue(makeRender("first"));
+
+    rtlRender(<ViewRuntime id="v1" kiosk />);
+
+    await waitFor(() => expect(getViewRender).not.toHaveBeenCalled());
+  });
+
+  it("fetches once the org lands", async () => {
+    orgState.isLoading = false;
+    orgState.currentOrgId = "o1";
+    getViewRender.mockResolvedValue(makeRender("first"));
+
+    rtlRender(<ViewRuntime id="v1" kiosk />);
+
+    await waitFor(() => expect(getViewRender).toHaveBeenCalled());
   });
 });

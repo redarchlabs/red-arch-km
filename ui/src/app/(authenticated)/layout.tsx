@@ -2,6 +2,7 @@
 
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { currentReturnTo } from "@/lib/auth/returnTo";
 
 import { HelpDock } from "@/components/help/HelpDock";
 import { Header } from "@/components/nav/Header";
@@ -36,7 +37,12 @@ export default function AuthenticatedLayout({ children }: Props) {
 
   useEffect(() => {
     if (!isInitializing && !isAuthenticated) {
-      router.replace("/login");
+      // Carry the requested page across the sign-in gate. Without this a deep
+      // link — a crew station on a wall display, a view someone was sent — is
+      // discarded the moment the guard fires, and the operator arrives at a
+      // generic landing page with nothing explaining where their link went.
+      const next = encodeURIComponent(currentReturnTo());
+      router.replace(next ? `/login?next=${next}` : "/login");
     }
   }, [isAuthenticated, isInitializing, router]);
 
