@@ -4,6 +4,7 @@ import { Loader2 } from "lucide-react";
 import { useState } from "react";
 
 import type { KeypadElement } from "@/lib/api/forms";
+import { evaluate } from "@/lib/forms/jsonLogic";
 
 /**
  * A numeric entry pad that runs a workflow with what was typed.
@@ -20,10 +21,14 @@ export function KeypadNode({
   el,
   onRun,
   disabled,
+  values,
 }: {
   el: KeypadElement;
   onRun?: (workflowId: string, inputs: Record<string, unknown>) => Promise<void> | void;
   disabled?: boolean;
+  /** The enclosing view's values, so a fixed input can reference a field on the
+   * page rather than being frozen into the layout. */
+  values?: Record<string, unknown>;
 }) {
   const [value, setValue] = useState("");
   const [busy, setBusy] = useState(false);
@@ -44,8 +49,14 @@ export function KeypadNode({
     setBusy(true);
     try {
       const parsed = Number(value);
+      // Every fixed input is a JsonLogic expression, exactly as a button's are —
+      // a literal evaluates to itself, and `{"var": "pump_speed"}` reads the
+      // field on the page. Passing them through raw sent the workflow the
+      // EXPRESSION, which fails as "must be a number" at the far end.
+      const fixed: Record<string, unknown> = {};
+      for (const [k, expr] of Object.entries(el.inputs ?? {})) fixed[k] = evaluate(expr, values ?? {});
       await onRun(el.workflow_id, {
-        ...(el.inputs ?? {}),
+        ...fixed,
         [el.input_name ?? "value"]: Number.isFinite(parsed) ? parsed : value,
       });
       setValue("");

@@ -2386,6 +2386,7 @@ export function FormRenderer({
           <div className={spanClass(el.width)}>
             <KeypadNode
               el={el}
+              values={values}
               disabled={preview || submitting}
               onRun={async (workflowId, inputs) => {
                 await onRunWorkflow?.(workflowId, inputs);
