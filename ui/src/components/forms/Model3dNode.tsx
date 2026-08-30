@@ -2,31 +2,24 @@
 
 import { useEffect, useRef, useState } from "react";
 
-import { fillTokens } from "@/lib/forms/href";
-import { parseBinaryStl, type Mesh, type Vec3 } from "@/lib/forms/stl";
 import type { Model3dElement } from "@/lib/api/forms";
+import { fillTokens } from "@/lib/forms/href";
 
 /**
- * A binary STL rendered as a slowly turning flat-shaded solid.
+ * A 3D model, rendered with three.js.
  *
- * Painted on a 2D canvas rather than through WebGL: this appears on status
- * screens, the meshes are a few hundred triangles, and a 3D library is a lot of
- * weight to carry for a turning object — particularly on a build that has to run
- * with no network. Triangles are sorted back-to-front and filled (a painter's
- * algorithm), which is exact enough for a convex-ish hull and has no depth
- * buffer to manage.
+ * The rig follows the one in reachy-virtual-robot's `robot3d.js`, which drives
+ * the printed Reachy STLs: a hemisphere light for ambient fill plus a warm key
+ * and a cool back-fill, `MeshStandardMaterial` so the surface actually responds
+ * to them, and OrbitControls for a viewer who wants to look at the other side.
+ *
+ * three.js is BUNDLED, not fetched. That repo vendors `three.module.js` into its
+ * static directory because it serves plain HTML with an importmap; here the
+ * bundler does the same job, and the dynamic import below keeps it in a chunk
+ * that only loads on a page carrying this element. Either way nothing reaches
+ * for a CDN at runtime, which is the requirement — these screens run on
+ * isolated networks.
  */
-
-function shade(hex: string, amount: number): string {
-  const h = hex.replace("#", "");
-  const full = h.length === 3 ? h.split("").map((c) => c + c).join("") : h;
-  const n = parseInt(full, 16);
-  const clamp = (v: number) => Math.max(0, Math.min(255, Math.round(v)));
-  const r = clamp(((n >> 16) & 255) * amount);
-  const g = clamp(((n >> 8) & 255) * amount);
-  const b = clamp((n & 255) * amount);
-  return `rgb(${r},${g},${b})`;
-}
 
 export function Model3dNode({
   el,
@@ -37,135 +30,161 @@ export function Model3dNode({
   values: Record<string, unknown>;
   recordId?: string | null;
 }) {
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const hostRef = useRef<HTMLDivElement | null>(null);
-  const [mesh, setMesh] = useState<Mesh | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
   const url = fillTokens(el.url ?? "", { ...values, id: recordId ?? "" });
+  const height = el.height ?? 260;
+  const spin = el.spin_seconds ?? 18;
+  const angle = el.angle ?? 0;
+  const colorProp = el.color ?? null;
 
   useEffect(() => {
-    let alive = true;
-    setError(null);
-    setMesh(null);
+    const host = hostRef.current;
+    if (!host) return;
     if (!url || url === "#") {
       setError("No model.");
+      setLoading(false);
       return;
     }
+
+    let disposed = false;
+    let cleanup: (() => void) | null = null;
+
     void (async () => {
-      try {
-        const res = await fetch(url);
-        if (!res.ok) throw new Error(String(res.status));
-        const parsed = parseBinaryStl(await res.arrayBuffer());
-        if (!alive) return;
-        if (parsed.triangles.length === 0) {
-          setError("That file is not a binary STL.");
-          return;
-        }
-        setMesh(parsed);
-      } catch {
-        if (alive) setError("Could not load the model.");
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [url]);
+      // Loaded here rather than at module scope so three.js lands in its own
+      // chunk: a view with no 3D on it should not pay for the library.
+      const THREE = await import("three");
+      const { STLLoader } = await import("three/examples/jsm/loaders/STLLoader.js");
+      const { OrbitControls } = await import("three/examples/jsm/controls/OrbitControls.js");
+      if (disposed) return;
 
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    const host = hostRef.current;
-    if (!canvas || !host || !mesh) return;
-    let raf = 0;
-    const start = performance.now();
+      const width = host.clientWidth || 300;
+      const scene = new THREE.Scene();
+      const camera = new THREE.PerspectiveCamera(38, width / height, 0.1, 100000);
+      const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      renderer.setSize(width, height);
+      host.appendChild(renderer.domElement);
 
-    const draw = () => {
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return;
-      const dpr = window.devicePixelRatio || 1;
-      const w = host.clientWidth || 300;
-      const h = el.height ?? 260;
-      if (canvas.width !== Math.floor(w * dpr) || canvas.height !== Math.floor(h * dpr)) {
-        canvas.width = Math.floor(w * dpr);
-        canvas.height = Math.floor(h * dpr);
-      }
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctx.clearRect(0, 0, w, h);
+      // Same three-light rig as robot3d.js: ambient sky/ground fill, a bright key
+      // from the front-right, and a cool back-fill so the shadowed side still
+      // reads as a surface rather than a silhouette.
+      scene.add(new THREE.HemisphereLight(0xdfefff, 0x1b2430, 1.1));
+      const key = new THREE.DirectionalLight(0xffffff, 1.4);
+      key.position.set(180, 320, 420);
+      scene.add(key);
+      const fill = new THREE.DirectionalLight(0x9fc0ff, 0.5);
+      fill.position.set(-260, 120, -160);
+      scene.add(fill);
 
-      const base =
-        el.color ||
-        getComputedStyle(host).getPropertyValue("--color-primary").trim() ||
-        "#7f9bd4";
+      const themed = getComputedStyle(host).getPropertyValue("--color-primary").trim();
+      const material = new THREE.MeshStandardMaterial({
+        color: new THREE.Color(colorProp || themed || "#7f9bd4"),
+        roughness: 0.5,
+        metalness: 0.25,
+      });
 
-      const spin = el.spin_seconds ?? 18;
-      const t = spin > 0 ? ((performance.now() - start) / (spin * 1000)) * Math.PI * 2 : 0;
-      const yaw = t + (el.angle ?? 0) * (Math.PI / 180);
-      // A fixed tilt so the object is seen from slightly above: a hull viewed
-      // exactly edge-on reads as a line.
-      const pitch = -0.42;
+      const controls = new OrbitControls(camera, renderer.domElement);
+      controls.enableDamping = false; // damping fights a manual render loop
+      controls.enablePan = false;
 
-      const scale = mesh.radius > 0 ? (Math.min(w, h) * 0.42) / mesh.radius : 1;
-      const cx = w / 2;
-      const cy = h / 2;
+      const pivot = new THREE.Group();
+      scene.add(pivot);
 
-      const project = (p: Vec3) => {
-        const x = p[0] - mesh.center[0];
-        const y = p[1] - mesh.center[1];
-        const z = p[2] - mesh.center[2];
-        const rx = x * Math.cos(yaw) - y * Math.sin(yaw);
-        const ry = x * Math.sin(yaw) + y * Math.cos(yaw);
-        const rz = z;
-        const py = ry * Math.cos(pitch) - rz * Math.sin(pitch);
-        const pz = ry * Math.sin(pitch) + rz * Math.cos(pitch);
-        return { sx: cx + rx * scale, sy: cy - pz * scale, depth: py };
+      let raf = 0;
+      let mesh: import("three").Mesh | null = null;
+
+      const onResize = () => {
+        const w = host.clientWidth || 300;
+        camera.aspect = w / height;
+        camera.updateProjectionMatrix();
+        renderer.setSize(w, height);
+      };
+      window.addEventListener("resize", onResize);
+
+      cleanup = () => {
+        cancelAnimationFrame(raf);
+        window.removeEventListener("resize", onResize);
+        controls.dispose();
+        mesh?.geometry.dispose();
+        material.dispose();
+        renderer.dispose();
+        renderer.domElement.remove();
       };
 
-      const faces = mesh.triangles.map((tri) => {
-        const a = project(tri[0]);
-        const b = project(tri[1]);
-        const c = project(tri[2]);
-        // Screen-space normal: its sign is the facing, its magnitude drives the
-        // fill. Cheaper than rotating the stored normal and never out of step
-        // with the winding actually being drawn.
-        const nz = (b.sx - a.sx) * (c.sy - a.sy) - (b.sy - a.sy) * (c.sx - a.sx);
-        return { a, b, c, nz, depth: (a.depth + b.depth + c.depth) / 3 };
-      });
-      faces.sort((f, g) => g.depth - f.depth);
+      new STLLoader().load(
+        url,
+        (geometry) => {
+          if (disposed) return;
+          // STLs carry no origin convention — these are authored Z-up in
+          // millimetres — so centre the geometry and frame the camera off its
+          // own bounding sphere instead of assuming a scale.
+          geometry.computeVertexNormals();
+          geometry.center();
+          geometry.computeBoundingSphere();
+          const r = geometry.boundingSphere?.radius ?? 1;
 
-      for (const f of faces) {
-        if (f.nz <= 0) continue; // back face
-        const area = Math.abs(f.nz);
-        // Facing-ness stands in for a light: broad faces read bright, faces
-        // turning away fall off. Bounded so nothing goes flat black or blows out.
-        const lit = 0.45 + Math.min(0.75, area / 900);
-        ctx.fillStyle = shade(base, lit);
-        ctx.beginPath();
-        ctx.moveTo(f.a.sx, f.a.sy);
-        ctx.lineTo(f.b.sx, f.b.sy);
-        ctx.lineTo(f.c.sx, f.c.sy);
-        ctx.closePath();
-        ctx.fill();
-      }
+          mesh = new THREE.Mesh(geometry, material);
+          // Z-up model into three's Y-up world, then a slight downward tilt so
+          // the hull is seen from above rather than edge-on.
+          mesh.rotation.x = -Math.PI / 2;
+          pivot.add(mesh);
+          pivot.rotation.y = (angle * Math.PI) / 180;
 
-      if (spin > 0) raf = requestAnimationFrame(draw);
+          camera.position.set(r * 1.6, r * 1.15, r * 2.0);
+          camera.lookAt(0, 0, 0);
+          controls.minDistance = r * 1.2;
+          controls.maxDistance = r * 8;
+          controls.update();
+
+          setLoading(false);
+          setError(null);
+
+          let last = performance.now();
+          const frame = () => {
+            raf = requestAnimationFrame(frame);
+            const now = performance.now();
+            if (spin > 0) {
+              pivot.rotation.y += ((now - last) / 1000) * ((Math.PI * 2) / spin);
+            }
+            last = now;
+            controls.update();
+            renderer.render(scene, camera);
+          };
+          raf = requestAnimationFrame(frame);
+        },
+        undefined,
+        () => {
+          if (disposed) return;
+          setLoading(false);
+          setError("Could not load the model.");
+        }
+      );
+    })();
+
+    return () => {
+      disposed = true;
+      cleanup?.();
     };
-
-    raf = requestAnimationFrame(draw);
-    return () => cancelAnimationFrame(raf);
-  }, [mesh, el]);
+  }, [url, height, spin, angle, colorProp]);
 
   return (
-    <div ref={hostRef} className="w-full">
+    <div className="w-full">
       {el.label ? (
         <p className="mb-1 text-sm font-medium text-muted-foreground">{el.label}</p>
       ) : null}
-      <canvas
-        ref={canvasRef}
-        style={{ width: "100%", height: el.height ?? 260 }}
+      <div
+        ref={hostRef}
+        style={{ width: "100%", height }}
         role="img"
         aria-label={el.label ?? "3D model"}
       />
       {error ? <p className="mt-1 text-xs text-muted-foreground">{error}</p> : null}
+      {loading && !error ? (
+        <p className="mt-1 text-xs text-muted-foreground">Loading model…</p>
+      ) : null}
     </div>
   );
 }
