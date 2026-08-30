@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 
 import type { Model3dElement } from "@/lib/api/forms";
 import { fillTokens } from "@/lib/forms/href";
-import { boxProjectUvs, makePlatingCanvas } from "@/lib/forms/hullTexture";
+import { boxProjectUvs, makeHullMaps } from "@/lib/forms/hullTexture";
 
 /**
  * A 3D model, rendered with three.js.
@@ -90,19 +90,30 @@ export function Model3dNode({
       });
 
       // Plating is generated, not loaded: an STL has no UVs and no material, so
-      // both halves have to be produced here. The same sheet drives `map` and
-      // `bumpMap` — the seams that darken the colour are the seams that should
-      // catch the light, and one canvas doing both keeps them in register.
-      let plating: import("three").Texture | null = null;
+      // both halves have to be produced here. Three sheets built off one panel
+      // layout drive `map`, `bumpMap` and `roughnessMap`, so the seam that
+      // darkens the colour is the seam that catches the light and scatters it.
+      const plating: import("three").Texture[] = [];
       if (finish === "panelled") {
-        plating = new THREE.CanvasTexture(makePlatingCanvas());
-        plating.wrapS = THREE.RepeatWrapping;
-        plating.wrapT = THREE.RepeatWrapping;
-        plating.anisotropy = renderer.capabilities.getMaxAnisotropy();
-        plating.colorSpace = THREE.SRGBColorSpace;
-        material.map = plating;
-        material.bumpMap = plating;
-        material.bumpScale = 0.6;
+        const maps = makeHullMaps();
+        const asTexture = (canvas: HTMLCanvasElement) => {
+          const tex = new THREE.CanvasTexture(canvas);
+          tex.wrapS = THREE.RepeatWrapping;
+          tex.wrapT = THREE.RepeatWrapping;
+          tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+          plating.push(tex);
+          return tex;
+        };
+        // Only the colour sheet is sRGB — bump and roughness are data, and
+        // tagging them as colour would gamma-shift the values they encode.
+        material.map = asTexture(maps.color);
+        material.map.colorSpace = THREE.SRGBColorSpace;
+        material.bumpMap = asTexture(maps.bump);
+        material.bumpScale = 0.5;
+        material.roughnessMap = asTexture(maps.roughness);
+        // The scalar multiplies the map, so it moves to 1 and the map carries
+        // the actual per-plate values.
+        material.roughness = 1.0;
         material.needsUpdate = true;
       }
 
@@ -129,7 +140,7 @@ export function Model3dNode({
         window.removeEventListener("resize", onResize);
         controls.dispose();
         mesh?.geometry.dispose();
-        plating?.dispose();
+        for (const tex of plating) tex.dispose();
         material.dispose();
         renderer.dispose();
         renderer.domElement.remove();
@@ -147,7 +158,7 @@ export function Model3dNode({
           geometry.computeBoundingSphere();
           const r = geometry.boundingSphere?.radius ?? 1;
 
-          if (plating) {
+          if (plating.length > 0) {
             // Panel size is expressed as a fraction of the model, so plating
             // stays the same apparent size whether the STL is authored in
             // millimetres or metres.
