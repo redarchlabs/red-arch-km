@@ -122,6 +122,72 @@
   --color-chart-8: #be185d;
 }
 
+/*
+ * "Console" — a black-ground control-surface theme for screens a crew reads
+ * across a room: a bridge station, a kiosk, an operations wall display.
+ *
+ * The ground is true black rather than the dark theme's #0a0a0a. On an OLED or a
+ * projector in a darkened room that is the difference between a panel that floats
+ * and a panel that shows its rectangle, and it is what console demoulators (Northwind
+ * among them) settle on for the same reason.
+ *
+ * Cyan leads because it stays legible against every alert colour a station shows
+ * (amber, red) without competing with them for "this is the urgent thing" — the
+ * one job the primary colour must not take. Borders are deliberately brighter
+ * relative to the ground than in the other themes: at two metres a 1px #27272a
+ * hairline on near-black is invisible, and the panel edges are what make a dense
+ * readout parseable at a glance.
+ *
+ * No webfont. The condensed display faces these consoles normally use (Teko,
+ * Bebas Neue) would mean a network fetch, and this theme's whole reason for
+ * existing is screens on isolated networks. The stack below asks for whatever
+ * condensed face the machine already has and degrades to the system sans.
+ */
+[data-theme="console"] {
+  --color-background: #000000;
+  --color-foreground: #e8f4f8;
+  --color-muted: #0e1621;
+  /* ~7:1 on black — readouts are scanned, not read, so they get headroom. */
+  --color-muted-foreground: #8aa4b8;
+  --color-border: #1d3a4d;
+  --color-input: #10202c;
+  --color-primary: #22d3ee;
+  --color-primary-foreground: #001016;
+  --color-secondary: #0e1f2b;
+  --color-secondary-foreground: #a5e8f5;
+  --color-destructive: #ff3b3b;
+  --color-destructive-foreground: #14e0e0;
+  --color-accent: #0d2635;
+  --color-accent-foreground: #7dd3fc;
+  --color-ring: #22d3ee;
+  --color-success: #34d399;
+  --color-warning: #fbbf24;
+  --color-chart-1: #22d3ee;
+  --color-chart-2: #34d399;
+  --color-chart-3: #fbbf24;
+  --color-chart-4: #a78bfa;
+  --color-chart-5: #ff3b3b;
+  --color-chart-6: #38bdf8;
+  --color-chart-7: #f472b6;
+  --color-chart-8: #94a3b8;
+}
+
+/*
+ * Console typography. Scoped to the theme so no other palette inherits it:
+ * condensed, wide-tracked, upper-case headings — the readout idiom — while body
+ * copy stays in the normal stack so prose remains prose.
+ */
+[data-theme="console"] {
+  font-family: "Roboto Condensed", "Liberation Sans Narrow", "DejaVu Sans Condensed",
+    "Arial Narrow", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-stretch: condensed;
+}
+[data-theme="console"] :where(h1, h2, h3) {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 600;
+}
+
 html, body {
   background-color: var(--color-background);
   color: var(--color-foreground);

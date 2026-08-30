@@ -39,7 +39,7 @@ export default function ViewBuilderPage({ params }: { params: Promise<{ id: stri
   // Kiosk/share page inset. Same round-trip reasoning as refreshMs.
   const [padding, setPadding] = useState<"none" | "comfortable" | "spacious">("none");
   // Pinned palette for the chrome-free routes; null follows the viewer's theme.
-  const [theme, setTheme] = useState<"light" | "dark" | "redarch" | null>(null);
+  const [theme, setTheme] = useState<"light" | "dark" | "redarch" | "console" | null>(null);
   const [allEntities, setAllEntities] = useState<EntityDefinition[]>([]);
   const [allRels, setAllRels] = useState<EntityRelationship[]>([]);
   const [forms, setForms] = useState<{ id: string; name: string }[]>([]);
@@ -204,13 +204,14 @@ export default function ViewBuilderPage({ params }: { params: Promise<{ id: stri
                 className="rounded-md border bg-background px-2 py-1 text-sm"
                 value={theme ?? ""}
                 onChange={(e) =>
-                  setTheme((e.target.value || null) as "light" | "dark" | "redarch" | null)
+                  setTheme((e.target.value || null) as "light" | "dark" | "redarch" | "console" | null)
                 }
               >
                 <option value="">Follow the viewer&apos;s theme</option>
                 <option value="light">Light</option>
                 <option value="dark">Dark</option>
                 <option value="redarch">Red Arch</option>
+                <option value="console">Console (black, for kiosks)</option>
               </select>
               <span className="text-xs">pins the palette on kiosk &amp; shared pages</span>
             </label>

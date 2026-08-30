@@ -3,7 +3,7 @@
  * pre-paint inline script.
  */
 
-export const THEMES = ["light", "dark", "redarch"] as const;
+export const THEMES = ["light", "dark", "redarch", "console"] as const;
 export type Theme = (typeof THEMES)[number];
 
 export const THEME_STORAGE_KEY = "redarch:theme";
@@ -12,6 +12,7 @@ export const THEME_LABELS: Record<Theme, string> = {
   light: "Light",
   dark: "Dark",
   redarch: "Red Arch",
+  console: "Console",
 };
 
 export function isTheme(value: unknown): value is Theme {

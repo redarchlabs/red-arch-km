@@ -115,7 +115,7 @@ class FormConfig(BaseModel):
     # wall display should look the same every morning. NULL keeps today's
     # behaviour (follow the viewer's theme). Applied to the view's own wrapper —
     # never to <html>, and never written to the visitor's stored preference.
-    theme: Literal["light", "dark", "redarch"] | None = None
+    theme: Literal["light", "dark", "redarch", "console"] | None = None
 
     @model_validator(mode="before")
     @classmethod

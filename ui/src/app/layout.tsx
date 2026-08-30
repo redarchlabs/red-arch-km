@@ -24,7 +24,7 @@ export const viewport: Viewport = {
 // Stamps data-theme on <html> BEFORE first paint so a stored dark/redarch
 // preference doesn't flash the light default. Must stay in sync with
 // src/lib/theme.ts (THEMES / storage key).
-const THEME_INIT_SCRIPT = `(function(){try{var t=localStorage.getItem("redarch:theme");if(t!=="light"&&t!=="dark"&&t!=="redarch"){t=window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";}document.documentElement.dataset.theme=t;}catch(e){}})();`;
+const THEME_INIT_SCRIPT = `(function(){try{var t=localStorage.getItem("redarch:theme");if(t!=="light"&&t!=="dark"&&t!=="redarch"&&t!=="console"){t=window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";}document.documentElement.dataset.theme=t;}catch(e){}})();`;
 
 interface RootLayoutProps {
   children: ReactNode;
