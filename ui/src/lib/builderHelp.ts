@@ -53,6 +53,9 @@ URL works too.
 
 - **Glow URL** — an optional second STL drawn unlit on top, for engine faces and
   running lights. A missing one costs the glow, not the ship.
+- **Accent URL** — a third STL drawn *lit*, in its own colour: painted panels,
+  markings, a livery. Both overlays are positioned in the main model's own
+  coordinates, so export them from the same scene.
 - **Finish** — \`panelled\` generates hull plating at render time (an STL carries
   no texture coordinates, so both the pattern and its projection are produced in
   the browser).

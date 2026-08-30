@@ -327,6 +327,9 @@ export interface Model3dElement extends ElementBase {
    * lights. STL has no materials, so glowing parts need their own file. */
   glow_url?: string | null;
   glow_color?: string | null;
+  /** A third mesh drawn lit, not emissive — painted panels and hull markings. */
+  accent_url?: string | null;
+  accent_color?: string | null;
 }
 
 /** A numeric entry pad that runs a workflow with what was typed. */

@@ -49,6 +49,10 @@ export function Model3dNode({
     ? resolveAssetUrl(fillTokens(el.glow_url, { ...values, id: recordId ?? "" }), shareToken)
     : null;
   const glowColor = el.glow_color ?? "#3fe0ff";
+  const accentUrl = el.accent_url
+    ? resolveAssetUrl(fillTokens(el.accent_url, { ...values, id: recordId ?? "" }), shareToken)
+    : null;
+  const accentColor = el.accent_color ?? "#c8a24a";
   const finish = el.finish ?? "smooth";
   const panelScale = el.panel_scale ?? 0.12;
 
@@ -178,23 +182,27 @@ export function Model3dNode({
         return loader.parse(bytes);
       };
 
-      const startGlow = () => {
-        if (!glowUrl || glowUrl === "#") return;
-        const glowMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(glowColor) });
-        materials.push(glowMat);
-        void loadGeometry(glowUrl)
+      /* An overlay is a second mesh in the hull's own coordinates — glowing
+         strips, painted panels — so it must be moved by the HULL's centring
+         offset, not by its own. Centring it on its own bounding box is the
+         obvious mistake and puts a run of engine lights in the middle of the
+         ship. Loaded after the hull for that reason, and independently of it,
+         so a missing or broken overlay costs the overlay and not the model. */
+      const addOverlay = (target: string | null, mat: import("three").Material, offset: import("three").Vector3) => {
+        if (!target || target === "#") return;
+        materials.push(mat);
+        void loadGeometry(target)
           .then((g) => {
             if (disposed) return;
-            g.center();
-            const gm = new THREE.Mesh(g, glowMat);
-            gm.rotation.x = -Math.PI / 2;
-            pivot.add(gm);
-            extra.push(gm);
+            g.translate(offset.x, offset.y, offset.z);
+            g.computeVertexNormals();
+            const om = new THREE.Mesh(g, mat);
+            om.rotation.x = -Math.PI / 2;
+            pivot.add(om);
+            extra.push(om);
           })
           .catch(() => undefined);
       };
-
-      startGlow();
 
       void loadGeometry(url)
         .then((geometry) => {
@@ -203,9 +211,28 @@ export function Model3dNode({
           // millimetres — so centre the geometry and frame the camera off its
           // own bounding sphere instead of assuming a scale.
           geometry.computeVertexNormals();
-          geometry.center();
+          geometry.computeBoundingBox();
+          // Keep the translation `center()` would have applied, so the overlays
+          // can be moved by the same amount and stay where they were authored.
+          const centre = new THREE.Vector3();
+          geometry.boundingBox?.getCenter(centre);
+          const offset = centre.clone().negate();
+          geometry.translate(offset.x, offset.y, offset.z);
           geometry.computeBoundingSphere();
           const r = geometry.boundingSphere?.radius ?? 1;
+
+          addOverlay(glowUrl, new THREE.MeshBasicMaterial({ color: new THREE.Color(glowColor) }), offset);
+          addOverlay(
+            accentUrl,
+            // Lit, unlike the glow: paint reads as paint only if it takes the
+            // same light the hull does.
+            new THREE.MeshStandardMaterial({
+              color: new THREE.Color(accentColor),
+              metalness: 0.45,
+              roughness: 0.45,
+            }),
+            offset
+          );
 
           if (plating.length > 0) {
             // Panel size is expressed as a fraction of the model, so plating
@@ -259,7 +286,7 @@ export function Model3dNode({
       disposed = true;
       cleanup?.();
     };
-  }, [url, height, spin, angle, colorProp, finish, panelScale, glowUrl, glowColor]);
+  }, [url, height, spin, angle, colorProp, finish, panelScale, glowUrl, glowColor, accentUrl, accentColor]);
 
   return (
     <div className="w-full">

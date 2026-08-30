@@ -2895,6 +2895,8 @@ class AgentService:
                         "panel_scale",
                         "glow_url",
                         "glow_color",
+                        "accent_url",
+                        "accent_color",
                         "width",
                         "visible_when",
                     ],
@@ -2902,10 +2904,15 @@ class AgentService:
                         "A binary STL shown as a slowly turning solid. finish "
                         "'panelled' generates hull plating and projects it onto the "
                         "mesh (an STL stores triangles only -- no texture coordinates); "
-                        "panel_scale sizes the plating relative to the model. url takes {token} "
-                        "placeholders filled from the bound record ({id}, {field_slug}), so "
-                        "one element serves every record: '/models/{registry}.stl'. Meant "
-                        "for a few hundred triangles on a status display, not a CAD viewer."
+                        "panel_scale sizes the plating relative to the model. An STL also "
+                        "carries no material, so parts that must look different need their "
+                        "own mesh: glow_url is drawn emissive (lights, engine faces) and "
+                        "accent_url lit (painted panels, markings), both in the hull's own "
+                        "coordinates. url takes {token} placeholders filled from the bound "
+                        "record ({id}, {field_slug}), so one element serves every record. "
+                        "Models usually live in the org asset store: "
+                        "'/api/assets/public/models/{registry}.stl'. Meant for a few thousand "
+                        "triangles on a status display, not a CAD viewer."
                     ),
                 },
                 "keypad": {

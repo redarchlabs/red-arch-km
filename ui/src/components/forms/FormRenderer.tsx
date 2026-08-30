@@ -67,6 +67,7 @@ import { QrCodeCard } from "./QrCodeCard";
 import { PuzzlePad } from "./puzzle/PuzzlePad";
 import type { PadOutcome } from "./puzzle/types";
 import { SlideDeck, coerceSlides } from "./SlideDeck";
+import { useShareToken } from "@/context/ShareTokenContext";
 
 /**
  * The one renderer that walks a `FormRender` element tree — used by the public
@@ -392,6 +393,11 @@ function RecordListNode({
   const [rows, setRows] = useState<EntityRecord[] | null>(null);
   const [error, setError] = useState(false);
   const [busyRow, setBusyRow] = useState<string | null>(null);
+  // A record list reads an entity through the org-scoped API, which an anonymous
+  // visitor has no credential for. The share endpoint already reports this
+  // element as unsupported when the link is created; without checking here the
+  // page would fire a request that can only 401. Say so instead of failing.
+  const shared = useShareToken() !== null;
   // Plucked results of the element's auxiliary queries, keyed by lookup key —
   // the `lookups.*` scope per-row visibility expressions evaluate against.
   const [lookups, setLookups] = useState<Record<string, unknown[]>>({});
@@ -458,6 +464,7 @@ function RecordListNode({
   }, [lookupsKey, runTick]);
 
   useEffect(() => {
+    if (shared) return;
     if (!el.entity) {
       setError(true);
       return;
@@ -646,7 +653,11 @@ function RecordListNode({
 
   return (
     <ViewCard title={el.label} flush>
-      {error ? (
+      {shared ? (
+        <div className="px-4 py-3 text-sm text-muted-foreground">
+          Not available on a shared link.
+        </div>
+      ) : error ? (
         <div className="px-4 py-3 text-sm text-destructive">Unable to load records.</div>
       ) : rows == null ? (
         // Initial load only — background re-polls swap data in place (or not at

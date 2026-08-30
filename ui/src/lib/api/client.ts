@@ -46,6 +46,19 @@ apiClient.interceptors.request.use(async (config) => {
 // instead of silently rejecting forever.
 let isRedirectingToLogin = false;
 
+/** Routes with no session behind them, where a 401 is not a signal to sign in.
+ *
+ * A shared view and a public intake form are opened by people who have no
+ * account and never will. Bouncing them to a sign-in wall turns one element
+ * that could not load into a dead end for the whole page, and tells a visitor
+ * their link is broken when it is not. The 401 still rejects; only the redirect
+ * is suppressed. */
+const ANONYMOUS_ROUTES = ["/s/", "/intake/"];
+
+function isAnonymousPage(): boolean {
+  return ANONYMOUS_ROUTES.some((prefix) => window.location.pathname.startsWith(prefix));
+}
+
 apiClient.interceptors.response.use(
   (response) => response,
   (error) => {
@@ -53,7 +66,8 @@ apiClient.interceptors.response.use(
       error.response?.status === 401 &&
       typeof window !== "undefined" &&
       !isRedirectingToLogin &&
-      !window.location.pathname.startsWith("/login")
+      !window.location.pathname.startsWith("/login") &&
+      !isAnonymousPage()
     ) {
       isRedirectingToLogin = true;
       // Carry the page that was being viewed, so signing in returns there instead

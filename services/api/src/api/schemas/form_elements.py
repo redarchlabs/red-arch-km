@@ -1400,6 +1400,11 @@ class Model3dElement(_Element):
     # file. Same ``{token}`` filling as ``url``.
     glow_url: str | None = None
     glow_color: str | None = None
+    # A third mesh, drawn LIT rather than emissive: painted panels, hull
+    # markings, a livery. Same reason as the glow — one STL can carry only one
+    # material, and these ships' identity is largely in where the paint is.
+    accent_url: str | None = None
+    accent_color: str | None = None
     # Panel size relative to the model, so plating stays the same physical size
     # whether the mesh is authored in millimetres or metres.
     panel_scale: float = Field(default=0.12, gt=0.005, le=2.0)
@@ -1411,16 +1416,16 @@ class Model3dElement(_Element):
     def _safe_url(cls, value: str) -> str:
         return _assert_safe_href(value)
 
-    @field_validator("glow_url")
+    @field_validator("glow_url", "accent_url")
     @classmethod
-    def _safe_glow_url(cls, value: str | None) -> str | None:
+    def _safe_overlay_url(cls, value: str | None) -> str | None:
         return None if value is None else _assert_safe_href(value)
 
-    @field_validator("glow_color")
+    @field_validator("glow_color", "accent_color")
     @classmethod
-    def _glow_hex(cls, value: str | None) -> str | None:
+    def _overlay_hex(cls, value: str | None, info) -> str | None:
         if value is not None and not re.match(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$", value):
-            raise ValueError(f"glow_color must be a hex color, got {value!r}")
+            raise ValueError(f"{info.field_name} must be a hex color, got {value!r}")
         return value
 
     @field_validator("color")
