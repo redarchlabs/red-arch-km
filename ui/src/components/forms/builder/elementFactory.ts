@@ -51,6 +51,9 @@ export const VIEW_KINDS: PaletteKind[] = [
   "work_order_create",
   "button",
   "puzzle_pad",
+  "plot",
+  "model_3d",
+  "keypad",
   "form_ref",
   ...LAYOUT_KINDS,
 ];
@@ -69,6 +72,9 @@ export const KIND_LABELS: Record<PaletteKind, string> = {
   stat: "Stat tile (KPI number)",
   report: "Report / chart",
   record_list: "Record list / status board",
+  plot: "Plot (radar scope / scatter)",
+  model_3d: "3D model (STL)",
+  keypad: "Numeric keypad",
   chat: "Chat",
   agent_timeline: "Agent timeline (swim lanes)",
   agent_diary: "Agent diary",
@@ -97,6 +103,18 @@ export function newElement(kind: PaletteKind): FormElement {
   switch (kind) {
     case "field":
       return { id, type: "field", slug: "", width: "full" };
+    case "plot":
+      return { id, type: "plot", mode: "polar", series: [], width: "full" };
+    case "model_3d":
+      return { id, type: "model_3d", url: "", width: "full" };
+    case "keypad":
+      return {
+        id,
+        type: "keypad",
+        workflow_id: "",
+        input_name: "value",
+        width: "full",
+      } as FormElement;
     case "label":
       return { id, type: "label", text: "Text", variant: "paragraph" };
     // Work-order elements default to the page's own record, so dropping one on a

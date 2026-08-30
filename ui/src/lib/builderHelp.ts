@@ -13,6 +13,50 @@ import type { HelpTopic } from "@/lib/help";
 const topic = (title: string, body: string): HelpTopic => ({ prefix: "", title, body });
 
 export const BUILDER_HELP: Record<PaletteKind, HelpTopic> = {
+  plot: topic(
+    "Plot element",
+    `
+Plots **records on a coordinate space** — the instrument a status board cannot be.
+
+A table tells you a contact is at bearing 045, 4,280km away. A plot tells you it
+is close, off the starboard bow, and closing on the two behind it. That is a
+different question, and usually the one being asked.
+
+**Polar** draws range rings with an optional sweep, from an *angle* field
+(degrees clockwise from up) and a *radius* field. **Cartesian** draws a gridded
+field from an *x* and a *y* field.
+
+Each series names an entity, so a plot works on a standalone view with no record
+bound. Set **poll** to follow the data live, and **category** + **colors** to
+colour points by a field's value.
+`,
+  ),
+  model_3d: topic(
+    "3D model element",
+    `
+Shows a **binary STL** as a slowly turning solid.
+
+The URL takes \`{token}\` placeholders filled from the record in scope — so
+\`/sim/ships/{registry}.stl\` shows whichever object the screen is bound to,
+with no lookup table.
+
+Rendered on a plain canvas rather than through a 3D library, so it costs nothing
+to load and works with no network. Best on a few hundred triangles; it is meant
+for a status display, not a CAD viewer.
+`,
+  ),
+  keypad: topic(
+    "Keypad element",
+    `
+A **numeric entry pad** that runs a workflow with what was typed.
+
+For a console operated by a finger: digits big enough to hit without looking, and
+a value committed on **Enter** rather than on every keystroke — so a course of
+045 is not entered as 0, then 04, then 045.
+
+The value is passed to the workflow as the input named by **input name**.
+`,
+  ),
   field: topic(
     "Field element",
     `

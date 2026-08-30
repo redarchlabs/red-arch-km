@@ -2852,6 +2852,78 @@ class AgentService:
                         "Clicking it opens an enlarged view. Set poll_ms for a live dashboard."
                     ),
                 },
+                "plot": {
+                    "required": ["type"],
+                    "optional": [
+                        "mode",
+                        "label",
+                        "series",
+                        "max_radius",
+                        "x_min",
+                        "x_max",
+                        "y_min",
+                        "y_max",
+                        "rings",
+                        "sweep_seconds",
+                        "show_labels",
+                        "height",
+                        "poll_ms",
+                        "empty_text",
+                        "width",
+                        "visible_when",
+                    ],
+                    "notes": (
+                        "Records plotted on a coordinate space. mode 'polar' draws range "
+                        "rings (and an optional sweep) from a series' angle+radius fields, "
+                        "or from x+y when the data already carries relative offsets; mode "
+                        "'cartesian' draws a gridded field from x+y. Each series is "
+                        "{entity, angle|radius|x|y, point_label, category, colors, filters, "
+                        "limit} and reads its own entity, so a plot works on a standalone "
+                        "view. Use it when position matters more than the numbers -- a "
+                        "table answers 'how far', a plot answers 'where'."
+                    ),
+                },
+                "model_3d": {
+                    "required": ["type", "url"],
+                    "optional": [
+                        "label",
+                        "height",
+                        "spin_seconds",
+                        "angle",
+                        "color",
+                        "width",
+                        "visible_when",
+                    ],
+                    "notes": (
+                        "A binary STL shown as a slowly turning solid. url takes {token} "
+                        "placeholders filled from the bound record ({id}, {field_slug}), so "
+                        "one element serves every record: '/models/{registry}.stl'. Meant "
+                        "for a few hundred triangles on a status display, not a CAD viewer."
+                    ),
+                },
+                "keypad": {
+                    "required": ["type", "workflow_id"],
+                    "optional": [
+                        "label",
+                        "input_name",
+                        "inputs",
+                        "submit_label",
+                        "placeholder",
+                        "max_length",
+                        "allow_decimal",
+                        "allow_negative",
+                        "confirm",
+                        "width",
+                        "visible_when",
+                    ],
+                    "notes": (
+                        "A numeric entry pad that runs a workflow with what was typed, "
+                        "passed as the input named by input_name (default 'value'); "
+                        "'inputs' are evaluated over the view scope and sent alongside. "
+                        "For a touch console: big digits, and the value committed on Enter "
+                        "rather than on every keystroke."
+                    ),
+                },
                 "record_list": {
                     "required": ["type", "entity"],
                     "optional": [

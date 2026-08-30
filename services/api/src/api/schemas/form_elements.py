@@ -1294,6 +1294,142 @@ class ApprovalQueueElement(_Element):
 # ------------------------------------------------------------------ #
 # The recursive element union
 # ------------------------------------------------------------------ #
+class PlotSeries(BaseModel):
+    """One set of points on a plot, read from an entity."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    entity: str  # entity slug to read points from
+    label: str | None = None
+    # POLAR: `angle` is degrees clockwise from up, `radius` the distance out.
+    # CARTESIAN: `x` and `y` are read directly. Field slugs, both cases.
+    angle: str | None = None
+    radius: str | None = None
+    x: str | None = None
+    y: str | None = None
+    # Field whose value labels the point on the plot, e.g. a contact's name.
+    point_label: str | None = None
+    # Field whose value selects the point's colour via `colors` below; a value with
+    # no entry falls back to the series colour.
+    category: str | None = None
+    colors: dict[str, str] = Field(default_factory=dict)
+    color: str | None = None
+    filters: list[RecordListFilter] = Field(default_factory=list)
+    limit: int = 50
+
+    @field_validator("color")
+    @classmethod
+    def _hex_color(cls, value: str | None) -> str | None:
+        if value is not None and not re.match(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$", value):
+            raise ValueError(f"color must be a hex color, got {value!r}")
+        return value
+
+    @field_validator("colors")
+    @classmethod
+    def _hex_colors(cls, value: dict[str, str]) -> dict[str, str]:
+        for key, color in value.items():
+            if not re.match(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$", color):
+                raise ValueError(f"colors[{key!r}] must be a hex color, got {color!r}")
+        return value
+
+
+class PlotElement(_Element):
+    """Records plotted on a coordinate space — the instrument a status board
+    cannot be.
+
+    A table tells you a contact is at bearing 045, 4,280km. A plot tells you it is
+    close, off the starboard bow, and closing on the two behind it. That is a
+    different question, and it is the one an operator actually asks.
+
+    ``mode`` picks the projection. POLAR draws concentric range rings with an
+    optional sweeping trace — a radar scope, a proximity display, anything measured
+    as bearing-and-distance. CARTESIAN draws a gridded field from two numeric
+    fields — a scatter plot, a floor plan, a star chart.
+
+    Each series names an entity and the fields carrying its coordinates, so this is
+    not bound to the view's root record and is valid in a standalone view. Set
+    ``poll_ms`` to follow the data live."""
+
+    type: Literal["plot"] = "plot"
+    mode: Literal["polar", "cartesian"] = "polar"
+    label: str | None = None
+    series: list[PlotSeries] = Field(default_factory=list, max_length=6)
+    # Outer edge of a polar plot / axis extent of a cartesian one, in the same
+    # units as the fields. Null scales to the data on each poll.
+    max_radius: float | None = None
+    x_min: float | None = None
+    x_max: float | None = None
+    y_min: float | None = None
+    y_max: float | None = None
+    rings: int = Field(default=4, ge=0, le=10)  # polar range rings
+    # Seconds for one revolution of the sweep. 0 or null = no sweep, which is what
+    # a plot that is not pretending to scan should use.
+    sweep_seconds: float | None = Field(default=None, ge=0, le=120)
+    show_labels: bool = True
+    height: int = Field(default=320, ge=120, le=1200)
+    poll_ms: int | None = None
+    empty_text: str | None = None
+
+
+class Model3dElement(_Element):
+    """A 3D model, rendered as a slowly turning solid.
+
+    ``url`` points at a binary STL and may carry ``{token}`` placeholders filled
+    from the enclosing scope (``{id}`` = the bound record id, ``{<field_slug>}`` =
+    a field value), so one element can show whichever object the screen is bound
+    to — ``/sim/ships/{registry}.stl``.
+
+    Rendered by projecting and flat-shading the mesh on a 2D canvas rather than
+    through a 3D library: the pages this appears on are status displays, the meshes
+    are small, and a WebGL dependency is not worth carrying for a turning solid."""
+
+    type: Literal["model_3d"] = "model_3d"
+    url: str
+    label: str | None = None
+    height: int = Field(default=260, ge=120, le=1200)
+    # Seconds per revolution; 0 holds it still at ``angle``.
+    spin_seconds: float = Field(default=18.0, ge=0, le=600)
+    angle: float = Field(default=0.0, ge=-360, le=360)
+    color: str | None = None
+
+    @field_validator("url")
+    @classmethod
+    def _safe_url(cls, value: str) -> str:
+        return _assert_safe_href(value)
+
+    @field_validator("color")
+    @classmethod
+    def _hex_color(cls, value: str | None) -> str | None:
+        if value is not None and not re.match(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$", value):
+            raise ValueError(f"color must be a hex color, got {value!r}")
+        return value
+
+
+class KeypadElement(_Element):
+    """A numeric entry pad that runs a workflow with what was typed.
+
+    A console operated by a finger on a touch screen needs digits big enough to
+    hit without looking, and a value that is committed deliberately rather than
+    on every keystroke. That is a different control from a text input, which is
+    why this is its own element rather than a styling option on one.
+
+    The entered value is passed to ``workflow_id`` as the input named
+    ``input_name``; anything in ``inputs`` is evaluated over the view's scope and
+    passed alongside."""
+
+    type: Literal["keypad"] = "keypad"
+    label: str | None = None
+    workflow_id: uuid.UUID
+    input_name: str = "value"
+    inputs: dict[str, Expression] = Field(default_factory=dict)
+    submit_label: str = "Enter"
+    placeholder: str | None = None
+    max_length: int = Field(default=6, ge=1, le=12)
+    allow_decimal: bool = False
+    allow_negative: bool = False
+    confirm: str | None = None
+
+
 FormElement = Annotated[
     FieldElement
     | LabelElement
@@ -1308,6 +1444,9 @@ FormElement = Annotated[
     | ReportElement
     | StatElement
     | RecordListElement
+    | PlotElement
+    | Model3dElement
+    | KeypadElement
     | ChatElement
     | AgentTimelineElement
     | AgentDiaryElement

@@ -52,6 +52,9 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { buildCatalog, fieldMeta, relatedEntityId } from "@/lib/forms/catalog";
 import { fillTokens } from "@/lib/forms/href";
+import { KeypadNode } from "./KeypadNode";
+import { Model3dNode } from "./Model3dNode";
+import { PlotNode } from "./PlotNode";
 import { shareTarget } from "@/lib/forms/shareUrl";
 import { evaluate } from "@/lib/forms/jsonLogic";
 import { mergeServerValues, sameValue } from "@/lib/forms/mergeValues";
@@ -2353,6 +2356,30 @@ export function FormRenderer({
         );
       case "image":
         return <div className={spanClass(el.width)}>{ImageNode({ el, scope })}</div>;
+      case "plot":
+        return (
+          <div className={spanClass(el.width)}>
+            <PlotNode el={el} />
+          </div>
+        );
+      case "model_3d":
+        return (
+          <div className={spanClass(el.width)}>
+            <Model3dNode el={el} values={scope.values} recordId={render.record_id} />
+          </div>
+        );
+      case "keypad":
+        return (
+          <div className={spanClass(el.width)}>
+            <KeypadNode
+              el={el}
+              disabled={preview || submitting}
+              onRun={async (workflowId, inputs) => {
+                await onRunWorkflow?.(workflowId, inputs);
+              }}
+            />
+          </div>
+        );
       case "qr_code":
         return (
           <div className={spanClass(el.width)}>
