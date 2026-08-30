@@ -1394,6 +1394,12 @@ class Model3dElement(_Element):
     # projects it onto the mesh, which an STL cannot carry itself: the format
     # stores triangles and nothing else, no texture coordinates.
     finish: Literal["smooth", "panelled"] = "smooth"
+    # A second mesh drawn with an EMISSIVE material, over the first. STL carries
+    # no materials, so a model whose look depends on glowing parts — engine
+    # faces, running lights, an instrument panel — cannot express them in one
+    # file. Same ``{token}`` filling as ``url``.
+    glow_url: str | None = None
+    glow_color: str | None = None
     # Panel size relative to the model, so plating stays the same physical size
     # whether the mesh is authored in millimetres or metres.
     panel_scale: float = Field(default=0.12, gt=0.005, le=2.0)
@@ -1404,6 +1410,18 @@ class Model3dElement(_Element):
     @classmethod
     def _safe_url(cls, value: str) -> str:
         return _assert_safe_href(value)
+
+    @field_validator("glow_url")
+    @classmethod
+    def _safe_glow_url(cls, value: str | None) -> str | None:
+        return None if value is None else _assert_safe_href(value)
+
+    @field_validator("glow_color")
+    @classmethod
+    def _glow_hex(cls, value: str | None) -> str | None:
+        if value is not None and not re.match(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$", value):
+            raise ValueError(f"glow_color must be a hex color, got {value!r}")
+        return value
 
     @field_validator("color")
     @classmethod

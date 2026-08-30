@@ -2893,6 +2893,8 @@ class AgentService:
                         "color",
                         "finish",
                         "panel_scale",
+                        "glow_url",
+                        "glow_color",
                         "width",
                         "visible_when",
                     ],

@@ -323,6 +323,10 @@ export interface Model3dElement extends ElementBase {
   /** `panelled` generates plating and projects it; an STL carries no UVs. */
   finish?: "smooth" | "panelled";
   panel_scale?: number;
+  /** A second mesh drawn with an emissive material — engine faces, running
+   * lights. STL has no materials, so glowing parts need their own file. */
+  glow_url?: string | null;
+  glow_color?: string | null;
 }
 
 /** A numeric entry pad that runs a workflow with what was typed. */

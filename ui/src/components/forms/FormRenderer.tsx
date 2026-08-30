@@ -1306,6 +1306,9 @@ function ChatNode({ el, preview }: { el: ChatElement; preview: boolean }) {
       if (mountedRef.current) failTurn("The robot did not reply. Try asking again.");
     }, ANSWER_TIMEOUT_MS);
     return () => window.clearTimeout(id);
+    // `failTurn` is redeclared every render; depending on it would re-arm the
+    // backstop on each one, which is the opposite of a deadline.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [thinking]);
 
   // While the robot is thinking, drip out filler chatter: the first line after
@@ -2109,7 +2112,6 @@ export function FormRenderer({
       }
       return changed ? next : prev;
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [render]);
 
   // Adopt a refreshed render: `values` is seeded once at mount, so without this a

@@ -68,15 +68,11 @@ async def test_unscheduled_workflows_do_not_starve_the_scheduled_one(
     # Two workflows with NO schedule, created first so they sort ahead of the
     # scheduled one under the "never fired" tie.
     for i in range(2):
-        wf = await svc.create_workflow(
-            name=f"Unscheduled {i}", entity_definition_id=definition.id, description=None
-        )
+        wf = await svc.create_workflow(name=f"Unscheduled {i}", entity_definition_id=definition.id, description=None)
         version = await svc.save_draft(wf.id, _definition(None, definition.slug))
         await svc.publish(wf.id, version.id)
 
-    scheduled = await svc.create_workflow(
-        name="Scheduled", entity_definition_id=definition.id, description=None
-    )
+    scheduled = await svc.create_workflow(name="Scheduled", entity_definition_id=definition.id, description=None)
     version = await svc.save_draft(scheduled.id, _definition({"every_seconds": 1}, definition.slug))
     await svc.publish(scheduled.id, version.id)
     await admin_session.commit()
