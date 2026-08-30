@@ -108,3 +108,78 @@ describe("OrgProvider", () => {
     expect(result.current.error).toBeNull();
   });
 });
+
+describe("org from the link", () => {
+  // A deep link to a view carries no org, so a visitor whose active org is a
+  // different one lands on a page that 404s and gets bounced somewhere generic.
+  // `?org=` in the URL names the org the link belongs to.
+  function withUrl(search: string) {
+    window.history.replaceState({}, "", `/views/v1/kiosk${search}`);
+  }
+
+  afterEach(() => {
+    window.history.replaceState({}, "", "/");
+  });
+
+  it("selects the org named in the query string", async () => {
+    withUrl("?org=o2");
+    fetchMe.mockResolvedValue(
+      me([
+        { id: "o1", name: "Robots" },
+        { id: "o2", name: "Northwind" },
+      ])
+    );
+
+    const { result } = renderHook(() => useOrg(), { wrapper });
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(result.current.currentOrgId).toBe("o2");
+    // and it sticks, so the axios interceptor sends the right header
+    expect(localStorage.getItem("redarch:currentOrgId")).toBe("o2");
+  });
+
+  it("beats a different org already stored", async () => {
+    localStorage.setItem("redarch:currentOrgId", "o1");
+    withUrl("?org=o2");
+    fetchMe.mockResolvedValue(
+      me([
+        { id: "o1", name: "Robots" },
+        { id: "o2", name: "Northwind" },
+      ])
+    );
+
+    const { result } = renderHook(() => useOrg(), { wrapper });
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(result.current.currentOrgId).toBe("o2");
+  });
+
+  it("ignores an org the user is not a member of", async () => {
+    // Not an error path worth surfacing: the link is simply not for this user,
+    // and honouring it would send every request an org header that 403s.
+    localStorage.setItem("redarch:currentOrgId", "o1");
+    withUrl("?org=not-mine");
+    fetchMe.mockResolvedValue(me([{ id: "o1", name: "Robots" }]));
+
+    const { result } = renderHook(() => useOrg(), { wrapper });
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(result.current.currentOrgId).toBe("o1");
+  });
+
+  it("falls back normally when the parameter is absent", async () => {
+    withUrl("");
+    localStorage.setItem("redarch:currentOrgId", "o2");
+    fetchMe.mockResolvedValue(
+      me([
+        { id: "o1", name: "Robots" },
+        { id: "o2", name: "Northwind" },
+      ])
+    );
+
+    const { result } = renderHook(() => useOrg(), { wrapper });
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(result.current.currentOrgId).toBe("o2");
+  });
+});

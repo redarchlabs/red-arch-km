@@ -56,7 +56,7 @@ export function ViewRuntime({ id, kiosk = false, token }: ViewRuntimeProps) {
   const shared = !!token;
   // Present for a signed-in kiosk; null for an anonymous visitor (the provider
   // lives in the root layout, so this is safe on the shared route too).
-  const { currentOrg } = useOrg();
+  const { currentOrg, currentOrgId, isLoading: orgLoading } = useOrg();
   const fetchRender = useCallback(
     () => (token ? getPublicViewRender(token) : getViewRender(id, recordId)),
     [token, id, recordId],
@@ -86,8 +86,14 @@ export function ViewRuntime({ id, kiosk = false, token }: ViewRuntimeProps) {
   }, [fetchRender]);
 
   useEffect(() => {
+    // An authenticated view is org-scoped, and the org header is read from
+    // storage by the axios interceptor — which OrgContext only fills once
+    // /users/me resolves. Fetching before then sends no header and the request
+    // fails with "X-Org-ID header is required", which is what a deep link opened
+    // in a cold browser used to land on. A shared page has no org and no wait.
+    if (!shared && (orgLoading || !currentOrgId)) return;
     void load();
-  }, [load]);
+  }, [load, shared, orgLoading, currentOrgId]);
 
   // Live view: a `refresh_ms` on the view's config re-fetches the render on that
   // cadence, so record-bound elements (progress bars, calculated values, a

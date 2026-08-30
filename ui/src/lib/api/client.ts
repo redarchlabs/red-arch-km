@@ -5,6 +5,7 @@
 import axios, { type AxiosInstance } from "axios";
 
 import { authHeaders } from "@/lib/auth/headers";
+import { currentReturnTo } from "@/lib/auth/returnTo";
 
 const STORAGE_KEY = "redarch:currentOrgId";
 
@@ -55,7 +56,11 @@ apiClient.interceptors.response.use(
       !window.location.pathname.startsWith("/login")
     ) {
       isRedirectingToLogin = true;
-      window.location.href = "/login";
+      // Carry the page that was being viewed, so signing in returns there instead
+      // of dropping the operator on a generic landing page with their deep link
+      // silently discarded. `safeReturnTo` re-validates it on the way back out.
+      const next = encodeURIComponent(currentReturnTo());
+      window.location.href = next ? `/login?next=${next}` : "/login";
       // If the navigation was cancelled, reset the flag so future 401s can
       // retry the redirect. In the normal path the page unloads before the
       // timer fires and this is a no-op.

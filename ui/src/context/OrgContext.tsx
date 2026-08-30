@@ -39,6 +39,18 @@ const OrgContext = createContext<OrgState | null>(null);
 
 const STORAGE_KEY = "redarch:currentOrgId";
 
+/** The org a deep link names, via `?org=<id>`. Read from the address bar rather
+ * than a router hook so this works during the provider's first load, before any
+ * page component has mounted. */
+function orgFromLocation(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return new URLSearchParams(window.location.search).get("org");
+  } catch {
+    return null;
+  }
+}
+
 export function OrgProvider({ children }: { children: ReactNode }) {
   const { isAuthenticated, isInitializing } = useAuth();
   const [orgs, setOrgs] = useState<OrgSummary[]>([]);
@@ -58,10 +70,26 @@ export function OrgProvider({ children }: { children: ReactNode }) {
       setOrgs(me.orgs);
       setIsSiteAdmin(me.is_site_admin);
 
-      // Hydrate current org from localStorage, fall back to first accessible org
+      // Resolution order: the org named by the LINK, then the one this browser
+      // last used, then the first accessible one.
+      //
+      // The link comes first because it is the most specific statement of intent
+      // available. A deep link to a view carries no org of its own, so a visitor
+      // whose active org happens to be a different one used to land on a page
+      // that 404s and get bounced somewhere generic — with nothing on screen
+      // explaining that the link was for an org they simply weren't looking at.
+      // A membership check gates it: an org the user cannot access is ignored
+      // rather than honoured, because setting it would send an org header that
+      // 403s every request for the rest of the session.
+      const fromLink = orgFromLocation();
       const stored = typeof window !== "undefined" ? localStorage.getItem(STORAGE_KEY) : null;
-      const valid = stored && me.orgs.some((o: OrgSummary) => o.id === stored);
-      const resolved = valid ? stored : (me.orgs[0]?.id ?? null);
+      const isMember = (id: string | null) =>
+        !!id && me.orgs.some((o: OrgSummary) => o.id === id);
+      const resolved = isMember(fromLink)
+        ? fromLink
+        : isMember(stored)
+          ? stored
+          : (me.orgs[0]?.id ?? null);
       setCurrentOrgIdState(resolved);
 
       // Persist the resolved org too: the axios interceptor reads ONLY
