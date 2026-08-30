@@ -15,7 +15,7 @@ describe("formatCell", () => {
     // trimming them would corrupt a reference the reader needs verbatim.
     expect(formatCell("0012")).toBe("0012");
     expect(formatCell("12345678901234567890")).toBe("12345678901234567890");
-    expect(formatCell("TB-10400")).toBe("TB-10400");
+    expect(formatCell("TB-1042")).toBe("TB-1042");
   });
 
   it("still handles real numbers, booleans and blanks", () => {

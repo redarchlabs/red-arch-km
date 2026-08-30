@@ -860,7 +860,7 @@ function ImageEditor({ el, onChange }: { el: ImageEl; onChange: (el: FormElement
       <Row label="Image URL">
         <input
           className={input}
-          placeholder="/sim/ship-{condition}.svg"
+          placeholder="/demo/unit-{condition}.svg"
           value={el.url}
           onChange={(e) => onChange({ ...el, url: e.target.value })}
         />

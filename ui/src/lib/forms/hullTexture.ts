@@ -4,7 +4,7 @@
  * An STL stores triangles and nothing else — no texture coordinates, no
  * materials. So a textured STL needs both halves generated: a UV projection over
  * the mesh, and images to project. Both are built here rather than shipped as
- * assets, which keeps the fleet's look in code and needs no image files on a
+ * assets, which keeps the surface's look in code and needs no image files on a
  * build that has to run offline.
  *
  * Three sheets are produced from one shared layout — colour, bump and

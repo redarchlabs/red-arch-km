@@ -37,24 +37,24 @@ class _Storage:
 
 @pytest.fixture
 def storage(monkeypatch):
-    store = _Storage({asset_key(ORG, "public/ships/a.stl"): BODY, asset_key(ORG, "private/a.stl"): BODY})
+    store = _Storage({asset_key(ORG, "public/models/a.glb"): BODY, asset_key(ORG, "private/a.stl"): BODY})
     monkeypatch.setattr(router, "StorageClient", lambda _settings: store)
     return store
 
 
 class TestPublicAsset:
     def test_serves_an_asset_under_the_public_prefix(self, storage):
-        response = router.public_asset_response(None, ORG, "public/ships/a.stl")
+        response = router.public_asset_response(None, ORG, "public/models/a.glb")
         assert response.status_code == 200
         assert response.body == BODY
-        assert response.media_type == "model/stl"
+        assert response.media_type == "model/gltf-binary"
 
     def test_reads_from_the_orgs_own_prefix(self, storage):
-        router.public_asset_response(None, ORG, "public/ships/a.stl")
-        assert storage.asked == [f"{ORG}/assets/public/ships/a.stl"]
+        router.public_asset_response(None, ORG, "public/models/a.glb")
+        assert storage.asked == [f"{ORG}/assets/public/models/a.glb"]
 
     def test_is_cacheable_by_shared_caches(self, storage):
-        response = router.public_asset_response(None, ORG, "public/ships/a.stl")
+        response = router.public_asset_response(None, ORG, "public/models/a.glb")
         # Anonymous and identical for every visitor, unlike the authenticated
         # route, which must stay out of a shared cache.
         assert response.headers["cache-control"] == "public, max-age=3600"
@@ -69,7 +69,7 @@ class TestPublicAsset:
 
     def test_a_missing_asset_is_404(self, storage):
         with pytest.raises(HTTPException) as exc:
-            router.public_asset_response(None, ORG, "public/ships/nope.stl")
+            router.public_asset_response(None, ORG, "public/models/nope.glb")
         assert exc.value.status_code == 404
 
     @pytest.mark.parametrize("path", ["public/../../etc/passwd", "public/%2e%2e%2fsecret.stl"])

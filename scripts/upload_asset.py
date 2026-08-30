@@ -11,10 +11,10 @@ nothing about what is being uploaded — the files and their destination paths a
 arguments, so tenant content never has to live in this repository.
 
     # one file
-    python3 scripts/upload_asset.py --org Northwind models/hull.stl --as public/ships/hull.stl
+    python3 scripts/upload_asset.py --org "My Org" turbine.glb --as public/models/turbine.glb
 
     # a directory, keeping its layout under a prefix
-    python3 scripts/upload_asset.py --org Northwind --dir models/ships --prefix public/ships
+    python3 scripts/upload_asset.py --org "My Org" --dir ./models --prefix public/models
 
 Anything under `public/` is readable by an anonymous visitor holding a share
 link to one of the org's public views; anything else needs a session. That is
@@ -144,7 +144,7 @@ def main() -> int:
     parser.add_argument("files", nargs="*", help="files to upload")
     parser.add_argument("--org", required=True, help="org uuid or name")
     parser.add_argument("--dir", help="upload every supported file under this directory")
-    parser.add_argument("--prefix", help="destination prefix, e.g. public/ships")
+    parser.add_argument("--prefix", help="destination prefix, e.g. public/models")
     parser.add_argument("--as", dest="dest", help="exact destination path for a single file")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()

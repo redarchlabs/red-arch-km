@@ -15,7 +15,7 @@ function pad(extra: Partial<KeypadElement> = {}): KeypadElement {
   return {
     type: "keypad",
     workflow_id: "wf-1",
-    input_name: "heading",
+    input_name: "pressure",
     max_length: 3,
     ...extra,
   } as KeypadElement;
@@ -30,7 +30,7 @@ describe("KeypadNode inputs", () => {
     const onRun = vi.fn();
     render(
       <KeypadNode
-        el={pad({ inputs: { notch: { var: "pump_speed" } } })}
+        el={pad({ inputs: { rate: { var: "pump_speed" } } })}
         values={{ pump_speed: 3 }}
         onRun={onRun}
       />
@@ -38,25 +38,25 @@ describe("KeypadNode inputs", () => {
     type("090");
     fireEvent.click(screen.getByRole("button", { name: "Enter" }));
     await waitFor(() => expect(onRun).toHaveBeenCalled());
-    expect(onRun).toHaveBeenCalledWith("wf-1", { notch: 3, heading: 90 });
+    expect(onRun).toHaveBeenCalledWith("wf-1", { rate: 3, pressure: 90 });
   });
 
   it("passes a literal input through unchanged", async () => {
     const onRun = vi.fn();
-    render(<KeypadNode el={pad({ inputs: { notch: 2, mode: "manual" } })} values={{}} onRun={onRun} />);
+    render(<KeypadNode el={pad({ inputs: { rate: 2, mode: "manual" } })} values={{}} onRun={onRun} />);
     type("45");
     fireEvent.click(screen.getByRole("button", { name: "Enter" }));
     await waitFor(() => expect(onRun).toHaveBeenCalled());
-    expect(onRun).toHaveBeenCalledWith("wf-1", { notch: 2, mode: "manual", heading: 45 });
+    expect(onRun).toHaveBeenCalledWith("wf-1", { rate: 2, mode: "manual", pressure: 45 });
   });
 
   it("sends the typed value as a number, under the element's input name", async () => {
     const onRun = vi.fn();
-    render(<KeypadNode el={pad({ input_name: "bearing" })} values={{}} onRun={onRun} />);
+    render(<KeypadNode el={pad({ input_name: "setpoint" })} values={{}} onRun={onRun} />);
     type("180");
     fireEvent.click(screen.getByRole("button", { name: "Enter" }));
     await waitFor(() => expect(onRun).toHaveBeenCalled());
-    expect(onRun).toHaveBeenCalledWith("wf-1", { bearing: 180 });
+    expect(onRun).toHaveBeenCalledWith("wf-1", { setpoint: 180 });
   });
 
   it("does not run with nothing entered", () => {

@@ -149,7 +149,7 @@ export interface LiveValueElement extends ElementBase {
 
 /** A display-only picture. `url` may carry `{token}` placeholders filled from the
  * enclosing scope's values (`{id}` = the bound record id, `{<field_slug>}` = a field
- * value), so the artwork can follow record state — e.g. `/sim/ship-{condition}.svg`.
+ * value), so the artwork can follow record state — e.g. `/demo/unit-{condition}.svg`.
  * Relative or http(s) URLs only. */
 export interface ImageElement extends ElementBase {
   type: "image";

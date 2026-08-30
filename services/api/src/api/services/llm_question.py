@@ -89,7 +89,7 @@ async def generate_question(
 
     ``client`` is an ``AsyncOpenAI`` instance (typed ``Any`` to keep this import-light and
     mockable). ``audience`` pitches the difficulty ("a 2nd grader", "a 9th-grade physics
-    class"); ``style`` is optional extra framing ("in the voice of a ship's computer").
+    class"); ``style`` is optional extra framing ("in the voice of a station announcer").
     Raises on a malformed model response — the caller records that on the step.
     """
     parts = [f"Topic:\n{topic}"]

@@ -14,12 +14,12 @@ const TOKEN = "H6oIIfZ3-HDnnKY8";
 
 describe("resolveAssetUrl", () => {
   it("leaves an org asset alone when there is a session", () => {
-    expect(resolveAssetUrl("/api/assets/public/ships/a.stl", null)).toBe("/api/assets/public/ships/a.stl");
+    expect(resolveAssetUrl("/api/assets/public/models/a.glb", null)).toBe("/api/assets/public/models/a.glb");
   });
 
   it("rewrites an org asset onto the token route on a shared page", () => {
-    expect(resolveAssetUrl("/api/assets/public/ships/a.stl", TOKEN)).toBe(
-      `${API_BASE}/public/views/${TOKEN}/assets/public/ships/a.stl`
+    expect(resolveAssetUrl("/api/assets/public/models/a.glb", TOKEN)).toBe(
+      `${API_BASE}/public/views/${TOKEN}/assets/public/models/a.glb`
     );
   });
 
@@ -34,7 +34,7 @@ describe("resolveAssetUrl", () => {
 
   it("leaves a static path and an external URL untouched in both contexts", () => {
     for (const token of [null, TOKEN]) {
-      expect(resolveAssetUrl("/sim/ship.svg", token)).toBe("/sim/ship.svg");
+      expect(resolveAssetUrl("/demo/unit.svg", token)).toBe("/demo/unit.svg");
       expect(resolveAssetUrl("https://example.com/a.stl", token)).toBe("https://example.com/a.stl");
     }
   });
@@ -55,7 +55,7 @@ describe("isApiAsset", () => {
   });
 
   it("is false for anything that is not an API path", () => {
-    expect(isApiAsset("/sim/ship.svg")).toBe(false);
+    expect(isApiAsset("/demo/unit.svg")).toBe(false);
     expect(isApiAsset("https://example.com/a.stl")).toBe(false);
   });
 });

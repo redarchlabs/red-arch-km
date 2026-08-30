@@ -4,7 +4,7 @@ import { fillColor } from "./Model3dNode";
 
 /**
  * One 3D element serves every record on a station, so a per-record livery — one
- * ship painted gold, another red — can only come from the row. What matters is
+ * unit painted gold, another red — can only come from the row. What matters is
  * the guard on the way back: a field holding a typo, an empty string or "none"
  * must cost the tint and nothing else. `new THREE.Color("nonsense")` does not
  * throw; it warns and leaves the material some unrelated colour, which on a dark
@@ -49,21 +49,21 @@ import { isGltfUrl } from "./Model3dNode";
  */
 describe("isGltfUrl", () => {
   it("recognises both glTF extensions, either case", () => {
-    for (const url of ["/a/ship.glb", "/a/ship.gltf", "/a/SHIP.GLB"]) {
+    for (const url of ["/a/rig.glb", "/a/rig.gltf", "/a/RIG.GLB"]) {
       expect(isGltfUrl(url)).toBe(true);
     }
   });
 
   it("is false for an STL", () => {
-    expect(isGltfUrl("/api/assets/public/ships/TB-10426.stl")).toBe(false);
+    expect(isGltfUrl("/api/assets/public/models/TB-1042.stl")).toBe(false);
   });
 
   it("ignores a query string, so a cache-busted asset still matches", () => {
-    expect(isGltfUrl("/api/assets/public/ships/a.glb?v=12345")).toBe(true);
-    expect(isGltfUrl("/api/assets/public/ships/a.stl?v=12345")).toBe(false);
+    expect(isGltfUrl("/api/assets/public/models/a.glb?v=12345")).toBe(true);
+    expect(isGltfUrl("/api/assets/public/models/a.stl?v=12345")).toBe(false);
   });
 
   it("is not fooled by the extension appearing elsewhere in the path", () => {
-    expect(isGltfUrl("/glb/models/ship.stl")).toBe(false);
+    expect(isGltfUrl("/glb/models/rig.stl")).toBe(false);
   });
 });

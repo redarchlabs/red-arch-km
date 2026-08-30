@@ -2703,7 +2703,7 @@ export function FormRenderer({
 
   /** A display-only picture. The `url` is token-filled from the enclosing scope's
    * values (`{id}` = the bound record id) and scheme-checked by `fillTokens`, so the
-   * artwork can follow record state — e.g. `/sim/ship-{condition}.svg`. */
+   * artwork can follow record state — e.g. `/demo/unit-{condition}.svg`. */
   function ImageNode({ el, scope }: { el: ImageElement; scope: Scope }) {
     const src = fillTokens(el.url ?? "", { ...scope.values, id: render.record_id ?? "" });
     if (!src) return null;

@@ -136,9 +136,9 @@ feed a button's workflow inputs or a calculated expression (reference it as
 A **picture** on the screen — the visual anchor a status page needs (a ship, a floor
 plan, a product shot). Display only; it reads no data and writes none.
 
-- **Image URL** — a relative path (e.g. \`/sim/ship-nominal.svg\`) or an \`http(s)\` URL.
+- **Image URL** — a relative path (e.g. \`/demo/unit-nominal.svg\`) or an \`http(s)\` URL.
   It may contain \`{token}\` placeholders filled from the record: \`{id}\` is the bound
-  record id and \`{field_slug}\` any field value — so \`/sim/ship-{condition}.svg\`
+  record id and \`{field_slug}\` any field value — so \`/demo/unit-{condition}.svg\`
   makes the artwork FOLLOW the record's state.
 - **Alt text** — what the picture shows, for screen readers.
 - **Caption** — optional line under the image.

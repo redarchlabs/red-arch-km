@@ -2695,11 +2695,11 @@ class AgentService:
                     "required": ["type", "url"],
                     "optional": ["alt", "caption", "max_height", "width"],
                     "use": (
-                        "A display-only PICTURE — the visual anchor of a status page (a ship, a floor "
+                        "A display-only PICTURE — the visual anchor of a status page (a machine, a floor "
                         "plan, a product shot). `url` is a relative path or http(s) URL and may carry "
                         "{token} placeholders filled from the record ({id} = bound record id, "
                         "{<field_slug>} = a field value), so the artwork FOLLOWS record state — e.g. "
-                        "'/sim/ship-{condition}.svg'. Pair with the view config's `refresh_ms` to "
+                        "'/demo/unit-{condition}.svg'. Pair with the view config's `refresh_ms` to "
                         "make it swap live. Not entity-bound; valid in standalone views."
                     ),
                 },

@@ -26,8 +26,8 @@ class TestNormalize:
     @pytest.mark.parametrize(
         "path",
         [
-            "ships/TB-10426.stl",
-            "public/ships/TB-10426.stl",
+            "models/TB-1042.stl",
+            "public/models/TB-1042.glb",
             "a.png",
             "deep/nested/path/model.glb",
             "with-dash_and_underscore.2.stl",
@@ -37,19 +37,19 @@ class TestNormalize:
         assert normalize_asset_path(path) == path
 
     def test_strips_a_leading_slash(self):
-        assert normalize_asset_path("/ships/a.stl") == "ships/a.stl"
+        assert normalize_asset_path("/models/a.glb") == "models/a.glb"
 
     def test_collapses_duplicate_slashes(self):
-        assert normalize_asset_path("ships//a.stl") == "ships/a.stl"
+        assert normalize_asset_path("models//a.glb") == "models/a.glb"
 
     @pytest.mark.parametrize(
         "path",
         [
             "../secrets.stl",
-            "ships/../../other-org/a.stl",
-            "ships/./a.stl",
+            "models/../../other-org/a.glb",
+            "models/./a.glb",
             "..",
-            "ships/..",
+            "models/..",
             "%2e%2e/a.stl",
             "..%2fa.stl",
         ],
@@ -61,7 +61,7 @@ class TestNormalize:
 
     @pytest.mark.parametrize(
         "path",
-        ["", "   ", "/", "ships/", "a\\b.stl", "a\x00b.stl", "a\nb.stl"],
+        ["", "   ", "/", "models/", "a\\b.stl", "a\x00b.stl", "a\nb.stl"],
     )
     def test_rejects_malformed(self, path):
         with pytest.raises(AssetError):
@@ -74,10 +74,10 @@ class TestNormalize:
 
 class TestKey:
     def test_key_is_scoped_to_the_org(self):
-        assert asset_key(ORG, "ships/a.stl") == f"{ORG}/assets/ships/a.stl"
+        assert asset_key(ORG, "models/a.glb") == f"{ORG}/assets/models/a.glb"
 
     def test_key_normalizes_its_path(self):
-        assert asset_key(ORG, "/ships//a.stl") == f"{ORG}/assets/ships/a.stl"
+        assert asset_key(ORG, "/models//a.glb") == f"{ORG}/assets/models/a.glb"
 
     def test_key_refuses_traversal(self):
         with pytest.raises(AssetError):
@@ -91,13 +91,13 @@ class TestPublicPrefix:
     view share itself uses."""
 
     def test_public_prefix_is_readable(self):
-        assert is_public_path(f"{PUBLIC_PREFIX}/ships/a.stl") is True
+        assert is_public_path(f"{PUBLIC_PREFIX}/models/a.glb") is True
 
     @pytest.mark.parametrize(
         "path",
         [
-            "ships/a.stl",
-            "private/a.stl",
+            "models/a.glb",
+            "private/a.glb",
             "publicish/a.stl",  # prefix match must be on the path SEGMENT
             "x/public/a.stl",
         ],

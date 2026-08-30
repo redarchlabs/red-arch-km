@@ -207,13 +207,13 @@ class LiveValueElement(_Element):
 
 
 class ImageElement(_Element):
-    """A display-only picture — the visual anchor a status page needs (a ship, a
+    """A display-only picture — the visual anchor a status page needs (a machine, a
     floor plan, a product shot) that no data element can supply.
 
     ``url`` may carry ``{token}`` placeholders filled from the enclosing scope's
     values at render time (``{id}`` = the bound record id, ``{<field_slug>}`` = a
     field value, each URL-encoded), so the image can FOLLOW record state — e.g.
-    ``/sim/ship-{condition}.svg`` swaps the artwork as a ship takes damage.
+    ``/demo/unit-{condition}.svg`` swaps the artwork as a unit degrades.
     Only relative or ``http(s)`` URLs are allowed (same rule as link hrefs).
 
     Not entity-bound, so it is valid in a standalone view. ``max_height`` caps the
@@ -1385,7 +1385,7 @@ class Model3dElement(_Element):
     ``url`` points at a binary STL and may carry ``{token}`` placeholders filled
     from the enclosing scope (``{id}`` = the bound record id, ``{<field_slug>}`` =
     a field value), so one element can show whichever object the screen is bound
-    to — ``/sim/ships/{registry}.stl``.
+    to — ``/api/assets/public/models/{asset_code}.glb``.
 
     Rendered by projecting and flat-shading the mesh on a 2D canvas rather than
     through a 3D library: the pages this appears on are status displays, the meshes
@@ -1410,7 +1410,7 @@ class Model3dElement(_Element):
     glow_color: str | None = None
     # A third mesh, drawn LIT rather than emissive: painted panels, hull
     # markings, a livery. Same reason as the glow — one STL can carry only one
-    # material, and these ships' identity is largely in where the paint is.
+    # material, and a machine's identity is often largely in where the paint is.
     accent_url: str | None = None
     accent_color: str | None = None
     # Panel size relative to the model, so plating stays the same physical size
@@ -1435,7 +1435,7 @@ class Model3dElement(_Element):
         """A hex colour, or a `{field_slug}` filled from the bound record.
 
         One element serves every record, so a livery that differs per record —
-        one ship painted gold, another red — has nowhere to live unless the
+        one unit painted gold, another red — has nowhere to live unless the
         colour can come from the row. The renderer re-checks the filled result
         and ignores anything that is not a hex, so a bad field value costs the
         tint rather than the model.

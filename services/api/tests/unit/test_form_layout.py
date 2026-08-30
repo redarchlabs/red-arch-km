@@ -408,7 +408,7 @@ def test_image_element_is_unbound_and_scheme_guarded(ids, fields_by_entity, rels
             "elements": [
                 {
                     "type": "image",
-                    "url": "/sim/ship-{condition}.svg",
+                    "url": "/demo/unit-{condition}.svg",
                     "alt": "The ship",
                     "caption": "Hull integrity nominal",
                     "max_height": 320,
