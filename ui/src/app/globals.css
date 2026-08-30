@@ -263,3 +263,171 @@ html, body {
 .markdown-body th, .markdown-body td { border: 1px solid var(--color-border); padding: 0.35rem 0.6rem; }
 .markdown-body hr { border: none; border-top: 1px solid var(--color-border); margin: 1rem 0; }
 .markdown-body img { max-width: 100%; }
+
+/* ------------------------------------------------------------------ *
+ * Per-view appearance (see api/schemas/form.py :: AppearanceConfig)
+ *
+ * A view definition sets a closed vocabulary of design tokens; the runtime
+ * turns them into custom properties and the `data-` attributes below. These
+ * rules are the generic half: the stylesheet knows what "glass" and "gradient"
+ * mean, never which org asked for them. Colors and radius arrive as custom
+ * properties and need no rules here at all.
+ *
+ * Panels are matched on the utility classes FormRenderer gives every panel it
+ * emits. A three-class compound outranks the single-class utility it overrides,
+ * so no `!important` is needed.
+ * ------------------------------------------------------------------ */
+
+/* Corner radius, where a view pinned one. */
+[style*="--view-radius"] :where(.rounded-lg, .rounded-xl, .rounded-2xl, .rounded-md) {
+  border-radius: var(--view-radius);
+}
+
+/* Translucent panels over the page ground, instead of opaque blocks. The blur
+   is what makes it read as glass rather than as flat transparency. */
+[data-surface="glass"] .rounded-lg.border.bg-background,
+[data-surface="glass"] .rounded-xl.border.bg-background,
+[data-surface="glass"] fieldset.rounded-lg.border {
+  background-color: color-mix(in srgb, var(--color-background) 20%, transparent);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  box-shadow: 10px 10px 10px rgb(0 0 0 / 0.3);
+}
+
+/* Buttons as seated hardware: a vertical gradient across the fill, a light top
+   edge and a dark bottom one, so the control reads as a physical key rather
+   than a painted rectangle. Colors still come from the theme tokens. */
+[data-button-finish="gradient"] button {
+  background-image: linear-gradient(
+    to bottom,
+    rgb(255 255 255 / 0.22) 0%,
+    rgb(255 255 255 / 0.04) 50%,
+    rgb(0 0 0 / 0.22) 100%
+  );
+  border: 1px solid rgb(255 255 255 / 0.35);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.25),
+    5px 5px 10px rgb(0 0 0 / 0.3);
+  text-shadow: 0 1px 1px rgb(0 0 0 / 0.4);
+}
+[data-button-finish="gradient"] button:active {
+  background-image: linear-gradient(
+    to bottom,
+    rgb(0 0 0 / 0.22) 0%,
+    rgb(255 255 255 / 0.04) 50%,
+    rgb(255 255 255 / 0.18) 100%
+  );
+  box-shadow: inset 0 2px 4px rgb(0 0 0 / 0.4);
+}
+
+/* A tiled pattern behind the element tree, plus a vignette that pulls the eye
+   to the middle of the screen — the ground a control surface sits on, not
+   decoration to be read. */
+[data-texture="diamond"],
+[data-texture="grid"] {
+  background-attachment: fixed;
+}
+[data-texture="diamond"] {
+  background-image:
+    radial-gradient(ellipse at center, rgb(0 0 0 / 0) 0%, rgb(0 0 0 / 0.85) 100%),
+    repeating-linear-gradient(
+      45deg,
+      transparent 0 24px,
+      rgb(255 255 255 / 0.045) 24px 25px
+    ),
+    repeating-linear-gradient(
+      -45deg,
+      transparent 0 24px,
+      rgb(255 255 255 / 0.045) 24px 25px
+    );
+}
+[data-texture="grid"] {
+  background-image:
+    radial-gradient(ellipse at center, rgb(0 0 0 / 0) 0%, rgb(0 0 0 / 0.85) 100%),
+    repeating-linear-gradient(0deg, transparent 0 31px, rgb(255 255 255 / 0.05) 31px 32px),
+    repeating-linear-gradient(90deg, transparent 0 31px, rgb(255 255 255 / 0.05) 31px 32px);
+}
+
+/* Heading case. Last in the file so it beats a theme's own default — a view
+   that asks for capitalize means it. */
+[data-heading-case="uppercase"] :where(h1, h2, h3) {
+  text-transform: uppercase;
+}
+[data-heading-case="capitalize"] :where(h1, h2, h3) {
+  text-transform: capitalize;
+}
+[data-heading-case="none"] :where(h1, h2, h3) {
+  text-transform: none;
+}
+
+/* Chrome around the whole surface: a bezel that reads as a cockpit rather than
+   a browser page. Drawn from gradients, not bitmaps, so it tints from the
+   theme's own tokens and costs nothing to ship. Fixed rather than in flow, so
+   it does not move when the body under it scrolls; the wrapper reserves the
+   space the top sweep occupies. */
+[data-frame="bezel"] {
+  padding-top: 76px;
+}
+[data-frame="bezel"]::before,
+[data-frame="bezel"]::after {
+  content: "";
+  position: fixed;
+  pointer-events: none;
+  z-index: 30;
+  background-image: linear-gradient(
+    to bottom,
+    rgb(255 255 255 / 0.85) 0%,
+    rgb(190 196 203 / 0.75) 42%,
+    rgb(96 103 110 / 0.8) 58%,
+    rgb(168 175 182 / 0.7) 100%
+  );
+  background-color: var(--color-muted);
+  box-shadow: 4px 4px 14px rgb(0 0 0 / 0.5);
+}
+/* Top-left sweep, stopping well short of the right edge so a kiosk's own
+   controls stay reachable. */
+[data-frame="bezel"]::before {
+  top: 0;
+  left: 0;
+  width: min(46%, 760px);
+  height: 62px;
+  border-bottom-right-radius: 72px 44px;
+}
+/* Bottom-right counterweight: the same shape rotated, which is what makes the
+   pair read as one enclosing frame instead of two unrelated bars. */
+[data-frame="bezel"]::after {
+  bottom: 0;
+  right: 0;
+  width: min(38%, 620px);
+  height: 44px;
+  border-top-left-radius: 64px 38px;
+}
+
+/* Card switching as a rail down the side. The tab strip and its panel are
+   siblings, so the parent becomes the row and the strip becomes the column. */
+[data-nav="rail"] :has(> [role="tablist"]) {
+  display: flex;
+  align-items: flex-start;
+  gap: 1.25rem;
+}
+[data-nav="rail"] [role="tablist"] {
+  flex-direction: column;
+  flex: 0 0 auto;
+  width: 148px;
+  overflow-x: visible;
+  border-bottom: none;
+  border-right: 1px solid var(--color-border);
+  padding-right: 0.5rem;
+  gap: 0.35rem;
+}
+[data-nav="rail"] [role="tablist"] > [role="tab"] {
+  width: 100%;
+  text-align: left;
+  justify-content: flex-start;
+}
+/* The panel takes the rest of the row. `min-width: 0` so a wide table inside it
+   scrolls in its own box instead of forcing the rail off-screen. */
+[data-nav="rail"] :has(> [role="tablist"]) > :not([role="tablist"]) {
+  flex: 1 1 auto;
+  min-width: 0;
+}
