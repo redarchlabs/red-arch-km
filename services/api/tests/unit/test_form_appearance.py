@@ -124,3 +124,70 @@ class TestOnFormConfig:
     def test_invalid_appearance_rejects_the_whole_config(self):
         with pytest.raises(ValidationError):
             FormConfig.model_validate({"elements": [], "appearance": {"colors": {"primary": "javascript:x"}}})
+
+
+class TestFrameAndNav:
+    """Two layout treatments a station needs and a dashboard does not: a bezel
+    around the whole surface, and card switching as a rail down one side."""
+
+    @pytest.mark.parametrize("frame", ["none", "bezel"])
+    def test_frame_enum(self, frame):
+        assert AppearanceConfig(frame=frame).frame == frame
+
+    def test_rejects_unknown_frame(self):
+        with pytest.raises(ValidationError):
+            AppearanceConfig(frame="art-deco")
+
+    @pytest.mark.parametrize("nav", ["tabs", "rail"])
+    def test_nav_enum(self, nav):
+        assert AppearanceConfig(nav=nav).nav == nav
+
+    def test_rejects_unknown_nav(self):
+        with pytest.raises(ValidationError):
+            AppearanceConfig(nav="carousel")
+
+
+class TestStateDrivenColors:
+    """The whole surface repainting from one field on the bound record — a ship's
+    alert condition, an SLA breach, a line going down. The field names itself in
+    `state_field`; `states` maps its value to token overrides."""
+
+    def test_state_field_accepts_a_field_slug(self):
+        assert AppearanceConfig(state_field="alert_level").state_field == "alert_level"
+
+    @pytest.mark.parametrize(
+        "slug",
+        ["Alert", "alert-level", "1alert", "", "a" * 64, "alert level", "alert;color:red"],
+    )
+    def test_state_field_rejects_a_non_slug(self, slug):
+        with pytest.raises(ValidationError, match="field slug"):
+            AppearanceConfig(state_field=slug)
+
+    def test_states_map_values_to_color_overrides(self):
+        a = AppearanceConfig(
+            state_field="alert_level",
+            states={"1": {"colors": {"primary": "#801919"}}},
+        )
+        assert a.states["1"].colors == {"primary": "#801919"}
+
+    def test_state_colors_are_validated_like_base_colors(self):
+        with pytest.raises(ValidationError, match="must be a hex color"):
+            AppearanceConfig(states={"1": {"colors": {"primary": "url(javascript:1)"}}})
+
+    def test_state_colors_reject_an_unknown_token(self):
+        with pytest.raises(ValidationError, match="unknown color token"):
+            AppearanceConfig(states={"1": {"colors": {"nope": "#000000"}}})
+
+    def test_state_keys_are_bounded_in_length(self):
+        # A key becomes an attribute value; an unbounded one is a payload, not a state.
+        with pytest.raises(ValidationError, match="state key"):
+            AppearanceConfig(states={"x" * 65: {"colors": {}}})
+
+    def test_state_count_is_bounded(self):
+        with pytest.raises(ValidationError, match="too many states"):
+            AppearanceConfig(states={str(i): {"colors": {}} for i in range(33)})
+
+    def test_states_default_empty(self):
+        a = AppearanceConfig()
+        assert a.states == {}
+        assert a.state_field is None

@@ -787,6 +787,12 @@ export interface ViewAppearance {
   texture?: "none" | "diamond" | "grid" | null;
   heading_case?: "none" | "uppercase" | "capitalize" | null;
   radius_px?: number | null;
+  frame?: "none" | "bezel" | null;
+  nav?: "tabs" | "rail" | null;
+  /** Field slug on the bound record whose value selects a `states` entry. */
+  state_field?: string | null;
+  /** Field value -> token overrides layered over the base colors. */
+  states?: Record<string, { colors?: Record<string, string> | null }> | null;
 }
 
 /** Org identity for a chrome-free page. Present only on an anonymous share

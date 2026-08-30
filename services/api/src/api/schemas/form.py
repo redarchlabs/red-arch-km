@@ -114,6 +114,43 @@ APPEARANCE_COLOR_TOKENS: frozenset[str] = frozenset(
 _HEX_COLOR = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
 
 
+def _validate_color_map(value: dict[str, str]) -> dict[str, str]:
+    """Allow-listed token names, hex-only values. Shared by the base appearance
+    block and every state override, so a state cannot smuggle past the check that
+    guards the base."""
+    for token, color in value.items():
+        if token not in APPEARANCE_COLOR_TOKENS:
+            raise ValueError(
+                f"unknown color token {token!r}; expected one of {', '.join(sorted(APPEARANCE_COLOR_TOKENS))}"
+            )
+        if not isinstance(color, str) or not _HEX_COLOR.match(color):
+            raise ValueError(f"{token!r} must be a hex color like '#233f7a', got {color!r}")
+    return value
+
+
+# A field slug, as the entity layer spells them. `state_field` names a field on
+# the bound record, and its value reaches a `data-` attribute.
+_FIELD_SLUG = re.compile(r"^[a-z][a-z0-9_]{0,62}$")
+
+# A state key is a field VALUE ("1", "red-alert"), so it is data rather than an
+# identifier -- but it lands in an attribute, so it is still bounded.
+_MAX_STATE_KEY = 64
+_MAX_STATES = 32
+
+
+class AppearanceState(BaseModel):
+    """Token overrides applied while the bound record sits in one state."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    colors: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("colors")
+    @classmethod
+    def _validate_colors(cls, value: dict[str, str]) -> dict[str, str]:
+        return _validate_color_map(value)
+
+
 class AppearanceConfig(BaseModel):
     """Per-view styling: a closed vocabulary of design tokens.
 
@@ -145,17 +182,39 @@ class AppearanceConfig(BaseModel):
     # Corner radius for panels and buttons. Bounded because it is emitted as a
     # length, and because past ~48px a control stops reading as a control.
     radius_px: int | None = Field(default=None, ge=0, le=48)
+    # Chrome drawn around the whole surface. A station reads as a cockpit with
+    # one; a page of prose does not want one at all.
+    frame: Literal["none", "bezel"] | None = None
+    # How a `tab_group` presents itself: a strip along the top, or a rail down the
+    # side. A rail is what a control surface with a handful of modes wants -- it
+    # stays put while the body under it changes completely.
+    nav: Literal["tabs", "rail"] | None = None
+    # Repaint the surface from one field on the bound record. `state_field` names
+    # the field; `states` maps its value to token overrides layered over the base.
+    # A ship's alert condition, an SLA breach, a line going down.
+    state_field: str | None = None
+    states: dict[str, AppearanceState] = Field(default_factory=dict)
 
     @field_validator("colors")
     @classmethod
     def _validate_colors(cls, value: dict[str, str]) -> dict[str, str]:
-        for token, color in value.items():
-            if token not in APPEARANCE_COLOR_TOKENS:
-                raise ValueError(
-                    f"unknown color token {token!r}; expected one of {', '.join(sorted(APPEARANCE_COLOR_TOKENS))}"
-                )
-            if not isinstance(color, str) or not _HEX_COLOR.match(color):
-                raise ValueError(f"{token!r} must be a hex color like '#233f7a', got {color!r}")
+        return _validate_color_map(value)
+
+    @field_validator("state_field")
+    @classmethod
+    def _validate_state_field(cls, value: str | None) -> str | None:
+        if value is not None and not _FIELD_SLUG.match(value):
+            raise ValueError(f"{value!r} is not a field slug (lowercase, digits, underscore)")
+        return value
+
+    @field_validator("states")
+    @classmethod
+    def _validate_states(cls, value: dict[str, Any]) -> dict[str, Any]:
+        if len(value) > _MAX_STATES:
+            raise ValueError(f"too many states: {len(value)} (max {_MAX_STATES})")
+        for key in value:
+            if not key or len(key) > _MAX_STATE_KEY:
+                raise ValueError(f"state key {key[:16]!r} must be 1-{_MAX_STATE_KEY} characters")
         return value
 
 

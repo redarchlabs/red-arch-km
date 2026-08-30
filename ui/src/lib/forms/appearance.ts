@@ -26,11 +26,27 @@ export interface AppearanceProps {
   "data-button-finish"?: string;
   "data-texture"?: string;
   "data-heading-case"?: string;
+  "data-frame"?: string;
+  "data-nav"?: string;
+  /** The bound record's value for `state_field`, once it matched a declared
+   * state. Present so a stylesheet (or a test) can see which state is live. */
+  "data-view-state"?: string;
+}
+
+/** A field value is usable as a state key only if it is a plain scalar: the key
+ * is a string comparison, and an object or array has no meaningful spelling. */
+function stateKey(value: unknown): string | null {
+  if (typeof value === "string") return value;
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  if (typeof value === "boolean") return String(value);
+  return null;
 }
 
 export function appearanceProps(
   appearance: ViewAppearance | null | undefined,
-  accentColor?: string | null
+  accentColor?: string | null,
+  /** The bound record's values, used only to resolve `state_field`. */
+  values?: Record<string, unknown> | null
 ): AppearanceProps {
   const style: Record<string, string> = {};
 
@@ -44,7 +60,21 @@ export function appearanceProps(
     return Object.keys(style).length ? { style: style as CSSProperties } : {};
   }
 
-  for (const [token, color] of Object.entries(appearance.colors ?? {})) {
+  // The state's overrides layer OVER the base, so a view declares its resting
+  // look once and each state names only what changes.
+  let liveState: string | null = null;
+  if (appearance.state_field && appearance.states && values) {
+    const key = stateKey(values[appearance.state_field]);
+    if (key !== null && Object.prototype.hasOwnProperty.call(appearance.states, key)) {
+      liveState = key;
+    }
+  }
+  const colors = {
+    ...(appearance.colors ?? {}),
+    ...(liveState !== null ? (appearance.states?.[liveState]?.colors ?? {}) : {}),
+  };
+
+  for (const [token, color] of Object.entries(colors)) {
     // Token names reach a custom-property name, so they are held to the same
     // shape the server allow-list guarantees: lowercase words and hyphens only.
     if (!/^[a-z]+(?:-[a-z]+)*$/.test(token)) continue;
@@ -65,5 +95,8 @@ export function appearanceProps(
   if (appearance.button_finish) props["data-button-finish"] = appearance.button_finish;
   if (appearance.texture) props["data-texture"] = appearance.texture;
   if (appearance.heading_case) props["data-heading-case"] = appearance.heading_case;
+  if (appearance.frame) props["data-frame"] = appearance.frame;
+  if (appearance.nav) props["data-nav"] = appearance.nav;
+  if (liveState !== null) props["data-view-state"] = liveState;
   return props;
 }

@@ -248,7 +248,7 @@ export function ViewRuntime({ id, kiosk = false, token }: ViewRuntimeProps) {
         // subtree the same way: custom properties for colors and radius, data
         // attributes for the surface/button/texture treatments that generic
         // rules in globals.css key off.
-        {...appearanceProps(render.config.appearance, branding?.accent_color)}
+        {...appearanceProps(render.config.appearance, branding?.accent_color, render.values)}
       >
         {/* A shared page gets no way "back into the app" — there is no app for
             an anonymous visitor to return to, and offering one only invites a
