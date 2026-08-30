@@ -6,7 +6,7 @@ A workflow's trigger may carry a ``schedule`` block: a fixed interval
 fire, given when it last fired.
 
 ``every_seconds`` exists for simulation-style loops — a workflow that advances
-shared state (heat rising, a ship moving) reads as broken at one tick per minute.
+shared state (heat rising, a vehicle moving) reads as broken at one tick per minute.
 Note the check is only as fine as the sweep that calls it: the beat interval
 (``WORKFLOW_TIMER_INTERVAL``) is the real floor, so an ``every_seconds`` below it
 fires once per sweep, not on its stated period.

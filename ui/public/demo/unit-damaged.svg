@@ -1,5 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 600" width="1200" height="600" role="img" aria-label="Vessel in critical condition, engines dark and shields down">
-  <title>Critical — shields down, engines offline</title>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 600" width="1200" height="600" role="img" aria-label="Unit with structural damage and failing shields">
+  <title>Hull damage — shields failing</title>
   <defs>
     <linearGradient id="space" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0%" stop-color="#0b1026"/>
@@ -38,16 +38,14 @@
   </g>
 
   <!-- shield envelope: intact -->
-  <ellipse cx="600" cy="300" rx="470" ry="215" fill="none" stroke="#ef4444" stroke-opacity=".45" stroke-width="3"
-           stroke-dasharray="10 54"/>
-  <ellipse cx="600" cy="300" rx="500" ry="240" fill="none" stroke="#ef4444" stroke-opacity=".18" stroke-width="20"/>
+  <ellipse cx="600" cy="300" rx="470" ry="215" fill="url(#shield)" opacity=".45"/>
+  <ellipse cx="600" cy="300" rx="470" ry="215" fill="none" stroke="#ffc24d" stroke-opacity=".6" stroke-width="3"
+           stroke-dasharray="46 34"/>
 
   <!-- engine exhaust -->
   <g>
-    <ellipse cx="272" cy="300" rx="34" ry="14" fill="#7a2d12" opacity=".7"/>
-    <g fill="#6b7280" opacity=".55">
-      <circle cx="240" cy="286" r="26"/><circle cx="196" cy="304" r="34"/><circle cx="146" cy="292" r="26"/>
-    </g>
+    <ellipse cx="228" cy="300" rx="105" ry="38" fill="url(#engineGlow)"/>
+    <ellipse cx="258" cy="300" rx="46" ry="18" fill="#ffe2ab" opacity=".85"/>
   </g>
 
   <!-- ship -->
@@ -58,25 +56,25 @@
     <path d="M1008 276 Q1090 288 1132 300 Q1090 312 1008 324 Z" fill="#dfe6f2" stroke="#39414f" stroke-width="3"/>
     <!-- upper fin -->
     <path d="M520 244 L565 140 L640 152 L660 240 Z" fill="url(#hullDark)" stroke="#39414f" stroke-width="4"/>
-    <!-- lower fin: sheared off -->
-    <path d="M520 356 L560 430 L596 420 L618 398 L640 448 L660 360 Z" fill="url(#hullDark)" stroke="#39414f" stroke-width="4"/>
+    <!-- lower fin -->
+    <path d="M520 356 L565 460 L640 448 L660 360 Z" fill="url(#hullDark)" stroke="#39414f" stroke-width="4"/>
     <!-- engine block -->
     <rect x="295" y="262" width="70" height="76" rx="12" fill="#5c6675" stroke="#39414f" stroke-width="4"/>
-    <rect x="308" y="278" width="42" height="44" rx="8" fill="#3b1d10" opacity=".95"/>
+    <rect x="308" y="278" width="42" height="44" rx="8" fill="#ffb347" opacity=".9"/>
     <!-- hull stripe -->
     <path d="M370 300 L1000 300" stroke="#e2372f" stroke-width="8" stroke-linecap="round" opacity=".85"/>
     <!-- windows -->
-    <g fill="#2b3040" stroke="#39414f" stroke-width="2">
-      <circle cx="905" cy="288" r="15" fill="#ef4444" opacity=".85"/><circle cx="855" cy="284" r="11"/>
-      <circle cx="805" cy="282" r="11"/><circle cx="755" cy="281" r="11" fill="#ef4444" opacity=".6"/>
+    <g fill="#ffe98a" stroke="#39414f" stroke-width="2">
+      <circle cx="905" cy="288" r="15"/><circle cx="855" cy="284" r="11" fill="#2b3040"/><circle cx="805" cy="282" r="11"/>
+      <circle cx="755" cy="281" r="11"/>
     </g>
     <!-- panel lines -->
     <g stroke="#8c97a8" stroke-width="3" opacity=".8">
       <path d="M430 256 L430 344"/><path d="M700 246 L700 354"/><path d="M840 240 L840 360"/>
     </g>
     <!-- running lights: green = nominal -->
-    <g fill="#ef4444">
-      <circle cx="600" cy="243" r="11"/><circle cx="600" cy="357" r="11"/>
+    <g fill="#fbbf24">
+      <circle cx="600" cy="243" r="9"/><circle cx="600" cy="357" r="9"/>
     </g>
     <!-- battle damage: scorched breach on the upper hull + buckled plating -->
     <g>
@@ -89,18 +87,11 @@
       </g>
       <g fill="#ffd166">
         <circle cx="758" cy="243" r="5"/><circle cx="781" cy="264" r="4"/><circle cx="698" cy="232" r="4"/>
-        <circle cx="812" cy="238" r="6"/><circle cx="666" cy="252" r="5"/><circle cx="586" cy="342" r="5"/>
-      </g>
-      <!-- second breach, mid-hull -->
-      <path d="M430 268 L486 262 L502 300 L462 316 L418 296 Z" fill="#3b2417" stroke="#1c1108" stroke-width="3"/>
-      <path d="M444 278 L480 274 L488 298 L458 306 Z" fill="#151515"/>
-      <g stroke="#ff4d3d" stroke-width="5" stroke-linecap="round" opacity=".95">
-        <path d="M470 274 L500 250"/><path d="M482 292 L520 288"/>
       </g>
     </g>
   </g>
 
   <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace">
-    <text x="600" y="545" fill="#ef4444" font-size="30" text-anchor="middle" letter-spacing="6">CRITICAL — ALL HANDS RESPOND</text>
+    <text x="600" y="545" fill="#fbbf24" font-size="30" text-anchor="middle" letter-spacing="6">HULL BREACH — SHIELDS FAILING</text>
   </g>
 </svg>

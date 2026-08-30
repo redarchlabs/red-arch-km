@@ -2695,11 +2695,11 @@ class AgentService:
                     "required": ["type", "url"],
                     "optional": ["alt", "caption", "max_height", "width"],
                     "use": (
-                        "A display-only PICTURE — the visual anchor of a status page (a ship, a floor "
+                        "A display-only PICTURE — the visual anchor of a status page (a machine, a floor "
                         "plan, a product shot). `url` is a relative path or http(s) URL and may carry "
                         "{token} placeholders filled from the record ({id} = bound record id, "
                         "{<field_slug>} = a field value), so the artwork FOLLOWS record state — e.g. "
-                        "'/sim/ship-{condition}.svg'. Pair with the view config's `refresh_ms` to "
+                        "'/demo/unit-{condition}.svg'. Pair with the view config's `refresh_ms` to "
                         "make it swap live. Not entity-bound; valid in standalone views."
                     ),
                 },
@@ -2850,6 +2850,92 @@ class AgentService:
                         "Embeds a SAVED REPORT and draws it per the report's own viz "
                         "(bar/line/pie/table/metric). Not entity-bound; valid standalone. "
                         "Clicking it opens an enlarged view. Set poll_ms for a live dashboard."
+                    ),
+                },
+                "plot": {
+                    "required": ["type"],
+                    "optional": [
+                        "mode",
+                        "label",
+                        "series",
+                        "max_radius",
+                        "x_min",
+                        "x_max",
+                        "y_min",
+                        "y_max",
+                        "rings",
+                        "sweep_seconds",
+                        "show_labels",
+                        "height",
+                        "poll_ms",
+                        "empty_text",
+                        "width",
+                        "visible_when",
+                    ],
+                    "notes": (
+                        "Records plotted on a coordinate space. mode 'polar' draws range "
+                        "rings (and an optional sweep) from a series' angle+radius fields, "
+                        "or from x+y when the data already carries relative offsets; mode "
+                        "'cartesian' draws a gridded field from x+y. Each series is "
+                        "{entity, angle|radius|x|y, point_label, category, colors, filters, "
+                        "limit} and reads its own entity, so a plot works on a standalone "
+                        "view. Use it when position matters more than the numbers -- a "
+                        "table answers 'how far', a plot answers 'where'."
+                    ),
+                },
+                "model_3d": {
+                    "required": ["type", "url"],
+                    "optional": [
+                        "label",
+                        "height",
+                        "spin_seconds",
+                        "angle",
+                        "color",
+                        "finish",
+                        "panel_scale",
+                        "glow_url",
+                        "glow_color",
+                        "accent_url",
+                        "accent_color",
+                        "width",
+                        "visible_when",
+                    ],
+                    "notes": (
+                        "A binary STL shown as a slowly turning solid. finish "
+                        "'panelled' generates hull plating and projects it onto the "
+                        "mesh (an STL stores triangles only -- no texture coordinates); "
+                        "panel_scale sizes the plating relative to the model. An STL also "
+                        "carries no material, so parts that must look different need their "
+                        "own mesh: glow_url is drawn emissive (lights, engine faces) and "
+                        "accent_url lit (painted panels, markings), both in the hull's own "
+                        "coordinates. url takes {token} placeholders filled from the bound "
+                        "record ({id}, {field_slug}), so one element serves every record. "
+                        "Models usually live in the org asset store: "
+                        "'/api/assets/public/models/{registry}.stl'. Meant for a few thousand "
+                        "triangles on a status display, not a CAD viewer."
+                    ),
+                },
+                "keypad": {
+                    "required": ["type", "workflow_id"],
+                    "optional": [
+                        "label",
+                        "input_name",
+                        "inputs",
+                        "submit_label",
+                        "placeholder",
+                        "max_length",
+                        "allow_decimal",
+                        "allow_negative",
+                        "confirm",
+                        "width",
+                        "visible_when",
+                    ],
+                    "notes": (
+                        "A numeric entry pad that runs a workflow with what was typed, "
+                        "passed as the input named by input_name (default 'value'); "
+                        "'inputs' are evaluated over the view scope and sent alongside. "
+                        "For a touch console: big digits, and the value committed on Enter "
+                        "rather than on every keystroke."
                     ),
                 },
                 "record_list": {

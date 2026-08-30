@@ -52,6 +52,9 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { buildCatalog, fieldMeta, relatedEntityId } from "@/lib/forms/catalog";
 import { fillTokens } from "@/lib/forms/href";
+import { KeypadNode } from "./KeypadNode";
+import { Model3dNode } from "./Model3dNode";
+import { PlotNode } from "./PlotNode";
 import { shareTarget } from "@/lib/forms/shareUrl";
 import { evaluate } from "@/lib/forms/jsonLogic";
 import { mergeServerValues, sameValue } from "@/lib/forms/mergeValues";
@@ -64,6 +67,7 @@ import { QrCodeCard } from "./QrCodeCard";
 import { PuzzlePad } from "./puzzle/PuzzlePad";
 import type { PadOutcome } from "./puzzle/types";
 import { SlideDeck, coerceSlides } from "./SlideDeck";
+import { useShareToken } from "@/context/ShareTokenContext";
 
 /**
  * The one renderer that walks a `FormRender` element tree — used by the public
@@ -389,6 +393,11 @@ function RecordListNode({
   const [rows, setRows] = useState<EntityRecord[] | null>(null);
   const [error, setError] = useState(false);
   const [busyRow, setBusyRow] = useState<string | null>(null);
+  // A record list reads an entity through the org-scoped API, which an anonymous
+  // visitor has no credential for. The share endpoint already reports this
+  // element as unsupported when the link is created; without checking here the
+  // page would fire a request that can only 401. Say so instead of failing.
+  const shared = useShareToken() !== null;
   // Plucked results of the element's auxiliary queries, keyed by lookup key —
   // the `lookups.*` scope per-row visibility expressions evaluate against.
   const [lookups, setLookups] = useState<Record<string, unknown[]>>({});
@@ -455,6 +464,7 @@ function RecordListNode({
   }, [lookupsKey, runTick]);
 
   useEffect(() => {
+    if (shared) return;
     if (!el.entity) {
       setError(true);
       return;
@@ -643,7 +653,11 @@ function RecordListNode({
 
   return (
     <ViewCard title={el.label} flush>
-      {error ? (
+      {shared ? (
+        <div className="px-4 py-3 text-sm text-muted-foreground">
+          Not available on a shared link.
+        </div>
+      ) : error ? (
         <div className="px-4 py-3 text-sm text-destructive">Unable to load records.</div>
       ) : rows == null ? (
         // Initial load only — background re-polls swap data in place (or not at
@@ -1303,6 +1317,9 @@ function ChatNode({ el, preview }: { el: ChatElement; preview: boolean }) {
       if (mountedRef.current) failTurn("The robot did not reply. Try asking again.");
     }, ANSWER_TIMEOUT_MS);
     return () => window.clearTimeout(id);
+    // `failTurn` is redeclared every render; depending on it would re-arm the
+    // backstop on each one, which is the opposite of a deadline.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [thinking]);
 
   // While the robot is thinking, drip out filler chatter: the first line after
@@ -2106,7 +2123,6 @@ export function FormRenderer({
       }
       return changed ? next : prev;
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [render]);
 
   // Adopt a refreshed render: `values` is seeded once at mount, so without this a
@@ -2353,6 +2369,31 @@ export function FormRenderer({
         );
       case "image":
         return <div className={spanClass(el.width)}>{ImageNode({ el, scope })}</div>;
+      case "plot":
+        return (
+          <div className={spanClass(el.width)}>
+            <PlotNode el={el} />
+          </div>
+        );
+      case "model_3d":
+        return (
+          <div className={spanClass(el.width)}>
+            <Model3dNode el={el} values={scope.values} recordId={render.record_id} />
+          </div>
+        );
+      case "keypad":
+        return (
+          <div className={spanClass(el.width)}>
+            <KeypadNode
+              el={el}
+              values={values}
+              disabled={preview || submitting}
+              onRun={async (workflowId, inputs) => {
+                await onRunWorkflow?.(workflowId, inputs);
+              }}
+            />
+          </div>
+        );
       case "qr_code":
         return (
           <div className={spanClass(el.width)}>
@@ -2662,7 +2703,7 @@ export function FormRenderer({
 
   /** A display-only picture. The `url` is token-filled from the enclosing scope's
    * values (`{id}` = the bound record id) and scheme-checked by `fillTokens`, so the
-   * artwork can follow record state — e.g. `/sim/ship-{condition}.svg`. */
+   * artwork can follow record state — e.g. `/demo/unit-{condition}.svg`. */
   function ImageNode({ el, scope }: { el: ImageElement; scope: Scope }) {
     const src = fillTokens(el.url ?? "", { ...scope.values, id: render.record_id ?? "" });
     if (!src) return null;

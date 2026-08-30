@@ -1354,8 +1354,8 @@ class LlmQuestion:
     stored question record uses, so the next node can ``create_record`` it field-for-field
     and a later gateway can grade an answer against ``{{vars.q.correct_choice}}``.
 
-    Config: ``{"topic": "fractions, framed as a ship's oxygen tank", "audience":
-    "{{vars.m.grade_band}} grade", "style"?: "in the voice of a ship's computer",
+    Config: ``{"topic": "fractions, framed as a fuel gauge", "audience":
+    "{{vars.m.grade_band}} grade", "style"?: "in the voice of a station announcer",
     "model"?: "..."}``. Fields may be literals, ``{{ }}`` templates, or ``$ref``
     envelopes. Wire ``capture`` (e.g. ``"q"``) to use the result downstream.
 

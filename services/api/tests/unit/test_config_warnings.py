@@ -9,7 +9,6 @@ refusing to start would take them down instead of telling anyone why.
 import logging
 
 import pytest
-
 from api.config import Settings
 
 pytestmark = pytest.mark.unit

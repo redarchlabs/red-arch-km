@@ -13,6 +13,7 @@ import { appearanceProps } from "@/lib/forms/appearance";
 import type { FormRender, OrgBranding } from "@/lib/api/forms";
 import { getPublicViewRender, getViewRender, runPublicViewWorkflow } from "@/lib/api/views";
 import { runWorkflow } from "@/lib/api/workflows";
+import { ShareTokenProvider } from "@/context/ShareTokenContext";
 
 /** Logos are <img> sources, not axios calls, so they need the absolute API base. */
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
@@ -45,7 +46,19 @@ interface ViewRuntimeProps {
 /** Ceiling for one inline manual run — matches the API's own outbound cap. */
 const RUN_TIMEOUT_MS = 300_000;
 
-export function ViewRuntime({ id, kiosk = false, token }: ViewRuntimeProps) {
+export function ViewRuntime(props: ViewRuntimeProps) {
+  // The token is the only credential a shared page has, and it is not carried by
+  // any client the element tree uses. Publishing it here means an element that
+  // needs an org-scoped resource (a 3D model, a texture) can resolve it for the
+  // context it is in, rather than the view's config having to say twice.
+  return (
+    <ShareTokenProvider token={props.token ?? null}>
+      <ViewRuntimeInner {...props} />
+    </ShareTokenProvider>
+  );
+}
+
+function ViewRuntimeInner({ id, kiosk = false, token }: ViewRuntimeProps) {
   // An entity-bound view can target a specific record via `?record_id=` — its
   // fields prefill, and run_workflow buttons run against that record (so an
   // update_record/update_record_field step writes it).

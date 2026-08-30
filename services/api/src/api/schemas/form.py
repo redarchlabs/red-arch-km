@@ -191,7 +191,7 @@ class AppearanceConfig(BaseModel):
     nav: Literal["tabs", "rail"] | None = None
     # Repaint the surface from one field on the bound record. `state_field` names
     # the field; `states` maps its value to token overrides layered over the base.
-    # A ship's alert condition, an SLA breach, a line going down.
+    # A plant's alarm state, an SLA breach, a line going down.
     state_field: str | None = None
     states: dict[str, AppearanceState] = Field(default_factory=dict)
 

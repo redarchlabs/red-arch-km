@@ -263,6 +263,11 @@ def _validate_element(
         "report",
         "stat",
         "record_list",
+        # A plot reads its own entities, a 3D model is a picture, and a keypad
+        # writes through a workflow rather than a field binding.
+        "plot",
+        "model_3d",
+        "keypad",
     ):
         return  # presentational / unbound — nothing to bind at this entity level
     elif etype == "section":

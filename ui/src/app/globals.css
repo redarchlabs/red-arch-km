@@ -123,13 +123,13 @@
 }
 
 /*
- * "Console" — a black-ground control-surface theme for screens a crew reads
- * across a room: a bridge station, a kiosk, an operations wall display.
+ * "Console" — a black-ground control-surface theme for screens a team reads
+ * across a room: a control station, a kiosk, an operations wall display.
  *
  * The ground is true black rather than the dark theme's #0a0a0a. On an OLED or a
  * projector in a darkened room that is the difference between a panel that floats
- * and a panel that shows its rectangle, and it is what console demoulators (Northwind
- * among them) settle on for the same reason.
+ * and a panel that shows its rectangle, and it is what control-room consoles
+ * settle on for the same reason.
  *
  * Cyan leads because it stays legible against every alert colour a station shows
  * (amber, red) without competing with them for "this is the urgent thing" — the

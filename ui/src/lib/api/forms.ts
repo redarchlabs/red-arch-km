@@ -149,7 +149,7 @@ export interface LiveValueElement extends ElementBase {
 
 /** A display-only picture. `url` may carry `{token}` placeholders filled from the
  * enclosing scope's values (`{id}` = the bound record id, `{<field_slug>}` = a field
- * value), so the artwork can follow record state — e.g. `/sim/ship-{condition}.svg`.
+ * value), so the artwork can follow record state — e.g. `/demo/unit-{condition}.svg`.
  * Relative or http(s) URLs only. */
 export interface ImageElement extends ElementBase {
   type: "image";
@@ -272,6 +272,82 @@ export interface RecordListFilterConfig {
 
 /** Read-only "status board": lists existing records of an entity (newest-first or by
  * sort_by), optionally re-polling to stay live, with an optional per-row workflow button. */
+/** One set of points on a `plot`, read from an entity. */
+export interface PlotSeries {
+  entity: string;
+  label?: string | null;
+  /** Polar: degrees clockwise from up, and distance out. */
+  angle?: string | null;
+  radius?: string | null;
+  /** Cartesian: read directly. */
+  x?: string | null;
+  y?: string | null;
+  point_label?: string | null;
+  category?: string | null;
+  colors?: Record<string, string> | null;
+  color?: string | null;
+  filters?: RecordListFilterConfig[];
+  limit?: number;
+}
+
+/** Records plotted on a coordinate space: a radar scope, a scatter, a map. */
+export interface PlotElement extends ElementBase {
+  type: "plot";
+  width?: FieldWidth | null;
+  mode?: "polar" | "cartesian";
+  label?: string | null;
+  series?: PlotSeries[];
+  max_radius?: number | null;
+  x_min?: number | null;
+  x_max?: number | null;
+  y_min?: number | null;
+  y_max?: number | null;
+  rings?: number;
+  sweep_seconds?: number | null;
+  show_labels?: boolean;
+  height?: number;
+  poll_ms?: number | null;
+  empty_text?: string | null;
+}
+
+/** A binary STL rendered as a slowly turning flat-shaded solid. */
+export interface Model3dElement extends ElementBase {
+  type: "model_3d";
+  width?: FieldWidth | null;
+  url: string;
+  label?: string | null;
+  height?: number;
+  spin_seconds?: number;
+  angle?: number;
+  color?: string | null;
+  /** `panelled` generates plating and projects it; an STL carries no UVs. */
+  finish?: "smooth" | "panelled";
+  panel_scale?: number;
+  /** A second mesh drawn with an emissive material — engine faces, running
+   * lights. STL has no materials, so glowing parts need their own file. */
+  glow_url?: string | null;
+  glow_color?: string | null;
+  /** A third mesh drawn lit, not emissive — painted panels and hull markings. */
+  accent_url?: string | null;
+  accent_color?: string | null;
+}
+
+/** A numeric entry pad that runs a workflow with what was typed. */
+export interface KeypadElement extends ElementBase {
+  type: "keypad";
+  width?: FieldWidth | null;
+  label?: string | null;
+  workflow_id: string;
+  input_name?: string;
+  inputs?: Record<string, unknown>;
+  submit_label?: string;
+  placeholder?: string | null;
+  max_length?: number;
+  allow_decimal?: boolean;
+  allow_negative?: boolean;
+  confirm?: string | null;
+}
+
 export interface RecordListElement extends ElementBase {
   type: "record_list";
   entity: string;
@@ -734,6 +810,9 @@ export type FormElement =
   | ReportElement
   | StatElement
   | RecordListElement
+  | PlotElement
+  | Model3dElement
+  | KeypadElement
   | ChatElement
   | AgentTimelineElement
   | AgentDiaryElement

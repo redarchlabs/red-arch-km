@@ -31,6 +31,7 @@ from api.routers import (
     agent_live,
     agents,
     api_keys,
+    assets,
     attributes,
     auth,
     chat,
@@ -205,6 +206,7 @@ def create_app() -> FastAPI:
     app.include_router(workflows.router, prefix="/api/workflows", tags=["workflows"])
     app.include_router(forms.router, prefix="/api/forms", tags=["forms"])
     app.include_router(views.router, prefix="/api/views", tags=["views"])
+    app.include_router(assets.router, prefix="/api/assets", tags=["assets"])
     # Unauthenticated: a share token in the path is the only credential. Off for
     # every view unless an org admin explicitly enables it (see view_share).
     app.include_router(views.public_router, prefix="/api/public/views", tags=["views-public"])

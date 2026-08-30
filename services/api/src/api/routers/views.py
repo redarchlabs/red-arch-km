@@ -266,6 +266,30 @@ async def public_view_logo(
     return _logo_response(settings, key)
 
 
+@public_router.get("/{token}/assets/{path:path}", dependencies=[Depends(_rate_limit_public)])
+async def public_view_asset(
+    token: str,
+    path: str,
+    session: Annotated[AsyncSession, Depends(get_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> Response:
+    """An org asset for an anonymous share link — a 3D model on a kiosk, a texture.
+
+    Keyed by the token like the logo route, so it inherits the link's rate limit
+    and lifetime, and only serves assets under the org's ``public/`` prefix. A
+    share link is a credential for ONE view; it must not become a way to read
+    everything the org has uploaded, so what it can reach is opted into by where
+    the file was put.
+    """
+    from api.routers.assets import public_asset_response
+
+    try:
+        org_id = await PublicViewService(session).org_for(token)
+    except FormError as exc:
+        _raise_http(exc)
+    return public_asset_response(settings, org_id, path)
+
+
 @public_router.post(
     "/{token}/workflows/{workflow_id}/run",
     response_model=ManualRunResult,

@@ -13,6 +13,69 @@ import type { HelpTopic } from "@/lib/help";
 const topic = (title: string, body: string): HelpTopic => ({ prefix: "", title, body });
 
 export const BUILDER_HELP: Record<PaletteKind, HelpTopic> = {
+  plot: topic(
+    "Plot element",
+    `
+Plots **records on a coordinate space** — the instrument a status board cannot be.
+
+A table tells you a contact is at bearing 045, 4,280km away. A plot tells you it
+is close, off the starboard bow, and closing on the two behind it. That is a
+different question, and usually the one being asked.
+
+**Polar** draws range rings with an optional sweep, from an *angle* field
+(degrees clockwise from up) and a *radius* field. **Cartesian** draws a gridded
+field from an *x* and a *y* field.
+
+Each series names an entity, so a plot works on a standalone view with no record
+bound. Set **poll** to follow the data live, and **category** + **colors** to
+colour points by a field's value.
+`,
+  ),
+  model_3d: topic(
+    "3D model element",
+    `
+Shows a **binary STL** as a slowly turning solid, lit and shaded.
+
+The URL takes \`{token}\` placeholders filled from the record in scope — so one
+element shows whichever object the screen is bound to, with no lookup table.
+
+Models usually live in the org's **asset store** rather than in the app, because
+they belong to you rather than to the platform:
+
+\`\`\`
+python3 scripts/upload_asset.py --org "My Org" model.stl --as public/rig.stl
+\`\`\`
+
+then point the element at \`/api/assets/public/rig.stl\`. A path under
+\`public/\` is also readable through a share link, so a shared page can draw the
+model; anything else needs a signed-in session. A static path or an \`http(s)\`
+URL works too.
+
+- **Glow URL** — an optional second STL drawn unlit on top, for engine faces and
+  running lights. A missing one costs the glow, not the ship.
+- **Accent URL** — a third STL drawn *lit*, in its own colour: painted panels,
+  markings, a livery. Both overlays are positioned in the main model's own
+  coordinates, so export them from the same scene.
+- **Finish** — \`panelled\` generates hull plating at render time (an STL carries
+  no texture coordinates, so both the pattern and its projection are produced in
+  the browser).
+
+Best on a few thousand triangles; it is meant for a status display, not a CAD
+viewer.
+`,
+  ),
+  keypad: topic(
+    "Keypad element",
+    `
+A **numeric entry pad** that runs a workflow with what was typed.
+
+For a console operated by a finger: digits big enough to hit without looking, and
+a value committed on **Enter** rather than on every keystroke — so a course of
+045 is not entered as 0, then 04, then 045.
+
+The value is passed to the workflow as the input named by **input name**.
+`,
+  ),
   field: topic(
     "Field element",
     `
@@ -73,9 +136,9 @@ feed a button's workflow inputs or a calculated expression (reference it as
 A **picture** on the screen — the visual anchor a status page needs (a ship, a floor
 plan, a product shot). Display only; it reads no data and writes none.
 
-- **Image URL** — a relative path (e.g. \`/sim/ship-nominal.svg\`) or an \`http(s)\` URL.
+- **Image URL** — a relative path (e.g. \`/demo/unit-nominal.svg\`) or an \`http(s)\` URL.
   It may contain \`{token}\` placeholders filled from the record: \`{id}\` is the bound
-  record id and \`{field_slug}\` any field value — so \`/sim/ship-{condition}.svg\`
+  record id and \`{field_slug}\` any field value — so \`/demo/unit-{condition}.svg\`
   makes the artwork FOLLOW the record's state.
 - **Alt text** — what the picture shows, for screen readers.
 - **Caption** — optional line under the image.
