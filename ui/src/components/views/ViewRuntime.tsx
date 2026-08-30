@@ -9,6 +9,7 @@ import { FormRenderer } from "@/components/forms/FormRenderer";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useOrg } from "@/context/OrgContext";
 import { getApiErrorMessage } from "@/lib/api/errors";
+import { appearanceProps } from "@/lib/forms/appearance";
 import type { FormRender, OrgBranding } from "@/lib/api/forms";
 import { getPublicViewRender, getViewRender, runPublicViewWorkflow } from "@/lib/api/views";
 import { runWorkflow } from "@/lib/api/workflows";
@@ -243,12 +244,11 @@ export function ViewRuntime({ id, kiosk = false, token }: ViewRuntimeProps) {
         // browser; inheriting whatever theme it last used is exactly the wrong
         // default for a page whose look was designed.
         data-theme={render.config.theme ?? undefined}
-        // The org accent overrides the theme's primary for this subtree only.
-        style={
-          branding?.accent_color
-            ? ({ "--color-primary": branding.accent_color } as React.CSSProperties)
-            : undefined
-        }
+        // Per-view design tokens (and the older org accent) scope to this
+        // subtree the same way: custom properties for colors and radius, data
+        // attributes for the surface/button/texture treatments that generic
+        // rules in globals.css key off.
+        {...appearanceProps(render.config.appearance, branding?.accent_color)}
       >
         {/* A shared page gets no way "back into the app" — there is no app for
             an anonymous visitor to return to, and offering one only invites a

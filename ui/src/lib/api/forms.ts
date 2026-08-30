@@ -770,6 +770,23 @@ export interface FormConfig {
   /** Pin the palette this view renders in instead of following the viewer's
    * theme. Applied to the view's own wrapper, never to `<html>`. */
   theme?: "light" | "dark" | "redarch" | "console" | null;
+  /** Per-view design-token overrides, layered on top of the theme in effect.
+   * Absent = render exactly as the theme dictates. */
+  appearance?: ViewAppearance | null;
+}
+
+/** The closed styling vocabulary a view definition may set. Mirrors
+ * `AppearanceConfig` in api/schemas/form.py — the server validates every value
+ * there (allow-listed token names, hex-only colors), because these land in a
+ * `style` attribute where a free-form string would be CSS injection. */
+export interface ViewAppearance {
+  /** Design token -> hex color, e.g. `{ primary: "#233f7a" }`. */
+  colors?: Record<string, string> | null;
+  surface?: "flat" | "glass" | null;
+  button_finish?: "flat" | "gradient" | null;
+  texture?: "none" | "diamond" | "grid" | null;
+  heading_case?: "none" | "uppercase" | "capitalize" | null;
+  radius_px?: number | null;
 }
 
 /** Org identity for a chrome-free page. Present only on an anonymous share

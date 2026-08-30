@@ -427,12 +427,15 @@ def test_image_element_is_unbound_and_scheme_guarded(ids, fields_by_entity, rels
 
 def test_view_refresh_ms_round_trips_and_is_bounded():
     """A view can declare a live-refresh cadence so the runtime re-reads its record.
-    Optional (existing configs are unchanged) and floored at 1s so a stored value
-    can't make a page hammer the API."""
+    Optional (existing configs are unchanged) and floored at 100ms so a stored value
+    can't make a page hammer the API. The floor was 1s until live control surfaces
+    (a helm, a gauge board following another station's write) needed to follow state
+    at something closer to interactive rate."""
     assert FormConfig.model_validate({"version": 2, "elements": []}).refresh_ms is None
     assert FormConfig.model_validate({"version": 2, "elements": [], "refresh_ms": 2000}).refresh_ms == 2000
+    assert FormConfig.model_validate({"version": 2, "elements": [], "refresh_ms": 100}).refresh_ms == 100
     with pytest.raises(ValidationError):
-        FormConfig.model_validate({"version": 2, "elements": [], "refresh_ms": 100})
+        FormConfig.model_validate({"version": 2, "elements": [], "refresh_ms": 99})
 
 
 def test_button_link_href_scheme_guarded():

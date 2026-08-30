@@ -12,6 +12,7 @@ entity definition.
 
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import datetime
 from typing import Any, Literal
@@ -82,6 +83,82 @@ def upgrade_legacy_form_config(data: Any) -> Any:
     return {"version": 2, "elements": elements}
 
 
+# ------------------------------------------------------------------ #
+# Per-view appearance
+# ------------------------------------------------------------------ #
+# The design tokens a view may override. Each maps to the `--color-<token>`
+# custom property the theme layer already defines, so an override composes with
+# whatever theme is in effect rather than replacing it.
+APPEARANCE_COLOR_TOKENS: frozenset[str] = frozenset(
+    {
+        "background",
+        "foreground",
+        "muted",
+        "muted-foreground",
+        "border",
+        "input",
+        "primary",
+        "primary-foreground",
+        "secondary",
+        "secondary-foreground",
+        "destructive",
+        "destructive-foreground",
+        "accent",
+        "accent-foreground",
+        "ring",
+        "success",
+        "warning",
+    }
+)
+
+_HEX_COLOR = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
+
+
+class AppearanceConfig(BaseModel):
+    """Per-view styling: a closed vocabulary of design tokens.
+
+    This is the only styling hook a view definition gets, and it is deliberately
+    a vocabulary rather than a stylesheet. An org dresses its own views — a crew
+    station, a wall board, a branded share page — while the platform stays free
+    of any particular org's look.
+
+    Every value here is rendered into a ``style`` attribute or a ``data-``
+    attribute on the view's wrapper, which makes validation a security boundary
+    rather than a convenience. A free-form string would be CSS injection: a value
+    containing ``}`` closes the rule and opens an attacker-chosen one, and a
+    ``url(...)`` beacons the viewer's IP to a third party the moment the page
+    paints. So keys come from an allow-list, colors must match a hex triple, and
+    everything else is an enum or a bounded integer. Nothing else reaches the DOM.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    # token -> hex color, overriding that token for this view's subtree only.
+    colors: dict[str, str] = Field(default_factory=dict)
+    # How panels are filled: an opaque block, or translucent over the page ground.
+    surface: Literal["flat", "glass"] | None = None
+    # Button fill: a solid color, or a vertical gradient with a seated edge.
+    button_finish: Literal["flat", "gradient"] | None = None
+    # A tiled pattern behind the element tree, tinted by the background token.
+    texture: Literal["none", "diamond", "grid"] | None = None
+    heading_case: Literal["none", "uppercase", "capitalize"] | None = None
+    # Corner radius for panels and buttons. Bounded because it is emitted as a
+    # length, and because past ~48px a control stops reading as a control.
+    radius_px: int | None = Field(default=None, ge=0, le=48)
+
+    @field_validator("colors")
+    @classmethod
+    def _validate_colors(cls, value: dict[str, str]) -> dict[str, str]:
+        for token, color in value.items():
+            if token not in APPEARANCE_COLOR_TOKENS:
+                raise ValueError(
+                    f"unknown color token {token!r}; expected one of {', '.join(sorted(APPEARANCE_COLOR_TOKENS))}"
+                )
+            if not isinstance(color, str) or not _HEX_COLOR.match(color):
+                raise ValueError(f"{token!r} must be a hex color like '#233f7a', got {color!r}")
+        return value
+
+
 class FormConfig(BaseModel):
     """A form's layout: a versioned, recursive tree of typed elements."""
 
@@ -116,6 +193,9 @@ class FormConfig(BaseModel):
     # behaviour (follow the viewer's theme). Applied to the view's own wrapper —
     # never to <html>, and never written to the visitor's stored preference.
     theme: Literal["light", "dark", "redarch", "console"] | None = None
+    # Per-view design-token overrides, layered on top of whatever theme is in
+    # effect. NULL (the default) renders exactly as the theme dictates.
+    appearance: AppearanceConfig | None = None
 
     @model_validator(mode="before")
     @classmethod
