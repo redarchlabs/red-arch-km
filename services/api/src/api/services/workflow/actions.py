@@ -358,40 +358,36 @@ def _as_float(value: Any, default: float | None = None) -> float | None:
         return default
 
 
-def _apply_increments(
-    record: dict[str, Any],
+def _resolve_increments(
     increments_cfg: dict[str, Any],
     clamp_cfg: dict[str, Any],
     context: dict[str, Any],
-) -> dict[str, Any]:
-    """Turn ``increments`` (field → delta) into absolute values against ``record``.
+) -> tuple[dict[str, float], dict[str, tuple[float | None, float | None]]]:
+    """Resolve the configured deltas and clamp bounds to plain numbers.
 
-    Deltas resolve like any other config value (literal / ``$ref`` / ``{{ }}``) and are
-    added to the record's CURRENT value; a missing or non-numeric current value counts
-    as 0, so a fresh record still accumulates. An optional ``clamp`` entry
-    (``{"shields": [0, 100]}``) bounds the result — either bound may be ``null`` to leave
-    that side open. A delta that resolves to nothing numeric is skipped rather than
-    zeroing the field, so an unset ``{{ inputs.bonus }}`` can't wipe a score.
+    Deltas resolve like any other config value (literal / ``$ref`` / ``{{ }}``). A
+    delta that resolves to nothing numeric is DROPPED rather than treated as 0, so an
+    unset ``{{ inputs.bonus }}`` can't wipe or zero a score. Clamp bounds resolve the
+    same way and either side may be absent, leaving that direction open.
 
-    Integer-valued arithmetic stays integral (a score reads ``40``, not ``40.0``).
+    The arithmetic itself deliberately does not happen here — the repository applies
+    the delta in SQL against the column's live value so concurrent writers don't lose
+    each other's changes. See ``DynamicEntityRepository.increment``.
     """
-    out: dict[str, Any] = {}
+    deltas: dict[str, float] = {}
+    clamps: dict[str, tuple[float | None, float | None]] = {}
     for slug, raw_delta in increments_cfg.items():
         delta = _as_float(_resolve_dynamic(raw_delta, context))
         if delta is None:
             continue
-        current = _as_float(record.get(slug), 0.0) or 0.0
-        total = current + delta
+        deltas[slug] = delta
         bounds = clamp_cfg.get(slug)
         if isinstance(bounds, (list, tuple)) and len(bounds) == 2:
             low = _as_float(_resolve_dynamic(bounds[0], context))
             high = _as_float(_resolve_dynamic(bounds[1], context))
-            if low is not None:
-                total = max(low, total)
-            if high is not None:
-                total = min(high, total)
-        out[slug] = int(total) if float(total).is_integer() else total
-    return out
+            if low is not None or high is not None:
+                clamps[slug] = (low, high)
+    return deltas, clamps
 
 
 def _as_str_list(value: Any) -> list[str] | None:
@@ -598,9 +594,10 @@ class UpdateRecord:
     current value (``{"score": {"$ref": "vars.p.points"}, "shields": -20, "tries": 1}``),
     and an optional ``clamp`` bounds the result (``{"shields": [0, 100]}``; either bound
     may be null). This is the counter/gauge primitive a stateful workflow needs: scores,
-    fuel, attempt counts, inventory. Read-modify-write in one step — fine for a single
-    driving process, but two workflows incrementing the SAME field concurrently can lose
-    an update. ``values`` wins over ``increments`` for a field named by both.
+    fuel, attempt counts, inventory. The delta is applied in SQL against the column's
+    live value, so two workflows (or two stations) incrementing the SAME field
+    concurrently both land — no lost update. ``values`` wins over ``increments`` for a
+    field named by both, and when set together they go in as ONE write.
 
     Writes emit a record-change event (fires entity-triggered workflows) — an
     announcer keyed off this entity must only READ + act, never write it back, or
@@ -632,26 +629,38 @@ class UpdateRecord:
                 raise ActionError("update_record requires a triggering record or a target_slug")
             repo = await ctx.trigger_repo()
             record_id = ctx.record_id
+        deltas: dict[str, float] = {}
+        clamps: dict[str, tuple[float | None, float | None]] = {}
         if has_increments:
-            # Deltas are relative to what's stored NOW, so the row has to be read back
-            # here rather than reusing a `get_record` snapshot taken earlier in the run.
-            current = await repo.get(record_id)
-            if current is None:
-                raise ActionError(f"update_record: record {record_id} not found")
             clamp_cfg = ctx.config.get("clamp")
-            bumped = _apply_increments(
-                current, increments_cfg, clamp_cfg if isinstance(clamp_cfg, dict) else {}, context
+            deltas, clamps = _resolve_increments(
+                increments_cfg, clamp_cfg if isinstance(clamp_cfg, dict) else {}, context
             )
-            # Explicit `values` win: an author naming a field in both means to SET it.
-            values = {**bumped, **values}
         # Everything resolved to nothing: touching the row would only bump `updated_at`
         # and fire a change event for a write that says nothing.
-        if not values:
+        if not values and not deltas:
             return {
                 "target_slug": target_slug,
                 "record_id": str(record_id),
                 "updated": False,
                 "values": {},
+                "skipped": skipped,
+            }
+        if deltas:
+            # One statement for the deltas AND the literals, so a reader polling this
+            # record can never catch it half-applied.
+            record = await repo.increment(record_id, deltas, clamps=clamps, values=values)
+            if record is None:
+                raise ActionError(f"update_record: record {record_id} not found")
+            # Report what the row actually HOLDS now. The delta's result isn't known
+            # until the database applies it, and that landed value is what the rest of
+            # the run (and the run log) should see.
+            touched = sorted(set(deltas) | set(values))
+            return {
+                "target_slug": target_slug,
+                "record_id": str(record_id),
+                "updated": True,
+                "values": _jsonable({slug: record.get(slug) for slug in touched}),
                 "skipped": skipped,
             }
         updated = await repo.update(record_id, values)

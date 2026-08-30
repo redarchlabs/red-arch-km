@@ -26,6 +26,7 @@ from sqlalchemy import (
     Table,
     and_,
     bindparam,
+    cast,
     distinct,
     false,
     func,
@@ -802,6 +803,80 @@ class DynamicEntityRepository:
         # the captured "before" slightly stale. Acceptable for change-capture
         # (the outbox is advisory, not the source of truth); revisit with a
         # locked read if exact before/after diffs become a hard requirement.
+        before = await self.get(record_id) if self._outbox is not None else None
+        row["updated_at"] = func.now()
+        stmt = (
+            self._table.update()
+            .where(self._table.c.id == record_id, self._table.c.org_id == self._org_id)
+            .values(**row)
+            .returning(*self._table.c)
+        )
+        result = await self._session.execute(stmt)
+        found = result.one_or_none()
+        if found is None:
+            return None
+        after = self._to_public(found)
+        await self._capture("update", record_id, before, after)
+        return after
+
+    async def increment(
+        self,
+        record_id: uuid.UUID,
+        deltas: dict[str, Any],
+        clamps: dict[str, tuple[Any, Any]] | None = None,
+        values: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        """Add ``deltas`` to numeric fields IN SQL, optionally clamped, in one UPDATE.
+
+        This is the counter/gauge primitive (a score, a shield pool, a reactor's
+        heat). The delta is applied against the column's live value — ``SET col =
+        coalesce(col, 0) + :d`` — rather than against a value read into Python
+        first, so two writers bumping the same field each land their change.
+        Read-modify-write silently loses one of them, which is the normal case once
+        more than one station or scheduled loop touches the same record.
+
+        ``clamps`` bounds a result (``{"shields": (0, 100)}``); either bound may be
+        ``None`` to leave that side open. ``values`` are literal field writes applied
+        in the SAME statement, and win over a delta for a field named by both — so a
+        combined set-and-bump can't be observed half-applied. A NULL column counts as
+        0. The arithmetic is cast back to the column's own type, so an integer field
+        stays integral.
+
+        Returns the updated record (post-increment), or None if it doesn't exist.
+        """
+        self._guard_writable()
+        clamps = clamps or {}
+        literal = {}
+        if values:
+            await self._validate_relationships(values)
+            literal = self._to_row(values, for_create=False)
+
+        row: dict[str, Any] = {}
+        for slug, raw_delta in deltas.items():
+            ftype = self._field_type(slug)
+            if ftype not in _NUMERIC_FIELD_TYPES:
+                raise EntityRecordError(f"cannot increment {slug!r}: not a numeric field")
+            col = self._column(slug)
+            # An explicit literal for this field means "set it", so the delta is moot.
+            if col.name in literal:
+                continue
+            expr: Any = func.coalesce(col, 0) + raw_delta
+            low, high = clamps.get(slug, (None, None))
+            if low is not None:
+                expr = func.greatest(expr, low)
+            if high is not None:
+                expr = func.least(expr, high)
+            # `coalesce(int_col, 0) + 2.5` comes back numeric; cast so the assignment
+            # to an integer column is explicit rather than relying on an implicit one.
+            row[col.name] = cast(expr, col.type)
+
+        row.update(literal)
+        if not row:
+            return await self.get(record_id)
+
+        # Same advisory-snapshot caveat as `update`: the "before" is read without a
+        # row lock, so it can be marginally stale under contention. The UPDATE itself
+        # is not — that is the whole point of this method.
         before = await self.get(record_id) if self._outbox is not None else None
         row["updated_at"] = func.now()
         stmt = (

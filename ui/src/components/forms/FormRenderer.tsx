@@ -253,7 +253,12 @@ function LiveValueNode({ el }: { el: LiveValueElement }) {
  * risk reformatting. Anything else passes through verbatim. */
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2})?(\.\d+)?(Z|[+-]\d{2}:?\d{2})?)?$/;
 
-function formatCell(value: unknown): string {
+/** A decimal string: digits, a point, digits. Deliberately NOT matching a bare
+ * integer — an integer-looking string is as likely to be an identifier, a code or a
+ * zero-padded reference as a quantity, and thousand-separating those would be wrong. */
+const DECIMAL_STRING_RE = /^-?\d+\.\d+$/;
+
+export function formatCell(value: unknown): string {
   if (value == null) return "—";
   if (typeof value === "boolean") return value ? "Yes" : "No";
   if (typeof value === "number") {
@@ -263,6 +268,18 @@ function formatCell(value: unknown): string {
   }
   if (typeof value === "object") return JSON.stringify(value);
   const s = String(value);
+  // A `numeric` column arrives from the API as a STRING, so the number branch above
+  // never sees it and the raw decimal expansion is what reaches the screen. Postgres
+  // stores exactly what it was given, and a workflow that computed a value in floating
+  // point hands over the binary artifact in full — a position readout rendering as
+  // "11836.97117999999940707311907317489385560485839843750" is the same two decimals
+  // everyone wanted, plus forty digits nobody did.
+  if (DECIMAL_STRING_RE.test(s)) {
+    const n = Number(s);
+    if (Number.isFinite(n)) {
+      return n.toLocaleString(undefined, { maximumFractionDigits: 2 });
+    }
+  }
   if (ISO_DATE_RE.test(s)) {
     const d = new Date(s);
     if (!Number.isNaN(d.getTime())) {
@@ -2747,9 +2764,24 @@ export function FormRenderer({
             style={{ width: `${pct}%` }}
           />
           {el.show_percent !== false ? (
-            <span className="absolute inset-0 flex items-center justify-center text-xs font-medium">
-              {pct}%
-            </span>
+            <>
+              {/* The label is centred over the WHOLE track while the fill covers only part
+                  of it, so a single copy is unreadable at one end or the other — dark on
+                  the dark fill at 100%, light on the pale track at 0%. Draw it twice at
+                  identical geometry and clip the second to the filled region, so whichever
+                  ground each pixel of the text sits on, it is the contrasting copy that
+                  shows. */}
+              <span className="absolute inset-0 flex items-center justify-center text-xs font-medium">
+                {pct}%
+              </span>
+              <span
+                className="absolute inset-0 flex items-center justify-center text-xs font-medium text-primary-foreground"
+                style={{ clipPath: `inset(0 ${100 - pct}% 0 0)` }}
+                aria-hidden
+              >
+                {pct}%
+              </span>
+            </>
           ) : null}
         </div>
       </div>

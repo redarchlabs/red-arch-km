@@ -769,7 +769,7 @@ export interface FormConfig {
   padding?: "none" | "comfortable" | "spacious" | null;
   /** Pin the palette this view renders in instead of following the viewer's
    * theme. Applied to the view's own wrapper, never to `<html>`. */
-  theme?: "light" | "dark" | "redarch" | null;
+  theme?: "light" | "dark" | "redarch" | "console" | null;
 }
 
 /** Org identity for a chrome-free page. Present only on an anonymous share

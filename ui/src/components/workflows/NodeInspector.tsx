@@ -668,8 +668,17 @@ function TriggerFields({
   };
 
   const source = (data.source as string | undefined) ?? "any";
-  const schedule = (data.schedule as { every_minutes?: number } | undefined) ?? {};
-  const everyMinutes = Number(schedule.every_minutes ?? 0);
+  const schedule = (data.schedule as { every_minutes?: number; every_seconds?: number } | undefined) ?? {};
+  // One control over two units. `every_seconds` wins server-side when both are set,
+  // so the editor writes exactly one of them — leaving a stale sibling key behind
+  // would silently pin the trigger to the unit the author didn't choose.
+  const scheduleUnit: "minutes" | "seconds" = schedule.every_seconds ? "seconds" : "minutes";
+  const everyValue = Number((scheduleUnit === "seconds" ? schedule.every_seconds : schedule.every_minutes) ?? 0);
+  const setSchedule = (value: number, unit: "minutes" | "seconds") => {
+    const n = Math.max(0, Math.floor(value || 0));
+    if (n <= 0) return patch({ schedule: undefined });
+    patch({ schedule: unit === "seconds" ? { every_seconds: n } : { every_minutes: n } });
+  };
   const manualInputs = (data.inputs as TriggerInput[] | undefined) ?? [];
   const startType = source === "manual" ? "manual" : "data";
 
@@ -762,20 +771,29 @@ function TriggerFields({
           <Input
             type="number"
             min={0}
-            value={everyMinutes || ""}
-            onChange={(e) => {
-              const n = Math.max(0, Math.floor(Number(e.target.value) || 0));
-              patch({ schedule: n > 0 ? { every_minutes: n } : undefined });
-            }}
+            value={everyValue || ""}
+            onChange={(e) => setSchedule(Number(e.target.value), scheduleUnit)}
             placeholder="0"
             className="h-9 w-24"
           />
-          <span className="text-muted-foreground">minutes (0 = off)</span>
+          <select
+            value={scheduleUnit}
+            onChange={(e) => setSchedule(everyValue, e.target.value as "minutes" | "seconds")}
+            className={selectClass}
+          >
+            <option value="minutes">minutes</option>
+            <option value="seconds">seconds</option>
+          </select>
+          <span className="text-muted-foreground">(0 = off)</span>
         </div>
         <p className="mt-1 text-xs text-muted-foreground">
           Scheduled runs have no changed record — use them with actions like &ldquo;Create a
           record&rdquo;, &ldquo;Send an email&rdquo;, or &ldquo;Send a webhook&rdquo;. To run
           <em> only</em> on a schedule, uncheck all &ldquo;Fire on&rdquo; operations above.
+        </p>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Seconds are for simulation-style loops that advance shared state. The sweep that
+          fires schedules is the real floor — an interval below it fires once per sweep.
         </p>
       </div>
         </>

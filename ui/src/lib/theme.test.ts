@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { isTheme, resolveInitialTheme, THEMES } from "./theme";
+import { isTheme, resolveInitialTheme, THEME_LABELS, THEMES } from "./theme";
 
 describe("isTheme", () => {
   it("accepts every known theme", () => {
@@ -26,5 +26,21 @@ describe("resolveInitialTheme", () => {
     expect(resolveInitialTheme(null, true)).toBe("dark");
     expect(resolveInitialTheme(null, false)).toBe("light");
     expect(resolveInitialTheme("garbage", true)).toBe("dark");
+  });
+
+  it("keeps the console theme over the OS preference", () => {
+    // A kiosk pinned to console must not fall back to dark because the machine
+    // it is plugged into prefers dark — the pin is the whole point.
+    expect(resolveInitialTheme("console", true)).toBe("console");
+    expect(resolveInitialTheme("console", false)).toBe("console");
+  });
+});
+
+describe("THEME_LABELS", () => {
+  it("labels every theme", () => {
+    // The picker renders from THEMES; a theme with no label ships as "undefined".
+    for (const theme of THEMES) {
+      expect(THEME_LABELS[theme]).toBeTruthy();
+    }
   });
 });
