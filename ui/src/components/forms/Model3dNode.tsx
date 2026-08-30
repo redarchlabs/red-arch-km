@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 
 import type { Model3dElement } from "@/lib/api/forms";
+import { fetchAssetBytes, isApiAsset, resolveAssetUrl } from "@/lib/api/assets";
+import { useShareToken } from "@/context/ShareTokenContext";
 import { fillTokens } from "@/lib/forms/href";
 import { boxProjectUvs, makeHullMaps } from "@/lib/forms/hullTexture";
 
@@ -35,11 +37,18 @@ export function Model3dNode({
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const url = fillTokens(el.url ?? "", { ...values, id: recordId ?? "" });
+  // On a shared page there is no session, so an org asset has to be fetched
+  // through the token-keyed public route instead. The config names it once.
+  const shareToken = useShareToken();
+  const url = resolveAssetUrl(fillTokens(el.url ?? "", { ...values, id: recordId ?? "" }), shareToken);
   const height = el.height ?? 260;
   const spin = el.spin_seconds ?? 18;
   const angle = el.angle ?? 0;
   const colorProp = el.color ?? null;
+  const glowUrl = el.glow_url
+    ? resolveAssetUrl(fillTokens(el.glow_url, { ...values, id: recordId ?? "" }), shareToken)
+    : null;
+  const glowColor = el.glow_color ?? "#3fe0ff";
   const finish = el.finish ?? "smooth";
   const panelScale = el.panel_scale ?? 0.12;
 
@@ -126,6 +135,8 @@ export function Model3dNode({
 
       let raf = 0;
       let mesh: import("three").Mesh | null = null;
+      const extra: import("three").Mesh[] = [];
+      const materials: import("three").Material[] = [material];
 
       const onResize = () => {
         const w = host.clientWidth || 300;
@@ -140,15 +151,53 @@ export function Model3dNode({
         window.removeEventListener("resize", onResize);
         controls.dispose();
         mesh?.geometry.dispose();
+        for (const m of extra) m.geometry.dispose();
+        for (const m of materials) m.dispose();
         for (const tex of plating) tex.dispose();
         material.dispose();
         renderer.dispose();
         renderer.domElement.remove();
       };
 
-      new STLLoader().load(
-        url,
-        (geometry) => {
+      // The emissive overlay. Loaded independently of the hull so a missing or
+      // broken glow file costs the glow, not the ship.
+
+      // An asset served by the API is org-scoped and needs the session's headers,
+      // which a bare STLLoader fetch does not carry — and on the kiosk route it
+      // would resolve against the UI origin rather than the API. So those go
+      // through the authenticated client and are parsed from bytes; anything
+      // else (a public share URL, a static path) loads directly.
+      const loadGeometry = async (target: string) => {
+        const loader = new STLLoader();
+        if (!isApiAsset(target)) {
+          return new Promise<import("three").BufferGeometry>((resolve, reject) =>
+            loader.load(target, resolve, undefined, reject)
+          );
+        }
+        const bytes = await fetchAssetBytes(target);
+        return loader.parse(bytes);
+      };
+
+      const startGlow = () => {
+        if (!glowUrl || glowUrl === "#") return;
+        const glowMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(glowColor) });
+        materials.push(glowMat);
+        void loadGeometry(glowUrl)
+          .then((g) => {
+            if (disposed) return;
+            g.center();
+            const gm = new THREE.Mesh(g, glowMat);
+            gm.rotation.x = -Math.PI / 2;
+            pivot.add(gm);
+            extra.push(gm);
+          })
+          .catch(() => undefined);
+      };
+
+      startGlow();
+
+      void loadGeometry(url)
+        .then((geometry) => {
           if (disposed) return;
           // STLs carry no origin convention — these are authored Z-up in
           // millimetres — so centre the geometry and frame the camera off its
@@ -198,21 +247,19 @@ export function Model3dNode({
             renderer.render(scene, camera);
           };
           raf = requestAnimationFrame(frame);
-        },
-        undefined,
-        () => {
+        })
+        .catch(() => {
           if (disposed) return;
           setLoading(false);
           setError("Could not load the model.");
-        }
-      );
+        });
     })();
 
     return () => {
       disposed = true;
       cleanup?.();
     };
-  }, [url, height, spin, angle, colorProp, finish, panelScale]);
+  }, [url, height, spin, angle, colorProp, finish, panelScale, glowUrl, glowColor]);
 
   return (
     <div className="w-full">

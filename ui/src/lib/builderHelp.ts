@@ -34,15 +34,31 @@ colour points by a field's value.
   model_3d: topic(
     "3D model element",
     `
-Shows a **binary STL** as a slowly turning solid.
+Shows a **binary STL** as a slowly turning solid, lit and shaded.
 
-The URL takes \`{token}\` placeholders filled from the record in scope — so
-\`/sim/ships/{registry}.stl\` shows whichever object the screen is bound to,
-with no lookup table.
+The URL takes \`{token}\` placeholders filled from the record in scope — so one
+element shows whichever object the screen is bound to, with no lookup table.
 
-Rendered on a plain canvas rather than through a 3D library, so it costs nothing
-to load and works with no network. Best on a few hundred triangles; it is meant
-for a status display, not a CAD viewer.
+Models usually live in the org's **asset store** rather than in the app, because
+they belong to you rather than to the platform:
+
+\`\`\`
+python3 scripts/upload_asset.py --org "My Org" model.stl --as public/rig.stl
+\`\`\`
+
+then point the element at \`/api/assets/public/rig.stl\`. A path under
+\`public/\` is also readable through a share link, so a shared page can draw the
+model; anything else needs a signed-in session. A static path or an \`http(s)\`
+URL works too.
+
+- **Glow URL** — an optional second STL drawn unlit on top, for engine faces and
+  running lights. A missing one costs the glow, not the ship.
+- **Finish** — \`panelled\` generates hull plating at render time (an STL carries
+  no texture coordinates, so both the pattern and its projection are produced in
+  the browser).
+
+Best on a few thousand triangles; it is meant for a status display, not a CAD
+viewer.
 `,
   ),
   keypad: topic(

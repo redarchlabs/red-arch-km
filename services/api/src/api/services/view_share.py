@@ -219,6 +219,17 @@ class PublicViewService:
                 )
         return trimmed
 
+    async def org_for(self, raw_token: str) -> uuid.UUID:
+        """The org behind a share link.
+
+        Deliberately NOT gated on branding the way `logo` is: branding is a
+        presentation choice, while an asset is content the shared page has to
+        load to render at all. What an anonymous caller may then read is bounded
+        by the asset layer's `public/` prefix, not by this.
+        """
+        view = await self._resolve(raw_token)
+        return view.org_id
+
     async def logo(self, raw_token: str) -> tuple[str, uuid.UUID]:
         """The stored logo key for a branded share link.
 
