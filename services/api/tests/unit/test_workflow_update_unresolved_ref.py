@@ -26,6 +26,7 @@ class FakeRepo:
     def __init__(self, records: list[dict] | None = None) -> None:
         self.records = records or []
         self.update_calls: list[tuple[uuid.UUID, dict]] = []
+        self.increment_calls: list[tuple[uuid.UUID, dict, dict, dict]] = []
 
     async def get(self, record_id: uuid.UUID) -> dict | None:
         for r in self.records:
@@ -39,6 +40,36 @@ class FakeRepo:
     async def update(self, record_id: uuid.UUID, patch: dict) -> dict:
         self.update_calls.append((record_id, patch))
         return {"id": record_id, **patch}
+
+    async def increment(
+        self,
+        record_id: uuid.UUID,
+        deltas: dict,
+        clamps: dict | None = None,
+        values: dict | None = None,
+    ):
+        """Emulate the repository's SQL increment: NULL counts as 0, clamps bound the
+        result, and a literal in `values` wins over a delta for the same field."""
+        self.increment_calls.append((record_id, dict(deltas), dict(clamps or {}), dict(values or {})))
+        # Deliberately NOT via `self.get` — that would record a read the action did not
+        # make, and "did the action read before writing?" is the thing under test.
+        current = next((r for r in self.records if str(r.get("id")) == str(record_id)), None)
+        if current is None:
+            return None
+        out = dict(current)
+        for slug, delta in deltas.items():
+            if slug in (values or {}):
+                continue
+            total = float(out.get(slug) or 0) + float(delta)
+            low, high = (clamps or {}).get(slug, (None, None))
+            if low is not None:
+                total = max(float(low), total)
+            if high is not None:
+                total = min(float(high), total)
+            out[slug] = int(total) if float(total).is_integer() else total
+        out.update(values or {})
+        self.records = [out if str(r.get("id")) == str(record_id) else r for r in self.records]
+        return out
 
 
 def _ctx(config, *, repo, inputs=None, vars=None):
@@ -162,8 +193,8 @@ async def test_increments_still_apply_when_every_value_is_skipped() -> None:
         },
         repo=repo,
     )
-    await _handler().execute(ctx)
-    assert repo.update_calls[0][1] == {"n": 5}
+    out = await _handler().execute(ctx)
+    assert out["values"] == {"n": 5}
 
 
 @pytest.mark.asyncio

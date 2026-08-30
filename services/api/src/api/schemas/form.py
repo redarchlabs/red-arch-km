@@ -96,8 +96,12 @@ class FormConfig(BaseModel):
     # `poll_ms` that `record_list`/`report`/`live_value` already have. Values the
     # viewer has EDITED are preserved across a refresh (a refresh never clobbers
     # typing); it is meant for status/display pages, not data-entry forms.
-    # Floor of 1s so a page can't hammer the API.
-    refresh_ms: int | None = Field(default=None, ge=1000, le=3_600_000)
+    # Floor of 100ms. 1s is the right cadence for a status page, but a live control
+    # surface (a helm, a gauge board reacting to another station's write) needs to
+    # follow state at something closer to interactive rate. Note the share-link rate
+    # limit is sized off this (see api/config.py) — a fleet of kiosks polling at the
+    # floor is what that budget has to cover.
+    refresh_ms: int | None = Field(default=None, ge=100, le=3_600_000)
     # Breathing room around the element tree on the CHROME-FREE routes (kiosk and the
     # public share link), where the runtime is otherwise deliberately full-bleed.
     # Full-bleed is right for a control surface that fills the screen — a crew station,

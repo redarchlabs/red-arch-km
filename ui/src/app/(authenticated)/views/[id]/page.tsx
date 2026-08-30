@@ -175,6 +175,9 @@ export default function ViewBuilderPage({ params }: { params: Promise<{ id: stri
                 onChange={(e) => setRefreshMs(e.target.value ? Number(e.target.value) : null)}
               >
                 <option value="">Off (load once)</option>
+                <option value={250}>Every 250ms (live control)</option>
+                <option value={500}>Every 500ms</option>
+                <option value={1000}>Every second</option>
                 <option value={2000}>Every 2s</option>
                 <option value={5000}>Every 5s</option>
                 <option value={15000}>Every 15s</option>

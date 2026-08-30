@@ -21,6 +21,7 @@ class FakeRepo:
         self.get_calls: list[uuid.UUID] = []
         self.list_calls: list[dict] = []
         self.update_calls: list[tuple[uuid.UUID, dict]] = []
+        self.increment_calls: list[tuple[uuid.UUID, dict, dict, dict]] = []
 
     async def get(self, record_id: uuid.UUID) -> dict | None:
         self.get_calls.append(record_id)
@@ -36,6 +37,36 @@ class FakeRepo:
     async def update(self, record_id: uuid.UUID, patch: dict) -> dict:
         self.update_calls.append((record_id, patch))
         return {"id": record_id, **patch}
+
+    async def increment(
+        self,
+        record_id: uuid.UUID,
+        deltas: dict,
+        clamps: dict | None = None,
+        values: dict | None = None,
+    ):
+        """Emulate the repository's SQL increment: NULL counts as 0, clamps bound the
+        result, and a literal in `values` wins over a delta for the same field."""
+        self.increment_calls.append((record_id, dict(deltas), dict(clamps or {}), dict(values or {})))
+        # Deliberately NOT via `self.get` — that would record a read the action did not
+        # make, and "did the action read before writing?" is the thing under test.
+        current = next((r for r in self.records if str(r.get("id")) == str(record_id)), None)
+        if current is None:
+            return None
+        out = dict(current)
+        for slug, delta in deltas.items():
+            if slug in (values or {}):
+                continue
+            total = float(out.get(slug) or 0) + float(delta)
+            low, high = (clamps or {}).get(slug, (None, None))
+            if low is not None:
+                total = max(float(low), total)
+            if high is not None:
+                total = min(float(high), total)
+            out[slug] = int(total) if float(total).is_integer() else total
+        out.update(values or {})
+        self.records = [out if str(r.get("id")) == str(record_id) else r for r in self.records]
+        return out
 
 
 class _PagingRepo:
@@ -380,7 +411,10 @@ class TestGradeQuiz:
 
 class TestUpdateRecordIncrements:
     """`increments` is the counter/gauge primitive: a workflow can add to a field's
-    CURRENT value (score, fuel, attempt counts) which a `{{ }}` template can't express."""
+    CURRENT value (score, fuel, attempt counts) which a `{{ }}` template can't express.
+
+    The arithmetic itself happens in SQL (see the repository's `increment`), so these
+    assert what the action RESOLVES and hands down, plus the values it reports back."""
 
     @pytest.mark.asyncio
     async def test_delta_is_added_to_the_stored_value(self) -> None:
@@ -396,9 +430,10 @@ class TestUpdateRecordIncrements:
             repo=repo,
             vars={"p": {"points": 15}},
         )
-        await handler.execute(ctx)
-        _, patch = repo.update_calls[0]
-        assert patch == {"score": 55, "solved": 3}
+        out = await handler.execute(ctx)
+        _, deltas, _clamps, _values = repo.increment_calls[0]
+        assert deltas == {"score": 15.0, "solved": 1.0}
+        assert out["values"] == {"score": 55, "solved": 3}
 
     @pytest.mark.asyncio
     async def test_clamp_bounds_the_result(self) -> None:
@@ -414,9 +449,10 @@ class TestUpdateRecordIncrements:
             },
             repo=repo,
         )
-        await handler.execute(ctx)
-        _, patch = repo.update_calls[0]
-        assert patch == {"shields": 0, "hull": 100}  # neither runs off the gauge
+        out = await handler.execute(ctx)
+        _, _deltas, clamps, _values = repo.increment_calls[0]
+        assert clamps == {"shields": (0.0, 100.0), "hull": (0.0, 100.0)}
+        assert out["values"] == {"shields": 0, "hull": 100}  # neither runs off the gauge
 
     @pytest.mark.asyncio
     async def test_missing_current_value_counts_as_zero(self) -> None:
@@ -424,8 +460,8 @@ class TestUpdateRecordIncrements:
         repo = FakeRepo([{"id": rid}])
         handler = ACTION_REGISTRY["update_record"]
         ctx = _ctx({"target_slug": "s", "record_id": str(rid), "increments": {"score": 10}}, repo=repo)
-        await handler.execute(ctx)
-        assert repo.update_calls[0][1] == {"score": 10}
+        out = await handler.execute(ctx)
+        assert out["values"] == {"score": 10}
 
     @pytest.mark.asyncio
     async def test_unresolvable_delta_is_skipped_not_zeroed(self) -> None:
@@ -442,6 +478,7 @@ class TestUpdateRecordIncrements:
         # Nothing resolved, so the row is not touched AT ALL — an empty patch would still
         # bump `updated_at` and emit a record-change event for a write that says nothing.
         assert repo.update_calls == []
+        assert repo.increment_calls == []
         assert out["updated"] is False
 
     @pytest.mark.asyncio
@@ -453,16 +490,20 @@ class TestUpdateRecordIncrements:
             {"target_slug": "s", "record_id": str(rid), "values": {"score": 0}, "increments": {"score": 10}},
             repo=repo,
         )
-        await handler.execute(ctx)
-        assert repo.update_calls[0][1] == {"score": 0}  # a reset beats a bump
+        out = await handler.execute(ctx)
+        _, _deltas, _clamps, values = repo.increment_calls[0]
+        assert values == {"score": 0}
+        assert out["values"] == {"score": 0}  # a reset beats a bump
 
     @pytest.mark.asyncio
     async def test_increments_alone_satisfy_the_non_empty_requirement(self) -> None:
         rid = uuid.uuid4()
         repo = FakeRepo([{"id": rid, "n": 1}])
         handler = ACTION_REGISTRY["update_record"]
-        await handler.execute(_ctx({"target_slug": "s", "record_id": str(rid), "increments": {"n": 1}}, repo=repo))
-        assert repo.update_calls[0][1] == {"n": 2}
+        out = await handler.execute(
+            _ctx({"target_slug": "s", "record_id": str(rid), "increments": {"n": 1}}, repo=repo)
+        )
+        assert out["values"] == {"n": 2}
 
     @pytest.mark.asyncio
     async def test_empty_config_still_raises(self) -> None:
@@ -475,10 +516,25 @@ class TestUpdateRecordIncrements:
         rid = uuid.uuid4()
         repo = FakeRepo([{"id": rid, "level": Decimal("2.5")}])
         handler = ACTION_REGISTRY["update_record"]
-        await handler.execute(
+        out = await handler.execute(
             _ctx({"target_slug": "s", "record_id": str(rid), "increments": {"level": 0.25}}, repo=repo)
         )
-        assert repo.update_calls[0][1] == {"level": 2.75}
+        assert out["values"] == {"level": 2.75}
+
+    @pytest.mark.asyncio
+    async def test_increment_never_reads_before_writing(self) -> None:
+        """The regression guard for lost updates: the action must NOT read the row and
+        compute the new value in Python. It hands the delta down to be applied against
+        the column's live value, so a concurrent writer's change isn't overwritten."""
+        rid = uuid.uuid4()
+        repo = FakeRepo([{"id": rid, "shields": 100}])
+        handler = ACTION_REGISTRY["update_record"]
+        await handler.execute(
+            _ctx({"target_slug": "s", "record_id": str(rid), "increments": {"shields": -20}}, repo=repo)
+        )
+        assert repo.get_calls == [], "a read-then-write here is exactly the lost-update bug"
+        assert repo.update_calls == [], "the delta must not go through the plain update path"
+        assert len(repo.increment_calls) == 1
 
 
 class TestRandomAction:

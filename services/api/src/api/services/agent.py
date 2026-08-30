@@ -612,7 +612,10 @@ TOOLS: list[dict[str, Any]] = [
                                         "field's current value (literal/$ref/token). The counter "
                                         'primitive templates cannot express: {"score": {"$ref": '
                                         '"vars.p.points"}, "shields": -20, "tries": 1}. Pair with '
-                                        '"clamp" to bound the result.'
+                                        '"clamp" to bound the result. The delta is applied in SQL '
+                                        "against the live value, so this is the CORRECT way to bump "
+                                        "a counter several writers share — reading a field and "
+                                        "writing back the sum loses concurrent updates."
                                     ),
                                 },
                                 "clamp": {

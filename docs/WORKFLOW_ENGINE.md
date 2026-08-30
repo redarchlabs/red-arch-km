@@ -142,12 +142,19 @@ expressions.
 `input_snapshot.after` with `trigger_operation = "webhook"` — so a handler reads
 the payload as `{{ after.<field> }}` (`inbound.trigger_from_inbound`).
 
-**Scheduled** triggers carry `data.schedule` as `{cron: "<5-field>"}` (croniter)
-or `{every_minutes: N}`; `schedule.is_schedule_due` decides, driven by
+**Scheduled** triggers carry `data.schedule` as `{cron: "<5-field>"}` (croniter),
+`{every_seconds: N}`, or `{every_minutes: N}` — most specific wins in that order;
+`schedule.is_schedule_due` decides, driven by
 `WorkflowDispatchService.run_due_schedules`. A scheduled run has no triggering
 record (`trigger_operation = "scheduled"`); cadence is derived from the last
 scheduled run's timestamp, so the sweep is safe at any interval finer than the
 schedule.
+
+`every_seconds` is for simulation-style loops — a workflow that advances shared
+state (a reactor warming, a ship moving) reads as broken at one tick per minute.
+The sweep interval (`WORKFLOW_TIMER_INTERVAL`, default 30s) is the real floor: a
+schedule finer than the sweep fires once per sweep, not on its stated period, so
+lower that env var alongside it if you actually need sub-30s ticks.
 
 ### Inline dispatch on record change (`run_inline_on_change`)
 

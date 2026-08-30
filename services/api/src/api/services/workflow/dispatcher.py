@@ -799,10 +799,17 @@ class WorkflowDispatchService:
         last_by_wf = await self._last_scheduled_runs()
         now = datetime.now(UTC)
 
+        # Drop the workflows with no schedule BEFORE the limit. Most workflows on a
+        # real installation are entity- or manually-triggered; slicing first let a
+        # few hundred of those fill every slot, so the handful of scheduled ones
+        # never fired. Worse, a schedule that HAD fired sorts last under the key
+        # below, so it would fire exactly once and then starve for good.
+        scheduled_rows = [(w, v) for w, v in rows if _schedule_of(v.definition) is not None]
+
         # Deterministic order: workflows that have never fired first, then the
         # least-recently-fired — so a fixed LIMIT can't starve some schedules.
         _EPOCH = datetime.min.replace(tzinfo=UTC)
-        candidates = sorted(rows, key=lambda rv: last_by_wf.get(rv[0].id) or _EPOCH)[:limit]
+        candidates = sorted(scheduled_rows, key=lambda rv: last_by_wf.get(rv[0].id) or _EPOCH)[:limit]
 
         counters = {"scheduled": 0, "actions": 0}
         for workflow, version in candidates:
