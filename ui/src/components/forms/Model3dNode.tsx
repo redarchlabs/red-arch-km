@@ -24,6 +24,37 @@ import { boxProjectUvs, makeHullMaps } from "@/lib/forms/hullTexture";
  * isolated networks.
  */
 
+const HEX = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
+
+/** Whether this model is glTF rather than STL — checked on the PATH, before any
+ * query string, since an org asset may carry a cache-busting parameter. */
+export function isGltfUrl(url: string): boolean {
+  return /\.(glb|gltf)$/i.test(url.split(/[?#]/)[0]);
+}
+
+/**
+ * Resolve a colour that may be a `{field_slug}` token on the bound record.
+ *
+ * One element serves every record, so a per-record livery has nowhere to live
+ * unless the colour can come from the row. The filled result is re-checked
+ * here: a field holding "none", an empty string or a typo must cost the tint,
+ * not the model, and must never reach three.js — `new THREE.Color("nonsense")`
+ * warns and leaves the material an unrelated colour.
+ */
+export function fillColor(
+  raw: string | null | undefined,
+  values: Record<string, unknown>
+): string | null {
+  if (!raw) return null;
+  // NOT `fillTokens`: that percent-encodes for URL safety, which turns
+  // `#c0392b` into `%23c0392b`. A colour is not a URL.
+  const filled = raw.replace(/\{(\w+)\}/g, (_, key: string) => {
+    const value = values[key];
+    return value == null ? "" : String(value);
+  });
+  return HEX.test(filled) ? filled : null;
+}
+
 export function Model3dNode({
   el,
   values,
@@ -44,15 +75,15 @@ export function Model3dNode({
   const height = el.height ?? 260;
   const spin = el.spin_seconds ?? 18;
   const angle = el.angle ?? 0;
-  const colorProp = el.color ?? null;
+  const colorProp = fillColor(el.color, values);
   const glowUrl = el.glow_url
     ? resolveAssetUrl(fillTokens(el.glow_url, { ...values, id: recordId ?? "" }), shareToken)
     : null;
-  const glowColor = el.glow_color ?? "#3fe0ff";
+  const glowColor = fillColor(el.glow_color, values) ?? "#3fe0ff";
   const accentUrl = el.accent_url
     ? resolveAssetUrl(fillTokens(el.accent_url, { ...values, id: recordId ?? "" }), shareToken)
     : null;
-  const accentColor = el.accent_color ?? "#c8a24a";
+  const accentColor = fillColor(el.accent_color, values) ?? "#c8a24a";
   const finish = el.finish ?? "smooth";
   const panelScale = el.panel_scale ?? 0.12;
 
@@ -72,7 +103,6 @@ export function Model3dNode({
       // Loaded here rather than at module scope so three.js lands in its own
       // chunk: a view with no 3D on it should not pay for the library.
       const THREE = await import("three");
-      const { STLLoader } = await import("three/examples/jsm/loaders/STLLoader.js");
       const { OrbitControls } = await import("three/examples/jsm/controls/OrbitControls.js");
       if (disposed) return;
 
@@ -82,7 +112,27 @@ export function Model3dNode({
       const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
       renderer.setSize(width, height);
+      // Filmic tone mapping rather than linear: these models are lit for a dark
+      // page, and linear clips the highlight off an emissive strip while
+      // crushing everything in shadow to the same black.
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = 1.0;
       host.appendChild(renderer.domElement);
+
+      // A metal with nothing to reflect renders BLACK — it has no diffuse
+      // response, so with lights alone a PBR hull comes out as a silhouette
+      // with a few specular glints. Every model needs an environment to be lit
+      // by, so one is generated rather than fetched: a small neutral room,
+      // prefiltered, which costs nothing to ship and works offline.
+      const pmrem = new THREE.PMREMGenerator(renderer);
+      const { RoomEnvironment } = await import("three/examples/jsm/environments/RoomEnvironment.js");
+      if (disposed) {
+        pmrem.dispose();
+        return;
+      }
+      const environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+      scene.environment = environment;
+      pmrem.dispose();
 
       // Same three-light rig as robot3d.js: ambient sky/ground fill, a bright key
       // from the front-right, and a cool back-fill so the shadowed side still
@@ -139,6 +189,7 @@ export function Model3dNode({
 
       let raf = 0;
       let mesh: import("three").Mesh | null = null;
+      let gltfRoot: import("three").Object3D | null = null;
       const extra: import("three").Mesh[] = [];
       const materials: import("three").Material[] = [material];
 
@@ -154,14 +205,103 @@ export function Model3dNode({
         cancelAnimationFrame(raf);
         window.removeEventListener("resize", onResize);
         controls.dispose();
+        // A glTF scene owns everything it brought with it — geometries,
+        // materials and the textures hanging off them. Nothing else here knows
+        // about those, so they are released by walking the tree.
+        gltfRoot?.traverse((node) => {
+          const asMesh = node as import("three").Mesh;
+          asMesh.geometry?.dispose();
+          for (const m of [asMesh.material].flat().filter(Boolean)) {
+            const mat = m as import("three").MeshStandardMaterial;
+            for (const slot of ["map", "normalMap", "roughnessMap", "metalnessMap", "emissiveMap", "aoMap"] as const) {
+              mat[slot]?.dispose();
+            }
+            mat.dispose();
+          }
+        });
         mesh?.geometry.dispose();
         for (const m of extra) m.geometry.dispose();
         for (const m of materials) m.dispose();
         for (const tex of plating) tex.dispose();
         material.dispose();
+        environment.dispose();
         renderer.dispose();
         renderer.domElement.remove();
       };
+
+      /** Frame the camera off the model's own size and start the spin.
+       *
+       * Shared by both formats: an STL is authored at whatever scale its author
+       * liked and a glTF at whatever its exporter used, so neither can be framed
+       * by assuming a unit. The bounding radius is the only thing both agree on.
+       */
+      const startLoop = (r: number) => {
+        pivot.rotation.y = (angle * Math.PI) / 180;
+        camera.position.set(r * 1.6, r * 1.15, r * 2.0);
+        camera.lookAt(0, 0, 0);
+        controls.minDistance = r * 1.2;
+        controls.maxDistance = r * 8;
+        controls.update();
+
+        setLoading(false);
+        setError(null);
+
+        let last = performance.now();
+        const frame = () => {
+          raf = requestAnimationFrame(frame);
+          const now = performance.now();
+          if (spin > 0) {
+            pivot.rotation.y += ((now - last) / 1000) * ((Math.PI * 2) / spin);
+          }
+          last = now;
+          controls.update();
+          renderer.render(scene, camera);
+        };
+        raf = requestAnimationFrame(frame);
+      };
+
+      const failed = () => {
+        if (disposed) return;
+        setLoading(false);
+        setError("Could not load the model.");
+      };
+
+      // glTF carries its own geometry, UVs, materials and textures, so none of
+      // the machinery below applies to it: no generated plating, no separate
+      // meshes stood in for the materials STL cannot hold. The element's
+      // `color`, `finish`, `glow_url` and `accent_url` are all ignored for a
+      // glTF, because the file already answers those questions.
+      if (isGltfUrl(url)) {
+        const { GLTFLoader } = await import("three/examples/jsm/loaders/GLTFLoader.js");
+        if (disposed) return;
+        const loader = new GLTFLoader();
+        const loadGltf = async () => {
+          if (!isApiAsset(url)) return loader.loadAsync(url);
+          const bytes = await fetchAssetBytes(url);
+          // The second argument is the base path for external resources; these
+          // are self-contained .glb files, so there are none to resolve.
+          return loader.parseAsync(bytes, "");
+        };
+        loadGltf()
+          .then((gltf) => {
+            if (disposed) return;
+            const root = gltf.scene;
+            const bounds = new THREE.Box3().setFromObject(root);
+            // Centre on the model's own bounds rather than trusting its origin:
+            // an exporter is free to put that anywhere, and off-centre reads as
+            // a wobble once the model starts turning.
+            root.position.sub(bounds.getCenter(new THREE.Vector3()));
+            const sphere = bounds.getBoundingSphere(new THREE.Sphere());
+            gltfRoot = root;
+            pivot.add(root);
+            startLoop(sphere.radius || 1);
+          })
+          .catch(failed);
+        return;
+      }
+
+      const { STLLoader } = await import("three/examples/jsm/loaders/STLLoader.js");
+      if (disposed) return;
 
       // The emissive overlay. Loaded independently of the hull so a missing or
       // broken glow file costs the glow, not the ship.
@@ -248,38 +388,13 @@ export function Model3dNode({
 
           mesh = new THREE.Mesh(geometry, material);
           // Z-up model into three's Y-up world, then a slight downward tilt so
-          // the hull is seen from above rather than edge-on.
+          // the hull is seen from above rather than edge-on. glTF needs no such
+          // fix-up: the format specifies Y-up.
           mesh.rotation.x = -Math.PI / 2;
           pivot.add(mesh);
-          pivot.rotation.y = (angle * Math.PI) / 180;
-
-          camera.position.set(r * 1.6, r * 1.15, r * 2.0);
-          camera.lookAt(0, 0, 0);
-          controls.minDistance = r * 1.2;
-          controls.maxDistance = r * 8;
-          controls.update();
-
-          setLoading(false);
-          setError(null);
-
-          let last = performance.now();
-          const frame = () => {
-            raf = requestAnimationFrame(frame);
-            const now = performance.now();
-            if (spin > 0) {
-              pivot.rotation.y += ((now - last) / 1000) * ((Math.PI * 2) / spin);
-            }
-            last = now;
-            controls.update();
-            renderer.render(scene, camera);
-          };
-          raf = requestAnimationFrame(frame);
+          startLoop(r);
         })
-        .catch(() => {
-          if (disposed) return;
-          setLoading(false);
-          setError("Could not load the model.");
-        });
+        .catch(failed);
     })();
 
     return () => {

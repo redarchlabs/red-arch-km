@@ -1371,6 +1371,14 @@ class PlotElement(_Element):
     empty_text: str | None = None
 
 
+# A colour is either a literal hex or a single `{field_slug}` placeholder that
+# the renderer fills from the bound record. Nothing else: a partially templated
+# string like "#{shade}00" would be filled into something that only looks like a
+# colour, and debugging that is worse than being told no.
+_HEX_COLOR = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
+_COLOR_TOKEN = re.compile(r"^\{[a-z][a-z0-9_]{0,62}\}$")
+
+
 class Model3dElement(_Element):
     """A 3D model, rendered as a slowly turning solid.
 
@@ -1421,19 +1429,20 @@ class Model3dElement(_Element):
     def _safe_overlay_url(cls, value: str | None) -> str | None:
         return None if value is None else _assert_safe_href(value)
 
-    @field_validator("glow_color", "accent_color")
+    @field_validator("color", "glow_color", "accent_color")
     @classmethod
-    def _overlay_hex(cls, value: str | None, info) -> str | None:
-        if value is not None and not re.match(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$", value):
-            raise ValueError(f"{info.field_name} must be a hex color, got {value!r}")
-        return value
+    def _hex_or_token(cls, value: str | None, info) -> str | None:
+        """A hex colour, or a `{field_slug}` filled from the bound record.
 
-    @field_validator("color")
-    @classmethod
-    def _hex_color(cls, value: str | None) -> str | None:
-        if value is not None and not re.match(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$", value):
-            raise ValueError(f"color must be a hex color, got {value!r}")
-        return value
+        One element serves every record, so a livery that differs per record —
+        one ship painted gold, another red — has nowhere to live unless the
+        colour can come from the row. The renderer re-checks the filled result
+        and ignores anything that is not a hex, so a bad field value costs the
+        tint rather than the model.
+        """
+        if value is None or _COLOR_TOKEN.match(value) or _HEX_COLOR.match(value):
+            return value
+        raise ValueError(f"{info.field_name} must be a hex color or a {{field}} token, got {value!r}")
 
 
 class KeypadElement(_Element):
