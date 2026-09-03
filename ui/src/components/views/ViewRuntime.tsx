@@ -273,7 +273,13 @@ function ViewRuntimeInner({ id, kiosk = false, token }: ViewRuntimeProps) {
             an anonymous visitor to return to, and offering one only invites a
             confusing sign-in wall. It keeps the fullscreen toggle. */}
         <KioskControls id={id} recordId={recordId} exitHref={shared ? null : undefined} />
-        {branding ? <BrandHeader branding={branding} logoSrc={logoSrc} /> : null}
+        {/* A view that draws its own chassis owns the edges of the screen, and the
+            identity strip becomes a second, contradictory header stacked above the
+            one the design already has. So a framed view suppresses it: the frame
+            IS the branding on a surface like that. Unframed kiosks keep the strip. */}
+        {branding && render.config.appearance?.frame !== "bezel" ? (
+          <BrandHeader branding={branding} logoSrc={logoSrc} />
+        ) : null}
         {error || notice ? (
           <div className="pointer-events-none fixed inset-x-0 top-0 z-40 flex justify-center p-2">
             <p
