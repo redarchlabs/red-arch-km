@@ -65,6 +65,8 @@ export interface LabelElement extends ElementBase {
   variant: "heading" | "subheading" | "paragraph" | "divider";
   /** Wall-display typesetting; overrides `variant` when set. */
   display?: "headline" | "prose" | "quote" | "caption" | null;
+  /** Where the text sits in its column — a nameplate's position carries meaning. */
+  align?: "left" | "right" | "center" | null;
   width?: FieldWidth | null;
 }
 

@@ -2687,15 +2687,22 @@ export function FormRenderer({
 
   function LabelNode({ el }: { el: Extract<FormElement, { type: "label" }> }) {
     if (el.variant === "divider") return <hr className="my-2 border-t" />;
+    const align =
+      el.align === "right" ? " text-right" : el.align === "center" ? " text-center" : "";
     // Wall-display typesetting — same ramp as the field element's DisplayText,
     // but available to standalone views with no entity to bind.
     if (el.display && LABEL_DISPLAY_CLASSES[el.display])
-      return <div className={LABEL_DISPLAY_CLASSES[el.display]}>{el.text}</div>;
+      return (
+        <div className={LABEL_DISPLAY_CLASSES[el.display] + align} data-display={el.display}>
+          {el.text}
+        </div>
+      );
     // A page heading has to outrank the card titles beneath it; the old text-lg
     // was card-title size, which flattened the whole hierarchy.
     if (el.variant === "heading")
-      return <h2 className="text-2xl font-semibold tracking-tight">{el.text}</h2>;
-    if (el.variant === "subheading") return <h3 className="text-lg font-semibold">{el.text}</h3>;
+      return <h2 className={`text-2xl font-semibold tracking-tight${align}`}>{el.text}</h2>;
+    if (el.variant === "subheading")
+      return <h3 className={`text-lg font-semibold${align}`}>{el.text}</h3>;
     // Body copy is content, not chrome: foreground color (muted was punishing
     // whole paragraphs), and markdown so authors get bold/links/lists.
     return <Markdown content={el.text} stripImages className="leading-relaxed" />;
@@ -2757,8 +2764,11 @@ export function FormRenderer({
       // slide off the screen it is supposed to be supporting.
       log: "max-h-[32vh] overflow-y-auto whitespace-pre-wrap text-base leading-relaxed text-muted-foreground",
     }[display] ?? "whitespace-pre-wrap text-2xl leading-relaxed text-foreground";
+    // `data-display` is the hook a view's appearance styles against: the ramp is
+    // chosen here by name, and a stylesheet that wants to treat a headline as a
+    // machined nameplate has no other way to tell one of these apart from body copy.
     return (
-      <div className="space-y-2">
+      <div className="space-y-2" data-display={display}>
         {label ? (
           <p className="text-xs font-medium uppercase tracking-widest text-muted-foreground">{label}</p>
         ) : null}
