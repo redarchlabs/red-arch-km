@@ -59,6 +59,7 @@ import { shareTarget } from "@/lib/forms/shareUrl";
 import { evaluate } from "@/lib/forms/jsonLogic";
 import { mergeServerValues, sameValue } from "@/lib/forms/mergeValues";
 import { displayLiveValue, formatLiveValue, readJsonPointer } from "@/lib/forms/liveValue";
+import { isSelfEcho } from "@/lib/speech/echo";
 import { useSpeechRecognition } from "@/lib/speech/useSpeechRecognition";
 
 import { CountdownNode } from "./CountdownNode";
@@ -1070,27 +1071,6 @@ function estimateSpeechMs(text: string): number {
   return Math.min(180_000, Math.max(1500, 800 + words * 400 + TAIL_PAD_MS));
 }
 
-/** Normalize speech text for self-echo comparison: lowercase, strip everything but
- * letters/digits/spaces, collapse whitespace. Lets us tell when a recognized
- * utterance is really the robot's own last answer bleeding back through the mic. */
-function normalizeEcho(text: string): string {
-  return text
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-/** True when `heard` looks like the robot's own `spoken` answer echoing back
- * (one contains the other, on a substantial chunk) — so always-on voice can drop
- * it instead of treating the robot's speech as a new question. */
-function isSelfEcho(heard: string, spoken: string): boolean {
-  const h = normalizeEcho(heard);
-  const s = normalizeEcho(spoken);
-  if (h.length < 8 || s.length < 8) return false;
-  return s.includes(h) || h.includes(s);
-}
-
 /** How long a turn may sit unanswered before the chat gives up on it. Comfortably
  * past the run call's own 120s timeout, so this only catches a run that reported
  * success and then never wrote a reply. */
@@ -1169,6 +1149,13 @@ function ChatNode({ el, preview }: { el: ChatElement; preview: boolean }) {
   // truth, so if the stream fails the chat behaves exactly as it did before.
   const [liveAnswer, setLiveAnswer] = useState("");
   const streamAbortRef = useRef<AbortController | null>(null);
+  // Synchronous ownership guards cover multiple callbacks before React renders.
+  const turnRef = useRef(0);
+  const turnBusyRef = useRef(false);
+  const turnMessageRef = useRef<string | null>(null);
+  const workflowDoneRef = useRef(false);
+  const conversationEpochRef = useRef(0);
+  const echoUntilRef = useRef(0);
   // The running poll's tick, so a finished answer can be fetched the instant the
   // run says it's done instead of waiting out the rest of the interval.
   const pollNowRef = useRef<(() => Promise<void>) | null>(null);
@@ -1199,6 +1186,8 @@ function ChatNode({ el, preview }: { el: ChatElement; preview: boolean }) {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      turnRef.current += 1;
+      conversationEpochRef.current += 1;
       // Don't leave an SSE connection open behind a closed view.
       streamAbortRef.current?.abort();
       streamAbortRef.current = null;
@@ -1209,10 +1198,13 @@ function ChatNode({ el, preview }: { el: ChatElement; preview: boolean }) {
   useEffect(() => {
     if (preview) return;
     let alive = true;
+    const epoch = conversationEpochRef.current;
     void (async () => {
       try {
         const res = await listRecords(convEntity, { limit: 1 });
-        if (alive && res.items[0]) setConversationId(String(res.items[0].id));
+        if (alive && epoch === conversationEpochRef.current && !turnBusyRef.current && res.items[0]) {
+          setConversationId(String(res.items[0].id));
+        }
       } catch {
         /* no conversation yet — created on first send */
       }
@@ -1228,25 +1220,34 @@ function ChatNode({ el, preview }: { el: ChatElement; preview: boolean }) {
     if (preview || !conversationId) return;
     let alive = true;
     // Serialized last-committed transcript: an unchanged poll skips the state
-    // updates below entirely (the answered-detection only ever transitions when
-    // the rows change, so skipping it on identical ticks is safe).
+    // updates. Completion is checked even when a workflow finishes after its
+    // reply was already polled.
     let lastJson: string | null = null;
+    const epoch = conversationEpochRef.current;
+    let pollSequence = 0;
+    let committedSequence = 0;
     const tick = async () => {
+      const sequence = ++pollSequence;
       try {
         const res = await listRecords(msgEntity, { limit: 100 });
-        if (!alive) return;
+        if (!alive || epoch !== conversationEpochRef.current || sequence < committedSequence) return;
+        committedSequence = sequence;
         const rows = res.items
           .filter((r) => String(r[relSlug] ?? "") === conversationId)
           .sort((a, b) => String(a.created_at ?? "").localeCompare(String(b.created_at ?? "")));
         const json = JSON.stringify(rows);
-        if (json === lastJson) return;
-        lastJson = json;
-        setMessages(rows);
+        if (json !== lastJson) {
+          lastJson = json;
+          setMessages(rows);
+        }
         // The robot has answered once the newest turn is no longer the person's;
         // clearing here (rather than on the run promise) makes the reply and the
         // dismissal of the typing indicator land on the same tick.
         const last = rows[rows.length - 1];
-        if (last && String(last[roleField] ?? "") !== "person") {
+        const questionIndex = rows.findIndex((row) => String(row.id) === turnMessageRef.current);
+        if (turnBusyRef.current && workflowDoneRef.current && questionIndex >= 0 &&
+            questionIndex < rows.length - 1 && last && String(last[roleField] ?? "") !== "person") {
+          turnBusyRef.current = false;
           setThinking(false);
           setFillers([]);
           // The saved reply supersedes the streamed preview of it.
@@ -1267,7 +1268,9 @@ function ChatNode({ el, preview }: { el: ChatElement; preview: boolean }) {
             const replyText = String(last[textField] ?? "");
             lastRobotSpokenRef.current = replyText;
             if (willSpeakRef.current && replyText.trim()) {
-              setSpeakingUntil(Date.now() + estimateSpeechMs(replyText));
+              const until = Date.now() + estimateSpeechMs(replyText);
+              setSpeakingUntil(until);
+              echoUntilRef.current = until + 2000;
             }
           }
         }
@@ -1313,8 +1316,9 @@ function ChatNode({ el, preview }: { el: ChatElement; preview: boolean }) {
   // out at 120s, so anything still waiting well past that is never arriving.
   useEffect(() => {
     if (!thinking) return;
+    const turn = turnRef.current;
     const id = window.setTimeout(() => {
-      if (mountedRef.current) failTurn("The robot did not reply. Try asking again.");
+      if (mountedRef.current && turn === turnRef.current) failTurn("The robot did not reply. Try asking again.");
     }, ANSWER_TIMEOUT_MS);
     return () => window.clearTimeout(id);
     // `failTurn` is redeclared every render; depending on it would re-arm the
@@ -1379,6 +1383,8 @@ function ChatNode({ el, preview }: { el: ChatElement; preview: boolean }) {
    * of them can leave the "thinking" indicator running on its own.
    */
   const failTurn = (message: string) => {
+    turnBusyRef.current = false;
+    turnRef.current += 1;
     askedAtRef.current = null;
     setThinking(false);
     setFillers([]);
@@ -1391,25 +1397,20 @@ function ChatNode({ el, preview }: { el: ChatElement; preview: boolean }) {
    * best-effort: an unavailable stream (no Redis, older API, dropped connection)
    * simply leaves the typing indicator up until the reply record arrives.
    */
-  const watchAnswerStream = (streamToken: string) => {
+  const watchAnswerStream = (streamToken: string, turn: number) => {
     const controller = new AbortController();
     streamAbortRef.current = controller;
     setLiveAnswer("");
     void (async () => {
+      let answer = "";
       try {
         for await (const event of streamRunTokens(streamToken, { signal: controller.signal })) {
-          if (!mountedRef.current || controller.signal.aborted) return;
+          if (!mountedRef.current || controller.signal.aborted || turn !== turnRef.current) return;
           if (event.type === "delta" && event.text) {
-            setLiveAnswer((prev) => {
-              const next = prev + event.text;
-              // The robot speaks each finished clause as it streams, well before the
-              // reply record lands — so the self-echo backstop has to track the text
-              // being spoken RIGHT NOW. Left until the poll loop set it, this ref
-              // still held the PREVIOUS answer for the whole streaming window, which
-              // is exactly when a bleed-through has to be recognized.
-              lastRobotSpokenRef.current = next;
-              return next;
-            });
+            answer += event.text;
+            lastRobotSpokenRef.current = answer;
+            if (willSpeakRef.current) echoUntilRef.current = Date.now() + estimateSpeechMs(answer) + 2000;
+            setLiveAnswer(answer);
           } else if (event.type === "done" || event.type === "error") {
             // The run has finished writing the reply — go get it now rather than
             // leaving the answer on screen as a preview for another poll cycle.
@@ -1425,7 +1426,13 @@ function ChatNode({ el, preview }: { el: ChatElement; preview: boolean }) {
 
   const send = async (textOverride?: string) => {
     const text = (textOverride ?? input).trim();
-    if (!text || sending || preview) return;
+    if (!text || turnBusyRef.current || preview) return;
+    turnBusyRef.current = true;
+    turnMessageRef.current = null;
+    workflowDoneRef.current = false;
+    const turn = ++turnRef.current;
+    conversationEpochRef.current += conversationId ? 0 : 1;
+    const current = () => mountedRef.current && turn === turnRef.current;
     setSending(true);
     setErr(null);
     setFillers([]);
@@ -1437,10 +1444,11 @@ function ChatNode({ el, preview }: { el: ChatElement; preview: boolean }) {
       let convId = conversationId;
       if (!convId) {
         const conv = await createRecord(convEntity, { title: text.slice(0, 60), status: "active" });
+        if (!current()) return;
         convId = String(conv.id);
         setConversationId(convId);
       }
-      await createRecord(msgEntity, {
+      const question = await createRecord(msgEntity, {
         [roleField]: "person",
         [channelField]: "typed",
         [textField]: text,
@@ -1449,6 +1457,8 @@ function ChatNode({ el, preview }: { el: ChatElement; preview: boolean }) {
           ? { [attachmentsField]: paste.documentIds.join(",") }
           : {}),
       });
+      if (!current()) return;
+      turnMessageRef.current = String(question.id);
       setInput("");
       paste.clear();
       if (el.answer_workflow_id) {
@@ -1498,7 +1508,7 @@ function ChatNode({ el, preview }: { el: ChatElement; preview: boolean }) {
         const streamToken = newStreamToken();
         if (streamToken) {
           inputs.stream_token = streamToken;
-          watchAnswerStream(streamToken);
+          watchAnswerStream(streamToken, turn);
         }
         void runWorkflow(
           el.answer_workflow_id,
@@ -1512,26 +1522,41 @@ function ChatNode({ el, preview }: { el: ChatElement; preview: boolean }) {
             // the LLM connection dropped mid-answer ("peer closed connection without
             // sending complete message body").
             //
-            // Only failure is handled here. A succeeded run may still be moments away
-            // from its message landing, and the poll is what picks that up.
-            if (!mountedRef.current) return;
+            // A succeeded run may precede the next message poll. Require both
+            // workflow completion and its saved reply before accepting another turn.
+            if (!current()) return;
             if (result.status === "failed" || result.error) {
               failTurn(result.error || "The robot could not answer");
+            } else {
+              workflowDoneRef.current = true;
+              void pollNowRef.current?.();
             }
           })
           .catch((e: unknown) => {
-            if (!mountedRef.current) return;
+            if (!current()) return;
             failTurn(e instanceof Error ? e.message : "The robot could not answer");
           });
+      } else {
+        turnBusyRef.current = false;
       }
     } catch (e: unknown) {
-      setErr(e instanceof Error ? e.message : "Failed to send");
+      if (current()) {
+        turnBusyRef.current = false;
+        setErr(e instanceof Error ? e.message : "Failed to send");
+      }
     } finally {
-      setSending(false);
+      if (current()) setSending(false);
     }
   };
 
   const startNew = () => {
+    turnRef.current += 1;
+    conversationEpochRef.current += 1;
+    turnBusyRef.current = false;
+    turnMessageRef.current = null;
+    workflowDoneRef.current = false;
+    echoUntilRef.current = 0;
+    setSending(false);
     stopAnswerStream();
     setConversationId(null);
     setMessages([]);
@@ -1573,7 +1598,7 @@ function ChatNode({ el, preview }: { el: ChatElement; preview: boolean }) {
       // Drop the robot's own reply echoing back through the mic (always-on): the
       // speaking-cooldown usually keeps the mic closed while it talks, and this is
       // the backstop if the estimate runs short and the tail bleeds through.
-      if (isSelfEcho(text, lastRobotSpokenRef.current)) return;
+      if (isSelfEcho(text, lastRobotSpokenRef.current, voiceMode, echoUntilRef.current)) return;
       void send(text);
     },
     onError: (m) => {
@@ -1620,7 +1645,7 @@ function ChatNode({ el, preview }: { el: ChatElement; preview: boolean }) {
   // Hold-to-talk press/release. `startVoice`/`stopVoice` are no-ops if the mode
   // or support doesn't allow it, so these stay simple.
   const pressToTalkStart = () => {
-    if (preview || voiceMode !== "push_to_talk") return;
+    if (preview || turnBusyRef.current || voiceMode !== "push_to_talk") return;
     startVoice(false);
   };
   const pressToTalkEnd = () => {
@@ -1797,7 +1822,7 @@ function ChatNode({ el, preview }: { el: ChatElement; preview: boolean }) {
         {voiceEnabled ? (
           <button
             type="button"
-            disabled={preview || !voiceSupported}
+            disabled={preview || !voiceSupported || (voiceMode === "push_to_talk" && !micActive && (sending || thinking))}
             aria-pressed={micActive}
             aria-label={voiceMode === "push_to_talk" ? "Hold to talk" : micArmed ? "Stop listening" : "Start listening"}
             title={
@@ -1840,7 +1865,7 @@ function ChatNode({ el, preview }: { el: ChatElement; preview: boolean }) {
         <Input
           className="w-full"
           placeholder={micActive ? "Listening…" : el.placeholder ?? "Message the robot…"}
-          value={micActive && voiceInterim && !isSelfEcho(voiceInterim, lastRobotSpokenRef.current) ? voiceInterim : input}
+          value={micActive && voiceInterim && !isSelfEcho(voiceInterim, lastRobotSpokenRef.current, voiceMode, echoUntilRef.current) ? voiceInterim : input}
           disabled={preview || sending || micActive}
           onChange={(e) => setInput(e.target.value)}
           onPaste={attachmentsField ? paste.onPaste : undefined}
@@ -1854,7 +1879,7 @@ function ChatNode({ el, preview }: { el: ChatElement; preview: boolean }) {
         <button
           type="button"
           onClick={() => void send()}
-          disabled={preview || sending || micActive || !input.trim()}
+          disabled={preview || sending || thinking || micActive || !input.trim()}
           className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-60"
         >
           {sending ? "…" : "Send"}

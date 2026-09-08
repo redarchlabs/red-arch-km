@@ -48,7 +48,7 @@ from api.services.agents.live import bus
 from api.services.agents.llm.catalog import model_supports_vision
 from api.services.agents.llm.keys import resolve_provider_key
 from api.services.agents.llm.provider import ToolCallRequest
-from api.services.agents.llm.routing import provider_for
+from api.services.agents.llm.routing import provider_for, provider_key_required
 from api.services.agents.prompts import build_system_prompt
 from api.services.agents.runtime import RunParked, run_agent_loop
 from api.services.agents.tools.loader import load_agent_tools
@@ -208,7 +208,7 @@ class AgentConsoleService:
         finally:
             await queue.put(_DONE)
 
-    async def _prepare(self, agent_id, history, emit) -> tuple[Agent, str, uuid.UUID] | None:
+    async def _prepare(self, agent_id, history, emit) -> tuple[Agent, str | None, uuid.UUID] | None:
         """Resolve the agent + key and open the run. Releases before returning."""
         async with self._work() as session:
             agent = await AgentRepository(session, self._org_id).get(agent_id)
@@ -220,7 +220,7 @@ class AgentConsoleService:
                 return None
 
             key = await resolve_provider_key(session, self._org_id, agent.provider, self._settings)
-            if not key:
+            if not key and provider_key_required(self._settings, agent.model):
                 await emit({"type": "error", "error": f"No API key configured for provider '{agent.provider}'"})
                 return None
 
@@ -238,7 +238,7 @@ class AgentConsoleService:
         await emit({"type": "run_started", "run_id": str(run_id)})
         return agent, key, run_id
 
-    async def _run_segment(self, agent: Agent, key: str, run_id: uuid.UUID, resume: _Resume, emit) -> _Segment:
+    async def _run_segment(self, agent: Agent, key: str | None, run_id: uuid.UUID, resume: _Resume, emit) -> _Segment:
         """Drive the loop until it finishes, parks, or fails. Holds a session —
         the loop is continuous work: every tool call reads or writes."""
         async with self._work() as session:

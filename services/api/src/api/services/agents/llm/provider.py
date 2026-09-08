@@ -127,17 +127,23 @@ def _finalize_tool_calls(acc: dict[int, dict[str, Any]]) -> list[ToolCallRequest
         slot = acc[idx]
         name = slot.get("name")
         if not name:
-            continue
-        raw = (slot.get("arguments") or "").strip()
+            raise LLMError("Tool call is missing a function name")
+        raw = slot.get("arguments")
+        if not isinstance(raw, str) or not raw.strip():
+            raise LLMError(f"Missing JSON arguments for tool {name}")
         try:
-            arguments = json.loads(raw) if raw else {}
-        except json.JSONDecodeError:
-            logger.warning("Discarding un-parseable tool arguments for %s", name)
-            arguments = {}
+            arguments = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise LLMError(f"Invalid JSON arguments for tool {name}") from exc
         if not isinstance(arguments, dict):
-            arguments = {}
+            raise LLMError(f"Arguments for tool {name} must be a JSON object")
         calls.append(ToolCallRequest(id=slot.get("id") or f"call_{idx}", name=name, arguments=arguments))
     return calls
+
+
+def _require_complete_tools(acc: dict[int, dict[str, Any]], finish_reason: str | None) -> None:
+    if acc and finish_reason not in {"tool_calls", "stop", "function_call"}:
+        raise LLMError("Incomplete tool-call response; no tools were executed")
 
 
 def _grounding_sources(response: Any) -> tuple[dict[str, Any], ...]:
@@ -176,14 +182,24 @@ def _completion_from_response(response: Any) -> Completion:
     """Build a :class:`Completion` from a non-streaming LiteLLM response."""
     content = ""
     finish_reason: str | None = None
+    tool_acc: dict[int, dict[str, Any]] = {}
     try:
         choice = response.choices[0]
         content = getattr(choice.message, "content", None) or ""
         finish_reason = getattr(choice, "finish_reason", None)
+        for idx, tc in enumerate(getattr(choice.message, "tool_calls", None) or []):
+            fn = getattr(tc, "function", None)
+            tool_acc[idx] = {
+                "id": getattr(tc, "id", None),
+                "name": getattr(fn, "name", None),
+                "arguments": getattr(fn, "arguments", None),
+            }
     except (AttributeError, IndexError, TypeError):
         pass
+    _require_complete_tools(tool_acc, finish_reason)
     return Completion(
         content=content,
+        tool_calls=tuple(_finalize_tool_calls(tool_acc)),
         finish_reason=finish_reason,
         usage=_extract_usage(response),
         sources=_grounding_sources(response),
@@ -323,6 +339,7 @@ class LLMProvider:
         except Exception as exc:  # noqa: BLE001 - normalize any vendor error
             raise LLMError(str(exc)) from exc
 
+        _require_complete_tools(tool_acc, finish_reason)
         if usage and (usage.cache_read_tokens or usage.cache_write_tokens):
             logger.debug(
                 "prompt cache: read=%d write=%d (model=%s)",

@@ -160,3 +160,21 @@ class TestRoutedBaseUrl:
         hybrid = _Settings(openai_model_routes="local-fast=http://127.0.0.1:8097/v1")
         assert api_key_required(hybrid, "gpt-5-mini") is True
         assert api_key_required(hybrid, "local-fast") is False
+
+
+def test_explicit_hosted_route_still_requires_key():
+    settings = _Settings(openai_model_routes="hosted=https://api.openai.com/v1")
+    assert api_key_required(settings, "hosted")
+
+
+def test_public_proxy_authentication_is_explicit():
+    from types import SimpleNamespace
+
+    settings = SimpleNamespace(openai_base_url="https://proxy.example.com/v1", openai_model_auth="")
+    assert api_key_required(settings, "model")
+    settings.openai_model_auth = "model=none"
+    assert not api_key_required(settings, "model")
+    assert api_key_required(settings, "other")
+    settings.openai_base_url = "http://localhost:8099/v1"
+    settings.openai_model_auth = "*=required"
+    assert api_key_required(settings, "model")

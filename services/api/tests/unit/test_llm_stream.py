@@ -161,3 +161,41 @@ class TestStreamJsonContent:
         )
         assert "".join(seen) == "a\nb"
         assert raw == '{"reply": "a\\nb"}'
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ('{"coach":{"reply":"private"},"reply":"public"}', "public"),
+        ('{"coach":[{"reply":"private"}],"reply":"public"}', "public"),
+        (r'{"coach":"\"reply\":\"private\"","reply":"public"}', "public"),
+        (r'{"repl\u0079":"public"}', "public"),
+        (r'{"reply":"a\ud83d\ude00b"}', "a😀b"),
+        (r'{"reply":"a\ud83d', "a"),
+        ('{"reply":null,"nested":{"reply":"private"}}', ""),
+    ],
+)
+def test_root_field_and_unicode_at_every_chunk_boundary(raw, expected):
+    from api.services.llm_stream import StringFieldParser
+
+    assert partial_string_field(raw, "reply") == expected
+    for split in range(len(raw) + 1):
+        parser = StringFieldParser("reply")
+        assert parser.push(raw[:split]) + parser.push(raw[split:]) == expected
+    parser = StringFieldParser("reply")
+    assert "".join(parser.push(char) for char in raw) == expected
+
+
+@pytest.mark.asyncio
+async def test_stream_never_rescans_or_publishes_nested_fields(monkeypatch):
+    from api.services import llm_stream
+
+    def no_rescan(*args):
+        raise AssertionError("stream must retain parser state")
+
+    monkeypatch.setattr(llm_stream, "partial_string_field", no_rescan)
+    raw = r'{"nested":{"reply":"private"},"reply":"Hello \ud83d\ude00"}'
+    seen = []
+    assert await stream_json_content(_FakeClient(list(raw)), field="reply", on_delta=seen.append) == raw
+    assert "".join(seen) == "Hello 😀"
+    assert all(not any(0xD800 <= ord(c) <= 0xDFFF for c in piece) for piece in seen)

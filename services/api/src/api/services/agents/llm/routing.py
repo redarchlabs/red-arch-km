@@ -18,12 +18,21 @@ from typing import Any
 
 from api.services.agents.llm.catalog import bare_model, provider_factory, provider_for_model
 from api.services.agents.llm.provider import LLMProvider
-from api.services.openai_client import base_url
+from api.services.openai_client import api_key_required, base_url
 
 # LiteLLM needs the provider prefix on the agent path (``openai/gpt-4.1-mini``);
 # the routes table is keyed by the bare model id, as workflow nodes name it, so
 # `bare_model` (from the catalog) is what bridges the two.
-__all__ = ["bare_model", "provider_for"]
+__all__ = ["bare_model", "provider_for", "provider_key_required"]
+
+
+def provider_key_required(settings: Any, model: str) -> bool:
+    """Only OpenAI-shaped local transports may omit the provider credential."""
+    if provider_factory(provider_for_model(model)) is not None:
+        return True
+    if not model.startswith("openai/") and "/" in model:
+        return True
+    return api_key_required(settings, bare_model(model))
 
 
 def provider_for(settings: Any, model: str, api_key: str | None) -> Any:
@@ -45,4 +54,5 @@ def provider_for(settings: Any, model: str, api_key: str | None) -> Any:
     if not model.startswith("openai/") and "/" in model:
         return LLMProvider(api_key=api_key)
     endpoint = base_url(settings, bare_model(model))
-    return LLMProvider(api_key=api_key, default_params={"api_base": endpoint} if endpoint else {})
+    key = api_key or ("not-needed" if not provider_key_required(settings, model) else None)
+    return LLMProvider(api_key=key, default_params={"api_base": endpoint} if endpoint else {})

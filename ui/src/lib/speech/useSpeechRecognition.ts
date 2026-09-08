@@ -118,6 +118,8 @@ export function useSpeechRecognition(options: UseSpeechRecognitionOptions): Spee
   const activeRef = useRef(false);
   // Whether the active session was opened in always-on (continuous) mode.
   const continuousRef = useRef(false);
+  const phaseRef = useRef<"idle" | "starting" | "listening" | "stopping">("idle");
+  const pendingStartRef = useRef(false);
 
   // Latest callbacks, so the recognition event handlers (bound once) always see
   // current values without re-creating the recognition instance.
@@ -133,6 +135,11 @@ export function useSpeechRecognition(options: UseSpeechRecognitionOptions): Spee
     if (!Ctor) return null;
     const rec = new Ctor();
     rec.maxAlternatives = 1;
+    rec.onstart = () => {
+      if (phaseRef.current === "stopping") return;
+      phaseRef.current = "listening";
+      setListening(true);
+    };
     rec.onresult = (event) => {
       let interimText = "";
       for (let i = event.resultIndex; i < event.results.length; i += 1) {
@@ -161,14 +168,21 @@ export function useSpeechRecognition(options: UseSpeechRecognitionOptions): Spee
       setInterim("");
       // In always-on mode the engine stops itself after a pause; reopen the mic
       // until the caller explicitly stops. Otherwise the session is done.
-      if (activeRef.current && continuousRef.current) {
+      phaseRef.current = "idle";
+      if (activeRef.current && (continuousRef.current || pendingStartRef.current)) {
+        pendingStartRef.current = false;
+        rec.continuous = continuousRef.current;
         try {
+          phaseRef.current = "starting";
           rec.start();
           return;
         } catch {
           activeRef.current = false;
         }
       }
+      activeRef.current = false;
+      pendingStartRef.current = false;
+      phaseRef.current = "idle";
       setListening(false);
     };
     recognitionRef.current = rec;
@@ -182,14 +196,21 @@ export function useSpeechRecognition(options: UseSpeechRecognitionOptions): Spee
       activeRef.current = true;
       continuousRef.current = continuous;
       rec.lang = lang;
+      if (phaseRef.current === "stopping") {
+        pendingStartRef.current = true;
+        return;
+      }
       rec.continuous = continuous;
       rec.interimResults = true;
       try {
+        phaseRef.current = "starting";
         rec.start();
         setListening(true);
       } catch {
         // start() throws if a prior session hasn't fully ended; treat as no-op.
         activeRef.current = false;
+        phaseRef.current = "idle";
+        setListening(false);
       }
     },
     [ensureRecognition, lang],
@@ -198,13 +219,16 @@ export function useSpeechRecognition(options: UseSpeechRecognitionOptions): Spee
   const stop = useCallback(() => {
     activeRef.current = false;
     continuousRef.current = false;
+    pendingStartRef.current = false;
     setInterim("");
     const rec = recognitionRef.current;
-    if (rec) {
+    if (rec && phaseRef.current !== "idle" && phaseRef.current !== "stopping") {
       try {
+        phaseRef.current = "stopping";
         rec.stop();
       } catch {
-        /* already stopped */
+        phaseRef.current = "idle";
+        setListening(false);
       }
     }
   }, []);
@@ -214,8 +238,12 @@ export function useSpeechRecognition(options: UseSpeechRecognitionOptions): Spee
     return () => {
       activeRef.current = false;
       continuousRef.current = false;
+      pendingStartRef.current = false;
+      phaseRef.current = "idle";
       const rec = recognitionRef.current;
       if (rec) {
+        recognitionRef.current = null;
+        rec.onstart = null;
         rec.onresult = null;
         rec.onerror = null;
         rec.onend = null;
