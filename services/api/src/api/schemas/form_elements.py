@@ -123,6 +123,11 @@ class LabelElement(_Element):
     # standalone dashboard can headline a screen without binding an entity field.
     # Overrides ``variant`` when set.
     display: Literal["headline", "prose", "quote", "caption"] | None = None
+    # A label is often a nameplate rather than a run of prose, and a nameplate's
+    # position is part of its meaning — the one naming the panel belongs at the
+    # far end of the strip from the one naming the surface as a whole. The field
+    # element already carries this; a static label had no way to say it.
+    align: Literal["left", "right", "center"] | None = None
     width: FieldWidth | None = None
 
 

@@ -46,8 +46,18 @@ AUTH = {
 # from the path and will reject anything else, so failing here is friendlier
 # than a 400 after reading the whole file.
 ALLOWED_SUFFIXES = {
-    ".stl", ".glb", ".gltf", ".obj", ".mtl",
-    ".png", ".jpg", ".jpeg", ".webp", ".svg", ".ktx2", ".bin",
+    ".stl",
+    ".glb",
+    ".gltf",
+    ".obj",
+    ".mtl",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".webp",
+    ".svg",
+    ".ktx2",
+    ".bin",
 }
 
 

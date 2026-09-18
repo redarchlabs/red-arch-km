@@ -1,0 +1,14 @@
+# Reviewed false positives: test fixtures that look like keys to the generic-api-key
+# rule. The scheduled scan reads all of history, so these are pinned by the commit
+# that introduced them — an inline `gitleaks:allow` added later cannot reach them.
+# Format: <commit>:<file>:<rule>:<line>
+
+# Placeholder share token (16 chars; real share tokens are 43).
+db04d67ac2415991b7d7d614d62dc06d515ac24b:ui/src/lib/api/assets.test.ts:generic-api-key:13
+cd7deace9a558e8fb1f3d843e08681e46ed98ef6:ui/src/lib/api/assets.test.ts:generic-api-key:13
+# Placeholder internal key in the middleware's own test.
+34a484f2f20e2cb3a458b5afe2124358dccae64c:services/api-go/internal/middleware/internalkey_test.go:generic-api-key:10
+# The RFC 4122 example UUID, used as a fake auth subject.
+376ac209b6af75c79d9ada732d8842fbc28bc39e:services/api-go/internal/handlers/users_provision_test.go:generic-api-key:55
+# Deliberately invalid secret, asserting it is rejected.
+a11434d77ebb24bb4ccafed8b8ba18f2ef20bd7a:ui/tests/e2e/auth.spec.ts:generic-api-key:65

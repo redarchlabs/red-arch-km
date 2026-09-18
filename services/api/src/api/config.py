@@ -89,6 +89,8 @@ class Settings(BaseSettings):
     # where a 30B model spends ~1.2s per 10 words) alongside a large one for reasoning.
     # Unset (default): every model goes to openai_base_url, exactly as before.
     openai_model_routes: str = Field(default="", validation_alias="OPENAI_MODEL_ROUTES")
+    # Explicit authentication policy for custom endpoints: model=required|none, *=default.
+    openai_model_auth: str = Field(default="", validation_alias="OPENAI_MODEL_AUTH")
 
     # Additional LLM providers for the multi-provider agent org (services/agents/).
     # Each central key is a fallback; an org's own key (org_provider_credentials)

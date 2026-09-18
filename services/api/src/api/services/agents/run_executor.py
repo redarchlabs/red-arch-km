@@ -36,7 +36,7 @@ from api.services.agents.live.activity import RunActivityPublisher
 from api.services.agents.llm.catalog import model_supports_vision
 from api.services.agents.llm.keys import resolve_provider_key
 from api.services.agents.llm.provider import ToolCallRequest
-from api.services.agents.llm.routing import provider_for
+from api.services.agents.llm.routing import provider_for, provider_key_required
 from api.services.agents.notify import create_notification
 from api.services.agents.prompts import build_system_prompt
 from api.services.agents.runtime import RunCancelled, RunFinished, RunParked, run_agent_loop
@@ -420,7 +420,7 @@ class AgentRunExecutor:
             await lifecycle.finalize_run(session, org_id, run, status="error", error="agent missing or disabled")
             return
         key = await resolve_provider_key(session, org_id, agent.provider, self._settings)
-        if not key:
+        if not key and provider_key_required(self._settings, agent.model):
             await lifecycle.finalize_run(
                 session, org_id, run, status="error", error=f"no key for provider {agent.provider}"
             )

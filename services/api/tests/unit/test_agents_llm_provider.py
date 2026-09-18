@@ -67,13 +67,14 @@ def test_accumulate_and_finalize_tool_calls_across_chunks():
     assert calls == [ToolCallRequest(id="call_1", name="run_workflow", arguments={"workflow": "x"})]
 
 
-def test_finalize_tolerates_bad_json_and_missing_name():
+def test_finalize_rejects_bad_json_and_missing_name():
     acc = {
         0: {"id": "c0", "name": "t", "arguments": "not json"},
         1: {"id": "c1", "name": None, "arguments": "{}"},  # dropped: no name
     }
-    calls = prov._finalize_tool_calls(acc)
-    assert calls == [ToolCallRequest(id="c0", name="t", arguments={})]
+    for index, slot in acc.items():
+        with pytest.raises(LLMError):
+            prov._finalize_tool_calls({index: slot})
 
 
 def test_extract_usage():
@@ -172,3 +173,48 @@ async def test_stream_passes_tools_and_key(monkeypatch):
     assert captured["tool_choice"] == "auto"
     assert captured["temperature"] == 0.2
     assert captured["stream"] is True
+
+
+@pytest.mark.parametrize("arguments", ['{"id":', "[]", "null", "", "   ", None, {}])
+def test_invalid_arguments_never_become_executable(arguments):
+    with pytest.raises(LLMError):
+        prov._finalize_tool_calls({0: {"id": "t", "name": "write", "arguments": arguments}})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("finish_reason", ["length", "content_filter", None])
+async def test_incomplete_stream_never_emits_tool_completion(monkeypatch, finish_reason):
+    chunks = [_chunk(tool_calls=[_tc(0, id="t", name="write", arguments="{}")], finish_reason=finish_reason)]
+    monkeypatch.setattr(prov, "_litellm", lambda: _FakeLiteLLM(chunks))
+    with pytest.raises(LLMError, match="Incomplete tool-call"):
+        await _collect(LLMProvider().stream(model="gpt-5-mini", messages=[]))
+
+
+@pytest.mark.asyncio
+async def test_nonstream_complete_preserves_tool_calls(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    response = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content="", tool_calls=[_tc(0, id="t", name="read", arguments='{"id":"1"}')]),
+                finish_reason="tool_calls",
+            )
+        ]
+    )
+    monkeypatch.setattr(prov, "_litellm", lambda: SimpleNamespace(acompletion=AsyncMock(return_value=response)))
+    result = await LLMProvider().complete(model="gpt-5-mini", messages=[])
+    assert result.tool_calls == (ToolCallRequest(id="t", name="read", arguments={"id": "1"}),)
+
+
+def test_nonstream_rejects_truncated_tool_calls():
+    response = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content="", tool_calls=[_tc(0, id="t", name="write", arguments="{}")]),
+                finish_reason="length",
+            )
+        ]
+    )
+    with pytest.raises(LLMError, match="Incomplete tool-call"):
+        prov._completion_from_response(response)

@@ -1,3 +1,6 @@
 
 # clerk configuration (can include secrets)
 /.clerk/
+
+# bun.lock is the lockfile here; an npm lockfile drifts from it and fails CI
+/package-lock.json

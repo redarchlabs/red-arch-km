@@ -75,3 +75,47 @@ class TestBareModel:
         # workflow node names the model.
         assert bare_model("openai/gpt-4.1-mini") == "gpt-4.1-mini"
         assert bare_model("gpt-4.1-mini") == "gpt-4.1-mini"
+
+
+def test_keyless_local_transport_has_explicit_placeholder():
+    from api.services.agents.llm.routing import provider_key_required
+
+    settings = _Settings(routes=ROUTES)
+    assert not provider_key_required(settings, "openai/qwen3-30b")
+    assert provider_key_required(settings, "openai/gpt-4.1-mini")
+    assert provider_key_required(settings, "anthropic/claude-sonnet-5")
+    assert provider_for(settings, "openai/qwen3-30b", None).api_key == "not-needed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model,allowed", [("openai/qwen3-30b", True), ("openai/gpt-4.1-mini", False)])
+async def test_console_key_gate_follows_model_endpoint(monkeypatch, model, allowed):
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from uuid import uuid4
+
+    from api.services.agents import console
+
+    org_id, agent_id, run_id = uuid4(), uuid4(), uuid4()
+    session = SimpleNamespace(commit=AsyncMock())
+    agent = SimpleNamespace(id=agent_id, enabled=True, provider="openai", model=model)
+    runs = SimpleNamespace(create_run=AsyncMock(return_value=SimpleNamespace(id=run_id)))
+    monkeypatch.setattr(console, "AgentRepository", lambda *_: SimpleNamespace(get=AsyncMock(return_value=agent)))
+    monkeypatch.setattr(console, "AgentRunRepository", lambda *_: runs)
+    monkeypatch.setattr(console, "resolve_provider_key", AsyncMock(return_value=None))
+    service = console.AgentConsoleService(
+        org_id=org_id,
+        settings=_Settings(routes=ROUTES),
+        session_factory=None,
+        actor_user_id=None,
+    )
+
+    @asynccontextmanager
+    async def work():
+        yield session
+
+    monkeypatch.setattr(service, "_work", work)
+    result = await service._prepare(agent_id, [], AsyncMock())
+    assert (result is not None) is allowed
+    assert runs.create_run.await_count == int(allowed)

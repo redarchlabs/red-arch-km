@@ -5,10 +5,9 @@
 raw token deltas to a viewer would paint ``{"reply":"Hel``, and the fields that
 are NOT speech (coaching, reasoning) would leak into the chat.
 
-So the tokens are accumulated here and, after each chunk, the value-so-far of one
-named field is re-read from the partial document; only the newly-added characters
-are published. The full raw content is still returned, so the caller parses the
-completed JSON exactly as it did before.
+An incremental parser tracks the root property and publishes only newly decoded
+characters, retaining nesting and escape state between chunks. The full raw
+content is still returned, so the caller parses the completed JSON as before.
 
 Field order matters: a strict ``json_schema`` emits properties in schema order, so
 the watched field should be declared first if it is to stream early.
@@ -25,54 +24,130 @@ _ESCAPES = {'"': '"', "\\": "\\", "/": "/", "b": "\b", "f": "\f", "n": "\n", "r"
 _WHITESPACE = " \t\r\n"
 
 
-def partial_string_field(buffer: str, field: str) -> str:
-    """Value-so-far of a top-level string ``field`` in a possibly-incomplete JSON doc.
+class StringFieldParser:
+    """Incrementally decode one root string property, visiting each input character once.
 
-    Returns "" until the field's opening quote has arrived. A trailing incomplete
-    escape (``"a\\``) stops the scan rather than emitting half a character — the
-    rest arrives with the next chunk.
+    String/escape state survives arbitrary chunk boundaries. Nested properties and
+    property-looking text inside other strings never become the selected field.
+    Invalid prefixes stop publication; the caller still validates the final JSON.
     """
-    start = buffer.find(f'"{field}"')
-    if start == -1:
-        return ""
-    i = start + len(field) + 2
-    while i < len(buffer) and buffer[i] in _WHITESPACE:
-        i += 1
-    if i >= len(buffer) or buffer[i] != ":":
-        return ""
-    i += 1
-    while i < len(buffer) and buffer[i] in _WHITESPACE:
-        i += 1
-    if i >= len(buffer) or buffer[i] != '"':
-        return ""
 
-    i += 1
-    out: list[str] = []
-    while i < len(buffer):
-        char = buffer[i]
-        if char == '"':
-            break  # value complete
-        if char != "\\":
-            out.append(char)
-            i += 1
-            continue
-        if i + 1 >= len(buffer):
-            break  # escape still arriving
-        nxt = buffer[i + 1]
-        if nxt == "u":
-            if i + 5 >= len(buffer):
-                break  # \uXXXX still arriving
-            try:
-                out.append(chr(int(buffer[i + 2 : i + 6], 16)))
-            except ValueError:
+    def __init__(self, field: str) -> None:
+        self.field = field
+        self.depth = 0
+        self.phase = "start"
+        self.string_role: str | None = None
+        self.key: list[str] = []
+        self.selected = False
+        self.escape: str | None = None
+        self.high_surrogate: int | None = None
+        self.done = False
+
+    def push(self, piece: str) -> str:
+        out: list[str] = []
+        for char in piece:
+            if self.done:
                 break
-            i += 6
-            continue
-        if nxt not in _ESCAPES:
-            break  # not valid JSON — stop rather than guess
-        out.append(_ESCAPES[nxt])
-        i += 2
-    return "".join(out)
+            if self.string_role is not None:
+                self._string_char(char, out)
+            elif char in _WHITESPACE:
+                continue
+            elif self.phase == "start":
+                if char != "{":
+                    self.done = True
+                else:
+                    self.depth = 1
+                    self.phase = "key"
+            elif self.depth == 1 and self.phase == "key":
+                if char == '"':
+                    self.key = []
+                    self.string_role = "key"
+                else:
+                    self.done = True
+            elif self.depth == 1 and self.phase == "colon":
+                if char == ":":
+                    self.phase = "value"
+                else:
+                    self.done = True
+            elif self.depth == 1 and self.phase == "value":
+                self.phase = "skip"
+                if self.selected:
+                    if char == '"':
+                        self.string_role = "selected"
+                    else:
+                        self.done = True
+                else:
+                    self._skip_char(char)
+            else:
+                self._skip_char(char)
+        return "".join(out)
+
+    def _skip_char(self, char: str) -> None:
+        if char == '"':
+            self.string_role = "other"
+        elif char in "{[":
+            self.depth += 1
+        elif char in "}]":
+            self.depth -= 1
+            if self.depth == 0:
+                self.done = True
+        elif char == "," and self.depth == 1:
+            self.phase = "key"
+
+    def _decoded(self, char: str, out: list[str]) -> None:
+        code = ord(char)
+        if self.high_surrogate is not None:
+            if not 0xDC00 <= code <= 0xDFFF:
+                self.done = True
+                return
+            char = chr(0x10000 + ((self.high_surrogate - 0xD800) << 10) + code - 0xDC00)
+            self.high_surrogate = None
+        elif 0xD800 <= code <= 0xDBFF:
+            self.high_surrogate = code
+            return
+        elif 0xDC00 <= code <= 0xDFFF:
+            self.done = True
+            return
+        if self.string_role == "key":
+            self.key.append(char)
+        elif self.string_role == "selected":
+            out.append(char)
+
+    def _string_char(self, char: str, out: list[str]) -> None:
+        if self.escape is not None:
+            if self.escape.startswith("u"):
+                if char not in "0123456789abcdefABCDEF":
+                    self.done = True
+                    return
+                self.escape += char
+                if len(self.escape) == 5:
+                    self._decoded(chr(int(self.escape[1:], 16)), out)
+                    self.escape = None
+            elif char == "u":
+                self.escape = "u"
+            elif char in _ESCAPES:
+                self._decoded(_ESCAPES[char], out)
+                self.escape = None
+            else:
+                self.done = True
+        elif char == "\\":
+            self.escape = ""
+        elif char == '"':
+            if self.high_surrogate is not None or self.string_role == "selected":
+                self.done = True
+            elif self.string_role == "key":
+                self.selected = "".join(self.key) == self.field
+                self.phase = "colon"
+            self.string_role = None
+        elif ord(char) < 0x20:
+            self.done = True
+        else:
+            self._decoded(char, out)
+
+
+def partial_string_field(buffer: str, field: str) -> str:
+    """Value-so-far of a root string property; incomplete escapes are withheld."""
+    return StringFieldParser(field).push(buffer)
 
 
 async def stream_json_content(
@@ -89,8 +164,8 @@ async def stream_json_content(
     broken sink never breaks the call.
     """
     stream = await client.chat.completions.create(**kwargs, stream=True)
-    buffer = ""
-    published = 0
+    pieces: list[str] = []
+    parser = StringFieldParser(field)
     async for chunk in stream:
         choices = getattr(chunk, "choices", None) or []
         if not choices:
@@ -98,9 +173,8 @@ async def stream_json_content(
         piece = getattr(getattr(choices[0], "delta", None), "content", None)
         if not piece:
             continue
-        buffer += piece
-        value = partial_string_field(buffer, field)
-        if len(value) > published:
-            await _emit(on_delta, value[published:])
-            published = len(value)
-    return buffer
+        pieces.append(piece)
+        delta = parser.push(piece)
+        if delta:
+            await _emit(on_delta, delta)
+    return "".join(pieces)

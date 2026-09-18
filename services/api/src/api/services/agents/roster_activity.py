@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
+from typing import Literal
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -36,7 +37,7 @@ LIVE_STATUSES = ("queued", "running")
 @dataclass(frozen=True)
 class AgentActivity:
     agent_id: uuid.UUID
-    state: str  # "working" | "needs_you"
+    state: Literal["working", "needs_you"]
     live_runs: int
     waiting_on_you: int
 

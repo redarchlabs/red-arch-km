@@ -27,7 +27,9 @@ Usage mirrors the existing key-resolution convention (org key, then central key)
 
 from __future__ import annotations
 
+from ipaddress import ip_address
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlparse
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle / heavy dep kept out of runtime
     from openai import AsyncOpenAI, OpenAI
@@ -96,20 +98,40 @@ def base_url(settings: Any, model: str | None = None) -> str | None:
 
 
 def api_key_required(settings: Any, model: str | None = None) -> bool:
-    """Whether a caller must have an API key before it can talk to the model.
+    """Resolve authentication with the endpoint, shared by workflows and agents.
 
-    False when pointed at a self-hosted endpoint — local servers authenticate nothing, and
-    demanding a key there is how "run everything locally" fails on its first request. A
-    routed model is judged by ITS endpoint, so a hybrid setup (hosted OpenAI plus one local
-    model) still refuses to run keyless against OpenAI while the local route needs nothing.
+    Hosted OpenAI always requires a key. Private/loopback endpoints default to
+    keyless for existing local deployments; public proxies require credentials.
+    OPENAI_MODEL_AUTH overrides custom endpoints with model=required|none pairs
+    (or *=required|none as a deployment default).
     """
-    return base_url(settings, model) is None
+    url = base_url(settings, model)
+    if not url:
+        return True
+    host = (urlparse(url).hostname or "").lower()
+    if not host or host == "api.openai.com" or host.endswith(".openai.com"):
+        return True
+    configured = getattr(settings, "openai_model_auth", "")
+    if isinstance(configured, str):
+        policies = dict(entry.split("=", 1) for entry in configured.replace(",", " ").split() if "=" in entry)
+        policy = next((v for k, v in policies.items() if model and k.lower() == model.strip().lower()), None)
+        policy = policy or policies.get("*")
+        if policy in {"required", "none"}:
+            return policy == "required"
+    if host == "localhost" or host.endswith((".localhost", ".internal")):
+        return False
+    try:
+        address = ip_address(host)
+    except ValueError:
+        # Single-label names address Docker services on a private network.
+        return "." in host
+    return not (address.is_private or address.is_loopback)
 
 
 def _kwargs(settings: Any, key: str | None, model: str | None, extra: dict[str, Any]) -> dict[str, Any]:
     url = base_url(settings, model)
     # The SDK rejects an empty api_key, so fall back to a placeholder the local server drops.
-    kwargs: dict[str, Any] = {"api_key": key or (_PLACEHOLDER_KEY if url else "")}
+    kwargs: dict[str, Any] = {"api_key": key or (_PLACEHOLDER_KEY if not api_key_required(settings, model) else "")}
     if url:
         kwargs["base_url"] = url
     kwargs.update(extra)

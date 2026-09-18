@@ -157,3 +157,30 @@ describe("useSpeechRecognition", () => {
     expect(onError).not.toHaveBeenCalled();
   });
 });
+
+it("can start again after a single utterance ends naturally", () => {
+  (window as unknown as Record<string, unknown>).SpeechRecognition = FakeRecognition;
+  FakeRecognition.instances = [];
+  const { result } = renderHook(() => useSpeechRecognition({ onResult: vi.fn() }));
+  act(() => result.current.start(false));
+  const rec = FakeRecognition.instances[0];
+  act(() => rec.emitEnd());
+  act(() => result.current.start(false));
+  expect(rec.started).toBe(2);
+});
+
+it("defers a new session until stop has completed", () => {
+  (window as unknown as Record<string, unknown>).SpeechRecognition = FakeRecognition;
+  FakeRecognition.instances = [];
+  const { result } = renderHook(() => useSpeechRecognition({ onResult: vi.fn() }));
+  act(() => result.current.start(true));
+  const rec = FakeRecognition.instances[0];
+  act(() => result.current.stop());
+  act(() => result.current.start(false));
+  expect(rec.started).toBe(1);
+  act(() => rec.emitEnd());
+  expect(rec.started).toBe(2);
+  expect(rec.continuous).toBe(false);
+  act(() => rec.emitEnd());
+  expect(result.current.listening).toBe(false);
+});

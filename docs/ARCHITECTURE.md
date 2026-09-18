@@ -522,9 +522,15 @@ property of configuration we can read rather than of process environment.
 Regression test: `services/brain_api/tests/unit/test_embedding_endpoint.py`.
 
 Helpers: `api/services/openai_client.py`, `brain_api/openai_client.py`, and
-`brain_sdk/embedding/openai_provider.py`. When a base URL is set, a missing API
-key is not an error — a self-hosted endpoint authenticates nothing — so
-`api_key_required()` gates the "no key configured" failure.
+`brain_sdk/embedding/openai_provider.py`. The API workflow and agent paths share
+endpoint-aware authentication resolution
+(`api_key_required()` / `provider_key_required()`). Local/private endpoints default
+to keyless operation; public endpoints require a key. Hosted OpenAI always requires
+a key, including when explicitly named in a model route. For custom endpoints,
+`OPENAI_MODEL_AUTH` declares `model=required` or `model=none` policies, with
+`*=required` / `*=none` as a fallback. For example, an authenticated local server
+can use `OPENAI_MODEL_AUTH=qwen3-30b=required`. These overrides apply to the API
+service; Brain API retains its separate client configuration.
 
 ### Self-hosted chat latency is a prompt-cache property
 

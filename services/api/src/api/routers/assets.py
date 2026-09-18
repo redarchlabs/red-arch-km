@@ -20,6 +20,7 @@ what it can read is opted into by where it was put.
 
 from __future__ import annotations
 
+import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Response, UploadFile, status
@@ -122,7 +123,7 @@ def _serve(settings: Settings, key: str, content_type: str, cache: str) -> Respo
     return Response(content=data, media_type=content_type, headers={"Cache-Control": cache})
 
 
-def public_asset_response(settings: Settings, org_id, path: str) -> Response:
+def public_asset_response(settings: Settings, org_id: uuid.UUID, path: str) -> Response:
     """Serve a `public/` asset on behalf of a share link.
 
     Lives here rather than in the views router so the prefix rule and the
