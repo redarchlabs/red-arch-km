@@ -114,7 +114,7 @@ async def _anthropic_research(ctx: ToolContext, key: str, query: str) -> dict[st
         for block in response.content:
             kind = getattr(block, "type", "")
             if kind == "text":
-                answer.append(block.text)
+                answer.append(getattr(block, "text", ""))
             elif kind in ("web_search_tool_result", "web_fetch_tool_result"):
                 found = _sources_from(block)
                 sources.extend(found)
@@ -136,7 +136,11 @@ async def _anthropic_research(ctx: ToolContext, key: str, query: str) -> dict[st
     # De-duplicated, order preserved: the same page cited twice is one source to a
     # reader, and the order the model found them in is the order it reasoned in.
     seen: set[str] = set()
-    unique = [s for s in sources if not (s["url"] in seen or seen.add(s["url"]))]
+    unique = []
+    for source in sources:
+        if source["url"] not in seen:
+            seen.add(source["url"])
+            unique.append(source)
     return {"answer": text, "sources": unique, "grounded": bool(unique)}
 
 
