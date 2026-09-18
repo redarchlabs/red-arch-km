@@ -19,9 +19,9 @@
     "@codemirror/language-data": "^6.5.2",
     "@codemirror/state": "^6.7.1",
     "@codemirror/view": "^6.43.5",
-    "@tiptap/pm": "^3.27.1",
-    "@tiptap/react": "^3.27.1",
-    "@tiptap/starter-kit": "^3.27.1",
+    "@tiptap/pm": "^3.31.3",
+    "@tiptap/react": "^3.31.3",
+    "@tiptap/starter-kit": "^3.31.3",
     "@types/three": "^0.185.4",
     "@uiw/react-codemirror": "^4.25.10",
     "@xyflow/react": "^12.11.1",
@@ -32,7 +32,7 @@
     "elkjs": "^0.11.1",
     "lucide-react": "^0.468.0",
     "marked": "^18.0.5",
-    "next": "^15.5.22",
+    "next": "^15.5.25",
     "qrcode": "^1.5.4",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
@@ -67,7 +67,7 @@
   "overrides": {
     "form-data": "4.0.6",
     "postcss": "8.5.18",
-    "sharp": "0.35.0",
+    "sharp": "0.35.4",
     "nanoid": "^3.3.17"
   }
 }
