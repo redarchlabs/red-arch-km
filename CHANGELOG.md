@@ -8,6 +8,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security — Reserved metadata keys are refused on the internal document routes and dropped on import
+
+Ingest-time stripping of index-owned metadata keys (`access_keys`, `tenant_id`, `tags`,
+`document_key`, `type`, …) already shipped in #78 (`RESERVED_INGEST_METADATA_KEYS`;
+`withUserMetadata` in Go), as did the 422 on the public API and the agent
+`create_document` check. This closes the remaining entry points:
+
+- **`POST /api/documents` and `PATCH /api/documents/{id}` return 422** naming any
+  reserved key in `metadata`, instead of storing a key that ingest then ignores. They
+  share the public API's set and check (`RESERVED_METADATA_KEYS`,
+  `reject_reserved_metadata_keys`) but keep their looser shape rules, so nested metadata
+  such as upload `attributes` is still accepted. A unit test keeps that set equal to
+  brain-api's `RESERVED_INGEST_METADATA_KEYS`.
+- **Migration bundle import drops reserved keys** from imported document metadata rather
+  than rejecting the bundle, so an export taken from an org that stored them earlier still
+  re-imports.
+- New tests: the ingest pipeline against a real Qdrant (metadata cannot make restricted
+  chunks public or redirect them to another `document_key`), and Go `IngestDocument` end
+  to end over both chunk and document payloads.
+
 ### Changed — Folders that name only some dimensions are now visible to the members they name
 
 **This changes what existing members can see.** A folder's viewer config leaves any
@@ -172,17 +192,43 @@ store `[0]` for `[]`. **Repair existing chunks** (idempotent) with
 backfill now also counts and logs documents it had to skip (no first chunk) and prints
 totals; it exits non-zero only when a tenant failed.
 
-### Fixed — Document metadata could rewrite a document's own access masks
+### Security — Document metadata could rewrite a document's own access masks
 
 Caller-supplied document metadata was spread into every chunk and document payload
 *after* the fields retrieval filters on, so a document created with
 `metadata: {"access_keys": [0]}` was indexed as public whatever its folder said — and
-`tags`, `document_key`, `tenant_id` and `type` could be overridden the same way. This
-applied to the first-party upload as well as the new API, and to the Go brain-api. Ingest
-now drops those fields from metadata and always sets them itself
-(`RESERVED_INGEST_METADATA_KEYS`; `withUserMetadata` in Go), the API rejects them with a
-`422` (API metadata is limited to flat scalar values), and the agent `create_document`
-tool rejects them and any non-object metadata.
+`tags`, `document_key`, `tenant_id` and `type` could be overridden the same way. Any
+member who could create a document (`POST /api/documents`) or edit its metadata
+(`PATCH /api/documents/{id}`) could do this; the flaw has been present since 2026-04-13
+(`1be75759`). It applied to the first-party routes, the agent `create_document` tool and
+migration import, and to the Go brain-api. Ingest now drops those fields from metadata
+and always sets them itself (`RESERVED_INGEST_METADATA_KEYS`; `withUserMetadata` in Go),
+the public `/api/v1` write rejects them with a `422` (v1 metadata is limited to flat
+scalar values), and the agent `create_document` tool rejects them and any non-object
+metadata. The first-party routes and import are closed by the entry above.
+
+**After deploying, check documents indexed before the fix.** Stripping applies to new
+ingests only; chunks already written with overridden fields stay as they are until the
+document is re-ingested. Run, read-only, as a role that can see every org:
+
+```sql
+SELECT d.org_id, d.id, d.document_key, d.title,
+       ARRAY(SELECT k FROM jsonb_object_keys(d.metadata) k
+             WHERE k = ANY (ARRAY['tenant_id','document_key','document_id','document_title','tags',
+                                  'access_keys','type','text','summary','summary_tree',
+                                  'chunk_order','section'])) AS reserved_keys
+FROM documents d
+WHERE jsonb_typeof(d.metadata) = 'object'
+  AND d.metadata ?| ARRAY['tenant_id','document_key','document_id','document_title','tags',
+                          'access_keys','type','text','summary','summary_tree',
+                          'chunk_order','section'];
+```
+
+For each row: remove the reserved keys from the document's metadata and reprocess it, so
+ingest purges its chunks by the real `document_key` and rewrites them with the folder's
+masks. Chunks written under a forged `document_key` or `tenant_id` are not found by that
+purge; delete them from the `{org_id}-chunks` / `{org_id}-documents` collections by their
+forged key. No rows means nothing to clean up.
 
 ### Fixed — Reading a restricted document by id, and facts that kept old permissions
 

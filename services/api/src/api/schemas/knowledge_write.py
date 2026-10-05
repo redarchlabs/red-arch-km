@@ -73,14 +73,25 @@ def _check_scalar(key: str, value: Any) -> None:
         reject_nul(value, f"metadata[{key!r}]")
 
 
-def validate_metadata(value: dict[str, Any]) -> dict[str, Any]:
-    if len(value) > MAX_METADATA_KEYS:
-        msg = f"metadata may have at most {MAX_METADATA_KEYS} keys"
-        raise ValueError(msg)
+def reject_reserved_metadata_keys(value: dict[str, Any]) -> dict[str, Any]:
+    """Raise ``ValueError`` naming every reserved key in ``value``; else return it.
+
+    Shared by the public API (:func:`validate_metadata`) and the first-party
+    document schemas, which keep their looser shape rules but must not let
+    metadata name an index-owned field either.
+    """
     reserved = sorted(set(value) & RESERVED_METADATA_KEYS)
     if reserved:
         msg = f"metadata may not set reserved field(s): {', '.join(reserved)}"
         raise ValueError(msg)
+    return value
+
+
+def validate_metadata(value: dict[str, Any]) -> dict[str, Any]:
+    if len(value) > MAX_METADATA_KEYS:
+        msg = f"metadata may have at most {MAX_METADATA_KEYS} keys"
+        raise ValueError(msg)
+    reject_reserved_metadata_keys(value)
     for key, item in value.items():
         reject_nul(key, "metadata key")
         if isinstance(item, list):
