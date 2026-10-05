@@ -1,4 +1,5 @@
 import apiClient from "./client";
+import { type AllPages, fetchAllPages, MAX_PAGE_SIZE } from "./pagination";
 
 export type DimensionKind = "regions" | "departments" | "roles" | "groups";
 
@@ -27,6 +28,16 @@ export async function listDimensions(kind: DimensionKind): Promise<DimensionList
     { params: { page_size: ADMIN_LIST_PAGE_SIZE } },
   );
   return { items: response.data.items, total: response.data.total };
+}
+
+/** Every value of one dimension, across pages (`truncated` past the page cap). */
+export async function listAllDimensions(kind: DimensionKind): Promise<AllPages<Dimension>> {
+  return fetchAllPages(async (page) => {
+    const response = await apiClient.get<{ items: Dimension[]; total: number }>(`/dimensions/${kind}`, {
+      params: { page, page_size: MAX_PAGE_SIZE },
+    });
+    return { items: response.data.items, total: response.data.total };
+  });
 }
 
 export async function createDimension(

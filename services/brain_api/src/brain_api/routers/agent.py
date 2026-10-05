@@ -24,6 +24,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from brain_api.auth import require_api_key
+from brain_api.limits import MAX_ACCESS_KEYS
 from brain_api.stores import Stores, get_stores
 
 logger = logging.getLogger(__name__)
@@ -34,7 +35,9 @@ class AgentAskRequest(BaseModel):
     tenant_id: str = Field(min_length=1, max_length=128)
     query: str = Field(min_length=1, max_length=5000)
     chat_history: list[dict[str, str]] = Field(default_factory=list)
-    access_keys: list[int] = Field(default_factory=list)
+    # Absent/null = unrestricted; an explicit [] = nothing is readable (the agent
+    # is never run — see _nothing_readable).
+    access_keys: list[int] | None = Field(default=None, max_length=MAX_ACCESS_KEYS)
     tags: list[str] = Field(default_factory=list)
     # Reasoning-model override (the per-org model pin, trusted from the API-key
     # holder like tenant_id/access_keys); omitted/null keeps the agent default.
@@ -55,7 +58,7 @@ class GapReExtractRequest(BaseModel):
     tenant_id: str = Field(min_length=1, max_length=128)
     gap_id: str = Field(min_length=1, max_length=64)
     limit: int = Field(default=5, ge=1, le=25)
-    access_keys: list[int] = Field(default_factory=list)
+    access_keys: list[int] = Field(default_factory=list, max_length=MAX_ACCESS_KEYS)
 
 
 def _history(body: AgentAskRequest) -> list[LLMMessage]:
@@ -76,9 +79,19 @@ def _agent(stores: Stores, body: AgentAskRequest) -> FactAgent:
 def _context(body: AgentAskRequest) -> AgentContext:
     return AgentContext(
         tenant_id=body.tenant_id,
-        access_keys=tuple(body.access_keys),
+        # () is the fact agent's "unrestricted"; only reached for an absent scope.
+        access_keys=tuple(body.access_keys or ()),
         tags=tuple(body.tags),
     )
+
+
+_NOTHING_READABLE = "There are no documents you can read that could answer this."
+
+
+def _nothing_readable(body: AgentAskRequest) -> bool:
+    """An explicit empty mask list: nothing is readable, so the agent never runs
+    (its own empty tuple would mean the opposite — unrestricted)."""
+    return body.access_keys is not None and not body.access_keys
 
 
 def _capture_gap(
@@ -119,6 +132,14 @@ async def agent_ask(
     _api_key: Annotated[str, Depends(require_api_key)],
 ) -> dict[str, Any]:
     """Non-streaming agentic query. Returns the answer, citations, and trace."""
+    if _nothing_readable(body):
+        return {
+            "answer": _NOTHING_READABLE,
+            "citations": [],
+            "unsupported_citations": [],
+            "evidence": [],
+            "iterations": 0,
+        }
     agent = _agent(stores, body)
     try:
         result = await asyncio.to_thread(agent.run, body.query, _context(body), history=_history(body))
@@ -175,6 +196,9 @@ async def agent_ask_stream(
 
     Event types: ``thought`` | ``tool_call`` | ``tool_result`` | ``final`` | ``error``.
     """
+    if _nothing_readable(body):
+        final = {"type": "final", "answer": _NOTHING_READABLE, "citations": [], "unsupported_citations": []}
+        return StreamingResponse(iter([f"data: {json.dumps(final)}\n\n"]), media_type="text/event-stream")
     agent = _agent(stores, body)
     ctx = _context(body)
     history = _history(body)

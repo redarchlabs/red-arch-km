@@ -10,14 +10,22 @@ import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth.dependencies import OrgContext, require_org_admin
 from api.dependencies import get_tenant_db
 from api.models.org import Department, Group, Region, Role
-from api.repositories.dimension import DimensionRepository, DimensionType
+from api.repositories.dimension import DimensionLimitReached, DimensionRepository, DimensionType
 from api.schemas.common import PaginatedResponse, PaginationParams, make_page
 from api.schemas.org import DimensionCreate, DimensionRead
+from api.services.api_key_assignments import (
+    active_keys_holding,
+    check_constraints_now,
+    in_use_detail,
+    lock_item,
+    purge_inactive_holders,
+)
 
 router = APIRouter()
 
@@ -76,7 +84,10 @@ async def create_dimension(
 ) -> DimensionRead:
     model = _resolve_model(dimension)
     repo = DimensionRepository(session, model, ctx.org_id)
-    instance = await repo.create(name=body.name, description=body.description)
+    try:
+        instance = await repo.create(name=body.name, description=body.description)
+    except DimensionLimitReached as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     return DimensionRead.model_validate(instance)
 
 
@@ -105,6 +116,22 @@ async def delete_dimension(
 ) -> None:
     model = _resolve_model(dimension)
     repo = DimensionRepository(session, model, ctx.org_id)
+    # Lock first: a mint validating this value holds it FOR SHARE, so this waits
+    # for that mint and the check below then sees its key.
+    if not await lock_item(session, ctx.org_id, dimension, dimension_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    # An active API key scoped to this value would lose (or, worse, change) its
+    # masks; the FK refuses it anyway (NO ACTION). Revoked/expired keys' rows are
+    # released first so they never block the delete.
+    await purge_inactive_holders(session, ctx.org_id, dimension, dimension_id)
+    holders = await active_keys_holding(session, ctx.org_id, dimension, dimension_id)
+    if holders:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=in_use_detail(dimension, holders))
     deleted = await repo.delete(dimension_id)
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    try:
+        # The FK is deferred to commit, which runs after the response: check it now.
+        await check_constraints_now(session)
+    except IntegrityError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=in_use_detail(dimension, [])) from exc

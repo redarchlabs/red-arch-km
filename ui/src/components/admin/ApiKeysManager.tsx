@@ -17,9 +17,15 @@ import {
   type ApiKey,
   type ApiKeyCreated,
   type ApiKeyStatus,
+  type NamedRef,
   type ScopeInfo,
 } from "@/lib/api/apiKeys";
+import { listAllDimensions, type DimensionKind } from "@/lib/api/dimensions";
 import { getApiErrorMessage } from "@/lib/api/errors";
+import { listAllFolders } from "@/lib/api/folders";
+import { cn } from "@/lib/utils";
+
+import { describeMintError, droppedScopes, effectiveScopes } from "./apiKeyForm";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
 const V1_BASE = `${API_BASE.replace(/\/$/, "")}/v1`;
@@ -34,6 +40,88 @@ const EXPIRY_PRESETS: ReadonlyArray<{ label: string; days: number | null }> = [
 ];
 
 const selectClass = "h-9 rounded-md border bg-background px-2 text-sm";
+
+// Scopes whose routes honour a scoped key's assignments (mirrors SCOPED_KEY_SCOPES
+// in services/api/src/api/services/api_key_scopes.py; the server enforces it).
+const SCOPED_KEY_SCOPES: ReadonlySet<string> = new Set([
+  "search:read",
+  "knowledge:read",
+  "knowledge:write",
+  "agents:read",
+  "agents:run",
+  "work_orders:read",
+  "work_orders:write",
+]);
+
+type AssignmentKind = DimensionKind | "folders";
+
+// Order + labels for the assignment pickers and the key list.
+const ASSIGNMENT_KINDS: ReadonlyArray<{ kind: AssignmentKind; label: string }> = [
+  { kind: "regions", label: "Regions" },
+  { kind: "roles", label: "Roles" },
+  { kind: "groups", label: "Groups" },
+  { kind: "departments", label: "Departments" },
+  { kind: "folders", label: "Folders" },
+];
+
+type AssignmentOptions = Record<AssignmentKind, NamedRef[]>;
+type AssignmentSelection = Record<AssignmentKind, Set<string>>;
+
+const EMPTY_OPTIONS: AssignmentOptions = { regions: [], roles: [], groups: [], departments: [], folders: [] };
+
+function emptySelection(): AssignmentSelection {
+  return { regions: new Set(), roles: new Set(), groups: new Set(), departments: new Set(), folders: new Set() };
+}
+
+function hasAssignments(sel: AssignmentSelection): boolean {
+  return ASSIGNMENT_KINDS.some(({ kind }) => sel[kind].size > 0);
+}
+
+/** "Roles: Analyst · Folders: Projects.Weekly" for a scoped key. */
+function describeAssignments(key: ApiKey): string {
+  return ASSIGNMENT_KINDS.filter(({ kind }) => key[kind].length > 0)
+    .map(({ kind, label }) => `${label}: ${key[kind].map((r) => r.name).join(", ")}`)
+    .join(" · ");
+}
+
+interface LoadedOptions {
+  options: AssignmentOptions;
+  /** Kinds with more values than the pickers loaded (see fetchAllPages). */
+  truncated: AssignmentKind[];
+}
+
+async function loadAssignmentOptions(): Promise<LoadedOptions> {
+  const [regions, roles, groups, departments, folders] = await Promise.all([
+    listAllDimensions("regions"),
+    listAllDimensions("roles"),
+    listAllDimensions("groups"),
+    listAllDimensions("departments"),
+    listAllFolders(),
+  ]);
+  const refs = (items: { id: string; name: string }[]) => items.map(({ id, name }) => ({ id, name }));
+  const pages = { regions, roles, groups, departments, folders };
+  return {
+    options: {
+      regions: refs(regions.items),
+      roles: refs(roles.items),
+      groups: refs(groups.items),
+      departments: refs(departments.items),
+      folders: folders.items
+        .map((f) => ({ id: f.id, name: f.dot_path || f.name }))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    },
+    truncated: ASSIGNMENT_KINDS.map(({ kind }) => kind).filter((kind) => pages[kind].truncated),
+  };
+}
+
+/** id → what the pickers show for it (folder path or dimension name). */
+function optionNames(options: AssignmentOptions): Map<string, string> {
+  const names = new Map<string, string>();
+  for (const { kind } of ASSIGNMENT_KINDS) {
+    for (const opt of options[kind]) names.set(opt.id.toLowerCase(), opt.name);
+  }
+  return names;
+}
 
 const STATUS_STYLES: Record<ApiKeyStatus, string> = {
   active: "border-emerald-600/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
@@ -50,12 +138,21 @@ function fmtDate(iso: string | null): string {
 export function ApiKeysManager() {
   const [keys, setKeys] = useState<ApiKey[]>([]);
   const [scopes, setScopes] = useState<ScopeInfo[]>([]);
+  const [options, setOptions] = useState<AssignmentOptions>(EMPTY_OPTIONS);
+  const [truncatedKinds, setTruncatedKinds] = useState<AssignmentKind[]>([]);
+  const [optionsError, setOptionsError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const [name, setName] = useState("");
   const [selectedScopes, setSelectedScopes] = useState<Set<string>>(new Set());
   const [expiryDays, setExpiryDays] = useState<number | null>(null);
+  // Empty = organization-wide; any selection makes the key scoped.
+  const [assigned, setAssigned] = useState<AssignmentSelection>(emptySelection);
+  const scoped = hasAssignments(assigned);
+  // Derived, never written back: toggling assignments must not lose a selection.
+  const sendScopes = effectiveScopes(selectedScopes, scoped, SCOPED_KEY_SCOPES);
+  const leftOut = droppedScopes(selectedScopes, scoped, SCOPED_KEY_SCOPES);
   const [creating, setCreating] = useState(false);
   // The plaintext key is returned once; hold it to show the copy dialog.
   const [created, setCreated] = useState<ApiKeyCreated | null>(null);
@@ -67,6 +164,20 @@ export function ApiKeysManager() {
       const [keyList, scopeList] = await Promise.all([listApiKeys(), listScopes()]);
       setKeys(keyList);
       setScopes(scopeList);
+      // The assignment pickers are optional: if they fail, the keys still load
+      // and organization-wide keys can still be created.
+      try {
+        const loaded = await loadAssignmentOptions();
+        setOptions(loaded.options);
+        setTruncatedKinds(loaded.truncated);
+        setOptionsError(null);
+      } catch (e: unknown) {
+        setOptions(EMPTY_OPTIONS);
+        setTruncatedKinds([]);
+        setOptionsError(
+          getApiErrorMessage(e, "Couldn't load regions, roles, groups, departments or folders; only organization-wide keys can be created right now"),
+        );
+      }
     } catch (e: unknown) {
       setError(getApiErrorMessage(e, "Failed to load API keys"));
     } finally {
@@ -78,7 +189,17 @@ export function ApiKeysManager() {
     void load();
   }, [load]);
 
-  const canSubmit = name.trim().length > 0 && selectedScopes.size > 0 && !creating;
+  const canSubmit = name.trim().length > 0 && sendScopes.size > 0 && !creating;
+
+  const toggleAssignment = (kind: AssignmentKind, id: string) => {
+    // Pure updater (StrictMode may run it twice); scopes are derived, not pruned here.
+    setAssigned((prev) => {
+      const next = { ...prev, [kind]: new Set(prev[kind]) };
+      if (next[kind].has(id)) next[kind].delete(id);
+      else next[kind].add(id);
+      return next;
+    });
+  };
 
   const toggleScope = (scope: string) => {
     setSelectedScopes((prev) => {
@@ -99,16 +220,23 @@ export function ApiKeysManager() {
         expiryDays === null ? null : new Date(Date.now() + expiryDays * 86_400_000).toISOString();
       const result = await createApiKey({
         name: name.trim(),
-        scopes: [...selectedScopes],
+        scopes: [...sendScopes],
         expires_at,
+        region_ids: [...assigned.regions],
+        role_ids: [...assigned.roles],
+        group_ids: [...assigned.groups],
+        department_ids: [...assigned.departments],
+        folder_ids: [...assigned.folders],
       });
       setCreated(result); // show the one-time key dialog
       setName("");
       setSelectedScopes(new Set());
       setExpiryDays(null);
+      setAssigned(emptySelection());
       await load();
     } catch (e: unknown) {
-      setError(getApiErrorMessage(e, "Failed to create API key"));
+      // Name the folders/dimensions the server refers to by id.
+      setError(describeMintError(getApiErrorMessage(e, "Failed to create API key"), optionNames(options)));
     } finally {
       setCreating(false);
     }
@@ -132,7 +260,10 @@ export function ApiKeysManager() {
         <h2 className="text-lg font-semibold">API keys</h2>
         <p className="text-sm text-muted-foreground">
           Grant external systems programmatic access to this organization&rsquo;s data over the REST
-          API. A key acts with organization-wide access, limited to the scopes you select.
+          API, limited to the scopes you select. A key either sees the whole organization&rsquo;s
+          knowledge, or is limited to the regions, roles, groups and departments you assign it
+          &mdash; exactly what a member holding them would see &mdash; optionally narrowed further
+          to chosen folders.
         </p>
       </div>
 
@@ -166,6 +297,58 @@ export function ApiKeysManager() {
               </div>
             </div>
 
+            <fieldset className="space-y-3 rounded-md border p-3">
+              <legend className="px-1 text-sm font-medium">Knowledge access</legend>
+              <p className="text-xs text-muted-foreground">
+                Leave everything unselected for an organization-wide key. Pick regions, roles, groups
+                or departments to make the key read exactly what a member holding them would. Pick
+                folders to narrow it further to those folders and their subfolders &mdash; folders
+                never grant access the assignments don&rsquo;t have, and a key with only folders reads
+                like a member with no assignments. Such a key can only hold search, knowledge, agent
+                and work-order scopes, and its assignments can&rsquo;t be changed later (revoke and
+                re-issue it instead). Moving a folder under a chosen folder widens the key&rsquo;s
+                folders to include it.
+              </p>
+              {optionsError ? <p className="text-xs text-amber-700 dark:text-amber-500">{optionsError}</p> : null}
+              {truncatedKinds.length > 0 ? (
+                <p className="text-xs text-amber-700 dark:text-amber-500">
+                  Only the first{" "}
+                  {truncatedKinds
+                    .map((kind) => ASSIGNMENT_KINDS.find((k) => k.kind === kind)?.label.toLowerCase() ?? kind)
+                    .join(", ")}{" "}
+                  are listed here; this organization has more than the pickers can show.
+                </p>
+              ) : null}
+              {ASSIGNMENT_KINDS.map(({ kind, label }) => (
+                <div key={kind}>
+                  <p className="mb-1.5 text-sm font-medium">{label}</p>
+                  {options[kind].length === 0 ? (
+                    <p className="text-xs text-muted-foreground">None defined.</p>
+                  ) : (
+                    <div className="flex flex-wrap gap-2" role="group" aria-label={label}>
+                      {options[kind].map((opt) => {
+                        const active = assigned[kind].has(opt.id);
+                        return (
+                          <button
+                            key={opt.id}
+                            type="button"
+                            aria-pressed={active}
+                            onClick={() => toggleAssignment(kind, opt.id)}
+                            className={cn(
+                              "rounded-md border px-2 py-1 text-xs transition-colors",
+                              active ? "border-primary bg-primary text-primary-foreground" : "hover:bg-accent",
+                            )}
+                          >
+                            {opt.name}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </fieldset>
+
             <div>
               <label className="mb-1 block text-sm font-medium">Scopes</label>
               {isLoading && scopes.length === 0 ? (
@@ -180,7 +363,8 @@ export function ApiKeysManager() {
                       <input
                         type="checkbox"
                         className="mt-0.5"
-                        checked={selectedScopes.has(s.name)}
+                        checked={sendScopes.has(s.name)}
+                        disabled={scoped && !SCOPED_KEY_SCOPES.has(s.name)}
                         onChange={() => toggleScope(s.name)}
                       />
                       <span className="min-w-0">
@@ -191,6 +375,12 @@ export function ApiKeysManager() {
                   ))}
                 </div>
               )}
+              {leftOut.length > 0 ? (
+                <p className="mt-2 text-xs text-amber-700 dark:text-amber-500">
+                  A key with assignments can&rsquo;t hold {leftOut.join(", ")}; {leftOut.length === 1 ? "it" : "they"}{" "}
+                  will be left out unless you clear the assignments.
+                </p>
+              ) : null}
             </div>
 
             <Button type="submit" disabled={!canSubmit}>
@@ -220,10 +410,17 @@ export function ApiKeysManager() {
                   </span>
                 </div>
                 <div className="truncate text-xs text-muted-foreground">
-                  <code>{key.key_prefix}…</code> · {key.scopes.length} scope
+                  <code>{key.key_prefix}…</code> ·{" "}
+                  {key.access_mode === "scoped" ? "limited" : "organization-wide"} ·{" "}
+                  {key.scopes.length} scope
                   {key.scopes.length === 1 ? "" : "s"} · last used {fmtDate(key.last_used_at)} · expires{" "}
                   {key.expires_at ? fmtDate(key.expires_at) : "never"}
                 </div>
+                {key.access_mode === "scoped" ? (
+                  <div className="truncate text-xs text-muted-foreground" title={describeAssignments(key)}>
+                    {describeAssignments(key) || key.assignments_note || "No assignments left — this key is refused"}
+                  </div>
+                ) : null}
               </div>
               {key.status !== "revoked" ? (
                 <Button
@@ -303,7 +500,9 @@ function KeyDialog({ created, onClose }: { created: ApiKeyCreated; onClose: () =
         <div className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
           <p className="mb-1 font-medium text-foreground">Grants</p>
           <p>
-            This key can act with organization-wide access, limited to:{" "}
+            {created.access_mode === "scoped"
+              ? `This key reads only what its assignments allow (${describeAssignments(created)}), limited to: `
+              : "This key can act with organization-wide access, limited to: "}
             {created.scopes.map((s) => (
               <code key={s} className="mr-1 rounded bg-muted px-1">
                 {s}

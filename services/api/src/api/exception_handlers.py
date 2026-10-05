@@ -68,3 +68,20 @@ def make_record_access_handler(
         )
 
     return handler
+
+
+def make_too_many_masks_handler(
+    allow_origins: Sequence[str],
+) -> Callable[[Request, Exception], Awaitable[JSONResponse]]:
+    """Map :class:`TooManyAccessMasks` (a membership whose expanded masks exceed
+    ``MAX_ACCESS_KEYS``) to a 422 that says why, instead of a 500 or a filter the
+    stores would reject. Fails closed: nothing is read."""
+
+    async def handler(request: Request, exc: Exception) -> JSONResponse:
+        return JSONResponse(
+            status_code=422,
+            content={"detail": str(exc)},
+            headers=_cors_headers(request, allow_origins),
+        )
+
+    return handler

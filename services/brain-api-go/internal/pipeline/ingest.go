@@ -128,7 +128,7 @@ func (p *Pipeline) IngestDocument(ctx context.Context, req IngestRequest) (*Inge
 
 	chunkRecords := make([]models.VectorRecord, len(chunks))
 	for i, chunk := range chunks {
-		payload := map[string]any{
+		payload := withUserMetadata(map[string]any{
 			"text":           chunk,
 			"summary":        summaries[i],
 			"chunk_order":    i,
@@ -139,11 +139,7 @@ func (p *Pipeline) IngestDocument(ctx context.Context, req IngestRequest) (*Inge
 			"tags":           req.Tags,
 			"access_keys":    accessKeys,
 			"type":           "chunk",
-		}
-		// Merge metadata
-		for k, v := range req.Metadata {
-			payload[k] = v
-		}
+		}, req.Metadata)
 
 		chunkRecords[i] = models.VectorRecord{
 			ID:      uuid.NewString(),
@@ -161,7 +157,7 @@ func (p *Pipeline) IngestDocument(ctx context.Context, req IngestRequest) (*Inge
 	docSummary := p.safeDocumentSummary(ctx, summaries)
 	docVector := p.chooseDocumentVector(ctx, docSummary, embeddings)
 
-	docPayload := map[string]any{
+	docPayload := withUserMetadata(map[string]any{
 		"document_id":    docID,
 		"document_key":   req.DocumentKey,
 		"document_title": req.Title,
@@ -170,10 +166,7 @@ func (p *Pipeline) IngestDocument(ctx context.Context, req IngestRequest) (*Inge
 		"tags":           req.Tags,
 		"access_keys":    accessKeys,
 		"type":           "document",
-	}
-	for k, v := range req.Metadata {
-		docPayload[k] = v
-	}
+	}, req.Metadata)
 
 	docRecord := models.VectorRecord{
 		ID:      docID,

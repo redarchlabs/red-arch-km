@@ -48,6 +48,15 @@ respond naturally to greetings and questions about how to use this assistant.
 # Long enough to show the sentence a citation came from, short enough to keep
 # the sources list compact and the SSE payload small.
 _SNIPPET_MAX_CHARS = 240
+# What a caller whose retrieval scope is empty is told. Nothing was searched.
+NOTHING_READABLE_ANSWER = "There are no documents you can read that could answer this."
+
+
+def _scope_is_empty(access_keys: list[int] | None, folder_tags: list[str] | None) -> bool:
+    """An EXPLICIT empty scope — ``[]`` masks or ``[]`` folders — means nothing is
+    readable. ``None`` is "no filter" and is not empty."""
+    return (access_keys is not None and not access_keys) or (folder_tags is not None and not folder_tags)
+
 
 # --- same-document expansion -------------------------------------------- #
 # Dense top-k ranks a passage that *describes* something above the passage that
@@ -182,7 +191,12 @@ class SearchService:
         vector store and re-scored down to ``limit`` before expansion — see
         :meth:`_rerank_hits`. Expansion then follows the *reranked* leader, which
         is the point: it is what puts the answering document in the prompt.
+
+        An explicit empty ``access_keys`` or ``folder_tags`` (``[]``) matches
+        nothing: the result is empty and nothing is queried. ``None`` = no filter.
         """
+        if _scope_is_empty(access_keys, folder_tags):
+            return {"hits": [], "total": 0}
         metrics = get_metrics()
         start = time.perf_counter()
         status = "success"
@@ -368,7 +382,12 @@ class SearchService:
         value still wins, which is what makes A/B-ing the limit possible without a
         redeploy. ``model`` overrides the configured chat model for the synthesis
         step (an org pinned to local or 3rd-party inference); None keeps the default.
+
+        An explicit empty scope answers :data:`NOTHING_READABLE_ANSWER` without
+        retrieval, graph or LLM calls (see :meth:`vector_search`).
         """
+        if _scope_is_empty(access_keys, folder_tags):
+            return {"answer": NOTHING_READABLE_ANSWER, "sources": [], "graph_context": []}
         # 1. Vector retrieval
         vector_result = self.vector_search(
             tenant_id=tenant_id,
@@ -390,6 +409,9 @@ class SearchService:
                     term=query,
                     tags=tags,
                     user_access=access_keys,
+                    # Same folder limit as the passages: a folder-limited caller
+                    # gets only facts stated by a readable document in them.
+                    folder_tags=folder_tags,
                 )[:10]
             except Exception as e:
                 logger.warning("Graph search failed: %s", e)
@@ -447,8 +469,15 @@ class SearchService:
 
         ``chunk_limit`` defaults to the configured ``CHAT_CHUNK_LIMIT`` and ``model``
         overrides the synthesis model — see :meth:`vector_chat`. This is the path
-        the UI chat actually takes.
+        the UI chat actually takes. An explicit empty scope streams
+        :data:`NOTHING_READABLE_ANSWER` without querying anything.
         """
+        if _scope_is_empty(access_keys, folder_tags):
+            yield {"type": "sources", "sources": []}
+            yield {"type": "graph", "triplets": []}
+            yield {"type": "delta", "content": NOTHING_READABLE_ANSWER}
+            yield {"type": "done"}
+            return
         # 1. Vector retrieval
         try:
             vector_result = self.vector_search(
@@ -480,6 +509,9 @@ class SearchService:
                     term=query,
                     tags=tags,
                     user_access=access_keys,
+                    # Same folder limit as the passages: a folder-limited caller
+                    # gets only facts stated by a readable document in them.
+                    folder_tags=folder_tags,
                 )[:10]
             except Exception as e:
                 logger.warning("Graph search failed during stream: %s", e)

@@ -296,8 +296,8 @@ class WorkOrderService:
         """
         return sorted(_TRANSITIONS.get(status, set()))
 
-    async def list_work_orders(self) -> list[WorkOrder]:
-        return await self._repo.list_all()
+    async def list_work_orders(self, *, api_key_id: uuid.UUID | None = None) -> list[WorkOrder]:
+        return await self._repo.list_all(api_key_id=api_key_id)
 
     async def get_work_order(self, wo_id: uuid.UUID) -> WorkOrder:
         wo = await self._repo.get(wo_id)
@@ -315,6 +315,8 @@ class WorkOrderService:
         review_level: str = "standard",
         assigned_agent_id: uuid.UUID | None = None,
         created_by_profile_id: uuid.UUID | None = None,
+        via_api_key: bool = False,
+        api_key_id: uuid.UUID | None = None,
     ) -> WorkOrder:
         wo = WorkOrder(
             slug=_slugify(title),
@@ -325,6 +327,8 @@ class WorkOrderService:
             review_level=review_level,
             assigned_agent_id=assigned_agent_id,
             created_by_profile_id=created_by_profile_id,
+            via_api_key=via_api_key,
+            api_key_id=api_key_id,
             status="draft",
         )
         return await self._repo.create(wo)
@@ -410,6 +414,9 @@ class WorkOrderService:
             # actor is refused the knowledge base entirely (fail-closed), so it
             # would start and then be unable to read anything.
             actor_user_id=actor_profile_id,
+            # An order filed through the API keeps the API key's limits on its runs.
+            via_api_key=bool(wo.via_api_key),
+            api_key_id=wo.api_key_id,
             status="queued",
             label=f"Work order: {wo.title[:80]}",
         )
@@ -513,6 +520,10 @@ class WorkOrderService:
             },
             work_order_id=wo.id,
             actor_user_id=wo.created_by_profile_id,
+            # Continues on the creator's behalf; an order filed through the API keeps
+            # the API key's limits on every run that carries it on.
+            via_api_key=bool(wo.via_api_key),
+            api_key_id=wo.api_key_id,
             status="queued",
             label=f"Continuing: {wo.title[:70]}",
         )

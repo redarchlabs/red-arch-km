@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -85,7 +86,10 @@ class VectorStore(Protocol):
         access_keys: list[int] | None = None,
         title: str | None = None,
     ) -> None:
-        """Update tags, access keys, and title for all vectors of a document."""
+        """Update tags, access keys, and title for all vectors of a document.
+
+        ``access_keys=[]`` means public within the org and is stored as the ``[0]``
+        sentinel, exactly as ingest stores it (mask-filtered reads match on 0)."""
         ...
 
     def count_document_chunks(self, tenant_id: str, document_key: str) -> int:
@@ -105,6 +109,22 @@ class VectorStore(Protocol):
 
     def get_document_record(self, tenant_id: str, document_key: str) -> SearchResult | None:
         """Return the doc-level record (summary + summary_tree) or None if absent."""
+        ...
+
+    def iter_document_heads(self, tenant_id: str, *, batch_size: int = 256) -> Iterator[SearchResult]:
+        """Yield each document's first chunk (``chunk_order`` 0), whose payload carries
+        the document's current ``tags`` and ``access_keys``. Empty for a tenant with
+        no collection."""
+        ...
+
+    def iter_document_keys(self, tenant_id: str, *, batch_size: int = 256) -> Iterator[str]:
+        """Yield every ingested document's key (from the document-level records).
+        Empty for a tenant with no collection."""
+        ...
+
+    def repair_empty_access_keys(self, tenant_id: str, *, batch_size: int = 500) -> dict[str, int]:
+        """Rewrite chunks stored with ``access_keys == []`` to the public ``[0]``
+        sentinel; idempotent. Returns ``{"scanned", "repaired"}``."""
         ...
 
     def delete_tenant(self, tenant_id: str) -> None:

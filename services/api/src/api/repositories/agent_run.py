@@ -40,6 +40,8 @@ class AgentRunRepository:
         parent_run_id: uuid.UUID | None = None,
         label: str | None = None,
         status: str = "running",
+        via_api_key: bool = False,
+        api_key_id: uuid.UUID | None = None,
     ) -> AgentRun:
         run = AgentRun(
             agent_id=agent_id,
@@ -52,6 +54,8 @@ class AgentRunRepository:
             parent_run_id=parent_run_id,
             label=label,
             status=status,
+            via_api_key=via_api_key,
+            api_key_id=api_key_id,
             started_at=_now(),
             last_activity_at=_now(),
             org_id=self._org_id,

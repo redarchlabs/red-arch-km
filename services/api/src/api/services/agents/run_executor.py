@@ -40,6 +40,7 @@ from api.services.agents.llm.routing import provider_for, provider_key_required
 from api.services.agents.notify import create_notification
 from api.services.agents.prompts import build_system_prompt
 from api.services.agents.runtime import RunCancelled, RunFinished, RunParked, run_agent_loop
+from api.services.agents.tools.key_scope import KEY_GONE, KeyState, offered_to_run, run_key_status
 from api.services.agents.tools.loader import load_agent_tools
 from api.services.agents.tools.spec import ToolContext, ToolSpec
 from api.services.agents.work_order_service import MAX_CONTINUATIONS, WorkOrderService
@@ -435,9 +436,17 @@ class AgentRunExecutor:
             settings=self._settings,
             agent=agent,
             actor_user_id=run.actor_user_id,
+            via_api_key=bool(run.via_api_key),
+            api_key_id=run.api_key_id,
             run_id=run.id,
             work_order_id=run.work_order_id,
         )
+        key_status = await run_key_status(ctx)
+        if key_status is not None and key_status.state is KeyState.GONE:
+            # The API key that started (or resumed) this run no longer grants
+            # anything: stop rather than let the model carry on without it.
+            await lifecycle.finalize_run(session, org_id, run, status="error", error=KEY_GONE)
+            return
         # Resolve the posture before building the tool list, not after: a plan-mode
         # run that is *offered* tools it will be denied burns turns proposing
         # actions that can never happen.
@@ -477,6 +486,9 @@ class AgentRunExecutor:
             raw_schema = linkage.get("output_schema")
             schema: dict[str, Any] = raw_schema if isinstance(raw_schema, dict) else {}
             specs = [*specs, *workflow_bridge_specs(schema)]
+
+        # A run started by a scoped API key only sees mask-aware tools.
+        specs = await offered_to_run(ctx, specs)
 
         # Resume a parked turn (human approved) or start fresh from the task.
         resume = run.input.get("resume") if isinstance(run.input, dict) else None
@@ -624,33 +636,7 @@ class AgentRunExecutor:
             logger.info("agent run %s cancelled externally; stopping without finalize", run.id)
             return
         except RunFinished as finished:
-            if isinstance(run.input, dict) and "resume" in run.input:
-                run.input = {k: v for k, v in run.input.items() if k != "resume"}
-            if finished.status == "done":
-                run.output = dict(finished.payload.get("output") or {})
-                await run_repo.add_step(run.id, kind="assistant", content={"completed": True, "output": run.output})
-                await lifecycle.finalize_run(
-                    session,
-                    org_id,
-                    run,
-                    status="done",
-                    prompt_tokens=finished.prompt_tokens,
-                    completion_tokens=finished.completion_tokens,
-                    total_tokens=finished.total_tokens,
-                )
-            else:
-                reason = str(finished.payload.get("reason") or "agent escalated")
-                await run_repo.add_step(run.id, kind="escalation", content={"reason": reason})
-                await lifecycle.finalize_run(
-                    session,
-                    org_id,
-                    run,
-                    status="escalated",
-                    error=reason,
-                    prompt_tokens=finished.prompt_tokens,
-                    completion_tokens=finished.completion_tokens,
-                    total_tokens=finished.total_tokens,
-                )
+            await self._finish_terminal(session, org_id, run, run_repo, finished)
             return
         except RunParked as parked:
             pending = parked.pending or []
@@ -741,6 +727,42 @@ class AgentRunExecutor:
         )
         if won:
             await self._signal_parent(session, org_id, run, agent.name, result.final_content)
+
+    async def _finish_terminal(
+        self,
+        session: AsyncSession,
+        org_id: uuid.UUID,
+        run: AgentRun,
+        run_repo: AgentRunRepository,
+        finished: RunFinished,
+    ) -> None:
+        """Finalize a run a terminal signal ended: ``done`` (completed with output),
+        ``error`` (stopped by the platform — e.g. the API key that started it is
+        gone) or anything else as ``escalated``."""
+        if isinstance(run.input, dict) and "resume" in run.input:
+            run.input = {k: v for k, v in run.input.items() if k != "resume"}
+        if finished.status == "done":
+            run.output = dict(finished.payload.get("output") or {})
+            await run_repo.add_step(run.id, kind="assistant", content={"completed": True, "output": run.output})
+            status, error = "done", None
+        elif finished.status == "error":
+            error = str(finished.payload.get("reason") or "run stopped")
+            await run_repo.add_step(run.id, kind="error", content={"reason": error})
+            status = "error"
+        else:
+            error = str(finished.payload.get("reason") or "agent escalated")
+            await run_repo.add_step(run.id, kind="escalation", content={"reason": error})
+            status = "escalated"
+        await lifecycle.finalize_run(
+            session,
+            org_id,
+            run,
+            status=status,
+            error=error,
+            prompt_tokens=finished.prompt_tokens,
+            completion_tokens=finished.completion_tokens,
+            total_tokens=finished.total_tokens,
+        )
 
     async def _load_attachments(
         self, session: AsyncSession, org_id: uuid.UUID, run: AgentRun

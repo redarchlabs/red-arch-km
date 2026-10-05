@@ -42,6 +42,10 @@ class Settings(BaseSettings):
     # from the legacy API_RATE_LIMIT_PER_MINUTE (which feeds rate_limit_per_minute
     # above) so the two limits don't collide on one variable.
     api_rate_limit_per_minute: int = Field(default=600, validation_alias="API_KEY_RATE_LIMIT_PER_MINUTE")
+    # Documents one API key may write per day via POST /api/v1/knowledge/documents.
+    # Each write can start an LLM-billed ingest (fact extraction), so this bounds the
+    # spend a single key can cause. Counted in Redis; fails open like the limiter.
+    api_key_document_writes_per_day: int = Field(default=500, ge=1, validation_alias="API_KEY_DOCUMENT_WRITES_PER_DAY")
     # Coarse per-client-IP quota applied BEFORE key resolution, so a flood of
     # invalid/unknown keys can't hammer the auth lookup unbounded. Generous by
     # design (a legitimate high-throughput client behind one IP must not trip it).

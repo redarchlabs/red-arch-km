@@ -15,11 +15,21 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.models.api_key import ApiKey
+from api.models.api_key import ACCESS_MODE_ORG, ACCESS_MODE_SCOPED, ApiKey
 from api.repositories.api_key import ApiKeyRepository
-from api.services.api_key_scopes import normalize_scopes
+from api.services.api_key_assignments import (
+    ApiKeyAssignmentError,
+    AssignmentLabels,
+    KeyAssignments,
+    check_constraints_now,
+    load_assignment_labels,
+    save_assignments,
+    validate_assignments,
+)
+from api.services.api_key_scopes import normalize_scopes, validate_scoped_key_scopes
 
 _KEY_PREFIX = "km2_"
 # Max keys per org — a guard against unbounded growth / abuse, not a hard product
@@ -37,6 +47,15 @@ class ApiKeyNotFoundError(ApiKeyError):
 
 class ApiKeyValidationError(ApiKeyError):
     """The request was invalid (bad scopes, over the per-org limit, etc.)."""
+
+
+class ApiKeyAssignmentInvalid(ApiKeyValidationError):  # noqa: N818 - reads as the condition
+    """An assignment cannot be granted: an unknown id, a folder the assignments
+    cannot see, too many masks, or a folder set too wide to search (422)."""
+
+
+class ApiKeyConflictError(ApiKeyError):
+    """Something the key was being minted with changed underneath it (409)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,11 +112,20 @@ class ApiKeyService:
         scopes: list[str],
         expires_at: datetime | None,
         created_by_profile_id: uuid.UUID | None,
+        assignments: KeyAssignments | None = None,
     ) -> tuple[ApiKey, str]:
         """Create a key and return ``(persisted_key, plaintext)``.
 
         The plaintext is the ONLY time the secret is available — callers must
-        surface it to the user immediately and never persist it.
+        surface it to the user immediately and never persist it, and must COMMIT
+        before returning it: a key whose row never committed would be a plaintext
+        secret for nothing.
+
+        Non-empty ``assignments`` make the key *scoped*: it reads knowledge with the
+        masks of those regions/roles/groups/departments, narrowed to the listed
+        folders. Every id must be in this org, the masks must stay under the cap,
+        and every folder must be visible to them (``api.services.api_key_assignments``).
+        A scoped key may hold only scope-aware scopes, never a wildcard.
         """
         clean_name = name.strip()
         if not clean_name:
@@ -112,6 +140,16 @@ class ApiKeyService:
             raise ApiKeyValidationError("Expiry must be in the future")
         if await self._repo.count() >= MAX_KEYS_PER_ORG:
             raise ApiKeyValidationError(f"This organization has reached the maximum of {MAX_KEYS_PER_ORG} API keys")
+        scoped = assignments is not None and not assignments.is_empty
+        if assignments is not None and scoped:
+            try:
+                validate_scoped_key_scopes(clean_scopes)
+            except ValueError as exc:
+                raise ApiKeyValidationError(str(exc)) from exc
+            try:
+                await validate_assignments(self._session, self._org_id, assignments)
+            except ApiKeyAssignmentError as exc:
+                raise ApiKeyAssignmentInvalid(str(exc)) from exc
 
         generated = generate_key()
         api_key = ApiKey(
@@ -121,9 +159,25 @@ class ApiKeyService:
             scopes=clean_scopes,
             expires_at=expires_at,
             created_by_profile_id=created_by_profile_id,
+            access_mode=ACCESS_MODE_SCOPED if scoped else ACCESS_MODE_ORG,
         )
         await self._repo.create(api_key)
+        if assignments is not None and scoped:
+            await save_assignments(self._session, api_key.id, assignments)
+            try:
+                # The item FKs are deferred to commit; check them now so a row
+                # deleted under the mint is a conflict here, not a lost key later.
+                await check_constraints_now(self._session)
+            except IntegrityError as exc:
+                raise ApiKeyConflictError(
+                    "One of the chosen regions, roles, groups, departments or folders was deleted while the key "
+                    "was being created. Reload and try again."
+                ) from exc
         return api_key, generated.plaintext
+
+    async def assignment_labels(self, keys: list[ApiKey]) -> dict[uuid.UUID, AssignmentLabels]:
+        """Each scoped key's assignments with names, for the admin list."""
+        return await load_assignment_labels(self._session, [k.id for k in keys if k.access_mode == ACCESS_MODE_SCOPED])
 
     async def revoke_key(self, api_key_id: uuid.UUID) -> ApiKey:
         """Revoke a key. Idempotent — revoking an already-revoked key is a no-op."""

@@ -10,11 +10,15 @@ from sqlalchemy import (
     Boolean,
     Column,
     ForeignKey,
+    Index,
     Integer,
     String,
     Table,
     Text,
     UniqueConstraint,
+)
+from sqlalchemy import (
+    text as sql_text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, BIGINT, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -75,8 +79,9 @@ class Folder(Base, UUIDMixin, TimestampMixin, LineageMixin):
 
     # Foreign keys
     org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), index=True)
+    # Indexed: a scoped API key's folders expand by walking parent_id.
     parent_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("folders.id", ondelete="CASCADE"), nullable=True
+        UUID(as_uuid=True), ForeignKey("folders.id", ondelete="CASCADE"), nullable=True, index=True
     )
 
     org: Mapped[Org] = relationship()
@@ -96,7 +101,17 @@ class Tag(Base, UUIDMixin, TimestampMixin, LineageMixin):
 
 class Document(Base, UUIDMixin, TimestampMixin, LineageMixin):
     __tablename__ = "documents"
-    __table_args__ = (UniqueConstraint("org_id", "document_key", name="uq_doc_key_per_org"),)
+    __table_args__ = (
+        UniqueConstraint("org_id", "document_key", name="uq_doc_key_per_org"),
+        Index(
+            "uq_doc_external_ref_per_folder",
+            "org_id",
+            "folder_id",
+            "external_ref",
+            unique=True,
+            postgresql_where=sql_text("external_ref IS NOT NULL"),
+        ),
+    )
 
     title: Mapped[str] = mapped_column(String(255))
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -115,6 +130,13 @@ class Document(Base, UUIDMixin, TimestampMixin, LineageMixin):
     celery_task_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     metadata_: Mapped[dict[str, Any] | None] = mapped_column("metadata", JSONB, nullable=True, default=dict)
     use_knowledge_graph: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    # Caller-chosen stable id for documents written through the public API
+    # (``POST /api/v1/knowledge/documents``): the same ref re-sent replaces this
+    # row's content rather than creating a duplicate. Unique per folder when set.
+    external_ref: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # SHA-256 hex of the content last ingested via that path; identical content
+    # re-sent is a no-op. NULL for documents created any other way.
+    content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     # Per-document permissions, independent of the folder. Seeded from the
     # folder at creation (the default) and overridable via the document's

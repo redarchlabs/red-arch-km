@@ -47,8 +47,14 @@ class GraphStore(Protocol):
         *,
         tags: list[str] | None = None,
         user_access: list[int] | None = None,
+        folder_tags: list[str] | None = None,
     ) -> list[dict[str, Any]]:
-        """Search triplets by fuzzy term matching."""
+        """Search triplets by fuzzy term matching.
+
+        ``folder_tags`` (``folder:<id>``; None = no folder limit, ``[]`` = nothing)
+        keeps only facts stated by a document that is both in one of those folders
+        and readable with ``user_access``.
+        """
         ...
 
     def fuzzy_entity_search(

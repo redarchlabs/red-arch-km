@@ -3,7 +3,8 @@
 How KM2 talks to the outside world: the `km2-mcp` developer tool that drives the
 API, the "Connect" OAuth flow that lets agents reach external MCP servers, inbound
 webhooks that start workflow runs, outbound connections that call third-party HTTP
-APIs, and the config-push transport used for cross-instance promotion. For
+APIs, external systems reading and writing the knowledge base over the public API,
+and the config-push transport used for cross-instance promotion. For
 engineers integrating with KM2 or extending its automation surface.
 
 ## Table of Contents
@@ -13,6 +14,7 @@ engineers integrating with KM2 or extending its automation surface.
 - [Agent MCP connections (the "Connect" OAuth flow)](#agent-mcp-connections-the-connect-oauth-flow)
 - [Inbound webhooks](#inbound-webhooks)
 - [Outbound connections](#outbound-connections)
+- [External knowledge clients (public API)](#external-knowledge-clients-public-api)
 - [Config-push transport](#config-push-transport)
 - [Cross-links](#cross-links)
 
@@ -30,6 +32,7 @@ external MCP servers.
 | Agent MCP connections ("Connect") | KM2 agents → external MCP server | OAuth 2.1 (PKCE), org- or user-scoped, tokens Fernet-encrypted | Give autonomous agents external tools |
 | Inbound webhooks | External sender → KM2 | Opaque URL token + optional HMAC `X-KM2-Signature` | Start a workflow run from an external event (real-time) |
 | Outbound connections | KM2 (workflow / form) → external HTTP API | Saved connector credential (`bearer` / `api_key` / `basic`) | Call third-party APIs and robots from workflows/forms |
+| External knowledge clients | External app / agent platform → KM2 `/api/v1` | Org API key, optionally scoped to dimension assignments and folders | Search, ask, and send documents into the knowledge base under KM2's folder permissions |
 | Config-push transport | KM2 instance → another KM2 instance | Remote org API key (`Bearer`), SSRF-guarded, HTTPS | Promote a config release to another deployment |
 
 ## The km2-mcp developer tool
@@ -267,6 +270,60 @@ button, or a workflow `http_request`, posts a command (e.g. speak/gesture) to th
 robot's endpoint; the command secret is injected server-side. This is how a "heard →
 knowledge_search → say" loop reaches the physical robot in real time.
 
+## External knowledge clients (public API)
+
+An external system — typically another agent platform whose agents need the org's
+documents and facts — uses the public `/api/v1` surface with an org API key. Full
+contract: [API.md](API.md#dimension-scoped-keys).
+
+| Need | Endpoint | Scope |
+|---|---|---|
+| Find passages | `POST /api/v1/search` | `search:read` |
+| Ask a question (RAG answer + sources + graph facts) | `POST /api/v1/search/chat` | `search:read` |
+| Send a document (or a new version of one) | `POST /api/v1/knowledge/documents` | `knowledge:write` |
+| Check ingest progress | `GET /api/v1/knowledge/documents/{id}` | `knowledge:read` |
+
+### One key per access level: dimension-scoped keys
+
+KM2's folder permissions are the single place knowledge access is managed. To keep it
+that way for an integration, mint a key **scoped to dimension assignments** (Admin Area →
+API & Keys → *Knowledge access*): pick the regions, roles, groups and/or departments that
+should apply, and the key searches, reads and writes with exactly the folder permissions a
+member holding them would have, resolved on every request. No member profile is needed.
+Typical setup:
+
+1. Decide the access levels the integration needs (for example one per business area) and
+   the dimension values each corresponds to.
+2. Mint one key per access level with those assignments and only the scopes it needs
+   (`search:read`, `knowledge:read`, `knowledge:write`; the agent and work-order scopes are
+   also allowed). Optionally list **folders** to narrow a key further to those folders and
+   their subfolders — folders never grant access the assignments lack. A scoped key cannot
+   hold record, report, entity, workflow or config scopes, nor any wildcard, and
+   `knowledge:write` must always be listed explicitly.
+3. The integration's **server** picks the key per request from its own notion of who is
+   asking. The key is a server-side secret; never let an agent choose or see it.
+
+Assignments cannot be edited after minting (revoke and re-issue). A region, role, group,
+department or folder an active key holds cannot be deleted (`409`) until the key is
+revoked. Moving a folder under one a key lists widens that key's folders to include it. An
+org-wide key (no assignments) remains available for trusted org-level integrations and
+sees everything.
+
+### Sending documents
+
+Send documents, not facts: KM2 does the extraction, and every extracted fact carries the
+document's folder masks. Each write is an ingest, and fact extraction is an LLM step, so
+batch writes (for example a periodic report) rather than sending on every event.
+
+Give each logical document a stable `external_ref` (`proj-weekly-2026-W41`,
+`proj-charter`); refs are unique per folder. Re-sending the same ref to the same folder
+replaces that document's content and re-ingests it; identical content is not re-ingested
+(a changed title or metadata is still applied). Ingest is asynchronous — poll the returned
+id until `processing_status` is `SUCCESS` or `FAILED`; a `503` means resend. A scoped key
+can only write into its folders that its assignments may add to, and each key has a daily write cap
+(`API_KEY_DOCUMENT_WRITES_PER_DAY`, default 500). Keep `metadata` flat (scalars or lists of
+scalars); the index's own fields such as `access_keys` or `tags` cannot be set through it.
+
 ## Config-push transport
 
 For cross-instance config promotion, `services/api/src/api/services/migration/transport.py`
@@ -290,7 +347,8 @@ model is documented in [CHANGE_MANAGEMENT.md](CHANGE_MANAGEMENT.md).
 - [WORKFLOW_ENGINE.md](WORKFLOW_ENGINE.md) — how inbound triggers and outbound actions run inside a workflow.
 - [AUTHENTICATION.md](AUTHENTICATION.md) — Clerk JWTs, org API keys, and the HMAC webhook signature scheme.
 - [CHANGE_MANAGEMENT.md](CHANGE_MANAGEMENT.md) — release bundles and cross-instance promotion.
-- [API.md](API.md) — the REST surface these tools drive.
+- [API.md](API.md) — the REST surface these tools drive, including dimension-scoped keys and document writes.
+- [RBAC.md](RBAC.md#dimension-scoped-api-keys) — how a scoped key is authorised.
 - [README](../README.md) — repo overview and stack.
 
 > Reviewed 2026-07-16 against Alembic migration 039. Source of truth is the code; if this doc disagrees with the code, the code wins.

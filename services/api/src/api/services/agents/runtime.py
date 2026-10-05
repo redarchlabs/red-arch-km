@@ -37,6 +37,7 @@ from typing import Any
 from api.models.agent import Agent
 from api.services.agents.authority import Decision, decide
 from api.services.agents.llm.provider import Completion, LLMError, LLMProvider, TextDelta, ToolCallRequest
+from api.services.agents.tools.key_scope import ends_run, scoped_key_refusal
 from api.services.agents.tools.spec import ToolContext, ToolSpec
 from api.services.agents.transcript import (
     DEFAULT_KEEP_RECENT,
@@ -455,6 +456,15 @@ async def _run_tool(spec: ToolSpec, ctx: ToolContext, tc: ToolCallRequest) -> di
     # argument so every existing handler signature stays as it is.
     ctx.tool_call_id = tc.id
     try:
+        # A key-started run re-checks its key on EVERY call (one cheap read). A key
+        # that is gone ends the run; a scoped key's run is limited to its allowlist
+        # (defense in depth: the tool list was already filtered by offered_to_run).
+        # Inside the try so a failed key lookup refuses the call, not the run.
+        refusal = await scoped_key_refusal(ctx, spec.name)
+        if ends_run(refusal):
+            raise RunFinished("error", {"reason": refusal})
+        if refusal is not None:
+            return {"error": refusal}
         return await spec.handler(ctx, tc.arguments)
     except (RunFinished, RunParked):
         # Control signals from a handler — propagate, never swallow into an "error"

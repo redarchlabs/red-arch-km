@@ -58,6 +58,7 @@ def _fake_key(**over: object) -> SimpleNamespace:
         "name": "k",
         "revoked_at": None,
         "expires_at": None,
+        "access_mode": "org",
     }
     base.update(over)
     return SimpleNamespace(**base)
@@ -231,3 +232,73 @@ class TestV1RouterWiring:
         assert deps.index(ak.enforce_ip_rate_limit) < deps.index(ak.enforce_api_rate_limit), (
             "IP throttle must run before per-key limiter (pre-auth)"
         )
+
+
+def _app_probe_scope() -> FastAPI:
+    app = FastAPI()
+
+    @app.get("/probe")
+    async def probe(principal: Annotated[ApiKeyPrincipal, Depends(ak.require_api_key)]):  # noqa: ANN202
+        return {
+            "access_mode": principal.access_mode,
+            "masks": list(principal.masks) if principal.masks is not None else None,
+            "folder_ids": sorted(str(f) for f in principal.folder_ids) if principal.folder_ids is not None else None,
+        }
+
+    return app
+
+
+class TestScopedKeys:
+    """A scoped key resolves its own assignments' masks and folders on every
+    request, and fails closed when they no longer resolve."""
+
+    async def test_org_key_carries_no_masks(self) -> None:
+        key = _fake_key()
+        resolver = AsyncMock()
+        with (
+            patch.object(ak, "lookup_by_key_hash", AsyncMock(return_value=key)),
+            patch.object(ak, "resolve_key_scope", resolver),
+        ):
+            async with _client(_app_probe_scope()) as client:
+                resp = await client.get("/probe", headers={"Authorization": "Bearer km2_x"})
+        assert resp.status_code == 200
+        assert resp.json() == {"access_mode": "org", "masks": None, "folder_ids": None}
+        resolver.assert_not_awaited()
+
+    async def test_scoped_key_resolves_masks_and_folders(self) -> None:
+        from api.services.api_key_scope import KeyScope
+
+        folder = uuid.uuid4()
+        key = _fake_key(access_mode="scoped")
+        resolver = AsyncMock(return_value=KeyScope(masks=(0, 2_097_152), folder_ids=frozenset({folder})))
+        with (
+            patch.object(ak, "lookup_by_key_hash", AsyncMock(return_value=key)),
+            patch.object(ak, "resolve_key_scope", resolver),
+        ):
+            async with _client(_app_probe_scope()) as client:
+                resp = await client.get("/probe", headers={"Authorization": "Bearer km2_x"})
+        assert resp.status_code == 200
+        assert resp.json() == {"access_mode": "scoped", "masks": [0, 2_097_152], "folder_ids": [str(folder)]}
+        assert resolver.await_args.args[1] is key
+
+    async def test_unresolvable_scope_is_403_not_org_wide(self) -> None:
+        """No assignment rows left / an assignment outside the org: the key stops
+        working. It must never quietly fall back to an org-wide key."""
+        key = _fake_key(access_mode="scoped")
+        resolver = AsyncMock(side_effect=ak.KeyScopeError("scoped key has no assignments"))
+        with (
+            patch.object(ak, "lookup_by_key_hash", AsyncMock(return_value=key)),
+            patch.object(ak, "resolve_key_scope", resolver),
+        ):
+            async with _client(_app_probe_scope()) as client:
+                resp = await client.get("/probe", headers={"Authorization": "Bearer km2_x"})
+        assert resp.status_code == 403
+        # The reason is logged server-side, not handed to the caller.
+        assert "no assignments" not in resp.text
+
+    async def test_unknown_access_mode_is_refused(self) -> None:
+        key = _fake_key(access_mode="weird")
+        with patch.object(ak, "lookup_by_key_hash", AsyncMock(return_value=key)):
+            async with _client(_app_probe_scope()) as client:
+                resp = await client.get("/probe", headers={"Authorization": "Bearer km2_x"})
+        assert resp.status_code == 403

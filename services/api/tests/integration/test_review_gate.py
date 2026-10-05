@@ -43,6 +43,8 @@ class _Ctx:
     run_id: uuid.UUID | None = None
     settings: Any = None
     actor_user_id: uuid.UUID | None = None
+    via_api_key: bool = False
+    api_key_id: uuid.UUID | None = None
     tool_call_id: str | None = "call_1"
     _extra: dict = field(default_factory=dict)
 

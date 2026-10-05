@@ -8,6 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.models.document import Tag
+from api.services.index_tags import validate_tag_name
 
 
 class TagRepository:
@@ -30,6 +31,8 @@ class TagRepository:
         return list(result.scalars().all()), total
 
     async def create(self, *, name: str) -> Tag:
+        # Defense in depth: every route already refuses the reserved prefix.
+        validate_tag_name(name)
         tag = Tag(name=name, org_id=self._org_id)
         self._session.add(tag)
         await self._session.flush()

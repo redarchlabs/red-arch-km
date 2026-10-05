@@ -7,6 +7,7 @@ import uuid
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth.dependencies import OrgContext, require_org_access, require_org_admin
@@ -17,12 +18,20 @@ from api.repositories.document import DocumentRepository
 from api.repositories.folder import FolderRepository
 from api.schemas.common import PaginatedResponse, PaginationParams, make_page
 from api.schemas.document import FolderCreate, FolderRead, FolderUpdate
+from api.services.api_key_assignments import (
+    active_keys_holding,
+    check_constraints_now,
+    in_use_detail,
+    lock_item,
+    purge_inactive_holders,
+)
 from api.services.folder_service import (
     FolderCycleError,
     build_dot_path,
     compute_folder_masks,
     move_folder,
 )
+from api.services.index_tags import index_tags
 from api.services.permission_config import calculate_user_masks_from_membership
 from api.tasks.ingest import dispatch_metadata_update
 
@@ -40,12 +49,12 @@ def _perm_propagation_payloads(
     retrieval entitlement in sync after a permission change. The ``folder:<id>``
     tag reflects the document's OWN folder, not the folder that changed.
     """
-    folder_tag = f"folder:{folder.id}"
     return [
         {
             "tenant_id": str(org_id),
             "document_key": doc.document_key,
-            "new_tags": [t.name for t in doc.tags] + [folder_tag],
+            # User tags may not carry the reserved folder: prefix; only this one does.
+            "new_tags": index_tags([t.name for t in doc.tags], folder.id),
             "new_access_keys": access_keys,
             "title": doc.title,
         }
@@ -257,18 +266,31 @@ async def delete_folder(
     if that's not desired.
     """
     repo = FolderRepository(session, ctx.org_id)
+    # Lock first: a mint validating this folder holds it FOR SHARE, so this waits
+    # for that mint and the key check below then sees its key.
+    if not await lock_item(session, ctx.org_id, "folders", folder_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Folder not found")
     folder = await repo.get(folder_id)
     if folder is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Folder not found")
 
-    # descendants() returns the folder itself + descendants, so >1 means children exist
-    descendants = await repo.descendants(folder)
-    if len(descendants) > 1:
+    # By parent_id, not dot_path: a same-named root's children are not this one's.
+    if await repo.list_children(folder.id):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Cannot delete folder with children — move or delete them first",
         )
+    # A folder-limited API key that lists this folder would silently lose it; the
+    # FK refuses it anyway (NO ACTION). Revoked/expired keys' rows are released first.
+    await purge_inactive_holders(session, ctx.org_id, "folders", folder_id)
+    holders = await active_keys_holding(session, ctx.org_id, "folders", folder_id)
+    if holders:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=in_use_detail("folders", holders))
 
     await session.delete(folder)
-    await session.flush()
+    try:
+        # The FK is deferred to commit, which runs after the response: check it now.
+        await check_constraints_now(session)
+    except IntegrityError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=in_use_detail("folders", [])) from exc
     logger.info("Deleted folder %s in org %s", folder_id, ctx.org_id)

@@ -7,7 +7,12 @@ into RAG, so the whole org can retrieve them later via ``search_knowledge``.
 
 It mirrors the first-party ``POST /documents`` router exactly (validate folder →
 create row → commit → enqueue ingest), using the run's ``actor_user_id`` as the
-uploader (nullable — a scheduled run has no human actor, which is fine).
+uploader (nullable — a scheduled run or a run started through an API key has no
+human actor, which is fine). A run started through an API key needs the key to
+still hold ``knowledge:write`` (org keys too), counts against the key's daily
+document-write cap (``API_KEY_DOCUMENT_WRITES_PER_DAY``, the same counter as
+``POST /api/v1/knowledge/documents``), and — for a scoped key — writes only inside
+that key's folders (see ``tools/key_scope.py``).
 
 Governance: category ``WRITE`` (operator-kind + ``records_write`` grant). Writing
 an internal KB document is **not** an external egress, so ``side_effecting`` is
@@ -21,9 +26,16 @@ import uuid
 from typing import Any
 
 from api import db_scope
+from api.dependencies import get_redis_client
 from api.repositories.document import DocumentRepository
 from api.repositories.folder import FolderRepository
+from api.schemas.knowledge_write import RESERVED_METADATA_KEYS
+from api.services.agents.tools.key_scope import RunKeyRefused, run_key_scope
 from api.services.agents.tools.spec import Category, ToolContext, ToolSpec
+from api.services.api_key_scopes import has_scope
+from api.services.api_key_write_cap import DOC_WRITE_WINDOW_SECONDS, doc_write_cap_key
+from api.services.api_rate_limit import check_rate_limit, peek_rate_limit
+from api.services.index_tags import index_tags
 from api.tasks.ingest import dispatch_ingest
 
 logger = logging.getLogger(__name__)
@@ -40,6 +52,14 @@ async def _create_document(ctx: ToolContext, args: dict[str, Any]) -> dict[str, 
     title = str(args.get("title") or "").strip()
     if not title:
         return {"error": "title is required"}
+    metadata = args.get("metadata")
+    if metadata is not None and not isinstance(metadata, dict):
+        return {"error": "metadata must be an object"}
+    reserved = sorted(set(metadata or {}) & RESERVED_METADATA_KEYS)
+    if reserved:
+        # These are the index's own fields (masks, scope, identity); brain-api
+        # ignores them in metadata anyway, but say so rather than drop them silently.
+        return {"error": f"metadata may not set reserved field(s): {', '.join(reserved)}"}
     text = args.get("text")
     text = str(text) if text is not None else None
 
@@ -49,23 +69,29 @@ async def _create_document(ctx: ToolContext, args: dict[str, Any]) -> dict[str, 
     # Validate the folder up front so a bad id fails cleanly (and scope the
     # ingest to the folder's view masks, exactly like the REST create path).
     access_keys: list[int] = []
-    tag_names: list[str] = []
     folder_id = _parse_id(args.get("folder_id")) if args.get("folder_id") else None
-    if folder_id is not None:
-        folder = await folder_repo.get(folder_id)
-        if folder is None:
-            return {"error": "folder_id does not exist in this organization"}
+    folder = await folder_repo.get(folder_id) if folder_id is not None else None
+    if folder_id is not None and folder is None:
+        return {"error": "folder_id does not exist in this organization"}
+    via_api_key = bool(getattr(ctx, "via_api_key", False))
+    if via_api_key:
+        refusal = await _key_write_refusal(ctx, folder) or await _daily_cap_refusal(ctx)
+        if refusal is not None:
+            return {"error": refusal}
+    if folder is not None:
         access_keys = await folder_repo.effective_view_masks(folder)
-        tag_names.append(f"folder:{folder.id}")
+    # The folder tag is server-derived; no user tag may carry its prefix.
+    tag_names = index_tags([], folder.id if folder is not None else None)
 
     doc = await doc_repo.create(
         title=title,
         text=text,
         description=args.get("description"),
         folder_id=folder_id,
-        uploaded_by_id=ctx.actor_user_id,
+        # A key is not a person: a key-started run's documents have no uploader.
+        uploaded_by_id=None if via_api_key else ctx.actor_user_id,
         use_knowledge_graph=args.get("use_knowledge_graph"),
-        metadata=args.get("metadata") or {},
+        metadata=metadata or {},
     )
     doc.size_bytes = len(text.encode("utf-8")) if text else None
 
@@ -82,6 +108,8 @@ async def _create_document(ctx: ToolContext, args: dict[str, Any]) -> dict[str, 
     # would otherwise hit RLS unscoped. See api/db_scope.py.
     await ctx.session.commit()
     await db_scope.enter_tenant(ctx.session, ctx.org_id)
+    if via_api_key:
+        await _count_key_write(ctx)
 
     ingest = "skipped_no_text"
     if text:
@@ -106,6 +134,62 @@ async def _create_document(ctx: ToolContext, args: dict[str, Any]) -> dict[str, 
             ingest = "pending_enqueue_failed"
 
     return {"id": str(doc_id), "title": title, "folder_id": str(folder_id) if folder_id else None, "ingest": ingest}
+
+
+async def _key_write_refusal(ctx: ToolContext, folder: Any) -> str | None:
+    """Re-check the run's API key at write time (it may have been revoked mid-run).
+
+    Any key must still be valid and hold ``knowledge:write`` — the scope the REST
+    write requires. A scoped key's run must also name a folder (unfiled documents
+    bypass folder permissions), keep inside the key's folder set, and have masks
+    that may add to that folder; an org key writes with org-wide reach, as the REST
+    write does.
+    """
+    from api.services.knowledge_visibility import can_add_to_folder
+
+    try:
+        key_scope = await run_key_scope(ctx)
+    except RunKeyRefused as exc:
+        return str(exc)
+    if key_scope is None:
+        return None
+    if not has_scope(key_scope.scopes, "knowledge:write"):
+        return "The API key that started this run does not (or no longer) hold knowledge:write."
+    if not key_scope.scoped:
+        return None
+    if folder is None:
+        return "A folder_id is required: this run may only file into the API key's folders."
+    if key_scope.folder_ids is not None and folder.id not in key_scope.folder_ids:
+        return "That folder is outside the folders the API key that started this run may use."
+    masks = list(key_scope.masks or ())
+    if not masks or not await can_add_to_folder(ctx.session, ctx.org_id, folder, masks):
+        return "The API key that started this run may not add documents to that folder."
+    return None
+
+
+async def _daily_cap_refusal(ctx: ToolContext) -> str | None:
+    """Every write may start an LLM-billed ingest, so a key's writes are capped per
+    day — agent writes and REST writes share one counter. Peeked (not counted)
+    before the write; fail-open on a Redis outage, like the REST path."""
+    result = await peek_rate_limit(
+        get_redis_client(ctx.settings),
+        doc_write_cap_key(ctx.api_key_id),
+        limit=ctx.settings.api_key_document_writes_per_day,
+        window_seconds=DOC_WRITE_WINDOW_SECONDS,
+    )
+    if result.allowed:
+        return None
+    return "The API key that started this run has reached its daily document-write limit; try again tomorrow."
+
+
+async def _count_key_write(ctx: ToolContext) -> None:
+    """Count a committed write against the key's daily cap."""
+    await check_rate_limit(
+        get_redis_client(ctx.settings),
+        doc_write_cap_key(ctx.api_key_id),
+        limit=ctx.settings.api_key_document_writes_per_day,
+        window_seconds=DOC_WRITE_WINDOW_SECONDS,
+    )
 
 
 CREATE_DOCUMENT = ToolSpec(

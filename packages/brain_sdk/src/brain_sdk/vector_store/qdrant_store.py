@@ -6,6 +6,7 @@ import contextlib
 import logging
 import time
 import uuid
+from collections.abc import Iterator
 from typing import Any
 
 from qdrant_client import QdrantClient
@@ -16,6 +17,15 @@ from brain_sdk.vector_store.protocol import SearchResult, VectorRecord
 logger = logging.getLogger(__name__)
 
 _RANGE_INDEX_ERROR = "No range index for `order_by` key"
+# What ingest stores for a document with no viewer restriction ("public within the
+# org"). Mask-filtered reads use MatchAny and always include it; an empty list
+# would match nothing at all.
+PUBLIC_ACCESS_KEYS: tuple[int, ...] = (0,)
+
+
+def _is_missing_collection(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return "doesn't exist" in msg or "not found" in msg
 
 
 def _batched(items: list[Any], size: int) -> list[list[Any]]:
@@ -298,7 +308,9 @@ class QdrantVectorStore:
         if tags is not None:
             payload["tags"] = tags
         if access_keys is not None:
-            payload["access_keys"] = access_keys
+            # [] is "public" here, exactly as at ingest: store the sentinel, or the
+            # document drops out of every mask-filtered search.
+            payload["access_keys"] = list(access_keys) or list(PUBLIC_ACCESS_KEYS)
         if title is not None:
             payload["document_title"] = title
 
@@ -410,6 +422,97 @@ class QdrantVectorStore:
             return None
         p = points[0]
         return SearchResult(id=str(p.id), score=0.0, payload=p.payload or {})
+
+    def _scroll_points(
+        self,
+        collection: str,
+        *,
+        scroll_filter: rest.Filter | None = None,
+        with_payload: list[str] | bool = True,
+        batch_size: int = 256,
+    ) -> Iterator[Any]:
+        """Every point of ``collection`` (matching ``scroll_filter``), page by page.
+        A missing collection yields nothing; other errors propagate."""
+        offset: Any = None
+        while True:
+            try:
+                points, offset = self._client.scroll(
+                    collection_name=collection,
+                    scroll_filter=scroll_filter,
+                    limit=batch_size,
+                    offset=offset,
+                    with_payload=with_payload,
+                    with_vectors=False,
+                )
+            except Exception as e:  # noqa: BLE001 — Qdrant raises generic on missing collection
+                if _is_missing_collection(e):
+                    return
+                raise
+            yield from points
+            if offset is None or not points:
+                return
+
+    def iter_document_heads(self, tenant_id: str, *, batch_size: int = 256) -> Iterator[SearchResult]:
+        """Yield each document's first chunk (``chunk_order`` 0), payload only.
+
+        Chunks, not the document-level record: ``update_metadata`` re-tags and
+        re-masks chunk payloads only, so after a folder move the first chunk
+        carries the document's current folder tag and masks and the document
+        record does not. Every ingested document has a chunk 0 (``chunk_order``
+        is assigned by ``enumerate`` after filtering). A missing collection yields
+        nothing; other errors propagate.
+        """
+        query_filter = rest.Filter(
+            must=[
+                rest.FieldCondition(key="tenant_id", match=rest.MatchValue(value=tenant_id)),
+                rest.FieldCondition(key="chunk_order", match=rest.MatchValue(value=0)),
+            ]
+        )
+        for p in self._scroll_points(
+            self._chunk_collection(tenant_id),
+            scroll_filter=query_filter,
+            with_payload=["document_key", "tags", "access_keys"],
+            batch_size=batch_size,
+        ):
+            yield SearchResult(id=str(p.id), score=0.0, payload=p.payload or {})
+
+    def iter_document_keys(self, tenant_id: str, *, batch_size: int = 256) -> Iterator[str]:
+        """Yield the ``document_key`` of every document-level record (one per
+        ingested document). A missing collection yields nothing."""
+        for p in self._scroll_points(
+            self._doc_collection(tenant_id), with_payload=["document_key"], batch_size=batch_size
+        ):
+            key = (p.payload or {}).get("document_key")
+            if key:
+                yield str(key)
+
+    def repair_empty_access_keys(self, tenant_id: str, *, batch_size: int = 500) -> dict[str, int]:
+        """Rewrite chunks whose ``access_keys`` is exactly ``[]`` to the public
+        sentinel ``[0]`` (what ingest stores for a public document).
+
+        Older ``update_metadata`` calls stored ``[]`` for a public document, which
+        no mask-filtered search matches. Only an exact empty list is rewritten — a
+        missing field or real masks are left alone — so a re-run repairs nothing.
+        Returns ``{"scanned", "repaired"}`` (``scanned``: chunks whose field was
+        empty or missing, examined).
+        """
+        collection = self._chunk_collection(tenant_id)
+        # IsEmpty narrows server-side (it also matches a missing or null field,
+        # which the exact check below leaves alone).
+        candidates = rest.Filter(must=[rest.IsEmptyCondition(is_empty=rest.PayloadField(key="access_keys"))])
+        scanned = 0
+        broken: list[Any] = []
+        for p in self._scroll_points(
+            collection, scroll_filter=candidates, with_payload=["access_keys"], batch_size=batch_size
+        ):
+            scanned += 1
+            if (p.payload or {}).get("access_keys", None) == []:
+                broken.append(p.id)
+        for ids in _batched(broken, batch_size):
+            self._client.set_payload(
+                collection_name=collection, payload={"access_keys": list(PUBLIC_ACCESS_KEYS)}, points=ids
+            )
+        return {"scanned": scanned, "repaired": len(broken)}
 
     def _wait_collection_ready(self, collection: str, *, timeout: int = 60) -> None:
         deadline = time.time() + timeout

@@ -314,6 +314,16 @@ func (q *QdrantStore) DeleteTenant(ctx context.Context, tenantID string) error {
 	return nil
 }
 
+// chunkAccessKeys is what a chunk stores for a document's masks: an empty list
+// (public within the org) becomes the [0] sentinel ingest uses, because
+// mask-filtered search matches with MatchAny on 0 and [] would match nothing.
+func chunkAccessKeys(accessKeys []int) []int {
+	if len(accessKeys) == 0 {
+		return []int{0}
+	}
+	return accessKeys
+}
+
 // UpdateMetadata updates tags/access_keys/title on all chunks for a document.
 func (q *QdrantStore) UpdateMetadata(ctx context.Context, tenantID, documentKey string, tags []string, accessKeys []int, title *string) error {
 	collection := q.chunkCollection(tenantID)
@@ -344,7 +354,7 @@ func (q *QdrantStore) UpdateMetadata(ctx context.Context, tenantID, documentKey 
 		payload["tags"] = toQdrantValue(tags)
 	}
 	if accessKeys != nil {
-		payload["access_keys"] = toQdrantValue(accessKeys)
+		payload["access_keys"] = toQdrantValue(chunkAccessKeys(accessKeys))
 	}
 	if title != nil {
 		payload["document_title"] = toQdrantValue(*title)

@@ -10,6 +10,15 @@ import apiClient from "./client";
 
 export type ApiKeyStatus = "active" | "revoked" | "expired";
 
+/** "org" = organization-wide knowledge; "scoped" = its own assignments below. */
+export type ApiKeyAccessMode = "org" | "scoped";
+
+/** An assignment shown on a key: a dimension's name, or a folder's path. */
+export interface NamedRef {
+  id: string;
+  name: string;
+}
+
 export interface ApiKey {
   id: string;
   name: string;
@@ -18,6 +27,18 @@ export interface ApiKey {
   scopes: string[];
   status: ApiKeyStatus;
   created_by_profile_id: string | null;
+  access_mode: ApiKeyAccessMode;
+  regions: NamedRef[];
+  roles: NamedRef[];
+  groups: NamedRef[];
+  departments: NamedRef[];
+  /** Folders (with their subfolders) that narrow what the key reads. */
+  folders: NamedRef[];
+  /**
+   * Set only for a scoped key with no assignments left: released after the key
+   * was revoked/expired, or (an active key) broken and refused.
+   */
+  assignments_note: string | null;
   last_used_at: string | null;
   expires_at: string | null;
   revoked_at: string | null;
@@ -40,6 +61,17 @@ export interface ApiKeyCreateInput {
   scopes: string[];
   /** ISO 8601 instant, or null/omitted for a non-expiring key. */
   expires_at?: string | null;
+  /**
+   * Dimension assignments: the key reads knowledge exactly as a member holding
+   * them would. Any non-empty list (or folder_ids) makes the key "scoped";
+   * all empty = an organization-wide key. Fixed once minted.
+   */
+  region_ids?: string[];
+  role_ids?: string[];
+  group_ids?: string[];
+  department_ids?: string[];
+  /** Folders (with subfolders) that only NARROW what the key reads; never grant. */
+  folder_ids?: string[];
 }
 
 export async function listApiKeys(): Promise<ApiKey[]> {

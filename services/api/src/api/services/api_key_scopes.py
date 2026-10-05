@@ -28,9 +28,9 @@ class ScopeDef:
 # UI via GET /api/api-keys/scopes so the create form can render labelled checkboxes.
 #
 # Only scopes with a live /api/v1 endpoint are listed — advertising a grant that
-# silently does nothing (e.g. entity-definition writes, document uploads, outbound
-# webhooks) would give admins a false sense of least-privilege. Those ship with
-# their endpoints in later phases. NOTE: a wildcard grant ("*" or "<domain>:*")
+# silently does nothing (e.g. entity-definition writes, outbound webhooks) would
+# give admins a false sense of least-privilege. Those ship with their endpoints in
+# later phases. NOTE: a wildcard grant ("*" or "<domain>:*")
 # auto-expands to future actions in that domain when they land, without re-consent.
 API_SCOPES: tuple[ScopeDef, ...] = (
     ScopeDef("entities:read", "List and read custom entity definitions (schema)."),
@@ -46,6 +46,13 @@ API_SCOPES: tuple[ScopeDef, ...] = (
     ),
     ScopeDef("search:read", "Run semantic search and RAG chat over the knowledge base."),
     ScopeDef("knowledge:read", "List and read documents and folders."),
+    ScopeDef(
+        "knowledge:write",
+        "Add documents to the knowledge base, or replace one's content by its external_ref. "
+        "Each write is ingested, which costs LLM tokens, so it is NEVER granted by a '*' or "
+        "'knowledge:*' wildcard. A key limited to dimension or folder assignments may only "
+        "write to its own folders that its assignments may add to.",
+    ),
     ScopeDef("agents:read", "List agents and inspect agent runs."),
     ScopeDef(
         "agents:run",
@@ -69,7 +76,38 @@ VALID_SCOPES: frozenset[str] = frozenset(s.name for s in API_SCOPES)
 # Scopes so powerful they are never satisfied by a wildcard grant ("*" or
 # "<domain>:*") — a key must be minted with the exact scope. ``config:write`` can
 # rewrite the whole org configuration, so it must be an explicit, deliberate grant.
-SENSITIVE_SCOPES: frozenset[str] = frozenset({"config:write"})
+# ``knowledge:write`` starts an LLM-billed ingest per call and adds content every
+# reader of the folder will see, so an existing "*" / "knowledge:*" key must not
+# silently gain it when the endpoint ships.
+SENSITIVE_SCOPES: frozenset[str] = frozenset({"config:write", "knowledge:write"})
+
+# Scopes whose routes honour a scoped key's assignments (they read or write
+# knowledge with the key's masks and folder set, start runs limited to them, or only
+# show the key's own runs and work orders). A scoped key may hold only these, and
+# never a wildcard: records, reports, entities, workflows and config ignore the
+# key's scope, so a scoped key holding them would be org-wide there in disguise.
+SCOPED_KEY_SCOPES: frozenset[str] = frozenset(
+    {
+        "search:read",
+        "knowledge:read",
+        "knowledge:write",
+        "agents:read",
+        "agents:run",
+        "work_orders:read",
+        "work_orders:write",
+    }
+)
+
+
+def validate_scoped_key_scopes(scopes: list[str]) -> None:
+    """Raise ``ValueError`` unless every scope is concrete and scope-aware."""
+    bad = sorted(s for s in scopes if s not in SCOPED_KEY_SCOPES)
+    if bad:
+        msg = (
+            f"A key limited to dimension or folder assignments cannot hold {', '.join(bad)}; allowed: "
+            f"{', '.join(sorted(SCOPED_KEY_SCOPES))} (no wildcards)"
+        )
+        raise ValueError(msg)
 
 
 def normalize_scopes(scopes: list[str]) -> list[str]:

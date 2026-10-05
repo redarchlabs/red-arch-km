@@ -1,6 +1,7 @@
 import type { Folder } from "@/types";
 
 import apiClient from "./client";
+import { type AllPages, fetchAllPages, MAX_PAGE_SIZE } from "./pagination";
 
 /**
  * A single permission rule. All dimensions are optional; an unset dimension
@@ -22,6 +23,16 @@ export async function listFolders(): Promise<Folder[]> {
     params: { page_size: 200 },
   });
   return response.data.items;
+}
+
+/** Every folder the caller may see, across pages (`truncated` past the page cap). */
+export async function listAllFolders(): Promise<AllPages<Folder>> {
+  return fetchAllPages(async (page) => {
+    const response = await apiClient.get<{ items: Folder[]; total: number }>("/folders/", {
+      params: { page, page_size: MAX_PAGE_SIZE },
+    });
+    return { items: response.data.items, total: response.data.total };
+  });
 }
 
 export async function createFolder(input: FolderCreateInput): Promise<Folder> {

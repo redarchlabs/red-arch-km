@@ -322,3 +322,173 @@ class TestNavigationalChunkFiltering:
         )
         assert result["chunks"] >= 1
         assert self._indexed_texts(mock_stores)
+
+
+class TestReservedMetadata:
+    """Caller metadata rides along in every chunk/document payload, but it must
+    never override the fields retrieval filters and scopes on. A writer posting
+    ``{"access_keys": [0]}`` would otherwise make restricted content public."""
+
+    _HOSTILE = {
+        "access_keys": [0],
+        "tags": ["folder:someone-else"],
+        "document_key": "other-doc",
+        "document_id": "other-id",
+        "tenant_id": "other-tenant",
+        "type": "document",
+        "text": "replaced",
+        "summary": "replaced",
+        "section": "replaced",
+        "chunk_order": 999,
+        "document_title": "replaced",
+        "summary_tree": {"summary": "replaced"},
+        "source": "kept",
+    }
+
+    def _ingest(self, mock_stores: MagicMock) -> None:
+        IngestService(mock_stores).ingest_document(
+            tenant_id="t1",
+            document_key="dk1",
+            title="Doc",
+            text="Hello world. This is a test.",
+            tags=["folder:f1"],
+            access_keys=[42],
+            use_knowledge_graph=False,
+            metadata=dict(self._HOSTILE),
+        )
+
+    def test_chunk_payload_keeps_reserved_fields(self, mock_stores: MagicMock) -> None:
+        self._ingest(mock_stores)
+        for record in mock_stores.vector.upsert_vectors.call_args_list[0].args[1]:
+            p = record.payload
+            assert p["access_keys"] == [42]
+            assert p["tags"] == ["folder:f1"]
+            assert p["document_key"] == "dk1"
+            assert p["tenant_id"] == "t1"
+            assert p["type"] == "chunk"
+            assert p["text"] != "replaced"
+            assert p["chunk_order"] != 999
+            assert p["document_title"] == "Doc"
+            assert p["source"] == "kept"  # non-reserved metadata still lands
+
+    def test_document_payload_keeps_reserved_fields(self, mock_stores: MagicMock) -> None:
+        self._ingest(mock_stores)
+        p = mock_stores.vector.upsert_vectors.call_args_list[1].args[1][0].payload
+        assert p["access_keys"] == [42]
+        assert p["tags"] == ["folder:f1"]
+        assert p["document_key"] == "dk1"
+        assert p["tenant_id"] == "t1"
+        assert p["type"] == "document"
+        assert p["summary"] == "final doc summary"
+        assert p["summary_tree"] != {"summary": "replaced"}
+        assert p["source"] == "kept"
+
+    def test_reserved_key_set_is_exported(self) -> None:
+        from brain_api.services.ingest_service import RESERVED_INGEST_METADATA_KEYS
+
+        assert {"access_keys", "tags", "document_key", "tenant_id", "type"} <= RESERVED_INGEST_METADATA_KEYS
+
+
+class TestUpdateMetadataReachesFacts:
+    """A folder move or permission change must re-mask the document's facts too,
+    or facts from a public→restricted move stay public — and must move its folder
+    tags, which folder-limited graph search tests on the source Document node."""
+
+    def test_claim_masks_updated_when_fact_engine_on(self, mock_stores: MagicMock) -> None:
+        mock_stores.settings.use_fact_engine = True
+        IngestService(mock_stores).update_metadata(tenant_id="t1", document_key="dk1", access_keys=[7])
+        mock_stores.fact_store.update_document_metadata.assert_called_once_with("t1", "dk1", tags=None, access_keys=[7])
+
+    def test_folder_move_retags_the_document_node(self, mock_stores: MagicMock) -> None:
+        mock_stores.settings.use_fact_engine = True
+        IngestService(mock_stores).update_metadata(
+            tenant_id="t1", document_key="dk1", tags=["folder:new"], access_keys=[7]
+        )
+        mock_stores.fact_store.update_document_metadata.assert_called_once_with(
+            "t1", "dk1", tags=["folder:new"], access_keys=[7]
+        )
+
+    def test_tags_only_change_reaches_facts(self, mock_stores: MagicMock) -> None:
+        mock_stores.settings.use_fact_engine = True
+        IngestService(mock_stores).update_metadata(tenant_id="t1", document_key="dk1", tags=["folder:new"])
+        mock_stores.fact_store.update_document_metadata.assert_called_once_with(
+            "t1", "dk1", tags=["folder:new"], access_keys=None
+        )
+
+    def test_title_only_change_leaves_facts_alone(self, mock_stores: MagicMock) -> None:
+        mock_stores.settings.use_fact_engine = True
+        IngestService(mock_stores).update_metadata(tenant_id="t1", document_key="dk1", title="New")
+        mock_stores.fact_store.update_document_metadata.assert_not_called()
+
+    def test_fact_engine_off_leaves_facts_alone(self, mock_stores: MagicMock) -> None:
+        IngestService(mock_stores).update_metadata(tenant_id="t1", document_key="dk1", tags=["folder:new"])
+        mock_stores.fact_store.update_document_metadata.assert_not_called()
+
+
+class TestBackfillDocumentGraphMetadata:
+    """Document nodes written before they carried tags have none, so folder-limited
+    graph search excludes their claims (fails closed) until this copies each
+    document's current tags and masks over from its first chunk's payload (the
+    vector-store copy that metadata updates keep current)."""
+
+    @staticmethod
+    def _records(*payloads: dict) -> list[MagicMock]:
+        return [MagicMock(payload=p) for p in payloads]
+
+    def test_copies_tags_and_masks_from_the_vector_store(self, mock_stores: MagicMock) -> None:
+        mock_stores.settings.use_fact_engine = True
+        mock_stores.vector.iter_document_heads.return_value = self._records(
+            {"document_key": "dk1", "tags": ["folder:a", "policy"], "access_keys": [5, 6]},
+            {"document_key": "dk2", "tags": ["folder:b"], "access_keys": [0]},
+            {"document_key": "dk3", "access_keys": []},
+        )
+        mock_stores.fact_store.update_document_metadata.return_value = 1
+
+        result = IngestService(mock_stores).backfill_document_graph_metadata("t1")
+
+        calls = mock_stores.fact_store.update_document_metadata.call_args_list
+        assert [c.args for c in calls] == [("t1", "dk1"), ("t1", "dk2"), ("t1", "dk3")]
+        assert calls[0].kwargs == {"tags": ["folder:a", "policy"], "access_keys": [5, 6]}
+        # Ingest stores a public document's chunks as the [0] sentinel; the fact
+        # graph's public form is the empty list.
+        assert calls[1].kwargs == {"tags": ["folder:b"], "access_keys": []}
+        assert calls[2].kwargs == {"tags": [], "access_keys": []}
+        assert result == {"documents": 3, "claims_recomputed": 3, "skipped": 0}
+
+    def test_each_document_is_written_once(self, mock_stores: MagicMock) -> None:
+        mock_stores.settings.use_fact_engine = True
+        mock_stores.vector.iter_document_heads.return_value = self._records(
+            {"document_key": "dk1", "tags": ["folder:a"], "access_keys": [5]},
+            {"document_key": "dk1", "tags": ["folder:a"], "access_keys": [5]},
+        )
+        mock_stores.fact_store.update_document_metadata.return_value = 0
+        assert IngestService(mock_stores).backfill_document_graph_metadata("t1")["documents"] == 1
+        mock_stores.fact_store.update_document_metadata.assert_called_once()
+
+    def test_records_without_a_document_key_are_skipped_and_counted(self, mock_stores: MagicMock) -> None:
+        mock_stores.settings.use_fact_engine = True
+        mock_stores.vector.iter_document_heads.return_value = self._records({"tags": ["folder:a"]})
+        result = IngestService(mock_stores).backfill_document_graph_metadata("t1")
+        mock_stores.fact_store.update_document_metadata.assert_not_called()
+        assert result["documents"] == 0
+        assert result["skipped"] == 1
+
+    def test_documents_without_a_first_chunk_are_skipped_and_counted(self, mock_stores: MagicMock) -> None:
+        """A document whose chunk 0 is missing has no payload to copy from: it is
+        left alone, but counted, so the operator knows the graph is still behind."""
+        mock_stores.settings.use_fact_engine = True
+        mock_stores.vector.iter_document_heads.return_value = self._records(
+            {"document_key": "dk1", "tags": ["folder:a"], "access_keys": [5]}
+        )
+        mock_stores.vector.iter_document_keys.return_value = iter(["dk1", "dk2", "dk3"])
+        mock_stores.fact_store.update_document_metadata.return_value = 0
+
+        result = IngestService(mock_stores).backfill_document_graph_metadata("t1")
+
+        assert result == {"documents": 1, "claims_recomputed": 0, "skipped": 2}
+        mock_stores.fact_store.update_document_metadata.assert_called_once()
+
+    def test_fact_engine_off_is_a_no_op(self, mock_stores: MagicMock) -> None:
+        result = IngestService(mock_stores).backfill_document_graph_metadata("t1")
+        mock_stores.vector.iter_document_heads.assert_not_called()
+        assert result == {"documents": 0, "claims_recomputed": 0, "skipped": 0}

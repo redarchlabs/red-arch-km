@@ -1,9 +1,21 @@
 """``/api/v1/search`` — semantic search + RAG chat over the knowledge base.
 
-Wraps :class:`BrainAPIClient`. An org service key has org-wide content visibility
-(``service_key_access_keys`` → ``None``), so results are not filtered by
-per-user permission masks; the ``search:read`` scope is the gate. Folder scoping
-via ``folder_ids`` still applies.
+Wraps :class:`BrainAPIClient`. What a key can retrieve depends on its access mode
+(``api_key_access_keys`` / ``api_key_folder_scope``):
+
+* an **org key** has org-wide content visibility (``None``) — results are not
+  filtered by permission masks; the ``search:read`` scope is the gate;
+* a **scoped key** retrieves with the masks of its own dimension assignments,
+  resolved on every request, so passages and graph facts its assignments cannot
+  see are filtered out inside brain-api. A key limited to folders searches only
+  those folders (and their subfolders): ``folder_ids`` outside them is a ``404``,
+  none means all of them, and ``folder_tags`` is always sent — for search AND chat,
+  which brain-api applies to graph facts too.
+
+Folder scoping via ``folder_ids`` applies on top of either. A folder-limited key
+whose folders are all hidden gets an empty answer without brain-api being called
+(brain-api would also answer an explicit empty ``folder_tags`` with nothing; an
+absent one means "no folder filter").
 """
 
 from __future__ import annotations
@@ -25,7 +37,7 @@ from api.schemas.search import (
 )
 from api.services.brain_client import BrainAPIClient
 from api.services.org_llm import org_default_llm_model
-from api.services.search_access import folder_tags, service_key_access_keys
+from api.services.search_access import api_key_access_keys, api_key_folder_scope, folder_tags
 
 router = APIRouter()
 
@@ -40,14 +52,19 @@ async def search(
 
     Requires the ``search:read`` scope. Data is served by brain-api addressed by
     tenant id, so no local DB session is opened here."""
+    # Before any upstream call: fail closed first.
+    access_keys = api_key_access_keys(principal)
+    folders = api_key_folder_scope(principal, body.folder_ids)
+    if folders == []:
+        return SearchResponse(hits=[], total=0)
     client = BrainAPIClient(settings)
     result = await client.vector_search(
         tenant_id=str(principal.org_id),
         query=body.query,
         limit=body.limit,
-        access_keys=service_key_access_keys(),
+        access_keys=access_keys,
         tags=body.tags,
-        folder_tags=folder_tags(body.folder_ids),
+        folder_tags=folder_tags(folders),
     )
     hits = [
         SearchResult(
@@ -74,14 +91,18 @@ async def chat(
     """Hybrid RAG chat: an answer grounded in the org's knowledge base.
 
     Requires the ``search:read`` scope."""
+    access_keys = api_key_access_keys(principal)
+    folders = api_key_folder_scope(principal, body.folder_ids)
+    if folders == []:
+        return ChatResponse(answer="", sources=[], graph_context=[])
     client = BrainAPIClient(settings)
     result = await client.vector_chat(
         tenant_id=str(principal.org_id),
         query=body.query,
         chat_history=body.chat_history,
-        access_keys=service_key_access_keys(),
+        access_keys=access_keys,
         tags=body.tags,
-        folder_tags=folder_tags(body.folder_ids),
+        folder_tags=folder_tags(folders),
         use_knowledge_graph=body.use_knowledge_graph,
         # Org-pinned answer model (local vs 3rd-party); None = brain-api default.
         model=await org_default_llm_model(session, principal.org_id),

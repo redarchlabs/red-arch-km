@@ -15,13 +15,26 @@ from access_mask.constants import (
     ROLE_BITS,
     ROLE_SHIFT,
 )
-from access_mask.mask import AccessMask, decode, encode, matches
+from access_mask.mask import (
+    MAX_ACCESS_KEYS,
+    AccessMask,
+    decode,
+    encode,
+    expand_member_masks,
+    expand_wildcards,
+    matches,
+    member_masks,
+)
 
 __all__ = [
     "AccessMask",
     "decode",
     "encode",
+    "expand_member_masks",
+    "expand_wildcards",
     "matches",
+    "member_masks",
+    "MAX_ACCESS_KEYS",
     "ORG_BITS",
     "REGION_BITS",
     "ROLE_BITS",

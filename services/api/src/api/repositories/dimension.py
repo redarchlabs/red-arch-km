@@ -9,6 +9,7 @@ from __future__ import annotations
 import uuid
 from typing import cast
 
+from access_mask import MAX_DEPT, MAX_GROUP, MAX_REGION, MAX_ROLE
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,6 +21,16 @@ from api.models.org import Department, Group, Region, Role
 # constrained TypeVar (which a union argument cannot satisfy).
 DimensionModel = Region | Department | Role | Group
 DimensionType = type[Region] | type[Department] | type[Role] | type[Group]
+
+
+# A dimension's MAX value is the mask wildcard ("any value"), so the highest
+# number a real dimension may take is MAX-1: a region numbered 31 would make every
+# folder scoped to it visible in every region.
+_WILDCARD: dict[type, int] = {Region: MAX_REGION, Role: MAX_ROLE, Group: MAX_GROUP, Department: MAX_DEPT}
+
+
+class DimensionLimitReached(ValueError):
+    """No permission number is left below the dimension's wildcard value."""
 
 
 class DimensionRepository:
@@ -59,6 +70,13 @@ class DimensionRepository:
             .with_for_update()
         )
         last_num = last_num_result.scalar_one_or_none() or 0
+        highest = _WILDCARD[self._model] - 1
+        if last_num + 1 > highest:
+            msg = (
+                f"This organization already has the maximum number of {self._model.__tablename__} "
+                f"({highest}); the next number would be the permission wildcard. Rename or reuse one instead."
+            )
+            raise DimensionLimitReached(msg)
 
         instance = self._model(
             name=name,

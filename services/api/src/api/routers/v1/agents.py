@@ -4,6 +4,19 @@ Authoring stays first-party (Clerk admin). A service key can list agents, trigge
 an agent run (which the worker drives with the agent's configured grants), and
 file / read work orders. The scope is the gate — per-resource permissions that
 gate *users* do not apply to a service key.
+
+Runs and work orders created here have no actor and no filing profile: a key is
+not a person. Each is marked ``via_api_key`` with the key's id; the mark follows
+delegations, consults, escalations, reviews and work-order continuations. Such a
+run never searches another org and never reads with anyone's personal reach.
+
+A **scoped key** (dimension and/or folder assignments) starts runs whose knowledge
+tool reads with the key's own masks and folders — reloaded on every tool call, and
+checked before the agent's ``knowledge_scope: "org"`` grant so it can never become
+unrestricted — and which are limited to mask-aware tools (no workflows). A scoped
+key sees only the runs and work orders it created, and lists agents as summaries
+(no persona, params, grants or MCP servers). An org key's runs behave like any
+unattended run, and it sees every agent, run and work order in full, as before.
 """
 
 from __future__ import annotations
@@ -18,7 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.auth.api_key import ApiKeyPrincipal, get_apikey_tenant_db, require_scope
 from api.repositories.agent import AgentRepository
 from api.repositories.agent_run import AgentRunRepository
-from api.schemas.agent import AgentRead
+from api.schemas.agent import AgentRead, AgentSummaryRead
 from api.schemas.agent_run import AgentRunRead
 from api.schemas.work_order import WorkOrderCreate, WorkOrderRead
 from api.services.agents.work_order_service import WorkOrderService
@@ -30,12 +43,17 @@ class AgentRunTrigger(BaseModel):
     task: str = Field(min_length=1, description="What the agent should do.")
 
 
-@router.get("/agents", response_model=list[AgentRead])
+@router.get("/agents", response_model=list[AgentRead] | list[AgentSummaryRead])
 async def list_agents(
     principal: Annotated[ApiKeyPrincipal, Depends(require_scope("agents:read"))],
     session: Annotated[AsyncSession, Depends(get_apikey_tenant_db)],
-) -> list[AgentRead]:
+) -> list[AgentRead] | list[AgentSummaryRead]:
+    """Every agent in the org. A scoped key gets summaries (id, name, description,
+    kind, enabled) — how an agent is built (persona, params, grants, MCP servers)
+    is org-key only."""
     agents = await AgentRepository(session, principal.org_id).list_all()
+    if principal.is_scoped:
+        return [AgentSummaryRead.model_validate(a) for a in agents]
     return [AgentRead.model_validate(a) for a in agents]
 
 
@@ -56,6 +74,9 @@ async def trigger_agent_run(
         model=agent.model,
         trigger="manual",
         input={"task": body.task},
+        actor_user_id=None,  # a key is not a person; see tools/key_scope.py
+        via_api_key=True,
+        api_key_id=principal.api_key_id,
         status="queued",
     )
     return AgentRunRead.model_validate(run)
@@ -68,7 +89,8 @@ async def get_agent_run(
     session: Annotated[AsyncSession, Depends(get_apikey_tenant_db)],
 ) -> AgentRunRead:
     run = await AgentRunRepository(session, principal.org_id).get_run(run_id)
-    if run is None:
+    # A scoped key sees only the runs it started (and the runs those spawned).
+    if run is None or (principal.is_scoped and run.api_key_id != principal.api_key_id):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "run not found")
     return AgentRunRead.model_validate(run)
 
@@ -78,7 +100,10 @@ async def list_work_orders(
     principal: Annotated[ApiKeyPrincipal, Depends(require_scope("work_orders:read"))],
     session: Annotated[AsyncSession, Depends(get_apikey_tenant_db)],
 ) -> list[WorkOrderRead]:
-    items = await WorkOrderService(session, principal.org_id).list_work_orders()
+    # A scoped key lists only the work orders it filed.
+    items = await WorkOrderService(session, principal.org_id).list_work_orders(
+        api_key_id=principal.api_key_id if principal.is_scoped else None
+    )
     return [WorkOrderRead.model_validate(w) for w in items]
 
 
@@ -93,5 +118,9 @@ async def create_work_order(
         body=body.body,
         priority=body.priority,
         assigned_agent_id=body.assigned_agent_id,
+        # No filing profile: the order's runs have no actor and carry the key instead.
+        created_by_profile_id=None,
+        via_api_key=True,
+        api_key_id=principal.api_key_id,
     )
     return WorkOrderRead.model_validate(wo)

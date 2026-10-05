@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 
 from brain_api.auth import require_api_key
 from brain_api.config import BrainAPISettings
+from brain_api.limits import MAX_ACCESS_KEYS
 from brain_api.services.search_service import SearchService
 from brain_api.stores import Stores, get_stores
 
@@ -46,11 +47,18 @@ class AskRequest(BaseModel):
     tenant_id: str = Field(min_length=1, max_length=128)
     query: str = Field(min_length=1, max_length=5000)
     chat_history: list[dict[str, str]] = Field(default_factory=list)
-    access_keys: list[int] = Field(default_factory=list, max_length=256)
+    access_keys: list[int] | None = Field(
+        default=None,
+        max_length=MAX_ACCESS_KEYS,
+        description="Permission masks (MatchAny). Absent/null = unrestricted; [] = nothing is readable.",
+    )
     tags: list[str] = Field(default_factory=list)
-    folder_tags: list[str] = Field(
-        default_factory=list,
-        description="Folder-membership tags (folder:<id>); ORed to scope retrieval to a set of folders.",
+    folder_tags: list[str] | None = Field(
+        default=None,
+        description=(
+            "Folder-membership tags (folder:<id>); ORed to scope retrieval to a set of folders. "
+            "Absent/null = every folder; [] = no folder is readable."
+        ),
     )
     use_knowledge_graph: bool = True
     # Answer-synthesis model override (an org pinned to local or 3rd-party
@@ -75,9 +83,9 @@ async def ask(
             tenant_id=body.tenant_id,
             query=body.query,
             chat_history=body.chat_history,
-            access_keys=body.access_keys or None,
+            access_keys=body.access_keys,
             tags=body.tags,
-            folder_tags=body.folder_tags or None,
+            folder_tags=body.folder_tags,
             use_knowledge_graph=body.use_knowledge_graph,
             model=body.model,
         )
@@ -110,9 +118,9 @@ async def ask_stream(
             tenant_id=body.tenant_id,
             query=body.query,
             chat_history=body.chat_history,
-            access_keys=body.access_keys or None,
+            access_keys=body.access_keys,
             tags=body.tags,
-            folder_tags=body.folder_tags or None,
+            folder_tags=body.folder_tags,
             use_knowledge_graph=body.use_knowledge_graph,
             model=body.model,
         ):
