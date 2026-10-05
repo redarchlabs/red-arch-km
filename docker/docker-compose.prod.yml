@@ -44,7 +44,9 @@ services:
       CELERY_RESULT_BACKEND: redis://redis:6379/1
       API_DEBUG: "false"
       API_SECRET_KEY: ${API_SECRET_KEY:?Set API_SECRET_KEY}
-      BRAIN_API_URL: http://brain-api:8020
+      # The API reads settings with env_prefix API_ and brain_api_url has no alias,
+      # so it must be API_BRAIN_API_URL (the worker is unprefixed: BRAIN_API_URL).
+      API_BRAIN_API_URL: http://brain-api:8020
     depends_on:
       postgres:
         condition: service_healthy
