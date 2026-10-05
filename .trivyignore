@@ -1,0 +1,9 @@
+# Trivy reads this file from the scan root. Every entry needs a reason and an expiry.
+
+# CVE-2024-23342: python-ecdsa is vulnerable to the Minerva timing attack on ECDSA
+# *signing*, and upstream has no fixed release (it treats side channels as out of scope).
+# ecdsa is only pulled in transitively by python-jose. KM2 uses python-jose solely to
+# verify Clerk JWTs with algorithms=["RS256"] (services/api/src/api/auth/clerk.py) on the
+# cryptography backend, and never signs with ECDSA, so the vulnerable path is unused.
+# Drop this entry when python-jose is replaced by PyJWT (already a dependency).
+CVE-2024-23342 exp:2027-04-01
