@@ -19,6 +19,8 @@ type MockVectorStore struct {
 	ChunksResults        []models.SearchResult
 	ChunksErr            error
 	HealthyResult        bool
+	// Upserted records every UpsertVectors call by collection type.
+	Upserted map[string][]models.VectorRecord
 }
 
 func (m *MockVectorStore) EnsureCollections(ctx context.Context, tenantID string, reset bool) error {
@@ -26,7 +28,14 @@ func (m *MockVectorStore) EnsureCollections(ctx context.Context, tenantID string
 }
 
 func (m *MockVectorStore) UpsertVectors(ctx context.Context, tenantID string, records []models.VectorRecord, collType string) error {
-	return m.UpsertErr
+	if m.UpsertErr != nil {
+		return m.UpsertErr
+	}
+	if m.Upserted == nil {
+		m.Upserted = map[string][]models.VectorRecord{}
+	}
+	m.Upserted[collType] = append(m.Upserted[collType], records...)
+	return nil
 }
 
 func (m *MockVectorStore) Search(ctx context.Context, tenantID string, query []float32, limit int, accessKeys []int, tags []string) ([]models.SearchResult, error) {

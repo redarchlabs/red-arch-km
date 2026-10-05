@@ -8,6 +8,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from api.schemas.knowledge_write import reject_reserved_metadata_keys
 from api.services.index_tags import validate_tag_name
 
 
@@ -67,6 +68,13 @@ class DocumentCreate(BaseModel):
     def _validate_document_key(cls, v: str | None) -> str | None:
         return validate_document_key(v) if v is not None else None
 
+    @field_validator("metadata")
+    @classmethod
+    def _validate_metadata(cls, v: dict[str, Any]) -> dict[str, Any]:
+        # brain-api already drops these at ingest; a 422 here tells the caller
+        # rather than storing a key that is silently ignored.
+        return reject_reserved_metadata_keys(v)
+
 
 class DocumentUpdate(BaseModel):
     """Partial update for a document. Only the provided fields are modified.
@@ -85,6 +93,11 @@ class DocumentUpdate(BaseModel):
     # at creation). Providing either recomputes that document's masks.
     viewer_permissions_config: list[dict[str, Any]] | None = None
     contributor_permissions_config: list[dict[str, Any]] | None = None
+
+    @field_validator("metadata")
+    @classmethod
+    def _validate_metadata(cls, v: dict[str, Any] | None) -> dict[str, Any] | None:
+        return reject_reserved_metadata_keys(v) if v is not None else None
 
 
 class DocumentContentUpdate(BaseModel):

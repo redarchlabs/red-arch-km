@@ -388,6 +388,26 @@ class TestReservedMetadata:
 
         assert {"access_keys", "tags", "document_key", "tenant_id", "type"} <= RESERVED_INGEST_METADATA_KEYS
 
+    def test_chunk_only_metadata_keys_do_not_reach_document_payload(self, mock_stores: MagicMock) -> None:
+        self._ingest(mock_stores)
+        p = mock_stores.vector.upsert_vectors.call_args_list[1].args[1][0].payload
+        for key in ("text", "chunk_order", "section"):
+            assert key not in p
+
+    def test_caller_metadata_is_not_mutated(self, mock_stores: MagicMock) -> None:
+        metadata = {"source": "kept", "access_keys": [0]}
+        IngestService(mock_stores).ingest_document(
+            tenant_id="t1",
+            document_key="dk1",
+            title="Doc",
+            text="Hello world.",
+            tags=[],
+            access_keys=[42],
+            use_knowledge_graph=False,
+            metadata=metadata,
+        )
+        assert metadata == {"source": "kept", "access_keys": [0]}
+
 
 class TestUpdateMetadataReachesFacts:
     """A folder move or permission change must re-mask the document's facts too,

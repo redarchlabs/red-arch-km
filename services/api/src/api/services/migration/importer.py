@@ -49,6 +49,7 @@ from api.schemas.custom_entity import (
     EntityRelationshipCreate,
 )
 from api.schemas.form import FormConfig, FormCreate, FormUpdate
+from api.schemas.knowledge_write import RESERVED_METADATA_KEYS
 from api.schemas.report import ReportCreate, ReportUpdate, Visualization
 from api.schemas.view import ViewCreate, ViewUpdate
 from api.services.entity_service import EntityError, EntityService
@@ -1060,7 +1061,9 @@ class MigrationImporter:
                 description=doc.get("description"),
                 folder_id=folder_id,
                 use_knowledge_graph=doc.get("use_knowledge_graph"),
-                metadata=doc.get("metadata") or {},
+                # Drop (not reject) index-owned keys so an export taken from an
+                # org that stored them before they were refused still re-imports.
+                metadata={k: v for k, v in (doc.get("metadata") or {}).items() if k not in RESERVED_METADATA_KEYS},
                 tag_ids=tag_ids,
             )
             created.size_bytes = len(doc["text"].encode("utf-8")) if doc.get("text") else None
