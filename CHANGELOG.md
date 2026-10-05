@@ -28,6 +28,61 @@ Ingest-time stripping of index-owned metadata keys (`access_keys`, `tenant_id`, 
   chunks public or redirect them to another `document_key`), and Go `IngestDocument` end
   to end over both chunk and document payloads.
 
+### Security — An agent's `attach_document` is held to the API key's write rules
+
+In a run started through an API key, `create_document` needed `knowledge:write` on the
+key and counted against the key's daily write cap (`API_KEY_DOCUMENT_WRITES_PER_DAY`), but
+`attach_document` — which writes the same kind of knowledge-base document, as a work-order
+deliverable — did neither, so an org key without `knowledge:write` could still add
+documents through an agent, uncapped. Both tools now go through one gate
+(`key_run_write_refusal` / `count_key_run_write` in `services/agents/tools/documents.py`):
+the key still valid and holding `knowledge:write`; for a scoped key, a folder in its set
+that its masks may add to (scoped runs are still not offered `attach_document`); the shared
+daily cap, counted after the commit. A key-started run's attached documents have no
+uploader, as with `create_document`.
+
+### Security — Folder permissions are inherited by `parent_id`, never by name path
+
+Two top-level folders may share a name (the `(org_id, name, parent_id)` unique constraint
+does not bind `NULL` parents), and so may their children — giving identical `dot_path`s.
+Inheritance and propagation still resolved the tree by `dot_path`, so such a pair could
+pick up each other's permissions: a folder under the public twin inherited the restricted
+twin's masks (or the reverse — a restricted subtree read as public in folder lists), a
+permission change on one root re-scoped the other root's documents in the index, renaming
+one root rewrote the other's paths, and moving a root under its twin's child was refused as
+a cycle. `FolderRepository` now walks `parent_id` for `ancestors` /
+`nearest_configured_ancestor` / `nearest_contributor_configured_ancestor` (and so
+`effective_view_masks` / `effective_contributor_masks`), `descendants` (a recursive CTE,
+generalised from the key path's `visible_subtrees`), `list_visible_to_masks`, the
+propagation boundary check, the move cycle check, and the `dot_path` rebuild after a rename
+or move (rebuilt from names down the `parent_id` tree, which also repairs a drifted path).
+`dot_path` is now a display string only. The Go API's folder descendant, child-count and
+path-rewrite queries walk `parent_id` too. No unique index on root names is added.
+
+**After deploy:** documents in a folder with a same-named root twin may carry the wrong
+masks or folder tags in the index from an earlier propagation. Re-saving the permissions of
+each such root (or of the affected folders) re-propagates the correct values.
+
+### Changed — Reserved metadata keys have a single definition
+
+The reserved-key set and its checks now live in one module,
+`api.schemas.reserved_metadata` (`RESERVED_METADATA_KEYS`, `reject_reserved_metadata_keys`,
+`strip_reserved_metadata_keys`), used by the `/api/v1` write schema, the first-party
+document schemas, the agent `create_document` tool and migration import — no other copy
+remains in the API. `test_reserved_metadata_parity.py` keeps it equal to brain-api's Python
+`RESERVED_INGEST_METADATA_KEYS` and the Go `reservedIngestMetadataKeys` map (parsed from
+source), replacing the Python-only equality test. Import now logs a warning naming the
+reserved keys it dropped from a document.
+
+### Fixed — The Go worker dropped a change to public (`new_access_keys: []`)
+
+`worker-go`'s update-metadata task and brain client (and `api-go`'s queue payload) used
+`[]int` / `[]string` with `omitempty`, so `new_access_keys: []` (document made public —
+brain-api stores `[0]`) and `new_tags: []` (tags cleared) were silently dropped and the
+document stayed restricted or kept a stale folder tag. They are now pointer-to-slice
+fields: absent/`null` = no change, `[]` = sent as `[]`, matching the Python worker, which
+forwards the API's payload unchanged.
+
 ### Changed — Folders that name only some dimensions are now visible to the members they name
 
 **This changes what existing members can see.** A folder's viewer config leaves any

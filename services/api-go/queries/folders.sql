@@ -49,23 +49,42 @@ RETURNING *;
 DELETE FROM folders WHERE id = $1;
 
 -- name: GetFolderDescendants :many
--- Returns the folder and all its descendants (via dot_path prefix match)
+-- Returns the folder and all its descendants, walked by parent_id. Never by
+-- dot_path: two root folders may share a name, and so a path prefix.
+WITH RECURSIVE subtree AS (
+    SELECT f0.id FROM folders f0 WHERE f0.id = $1
+    UNION
+    SELECT c.id FROM folders c JOIN subtree s ON c.parent_id = s.id
+)
 SELECT f.* FROM folders f
-WHERE f.dot_path = (SELECT f2.dot_path FROM folders f2 WHERE f2.id = $1)
-   OR f.dot_path LIKE (SELECT f2.dot_path FROM folders f2 WHERE f2.id = $1) || '.%'
+WHERE f.id IN (SELECT id FROM subtree)
 ORDER BY f.dot_path;
 
 -- name: CountFolderDescendants :one
-SELECT COUNT(*) FROM folders f
-WHERE f.dot_path = (SELECT f2.dot_path FROM folders f2 WHERE f2.id = $1)
-   OR f.dot_path LIKE (SELECT f2.dot_path FROM folders f2 WHERE f2.id = $1) || '.%';
+-- The folder plus all its descendants, walked by parent_id (see GetFolderDescendants).
+WITH RECURSIVE subtree AS (
+    SELECT f0.id FROM folders f0 WHERE f0.id = $1
+    UNION
+    SELECT c.id FROM folders c JOIN subtree s ON c.parent_id = s.id
+)
+SELECT COUNT(*) FROM subtree;
 
 -- name: UpdateFolderDotPath :exec
--- Update dot_path for a folder and all its descendants when moved
+-- Set a folder's dot_path to new_prefix and rebuild every descendant's from its
+-- names, walked by parent_id (a LIKE on the old path would also rewrite a
+-- same-named root's subtree). The depth bound guards a corrupt cycle.
+WITH RECURSIVE subtree(id, path, depth) AS (
+    SELECT f0.id, sqlc.arg('new_prefix')::text, 0 FROM folders f0 WHERE f0.id = sqlc.arg('folder_id')
+    UNION ALL
+    SELECT c.id, s.path || '.' || c.name, s.depth + 1
+    FROM folders c JOIN subtree s ON c.parent_id = s.id
+    WHERE s.depth < 1000
+)
 UPDATE folders SET
-    dot_path = sqlc.arg('new_prefix')::text || SUBSTRING(dot_path FROM sqlc.arg('old_prefix_len')::int + 1),
+    dot_path = subtree.path,
     updated_at = NOW()
-WHERE dot_path = sqlc.arg('old_prefix') OR dot_path LIKE sqlc.arg('old_prefix') || '.%';
+FROM subtree
+WHERE folders.id = subtree.id;
 
 -- name: GetNextFolderOrder :one
 SELECT COALESCE(MAX("order"), 0) + 1 FROM folders WHERE org_id = $1 AND parent_id IS NOT DISTINCT FROM $2;

@@ -49,8 +49,8 @@ from api.schemas.custom_entity import (
     EntityRelationshipCreate,
 )
 from api.schemas.form import FormConfig, FormCreate, FormUpdate
-from api.schemas.knowledge_write import RESERVED_METADATA_KEYS
 from api.schemas.report import ReportCreate, ReportUpdate, Visualization
+from api.schemas.reserved_metadata import strip_reserved_metadata_keys
 from api.schemas.view import ViewCreate, ViewUpdate
 from api.services.entity_service import EntityError, EntityService
 from api.services.folder_service import build_dot_path, compute_folder_masks
@@ -1055,15 +1055,20 @@ class MigrationImporter:
                 # let re-ingest supersede the stale copy's vectors.
                 action = "overwritten"
             tag_ids = await self._resolve_tag_ids(doc.get("tag_names") or [], existing_tags, tag_repo)
+            # Drop (not reject) index-owned keys, so an export taken from an org that
+            # stored them before they were refused still re-imports.
+            metadata, dropped = strip_reserved_metadata_keys(doc.get("metadata"))
+            if dropped:
+                logger.warning(
+                    "Import: dropped reserved metadata key(s) %s from document %r", ", ".join(dropped), title
+                )
             created = await doc_repo.create(
                 title=new_title,
                 text=doc.get("text"),
                 description=doc.get("description"),
                 folder_id=folder_id,
                 use_knowledge_graph=doc.get("use_knowledge_graph"),
-                # Drop (not reject) index-owned keys so an export taken from an
-                # org that stored them before they were refused still re-imports.
-                metadata={k: v for k, v in (doc.get("metadata") or {}).items() if k not in RESERVED_METADATA_KEYS},
+                metadata=metadata,
                 tag_ids=tag_ids,
             )
             created.size_bytes = len(doc["text"].encode("utf-8")) if doc.get("text") else None

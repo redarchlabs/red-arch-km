@@ -1,11 +1,16 @@
-"""Tests for folder service cycle detection."""
+"""Tests for folder service cycle detection.
+
+A move is a cycle when the new parent is the folder itself or one of its
+descendants — i.e. the folder is the new parent or among the new parent's
+ancestors, walked by ``parent_id``. Never by ``dot_path``: two root folders may
+share a name, so a same-named root's subtree shares the path prefix.
+"""
 
 from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
 
-import pytest
 from api.services.folder_service import FolderCycleError, would_create_cycle
 
 
@@ -15,56 +20,42 @@ class _FakeFolder:
     dot_path: str
 
 
+def _f(path: str) -> _FakeFolder:
+    return _FakeFolder(id=uuid.uuid4(), dot_path=path)
+
+
 class TestWouldCreateCycle:
     def test_move_to_root_allowed(self) -> None:
-        folder = _FakeFolder(id=uuid.uuid4(), dot_path="a")
-        assert would_create_cycle(folder, None) is False
+        assert would_create_cycle(_f("a"), None, []) is False
 
     def test_move_to_self_rejected(self) -> None:
-        fid = uuid.uuid4()
-        folder = _FakeFolder(id=fid, dot_path="a")
-        assert would_create_cycle(folder, folder) is True
+        folder = _f("a")
+        assert would_create_cycle(folder, folder, []) is True
 
     def test_move_to_descendant_rejected(self) -> None:
-        parent = _FakeFolder(id=uuid.uuid4(), dot_path="a")
-        child = _FakeFolder(id=uuid.uuid4(), dot_path="a.b")
-        grandchild = _FakeFolder(id=uuid.uuid4(), dot_path="a.b.c")
-
-        assert would_create_cycle(parent, child) is True
-        assert would_create_cycle(parent, grandchild) is True
+        parent, child, grandchild = _f("a"), _f("a.b"), _f("a.b.c")
+        assert would_create_cycle(parent, child, [parent]) is True
+        assert would_create_cycle(parent, grandchild, [child, parent]) is True
 
     def test_move_to_sibling_allowed(self) -> None:
-        folder_a = _FakeFolder(id=uuid.uuid4(), dot_path="a")
-        folder_b = _FakeFolder(id=uuid.uuid4(), dot_path="b")
-        assert would_create_cycle(folder_a, folder_b) is False
+        root = _f("root")
+        assert would_create_cycle(_f("root.x"), _f("root.y"), [root]) is False
 
-    def test_move_to_unrelated_allowed(self) -> None:
-        folder = _FakeFolder(id=uuid.uuid4(), dot_path="root.team.alpha")
-        target = _FakeFolder(id=uuid.uuid4(), dot_path="root.team.beta")
-        assert would_create_cycle(folder, target) is False
+    def test_move_up_to_an_ancestor_allowed(self) -> None:
+        root = _f("root")
+        assert would_create_cycle(_f("root.x"), root, []) is False
 
     def test_prefix_match_not_confused_with_sibling(self) -> None:
         """'alpha' and 'alpha2' share a prefix but are not ancestor/descendant."""
-        folder = _FakeFolder(id=uuid.uuid4(), dot_path="alpha")
-        similar = _FakeFolder(id=uuid.uuid4(), dot_path="alpha2")
-        assert would_create_cycle(folder, similar) is False
+        assert would_create_cycle(_f("alpha"), _f("alpha2"), []) is False
+
+    def test_a_same_named_roots_child_is_not_a_descendant(self) -> None:
+        """Two roots named 'shared': the other root's child has path 'shared.kids'
+        but is not beneath this root, so moving there is not a cycle."""
+        mine, twin = _f("shared"), _f("shared")
+        twins_child = _f("shared.kids")
+        assert would_create_cycle(mine, twins_child, [twin]) is False
 
     def test_folder_cycle_error_is_valueerror(self) -> None:
         """Service callers can catch via ValueError if they prefer."""
         assert issubclass(FolderCycleError, ValueError)
-
-    @pytest.mark.parametrize(
-        "folder_path,target_path,expected",
-        [
-            ("a", "a.b", True),  # child
-            ("a", "a.b.c.d", True),  # deep descendant
-            ("root.x", "root.x.y", True),  # nested descendant
-            ("root.x", "root.y", False),  # sibling
-            ("root.x", "root", False),  # ancestor (move up)
-            ("root", "other", False),  # unrelated tree
-        ],
-    )
-    def test_parametrized_relationships(self, folder_path: str, target_path: str, expected: bool) -> None:
-        folder = _FakeFolder(id=uuid.uuid4(), dot_path=folder_path)
-        target = _FakeFolder(id=uuid.uuid4(), dot_path=target_path)
-        assert would_create_cycle(folder, target) is expected

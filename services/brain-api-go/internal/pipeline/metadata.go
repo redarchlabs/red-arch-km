@@ -4,7 +4,9 @@ package pipeline
 // cites on. Caller metadata can never set them: {"access_keys": [0]} would make
 // restricted content public, and document_key / tenant_id / tags / type would
 // re-scope it. Keep in sync with RESERVED_INGEST_METADATA_KEYS in
-// services/brain_api/src/brain_api/services/ingest_service.py.
+// services/brain_api/src/brain_api/services/ingest_service.py and the API's
+// services/api/src/api/schemas/reserved_metadata.py — the API's
+// test_reserved_metadata_parity.py parses this map literal and fails on drift.
 var reservedIngestMetadataKeys = map[string]struct{}{
 	"access_keys":    {},
 	"tenant_id":      {},

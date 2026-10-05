@@ -4,12 +4,18 @@ brain-api drops index-owned fields (``access_keys``, ``tenant_id``, ``tags``,
 ``document_key``, ``type`` …) from caller metadata at ingest
 (``RESERVED_INGEST_METADATA_KEYS``), and the public API already rejects them.
 ``POST /api/documents`` and ``PATCH /api/documents/{id}`` accepted and stored them
-silently; they now return 422 naming the offending keys.
+silently; they now return 422 naming the offending keys — through the same
+validator as the public write and the agent tool.
+
+A PATCH that does not send ``metadata`` is never checked: a document stored before
+the rule (holding, say, its own ``document_key`` in metadata) stays editable.
 """
 
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -21,19 +27,16 @@ from api.dependencies import get_tenant_db
 from api.routers import documents as documents_module
 from api.routers.documents import router as documents_router
 from api.schemas.document import DocumentCreate, DocumentUpdate
-from api.schemas.knowledge_write import RESERVED_METADATA_KEYS, reject_reserved_metadata_keys
+from api.schemas.reserved_metadata import (
+    RESERVED_METADATA_KEYS,
+    reject_reserved_metadata_keys,
+    strip_reserved_metadata_keys,
+)
 from fastapi import FastAPI
 from pydantic import ValidationError
 
 ORG_ID = uuid.uuid4()
 _RESERVED = sorted(RESERVED_METADATA_KEYS)
-
-
-class TestReservedKeySet:
-    def test_matches_brain_api_reserved_set(self) -> None:
-        """The API's copy must not drift from the set brain-api strips at ingest."""
-        ingest = pytest.importorskip("brain_api.services.ingest_service")
-        assert ingest.RESERVED_INGEST_METADATA_KEYS == RESERVED_METADATA_KEYS
 
 
 class TestRejectReservedMetadataKeys:
@@ -44,6 +47,18 @@ class TestRejectReservedMetadataKeys:
     def test_error_lists_every_offending_key(self) -> None:
         with pytest.raises(ValueError, match="access_keys, tenant_id"):
             reject_reserved_metadata_keys({"tenant_id": "x", "access_keys": [0], "author": "Ada"})
+
+
+class TestStripReservedMetadataKeys:
+    def test_returns_a_new_dict_and_the_dropped_keys(self) -> None:
+        meta = {"access_keys": [0], "tenant_id": "other", "author": "Ada"}
+        kept, dropped = strip_reserved_metadata_keys(meta)
+        assert kept == {"author": "Ada"}
+        assert dropped == ["access_keys", "tenant_id"]
+        assert meta == {"access_keys": [0], "tenant_id": "other", "author": "Ada"}  # not mutated
+
+    def test_none_is_empty(self) -> None:
+        assert strip_reserved_metadata_keys(None) == ({}, [])
 
 
 class TestDocumentSchemas:
@@ -79,7 +94,20 @@ class _ExplodingRepo:
 
 def _ctx() -> OrgContext:
     user = CurrentUser(sub="u", username="u", email="u@x.com", profile_id=uuid.uuid4(), is_site_admin=False)
-    return OrgContext(user=user, org_id=ORG_ID, membership=MagicMock(), is_org_admin=False)
+    return OrgContext(user=user, org_id=ORG_ID, membership=MagicMock(), is_org_admin=True)
+
+
+def _make_app() -> FastAPI:
+    application = FastAPI()
+    application.include_router(documents_router, prefix="/api/documents")
+
+    async def _fake_db() -> Any:
+        yield AsyncMock()
+
+    application.dependency_overrides[require_org_access] = _ctx
+    application.dependency_overrides[get_tenant_db] = _fake_db
+    application.dependency_overrides[get_settings] = lambda: Settings(secret_key="x")
+    return application
 
 
 @pytest.fixture
@@ -92,17 +120,7 @@ def app(monkeypatch: pytest.MonkeyPatch) -> FastAPI:
 
     monkeypatch.setattr(documents_module, "dispatch_ingest", _no_dispatch)
     monkeypatch.setattr(documents_module, "dispatch_metadata_update", _no_dispatch)
-
-    application = FastAPI()
-    application.include_router(documents_router, prefix="/api/documents")
-
-    async def _fake_db() -> Any:
-        yield AsyncMock()
-
-    application.dependency_overrides[require_org_access] = _ctx
-    application.dependency_overrides[get_tenant_db] = _fake_db
-    application.dependency_overrides[get_settings] = lambda: Settings(secret_key="x")
-    return application
+    return _make_app()
 
 
 def _client(app: FastAPI) -> httpx.AsyncClient:
@@ -123,3 +141,58 @@ async def test_patch_rejects_reserved_metadata_with_422(app: FastAPI, key: str) 
         resp = await client.patch(f"/api/documents/{uuid.uuid4()}", json={"metadata": {key: [0]}})
     assert resp.status_code == 422
     assert key in resp.text
+
+
+# --------------------------------------------------------------------------- #
+# A document already holding a reserved key stays editable
+# --------------------------------------------------------------------------- #
+_LEGACY_KEY = "legacy-doc"
+
+
+class _LegacyDocRepo:
+    """A document stored before the rule, with its own key copied into metadata."""
+
+    doc: SimpleNamespace | None = None
+
+    def __init__(self, session: Any, org_id: uuid.UUID) -> None: ...
+
+    async def get(self, _id: uuid.UUID) -> SimpleNamespace:
+        _LegacyDocRepo.doc = SimpleNamespace(
+            id=uuid.uuid4(),
+            title="Old title",
+            description=None,
+            document_key=_LEGACY_KEY,
+            processing_status="SUCCESS",
+            folder_id=None,
+            org_id=ORG_ID,
+            created_at=datetime.now(UTC),
+            tags=[],
+            metadata_={"document_key": _LEGACY_KEY, "author": "Ada"},
+            viewer_permissions_config=None,
+            contributor_permissions_config=None,
+        )
+        return _LegacyDocRepo.doc
+
+
+class _NoFolderRepo:
+    def __init__(self, session: Any, org_id: uuid.UUID) -> None: ...
+
+    async def get(self, _id: uuid.UUID) -> None:
+        return None
+
+    async def effective_view_masks(self, _folder: Any) -> list[int]:
+        return []
+
+
+async def test_patch_without_metadata_keeps_a_legacy_documents_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(documents_module, "DocumentRepository", _LegacyDocRepo)
+    monkeypatch.setattr(documents_module, "FolderRepository", _NoFolderRepo)
+    monkeypatch.setattr(documents_module, "dispatch_metadata_update", lambda _p: "task-1")
+
+    async with _client(_make_app()) as client:
+        resp = await client.patch(f"/api/documents/{uuid.uuid4()}", json={"title": "New title"})
+
+    assert resp.status_code == 200, resp.text
+    assert _LegacyDocRepo.doc is not None
+    assert _LegacyDocRepo.doc.title == "New title"
+    assert _LegacyDocRepo.doc.metadata_ == {"document_key": _LEGACY_KEY, "author": "Ada"}  # untouched

@@ -188,8 +188,8 @@ func TestBrainClient_UpdateMetadata(t *testing.T) {
 			TenantID:      "tenant-123",
 			DocumentKey:   "doc-key",
 			Title:         &title,
-			NewTags:       []string{"tag1"},
-			NewAccessKeys: []int{1, 2},
+			NewTags:       &[]string{"tag1"},
+			NewAccessKeys: &[]int{1, 2},
 		})
 
 		if err != nil {

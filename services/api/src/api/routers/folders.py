@@ -62,13 +62,23 @@ def _perm_propagation_payloads(
     ]
 
 
-def _is_under_boundary(folder: Folder, boundaries: list[Folder]) -> bool:
-    """True if ``folder`` lies within any boundary folder's subtree (inclusive).
+def _is_under_boundary(folder: Folder, changed_id: uuid.UUID, by_id: dict[uuid.UUID, Folder]) -> bool:
+    """True if ``folder`` lies within a boundary's subtree (inclusive), walking
+    ``parent_id`` up to the changed folder.
 
-    A boundary is a descendant that defines its OWN viewer config, so it (and
-    everything beneath it) inherits itself rather than the folder that changed.
+    A boundary is a descendant of the changed folder that defines its OWN viewer
+    config, so it (and everything beneath it) inherits itself rather than the
+    folder that changed. ``by_id`` is the changed folder's subtree. Not by
+    ``dot_path``: two root folders may share a name, and so a path.
     """
-    return any(folder.dot_path == b.dot_path or folder.dot_path.startswith(f"{b.dot_path}.") for b in boundaries)
+    node: Folder | None = folder
+    for _ in range(len(by_id) + 1):  # bound guards a corrupt cycle
+        if node is None or node.id == changed_id:
+            return False
+        if node.viewer_permissions_config is not None:
+            return True
+        node = by_id.get(node.parent_id) if node.parent_id is not None else None
+    return False
 
 
 async def _collect_subtree_propagation(
@@ -89,11 +99,11 @@ async def _collect_subtree_propagation(
 
     subtree = await folder_repo.descendants(changed)  # includes `changed` itself
     new_masks = await folder_repo.effective_view_masks(changed)
-    boundaries = [f for f in subtree if f.id != changed.id and f.viewer_permissions_config is not None]
+    by_id = {f.id: f for f in subtree}
 
     payloads: list[dict[str, Any]] = []
     for folder in subtree:
-        if _is_under_boundary(folder, boundaries):
+        if _is_under_boundary(folder, changed.id, by_id):
             continue
         docs = await doc_repo.list_inheriting_in_folder(folder.id)
         payloads.extend(_perm_propagation_payloads(org_id, folder, docs, new_masks))

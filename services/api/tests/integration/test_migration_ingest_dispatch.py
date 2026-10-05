@@ -10,6 +10,7 @@ they do not need a live Celery broker.
 
 from __future__ import annotations
 
+import logging
 import uuid
 
 import pytest
@@ -99,18 +100,20 @@ class TestIngestDispatch:
         assert sorted(sent[0]["tags"]) == ["hr", "policy"]
 
     async def test_reserved_metadata_keys_are_dropped_from_imported_documents(
-        self, admin_session: AsyncSession, monkeypatch
+        self, admin_session: AsyncSession, monkeypatch, caplog: pytest.LogCaptureFixture
     ) -> None:
         """A bundle must not plant index-owned keys (e.g. ``access_keys=[0]``) in
         the stored metadata or the ingest payload. Dropped rather than rejected, so
         an export taken from an org that stored them earlier still re-imports."""
         org_id = await _org(admin_session, "Ingest")
         doc = _doc("Restricted")
-        doc["metadata"] = {"access_keys": [0], "tenant_id": "other", "tags": ["x"], "author": "Ada"}
+        doc["metadata"] = {"access_keys": [0], "tenant_id": "other", "document_key": "x", "author": "Ada"}
 
-        sent = await _import(admin_session, org_id, _bundle([doc]), monkeypatch)
+        with caplog.at_level(logging.WARNING, logger="api.services.migration.importer"):
+            sent = await _import(admin_session, org_id, _bundle([doc]), monkeypatch)
 
         assert sent[0]["metadata"] == {"author": "Ada"}
+        assert "access_keys, document_key, tenant_id" in caplog.text
 
     async def test_every_document_in_a_multi_document_bundle_is_queued(
         self, admin_session: AsyncSession, monkeypatch

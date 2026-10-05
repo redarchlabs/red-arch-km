@@ -6,67 +6,31 @@ import uuid
 from collections.abc import Collection
 from typing import Any
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import Select, or_, select
 from sqlalchemy import text as sql_text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.models.document import Folder
 
-# PostgreSQL LIKE interprets % and _ as wildcards. dot_path is built from
-# user-supplied folder names (see folder_service.build_dot_path), so a
-# user who names a folder "foo_bar" or "a%" would otherwise match
-# unrelated siblings during descendants() or rename subtree rewrites.
-# Paired with the ESCAPE '\' clause on the LIKE pattern, this renders
-# wildcards literal.
-_LIKE_ESCAPE = str.maketrans({"\\": "\\\\", "%": "\\%", "_": "\\_"})
-
-
-def _escape_like(value: str) -> str:
-    return value.translate(_LIKE_ESCAPE)
-
-
-def _ancestor_dot_paths(dot_path: str) -> list[str]:
-    """Dot_paths of a folder's ancestors (nearest last), excluding itself.
-
-    ``"HR.Benefits.2024"`` → ``["HR", "HR.Benefits"]``. Folder names cannot
-    contain ``.`` (validated on write), so splitting on it is unambiguous.
-    """
-    parts = dot_path.split(".")
-    return [".".join(parts[:i]) for i in range(1, len(parts))]
-
-
-def _effective_masks_from_map(folder: Folder, by_dot_path: dict[str, Folder]) -> list[int]:
-    """Resolve a folder's effective view masks using an in-memory folder map.
-
-    The bulk equivalent of ``FolderRepository.effective_view_masks`` (no
-    per-folder query): own masks when the folder has its own viewer config,
-    else the nearest configured ancestor's, else empty (public within the org).
-    """
-    if folder.viewer_permissions_config is not None:
-        return folder.view_permission_masks or []
-    for prefix in reversed(_ancestor_dot_paths(folder.dot_path)):  # nearest ancestor first
-        ancestor = by_dot_path.get(prefix)
-        if ancestor is not None and ancestor.viewer_permissions_config is not None:
-            return ancestor.view_permission_masks or []
-    return []
-
-
-def _folder_visible_to(folder: Folder, by_dot_path: dict[str, Folder], user_masks: set[int]) -> bool:
-    """A folder is visible if it has no effective restriction, or one that
-    overlaps the user's masks."""
-    effective = _effective_masks_from_map(folder, by_dot_path)
-    if not effective:
-        return True
-    return bool(user_masks.intersection(effective))
+# The folder tree is walked by ``parent_id`` everywhere permissions, visibility or
+# membership are resolved. ``dot_path`` is built from names, and two ROOT folders
+# may share a name (``UniqueConstraint(org_id, name, parent_id)`` does not bind
+# NULL parents), so it is a display string only. Bound for path rebuilds, guarding
+# a corrupt cycle.
+_MAX_DEPTH = 1000
 
 
 def _effective_masks_by_parent(folder: Folder, by_id: dict[uuid.UUID, Folder]) -> list[int]:
-    """:func:`_effective_masks_from_map`, walking ``parent_id`` instead of ``dot_path``.
+    """Resolve a folder's effective view masks from an in-memory ``{id: folder}`` map.
 
-    ``dot_path`` is built from names, and two root folders may share a name, so a
-    name-keyed map can resolve the wrong ancestor. ``by_id`` must hold every
-    ancestor of ``folder`` (a missing one ends the walk). The step bound guards a
-    corrupt cycle.
+    The bulk equivalent of ``FolderRepository.effective_view_masks`` (no
+    per-folder query): own masks when the folder has its own viewer config, else
+    the nearest configured ancestor's, else empty (public within the org).
+
+    Walks ``parent_id``, never ``dot_path``: paths are built from names, and two
+    root folders may share a name, so a name-keyed map can resolve the wrong
+    ancestor. ``by_id`` must hold every ancestor of ``folder`` (a missing one ends
+    the walk). The step bound guards a corrupt cycle.
     """
     node: Folder | None = folder
     for _ in range(len(by_id) + 1):
@@ -76,6 +40,13 @@ def _effective_masks_by_parent(folder: Folder, by_id: dict[uuid.UUID, Folder]) -
             return list(node.view_permission_masks or [])
         node = by_id.get(node.parent_id) if node.parent_id is not None else None
     return []
+
+
+def _is_visible(folder: Folder, by_id: dict[uuid.UUID, Folder], user_masks: set[int]) -> bool:
+    """A folder is visible if it has no effective restriction, or one that
+    overlaps the user's masks."""
+    effective = _effective_masks_by_parent(folder, by_id)
+    return not effective or bool(user_masks.intersection(effective))
 
 
 class FolderRepository:
@@ -111,8 +82,8 @@ class FolderRepository:
         inherit their folder). So a folder under a restricted parent is hidden
         even if it defines no restriction itself. Resolution is done in Python
         over the org's full folder set — inheritance needs every ancestor
-        anyway, and folder names may contain LIKE metacharacters that make a
-        column-derived SQL LIKE pattern unsafe. Folder counts per org are modest.
+        anyway — walking ``parent_id`` (two root folders may share a name, and so
+        a ``dot_path``). Folder counts per org are modest.
 
         Pagination is optional — when offset/limit are omitted, all matching
         rows are returned (used internally by document permission filtering).
@@ -126,9 +97,9 @@ class FolderRepository:
         if user_masks is None:
             visible = all_folders  # admin view: no restriction
         else:
-            by_dot_path = {f.dot_path: f for f in all_folders}
+            by_id = {f.id: f for f in all_folders}
             user_set = set(user_masks)
-            visible = [f for f in all_folders if _folder_visible_to(f, by_dot_path, user_set)]
+            visible = [f for f in all_folders if _is_visible(f, by_id, user_set)]
 
         total = len(visible)
         if offset is not None:
@@ -161,30 +132,60 @@ class FolderRepository:
         roots = list(dict.fromkeys(root_ids))
         if not roots:
             return {}
-        in_org = Folder.org_id == self._org_id
-        down = select(Folder.id).where(in_org, Folder.id.in_(roots)).cte("key_subtree", recursive=True)
-        down = down.union(select(Folder.id).where(in_org, Folder.parent_id == down.c.id))
-        up = (
-            select(Folder.id, Folder.parent_id).where(in_org, Folder.id.in_(roots)).cte("key_ancestors", recursive=True)
-        )
-        up = up.union(select(Folder.id, Folder.parent_id).where(in_org, Folder.id == up.c.parent_id))
-        subtree_ids = select(down.c.id)
+        subtree_ids = self._subtree_ids(roots, "key_subtree")
+        ancestor_ids = self._ancestor_ids(roots, "key_ancestors")
         rows = (
             await self._session.execute(
                 select(Folder, Folder.id.in_(subtree_ids).label("in_key_subtree")).where(
-                    in_org, or_(Folder.id.in_(subtree_ids), Folder.id.in_(select(up.c.id)))
+                    Folder.org_id == self._org_id, or_(Folder.id.in_(subtree_ids), Folder.id.in_(ancestor_ids))
                 )
             )
         ).all()
         by_id = {folder.id: folder for folder, _ in rows}
         user_set = set(user_masks)
-        result: dict[uuid.UUID, bool] = {}
-        for folder, in_subtree_flag in rows:
-            if not in_subtree_flag:
-                continue
-            effective = _effective_masks_by_parent(folder, by_id)
-            result[folder.id] = not effective or bool(user_set.intersection(effective))
-        return result
+        return {folder.id: _is_visible(folder, by_id, user_set) for folder, in_subtree_flag in rows if in_subtree_flag}
+
+    def _subtree_ids(self, root_ids: Collection[uuid.UUID], name: str = "folder_subtree") -> Select[tuple[uuid.UUID]]:
+        """Ids of ``root_ids`` and every folder beneath them, walked by ``parent_id``
+        (a recursive CTE; ``UNION`` dedupes, so a corrupt cycle still terminates).
+
+        Never by ``dot_path``: paths are built from names and two ROOT folders may
+        share a name, so a path prefix pulls a same-named root's subtree in.
+        """
+        in_org = Folder.org_id == self._org_id
+        down = select(Folder.id).where(in_org, Folder.id.in_(list(root_ids))).cte(name, recursive=True)
+        down = down.union(select(Folder.id).where(in_org, Folder.parent_id == down.c.id))
+        return select(down.c.id)
+
+    def _ancestor_ids(
+        self, folder_ids: Collection[uuid.UUID], name: str = "folder_ancestors"
+    ) -> Select[tuple[uuid.UUID]]:
+        """Ids of ``folder_ids`` and every ancestor of them, walked by ``parent_id``."""
+        in_org = Folder.org_id == self._org_id
+        up = (
+            select(Folder.id, Folder.parent_id).where(in_org, Folder.id.in_(list(folder_ids))).cte(name, recursive=True)
+        )
+        up = up.union(select(Folder.id, Folder.parent_id).where(in_org, Folder.id == up.c.parent_id))
+        return select(up.c.id)
+
+    async def ancestors(self, folder: Folder) -> list[Folder]:
+        """``folder``'s ancestors, nearest first (itself excluded), by ``parent_id``.
+
+        Loads the chain in one query and orders it in Python; the step bound
+        guards a corrupt cycle.
+        """
+        if folder.parent_id is None:
+            return []
+        rows = await self._session.execute(
+            select(Folder).where(Folder.org_id == self._org_id, Folder.id.in_(self._ancestor_ids([folder.parent_id])))
+        )
+        by_id = {f.id: f for f in rows.scalars()}
+        chain: list[Folder] = []
+        node = by_id.get(folder.parent_id)
+        while node is not None and len(chain) <= len(by_id):
+            chain.append(node)
+            node = by_id.get(node.parent_id) if node.parent_id is not None else None
+        return chain
 
     async def list_children(self, parent_id: uuid.UUID | None) -> list[Folder]:
         query = (
@@ -228,21 +229,11 @@ class FolderRepository:
         Used to resolve inherited entitlement: a folder with a NULL viewer
         config inherits from the nearest ancestor that defines one. Returns
         ``None`` when no ancestor in the chain is configured.
+
+        Walks ``parent_id``: two root folders may share a name (and so a
+        ``dot_path``), and must not inherit each other's config.
         """
-        prefixes = _ancestor_dot_paths(folder.dot_path)
-        if not prefixes:
-            return None
-        result = await self._session.execute(
-            select(Folder)
-            .where(
-                Folder.org_id == self._org_id,
-                Folder.dot_path.in_(prefixes),
-                Folder.viewer_permissions_config.isnot(None),
-            )
-            .order_by(func.length(Folder.dot_path).desc())  # longest path = nearest ancestor
-            .limit(1)
-        )
-        return result.scalar_one_or_none()
+        return next((a for a in await self.ancestors(folder) if a.viewer_permissions_config is not None), None)
 
     async def effective_view_masks(self, folder: Folder | None) -> list[int]:
         """View masks a folder contributes to its documents, honoring inheritance.
@@ -262,20 +253,7 @@ class FolderRepository:
 
     async def nearest_contributor_configured_ancestor(self, folder: Folder) -> Folder | None:
         """The closest ancestor folder with its OWN contributor config (or None)."""
-        prefixes = _ancestor_dot_paths(folder.dot_path)
-        if not prefixes:
-            return None
-        result = await self._session.execute(
-            select(Folder)
-            .where(
-                Folder.org_id == self._org_id,
-                Folder.dot_path.in_(prefixes),
-                Folder.contributor_permissions_config.isnot(None),
-            )
-            .order_by(func.length(Folder.dot_path).desc())
-            .limit(1)
-        )
-        return result.scalar_one_or_none()
+        return next((a for a in await self.ancestors(folder) if a.contributor_permissions_config is not None), None)
 
     async def effective_contributor_masks(self, folder: Folder) -> list[int]:
         """Contributor masks governing who may ADD to a folder, honoring inheritance.
@@ -290,25 +268,20 @@ class FolderRepository:
         return list(ancestor.contributor_permission_masks or []) if ancestor else []
 
     async def descendants(self, folder: Folder) -> list[Folder]:
-        """Return this folder and all descendants via dot_path prefix match."""
-        prefix = folder.dot_path
-        escaped = _escape_like(prefix)
+        """Return this folder and all its descendants, walked by ``parent_id``."""
         result = await self._session.execute(
-            select(Folder).where(
-                Folder.org_id == self._org_id,
-                (Folder.dot_path == prefix) | Folder.dot_path.like(f"{escaped}.%", escape="\\"),
-            )
+            select(Folder).where(Folder.org_id == self._org_id, Folder.id.in_(self._subtree_ids([folder.id])))
         )
         return list(result.scalars().all())
 
     async def rename(self, folder: Folder, new_name: str) -> Folder:
         """Rename a folder and rebuild dot_paths for the subtree."""
-        old_prefix = folder.dot_path
         parent = await self.get(folder.parent_id) if folder.parent_id else None
         new_prefix = f"{parent.dot_path}.{new_name}" if parent else new_name
 
         folder.name = new_name
-        await self._rewrite_subtree_paths(old_prefix, new_prefix, folder.id)
+        await self._session.flush()
+        await self._rewrite_subtree_paths(new_prefix, folder.id)
         await self._session.refresh(folder)
         return folder
 
@@ -318,36 +291,38 @@ class FolderRepository:
         Caller is responsible for validating that `new_parent` is not a
         descendant of `folder` (cycle prevention lives in the service layer).
         """
-        old_prefix = folder.dot_path
         new_prefix = f"{new_parent.dot_path}.{folder.name}" if new_parent else folder.name
 
         folder.parent_id = new_parent.id if new_parent else None
-        await self._rewrite_subtree_paths(old_prefix, new_prefix, folder.id)
+        await self._session.flush()
+        await self._rewrite_subtree_paths(new_prefix, folder.id)
         await self._session.refresh(folder)
         return folder
 
-    async def _rewrite_subtree_paths(self, old_prefix: str, new_prefix: str, folder_id: uuid.UUID) -> None:
-        """Rewrite dot_path for the given folder and all descendants atomically.
+    async def _rewrite_subtree_paths(self, new_prefix: str, folder_id: uuid.UUID) -> None:
+        """Set ``folder_id``'s dot_path to ``new_prefix`` and rebuild every
+        descendant's from its names, in one statement.
 
-        Both statements are explicitly scoped to the repository's ``org_id`` so
-        a subtree rewrite can never touch another tenant's folders — this holds
-        regardless of whether RLS is enforced on the current connection.
+        The subtree is walked by ``parent_id`` — a ``LIKE 'old.%'`` match on the
+        old path would also rewrite a same-named root's subtree (and, rebuilt
+        from names, any path that drifted is repaired). The depth bound guards a
+        corrupt cycle. Scoped to the repository's ``org_id`` so a rewrite can
+        never touch another tenant's folders, whether or not RLS is enforced on
+        the current connection.
         """
         await self._session.execute(
-            sql_text("UPDATE folders SET dot_path = :new_prefix WHERE id = :folder_id AND org_id = :org_id"),
-            {"new_prefix": new_prefix, "folder_id": folder_id, "org_id": self._org_id},
-        )
-        await self._session.execute(
             sql_text(
-                "UPDATE folders "
-                "SET dot_path = :new_prefix || substr(dot_path, :old_len + 1) "
-                "WHERE dot_path LIKE :old_like ESCAPE '\\' AND org_id = :org_id"
+                "WITH RECURSIVE subtree(id, path, depth) AS ("
+                "  SELECT id, CAST(:new_prefix AS text), 0 FROM folders"
+                "  WHERE id = :folder_id AND org_id = :org_id"
+                "  UNION ALL"
+                "  SELECT f.id, subtree.path || '.' || f.name, subtree.depth + 1"
+                "  FROM folders f JOIN subtree ON f.parent_id = subtree.id"
+                "  WHERE f.org_id = :org_id AND subtree.depth < :max_depth"
+                ") "
+                "UPDATE folders SET dot_path = subtree.path FROM subtree "
+                "WHERE folders.id = subtree.id AND folders.org_id = :org_id"
             ),
-            {
-                "new_prefix": new_prefix,
-                "old_len": len(old_prefix),
-                "old_like": f"{_escape_like(old_prefix)}.%",
-                "org_id": self._org_id,
-            },
+            {"new_prefix": new_prefix, "folder_id": folder_id, "org_id": self._org_id, "max_depth": _MAX_DEPTH},
         )
         await self._session.flush()

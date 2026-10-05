@@ -504,9 +504,8 @@ func (h *FolderHandler) UpdateFolder(w http.ResponseWriter, r *http.Request) {
 		newPrefix := newDotPath.String
 		if oldPrefix != newPrefix {
 			if err := queries.UpdateFolderDotPath(ctx, repository.UpdateFolderDotPathParams{
-				NewPrefix:    newPrefix,
-				OldPrefixLen: int32(len(oldPrefix)),
-				OldPrefix:    pgtype.Text{String: oldPrefix, Valid: true},
+				NewPrefix: newPrefix,
+				FolderID:  folder.ID,
 			}); err != nil {
 				slog.Error("update descendant dot_paths", "error", err)
 			}

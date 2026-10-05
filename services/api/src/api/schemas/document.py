@@ -8,7 +8,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from api.schemas.knowledge_write import reject_reserved_metadata_keys
+from api.schemas.reserved_metadata import reject_reserved_metadata_keys
 from api.services.index_tags import validate_tag_name
 
 
@@ -97,6 +97,9 @@ class DocumentUpdate(BaseModel):
     @field_validator("metadata")
     @classmethod
     def _validate_metadata(cls, v: dict[str, Any] | None) -> dict[str, Any] | None:
+        # Only metadata that is SENT is checked: a document stored before the rule
+        # (holding, say, its own document_key) stays editable by a PATCH that
+        # leaves metadata alone.
         return reject_reserved_metadata_keys(v) if v is not None else None
 
 
