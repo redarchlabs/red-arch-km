@@ -13,7 +13,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, false, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -58,6 +58,12 @@ class WorkOrder(Base, UUIDMixin, TimestampMixin):
     )
     created_by_profile_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("user_profiles.id", ondelete="SET NULL"), nullable=True
+    )
+    # Filed through the public API (no filing profile). Runs that continue the order
+    # inherit this and the key id, so they stay inside the key's org and scope.
+    via_api_key: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    api_key_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("api_keys.id", ondelete="SET NULL"), nullable=True, index=True
     )
     # Successor WO when unfinished tasks roll over (reference "carried" semantics).
     rolled_over_to_id: Mapped[uuid.UUID | None] = mapped_column(

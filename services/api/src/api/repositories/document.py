@@ -5,7 +5,8 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from sqlalchemy import ColumnElement, func, or_, select
+from sqlalchemy import BIGINT, ColumnElement, cast, func, or_, select
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -40,6 +41,22 @@ class DocumentRepository:
         )
         return result.scalar_one_or_none()
 
+    async def get_by_external_ref(
+        self, folder_id: uuid.UUID, external_ref: str, *, for_update: bool = False
+    ) -> Document | None:
+        """Resolve a document by its caller-chosen ``external_ref`` within a folder
+        (public API writes; unique per folder). ``for_update`` locks the row until
+        the transaction ends, so two writers replacing the same ref serialise."""
+        stmt = select(Document).where(
+            Document.org_id == self._org_id,
+            Document.folder_id == folder_id,
+            Document.external_ref == external_ref,
+        )
+        if for_update:
+            stmt = stmt.with_for_update()
+        result = await self._session.execute(stmt)
+        return result.scalar_one_or_none()
+
     async def list_for_folders(
         self,
         folder_ids: list[uuid.UUID] | None = None,
@@ -47,6 +64,7 @@ class DocumentRepository:
         include_unfiled: bool = False,
         offset: int = 0,
         limit: int = 20,
+        viewer_masks: list[int] | None = None,
     ) -> tuple[list[Document], int]:
         """List documents, optionally scoped to a set of folders.
 
@@ -57,6 +75,11 @@ class DocumentRepository:
         ``IN (...)`` predicate. ``include_unfiled=True`` additively surfaces
         those unfiled documents so they are not silently invisible; without it,
         docs created without a folder would never appear in any list.
+
+        ``viewer_masks`` additionally applies each document's OWN viewer override:
+        a document whose ``viewer_permissions_config`` is set, with masks that do
+        not overlap ``viewer_masks``, is excluded (an override with no masks is
+        public). ``None`` skips this check (org-wide callers).
         """
         query = select(Document).where(Document.org_id == self._org_id).options(selectinload(Document.tags))
 
@@ -67,6 +90,17 @@ class DocumentRepository:
             if include_unfiled:
                 folder_filter = or_(folder_filter, Document.folder_id.is_(None))
             query = query.where(folder_filter)
+
+        if viewer_masks is not None:
+            query = query.where(
+                or_(
+                    Document.viewer_permissions_config.is_(None),
+                    # NULL and {} both mean "no masks" = public, matching
+                    # knowledge_visibility._overlaps and what ingest stores.
+                    func.coalesce(func.cardinality(Document.view_permission_masks), 0) == 0,
+                    Document.view_permission_masks.overlap(cast(viewer_masks, ARRAY(BIGINT))),
+                )
+            )
 
         count_query = select(func.count()).select_from(query.subquery())
         total = (await self._session.execute(count_query)).scalar_one()

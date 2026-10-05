@@ -270,3 +270,124 @@ func encode(org uint16, region, role, group, dept uint8) uint32 {
 	}
 	return m
 }
+
+func TestExpandWildcards(t *testing.T) {
+	m, _ := Encode(9, 3, 2, 7, 5)
+	variants := ExpandWildcards(m)
+	if len(variants) != 16 {
+		t.Fatalf("want 16 variants, got %d", len(variants))
+	}
+	if variants[0] != m {
+		t.Fatalf("original mask must come first")
+	}
+	seen := map[uint32]bool{}
+	for _, v := range variants {
+		if seen[v] {
+			t.Fatalf("duplicate variant %d", v)
+		}
+		seen[v] = true
+		d := Decode(v)
+		if d.Org != 9 {
+			t.Fatalf("org must never be wildcarded, got %d", d.Org)
+		}
+		if (d.Region != 3 && d.Region != MaxRegion) || (d.Role != 2 && d.Role != MaxRole) ||
+			(d.Group != 7 && d.Group != MaxGroup) || (d.Dept != 5 && d.Dept != MaxDept) {
+			t.Fatalf("unexpected variant %+v", d)
+		}
+	}
+}
+
+func TestExpandWildcardsDedupesMaxValues(t *testing.T) {
+	m, _ := Encode(9, MaxRegion, 2, 7, 5)
+	if got := len(ExpandWildcards(m)); got != 8 {
+		t.Fatalf("want 8 variants, got %d", got)
+	}
+}
+
+func TestExpandMemberMasks(t *testing.T) {
+	a, _ := Encode(9, 3, 0, 0, 5)
+	b, _ := Encode(9, 4, 0, 0, 5)
+	out := ExpandMemberMasks([]uint32{a, b, a})
+	if out[0] != a {
+		t.Fatalf("order not kept")
+	}
+	// 16 + 16, minus the 8 region-wildcard variants the two masks share.
+	if len(out) != 24 {
+		t.Fatalf("want 24 distinct masks, got %d", len(out))
+	}
+	if len(ExpandMemberMasks(nil)) != 0 {
+		t.Fatalf("empty in, empty out")
+	}
+}
+
+// Equality against the expanded set must agree with Matches for every pair.
+func TestExpandWildcardsAgreesWithMatches(t *testing.T) {
+	regions := []uint8{0, 3, 4, MaxRegion}
+	roles := []uint8{0, 2, MaxRole}
+	groups := []uint8{0, 7, MaxGroup}
+	depts := []uint8{0, 5, 6, MaxDept}
+	for _, ur := range []uint8{0, 3} {
+		for _, ud := range []uint8{5, 6} {
+			for _, ug := range []uint8{0, 7} {
+				user, _ := Encode(9, ur, 2, ug, ud)
+				expanded := map[uint32]bool{}
+				for _, v := range ExpandWildcards(user) {
+					expanded[v] = true
+				}
+				for _, org := range []uint16{9, 10} {
+					for _, r := range regions {
+						for _, ro := range roles {
+							for _, g := range groups {
+								for _, d := range depts {
+									doc, _ := Encode(org, r, ro, g, d)
+									if expanded[doc] != Matches(user, doc) {
+										t.Fatalf("user %+v doc %+v: set=%v matches=%v",
+											Decode(user), Decode(doc), expanded[doc], Matches(user, doc))
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+func TestMemberMasksMatchesPerTupleExpansion(t *testing.T) {
+	regions, roles, groups, depts := []uint8{3, 4}, []uint8{2}, []uint8{7, 8, 9}, []uint8{5, 6}
+	var base []uint32
+	for _, r := range regions {
+		for _, ro := range roles {
+			for _, g := range groups {
+				for _, d := range depts {
+					m, _ := Encode(9, r, ro, g, d)
+					base = append(base, m)
+				}
+			}
+		}
+	}
+	want := map[uint32]bool{}
+	for _, v := range ExpandMemberMasks(base) {
+		want[v] = true
+	}
+	got := MemberMasks(9, regions, roles, groups, depts)
+	if len(got) != len(want) {
+		t.Fatalf("got %d masks, want %d", len(got), len(want))
+	}
+	for _, v := range got {
+		if !want[v] {
+			t.Fatalf("unexpected mask %+v", Decode(v))
+		}
+	}
+	if len(got) != 3*2*4*3 {
+		t.Fatalf("size should be the product of (count+1), got %d", len(got))
+	}
+	first, _ := Encode(9, 3, 2, 7, 5)
+	if got[0] != first {
+		t.Fatalf("base tuple must come first")
+	}
+	if MaxAccessKeys != 8192 {
+		t.Fatalf("MaxAccessKeys = %d", MaxAccessKeys)
+	}
+}

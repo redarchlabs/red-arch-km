@@ -358,3 +358,29 @@ class TestTheNudgeBeforeStopping:
         await admin_session.flush()
 
         assert await _executor()._unfinished_work_nudge(admin_session, org.id, run) is None
+
+
+class TestApiFiledOrders:
+    """A continuation acts for the order's creator. For an order filed through an
+    API key that creator is the key's profile, and the run must keep the key's
+    limits (no other org, never unrestricted, no workflows)."""
+
+    async def test_continuation_inherits_via_api_key(self, admin_session: AsyncSession) -> None:
+        org, wo, svc = await _seed(admin_session, tasks=["Draft", "Send"])
+        wo.via_api_key = True
+        await admin_session.commit()
+
+        run = await svc.continue_order(wo, await svc.list_tasks(wo.id))
+        await admin_session.commit()
+
+        assert run is not None
+        assert run.via_api_key is True
+        assert run.api_key_id == wo.api_key_id
+
+    async def test_ordinary_orders_stay_unmarked(self, admin_session: AsyncSession) -> None:
+        org, wo, svc = await _seed(admin_session, tasks=["Draft", "Send"])
+
+        run = await svc.continue_order(wo, await svc.list_tasks(wo.id))
+
+        assert run is not None
+        assert run.via_api_key is False

@@ -18,6 +18,7 @@ from api.db import dispose_engine, get_engine, get_session_factory
 from api.dependencies import close_redis_client, get_redis_client
 from api.exception_handlers import (
     make_record_access_handler,
+    make_too_many_masks_handler,
     make_unhandled_exception_handler,
 )
 from api.middleware.request_logging import RequestLoggingMiddleware
@@ -61,6 +62,7 @@ from api.routers import (
 from api.routers import v1 as v1_router
 from api.services.agents.llm.plugins import load_plugins
 from api.services.openapi_v1 import register_v1_docs
+from api.services.permission_config import TooManyAccessMasks
 from api.services.setup_token import ensure_setup_token
 
 logger = logging.getLogger(__name__)
@@ -178,6 +180,8 @@ def create_app() -> FastAPI:
     app.add_exception_handler(Exception, make_unhandled_exception_handler(settings.cors_origins))
     # A member writing a workflow-only entity is a 403, not a 500.
     app.add_exception_handler(RecordAccessError, make_record_access_handler(settings.cors_origins))
+    # A membership with more permission assignments than the stores can filter on.
+    app.add_exception_handler(TooManyAccessMasks, make_too_many_masks_handler(settings.cors_origins))
 
     # Observability must be wired here (before startup). Starlette forbids
     # adding middleware once the app enters the lifespan context, and the

@@ -137,6 +137,8 @@ async def delegate(
     run_id: uuid.UUID | None,
     work_order_id: uuid.UUID | None,
     actor_user_id: uuid.UUID | None = None,
+    via_api_key: bool = False,
+    api_key_id: uuid.UUID | None = None,
 ) -> AgentRun:
     """Queue a child run for a DIRECT report. Raises on a non-report target."""
     target = await resolve_agent(session, org_id, target_ref)
@@ -159,6 +161,8 @@ async def delegate(
         # this a delegated child has no actor at all, which would let work handed
         # down the org chart read more than the person who started it.
         actor_user_id=actor_user_id,
+        via_api_key=via_api_key,
+        api_key_id=api_key_id,
         status="queued",
         label=f"Delegated: {task[:80]}",
     )
@@ -182,6 +186,8 @@ async def _delegate_task(ctx: ToolContext, args: dict[str, Any]) -> dict[str, An
             run_id=ctx.run_id,
             work_order_id=ctx.work_order_id,
             actor_user_id=ctx.actor_user_id,
+            via_api_key=ctx.via_api_key,
+            api_key_id=ctx.api_key_id,
         )
     except DelegationError as exc:
         return {"error": str(exc)}
@@ -261,6 +267,8 @@ async def _escalate(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
             # Same rule as delegation: the supervisor picks the work up on behalf of
             # whoever started it, and reads with exactly that person's entitlement.
             actor_user_id=ctx.actor_user_id,
+            via_api_key=ctx.via_api_key,
+            api_key_id=ctx.api_key_id,
             status="queued",
             label=f"Escalation from {ctx.agent.name}: {reason[:60]}",
         )
@@ -349,6 +357,8 @@ async def _consult_peer(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any
         # The advisor answers on the asker's behalf, so it reads with the asker's
         # entitlement — never wider.
         actor_user_id=ctx.actor_user_id,
+        via_api_key=ctx.via_api_key,
+        api_key_id=ctx.api_key_id,
         status="queued",
         label=f"Consult from {ctx.agent.name}: {question[:60]}",
     )

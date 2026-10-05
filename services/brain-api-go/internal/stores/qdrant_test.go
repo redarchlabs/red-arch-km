@@ -261,3 +261,15 @@ func TestCollectionNaming(t *testing.T) {
 		t.Errorf("expected %q, got %q", expectedDoc, actualDoc)
 	}
 }
+
+// A metadata update for a public document (no masks) must store the [0] sentinel
+// ingest uses: mask-filtered search matches with MatchAny on 0, and [] matches
+// nothing, so a public document would vanish after a move or permission change.
+func TestChunkAccessKeys_EmptyBecomesPublicSentinel(t *testing.T) {
+	if got := chunkAccessKeys([]int{}); len(got) != 1 || got[0] != 0 {
+		t.Fatalf("chunkAccessKeys([]) = %v, want [0]", got)
+	}
+	if got := chunkAccessKeys([]int{5, 6}); len(got) != 2 || got[0] != 5 || got[1] != 6 {
+		t.Fatalf("chunkAccessKeys([5 6]) = %v, want [5 6]", got)
+	}
+}

@@ -40,6 +40,33 @@ from brain_api.stores import Stores
 logger = logging.getLogger(__name__)
 _tracer = get_tracer("brain_api.ingest")
 
+# Payload fields that retrieval filters, scopes or cites on. Caller-supplied
+# document metadata rides along in every chunk/document payload but can never set
+# these: a writer posting {"access_keys": [0]} would otherwise make restricted
+# content public, and document_key / tenant_id / tags / type would re-scope it.
+RESERVED_INGEST_METADATA_KEYS: frozenset[str] = frozenset(
+    {
+        "access_keys",
+        "tenant_id",
+        "tags",
+        "document_key",
+        "document_id",
+        "document_title",
+        "type",
+        "text",
+        "summary",
+        "summary_tree",
+        "section",
+        "chunk_order",
+    }
+)
+
+
+def _caller_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
+    """Caller metadata minus reserved fields; spread FIRST so reserved fields win."""
+    return {k: v for k, v in (metadata or {}).items() if k not in RESERVED_INGEST_METADATA_KEYS}
+
+
 _CHUNK_SIZE_TOKENS = 500
 _CHUNK_OVERLAP_TOKENS = 20
 _TRIPLET_WORKERS = 8
@@ -181,6 +208,7 @@ class IngestService:
                     id=str(uuid.uuid4()),
                     vector=embedding,
                     payload={
+                        **_caller_metadata(metadata),
                         "text": sc.text,
                         "summary": summary,
                         "chunk_order": idx,
@@ -195,7 +223,6 @@ class IngestService:
                         "tags": tags,
                         "access_keys": access_keys or [0],
                         "type": "chunk",
-                        **(metadata or {}),
                     },
                 )
                 for idx, (sc, embedding, summary) in enumerate(
@@ -224,6 +251,7 @@ class IngestService:
                 id=doc_id,
                 vector=doc_vector,
                 payload={
+                    **_caller_metadata(metadata),
                     "document_id": doc_id,
                     "document_key": document_key,
                     "document_title": title,
@@ -236,7 +264,6 @@ class IngestService:
                     "tags": tags,
                     "access_keys": access_keys or [0],
                     "type": "document",
-                    **(metadata or {}),
                 },
             )
             self._stores.vector.upsert_vectors(tenant_id, [doc_record], collection_type="documents")
@@ -491,6 +518,60 @@ class IngestService:
             tags=tags,
             access_keys=access_keys,
         )
+        # Facts carry their document's masks too. Without this, moving a document
+        # from a public folder to a restricted one left its extracted facts public.
+        # The folder tags go onto the Document node for folder-limited graph search.
+        if (tags is not None or access_keys is not None) and self._stores.settings.use_fact_engine:
+            self._stores.fact_store.update_document_metadata(
+                tenant_id, document_key, tags=tags, access_keys=access_keys
+            )
+
+    def backfill_document_graph_metadata(self, tenant_id: str) -> dict[str, int]:
+        """Copy every document's current folder tags and masks onto its fact-graph
+        Document node, from its first chunk's payload in the vector store.
+
+        Document nodes written before they carried tags have none, and
+        folder-limited graph search excludes their claims (fails closed) until
+        this runs. Idempotent; safe to re-run. Ingest stores a public document's
+        chunks with the ``[0]`` sentinel, which is the fact graph's empty list.
+
+        Documents with nothing to copy from — a first chunk without a
+        ``document_key``, or a document record whose chunk 0 is missing — are
+        left alone and counted in ``skipped`` (logged), so an operator can see the
+        graph is still behind for them.
+        """
+        if not self._stores.settings.use_fact_engine:
+            return {"documents": 0, "claims_recomputed": 0, "skipped": 0}
+        seen: set[str] = set()
+        recomputed = 0
+        skipped = 0
+        for head in self._stores.vector.iter_document_heads(tenant_id):
+            document_key = str(head.payload.get("document_key") or "")
+            if not document_key:
+                skipped += 1
+                logger.warning("Backfill %s: skipped chunk %s (no document_key)", tenant_id, head.id)
+                continue
+            if document_key in seen:
+                continue
+            seen.add(document_key)
+            keys = [int(k) for k in head.payload.get("access_keys") or []]
+            recomputed += self._stores.fact_store.update_document_metadata(
+                tenant_id,
+                document_key,
+                tags=[str(t) for t in head.payload.get("tags") or []],
+                access_keys=[] if keys == [0] else keys,
+            )
+        headless = sorted(set(self._stores.vector.iter_document_keys(tenant_id)) - seen)
+        if headless:
+            skipped += len(headless)
+            logger.warning(
+                "Backfill %s: skipped %d documents with no first chunk (e.g. %s)",
+                tenant_id,
+                len(headless),
+                ", ".join(headless[:5]),
+            )
+        logger.info("Backfilled %d fact-graph documents for tenant %s (%d skipped)", len(seen), tenant_id, skipped)
+        return {"documents": len(seen), "claims_recomputed": recomputed, "skipped": skipped}
 
     def init_tenant(self, tenant_id: str) -> None:
         """Initialize vector collections and graph schema for a new tenant."""

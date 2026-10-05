@@ -16,10 +16,12 @@ class WorkOrderRepository:
         self._session = session
         self._org_id = org_id
 
-    async def list_all(self) -> list[WorkOrder]:
-        result = await self._session.execute(
-            select(WorkOrder).where(WorkOrder.org_id == self._org_id).order_by(WorkOrder.created_at.desc())
-        )
+    async def list_all(self, *, api_key_id: uuid.UUID | None = None) -> list[WorkOrder]:
+        """Every work order in the org, newest first — or only those one API key filed."""
+        stmt = select(WorkOrder).where(WorkOrder.org_id == self._org_id)
+        if api_key_id is not None:
+            stmt = stmt.where(WorkOrder.api_key_id == api_key_id)
+        result = await self._session.execute(stmt.order_by(WorkOrder.created_at.desc()))
         return list(result.scalars().all())
 
     async def get(self, work_order_id: uuid.UUID) -> WorkOrder | None:

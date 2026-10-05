@@ -132,7 +132,7 @@ router where `{dimension}` ∈ `regions`, `departments`, `roles`, `groups`.
 
 | Method | Path | Purpose | Auth |
 |--------|------|---------|------|
-| GET·POST | `/api/dimensions/{dimension}` | List / create a region, department, role, or group | Org admin |
+| GET·POST | `/api/dimensions/{dimension}` | List / create a region, department, role, or group (`409` past MAX-1: the next number would be the mask wildcard) | Org admin |
 | GET·PATCH·DELETE | `/api/dimensions/{dimension}/{id}` | Read / update / delete one | Org admin |
 | GET·POST | `/api/tags` | List / create tags | Member |
 | GET·PATCH·DELETE | `/api/tags/{tag_id}` | Read / update / delete a tag | Member |
@@ -143,7 +143,12 @@ router where `{dimension}` ∈ `regions`, `departments`, `roles`, `groups`.
 
 Router `documents.py`. Reads and writes are member-gated with per-document permission
 masks applied (see [document permissions](DATABASE.md) and the folder inheritance model).
-Bodies: `api/schemas/document.py`.
+For a member, the list applies each document's own viewer override as well as its folder's,
+and `GET /{id}`, `/by-key/{key}`, `/content`, `/chunks`, `/summary` and `/logs` answer `404`
+unless the document is filed in a folder the member can see and its own viewer override (if
+any) admits them — except an unfiled document the member uploaded themselves. Admins read
+everything. Bodies:
+`api/schemas/document.py`.
 
 | Method | Path | Purpose | Auth |
 |--------|------|---------|------|
@@ -389,9 +394,29 @@ Bodies: `api/schemas/api_key.py`.
 | Method | Path | Purpose | Auth |
 |--------|------|---------|------|
 | GET | `/api/api-keys/scopes` | Scope catalog (for the create form) | Org admin |
-| GET | `/api/api-keys` | List keys (metadata only) | Org admin |
-| POST | `/api/api-keys` | Mint a key — response `key` shown once | Org admin |
+| GET | `/api/api-keys` | List keys (metadata only, incl. `access_mode` and the `regions` / `roles` / `groups` / `departments` / `folders` it holds as `{id, name}` — a folder's `name` is its path; `assignments_note` explains a scoped key with none left: released after it was revoked/expired, or — active — refused) | Org admin |
+| POST | `/api/api-keys` | Mint a key — response `key` shown once; optional `region_ids`, `role_ids`, `group_ids`, `department_ids`, `folder_ids` make it scoped | Org admin |
 | DELETE | `/api/api-keys/{id}` | Revoke a key (idempotent) | Org admin |
+
+A key minted with any of `region_ids`, `role_ids`, `group_ids`, `department_ids` or
+`folder_ids` is **scoped** (`access_mode: "scoped"`; see
+[Dimension-scoped keys](#dimension-scoped-keys)); with none it is organization-wide
+(`"org"`). Minting a scoped key is refused with `422` when an id does not belong to the
+key's org (one message for missing and foreign ids), when the assignments exceed the mask
+cap, when a listed folder is not visible to the masks the assignments produce (named by
+path), or when the listed folders **plus their subfolders** that the masks can see exceed
+1024 (the most one search can be limited to); and with `400` when any requested scope is a
+wildcard or not scope-aware. The key is committed before the response carries its
+plaintext, so a returned key always exists. Assignments cannot be changed after minting —
+there is no update route; revoke and re-issue.
+
+Deleting a region, role, group or department (`DELETE /api/dimensions/{kind}/{id}`) or a
+folder (`DELETE /api/folders/{id}`) that an **active** key holds is a `409` naming those
+keys; rows held by revoked or expired keys are released first (an explicit step of the
+delete) and never block it. A mint and a delete of the same item cannot race: minting
+locks every row it validates (`FOR SHARE`), the delete locks the item (`FOR UPDATE`)
+before checking, and both check the deferred foreign keys inside the handler — a
+violation is a `409` there, never a failed commit after the response.
 
 ### Admin (site admin)
 
@@ -430,11 +455,14 @@ Worker callbacks and the Celery-beat sweep tasks. Bodies are inline models in th
 ## Enterprise API — `/api/v1` (org API key)
 
 The versioned public surface (`services/api/src/api/routers/v1/`) is authenticated by an
-org **API key**, not a Clerk session — no `X-Org-ID` (the key resolves to its org) and no
-per-user permission masks (a key has org-wide visibility). Each endpoint declares the one
-scope it needs; `has_scope` in `api/services/api_key_scopes.py` decides access. `*` and
-`<domain>:*` wildcards are honored **except** `config:write`, which must be granted
-explicitly. Missing scope → `403`; unknown/revoked/expired/missing key → opaque `401`.
+org **API key**, not a Clerk session — no `X-Org-ID` (the key resolves to its org). An
+org key has org-wide visibility; a **scoped key** sees knowledge with the permission masks
+of its own dimension assignments, optionally narrowed to folders (below). Each endpoint declares the one scope it needs;
+`has_scope` in `api/services/api_key_scopes.py` decides access. `*` and `<domain>:*`
+wildcards are honored **except** for the sensitive scopes `config:write` and
+`knowledge:write`, which must be granted explicitly. Missing
+scope → `403`; unknown/revoked/expired/missing key → opaque `401`; a scoped key whose
+assignments no longer resolve → `403` on every route (`422` past the mask cap).
 
 Interactive docs: `GET /api/v1/docs` + `GET /api/v1/openapi.json` (gated by
 `API_DOCS_ENABLED`, default on). Rate limits: see [Rate limiting](#rate-limiting).
@@ -454,6 +482,7 @@ Catalog (`API_SCOPES`) — only scopes with a live `/api/v1` endpoint are listed
 | `workflows:run` | Trigger runs — **HIGH**: runs ANY workflow, bypassing per-user run permission |
 | `search:read` | Semantic search + RAG chat |
 | `knowledge:read` | List/read folders + documents + chunks/summary |
+| `knowledge:write` | Add documents / new versions by `external_ref` — each write is an LLM-billed ingest, so **never granted by a wildcard** |
 | `agents:read` | List agents, inspect agent runs |
 | `agents:run` | Trigger an agent run — **HIGH**: agent acts with its configured grants |
 | `work_orders:read` | List/read work orders |
@@ -489,16 +518,141 @@ Catalog (`API_SCOPES`) — only scopes with a live `/api/v1` endpoint are listed
 | GET | `/api/v1/knowledge/documents/{id}` | Document metadata + status | `knowledge:read` |
 | GET | `/api/v1/knowledge/documents/{id}/chunks` | Extracted chunks (paged) | `knowledge:read` |
 | GET | `/api/v1/knowledge/documents/{id}/summary` | Document summary tree | `knowledge:read` |
+| POST | `/api/v1/knowledge/documents` | Add a document, or a new version by `external_ref` (async ingest) | `knowledge:write` |
 | GET | `/api/v1/agents` | List agents | `agents:read` |
 | POST | `/api/v1/agents/{agent_id}/run` | Queue an agent run (202; poll the run) | `agents:run` |
-| GET | `/api/v1/agents/runs/{run_id}` | Agent run detail | `agents:read` |
-| GET | `/api/v1/work-orders` | List work orders | `work_orders:read` |
+| GET | `/api/v1/agents/runs/{run_id}` | Agent run detail (a scoped key: only runs it started) | `agents:read` |
+| GET | `/api/v1/work-orders` | List work orders (a scoped key: only those it filed) | `work_orders:read` |
 | POST | `/api/v1/work-orders` | File a work order | `work_orders:write` |
 | GET | `/api/v1/config/ping` | Authenticated probe — reports bundle format version | `config:read` |
 | POST | `/api/v1/config/promotions` | Receive + apply a pushed config bundle (`?dry_run`, 409 on in-flight runs) | `config:write` |
 
 `config:write` is the remote receiver for cross-instance promotions and runs on the
 DDL-capable (still RLS-scoped) owner session; see [CHANGE_MANAGEMENT.md](CHANGE_MANAGEMENT.md).
+
+### Dimension-scoped keys
+
+A key minted with dimension assignments (any subset of regions, roles, groups and
+departments) reads knowledge with **exactly the masks a member holding those assignments
+would have** — the same builder (`calculate_masks_from_assignments`) serves both, so a key
+with only the role *Analyst* reads like a member with only that role. No member profile
+backs the key. On every request `require_api_key` loads the key's assignments in one query
+and resolves its scope (`api.services.api_key_scope`); a scoped key with no assignment rows
+left, or one that no longer resolves inside its org, is refused with `403` — it never
+falls back to org-wide.
+
+**Folders only narrow.** A key may also list folders (`folder_ids`). It then reads only
+those folders **and their subfolders**, intersected with the folders its masks may see; a
+listed folder never grants anything the assignments lack. Subfolders are found by walking
+`parent_id` from the listed folders, never by path: a path is built from names, and two
+top-level folders may share a name, so a path match would let a second "Finance" join a
+key that lists the first. A key with folders but no
+dimensions reads with the masks of a member with no assignments — never org-wide. Moving a
+folder under a listed folder widens the key's folder set to include it (the masks still
+cap what it reads); a listed folder whose permissions are tightened beyond the key's masks
+drops out of the set.
+
+A scoped key may hold **only scope-aware scopes** — `search:read`, `knowledge:read`,
+`knowledge:write`, `agents:read`, `agents:run`, `work_orders:read`, `work_orders:write` — and
+no wildcard (`SCOPED_KEY_SCOPES`, enforced at mint time). As defense in depth, every
+other route answers `403` to a scoped key even if it somehow holds the scope. What changes
+for a scoped key:
+
+| Route | Org key | Scoped key |
+|-------|---------|------------|
+| `POST /search`, `POST /search/chat` | `access_keys=None` (org-wide) | the key's masks → brain-api filters passages and graph facts. With folders: `folder_tags` for the allowed set (or the requested subset) is **always** sent, for chat too; a requested folder outside the set → `404 folder not found`; an empty allowed set → empty answer, brain-api not called; more than 1024 folders → `422` |
+| `GET /knowledge/folders` | all folders | folders the masks can see (effective view masks), ∩ the folder set |
+| `GET /knowledge/documents` | all documents, incl. unfiled | documents in visible folders (∩ the folder set) whose own override (if any) admits the masks; unfiled excluded |
+| `GET /knowledge/documents/{id}` (+ `/chunks`, `/summary`) | any document | `404` unless visible and inside the folder set; brain-api is not called |
+| `POST /knowledge/documents` | any folder in the org (org-admin-equivalent) | only folders in the folder set that the masks may add to (below) |
+| `POST /agents/{id}/run`, `POST /work-orders` | run has no actor | run has no actor either; it carries the key, and its knowledge tool reads with the key's masks and folders |
+| `GET /agents` | every agent in full | summaries only — `id`, `name`, `display_name`, `description`, `kind`, `enabled` (no persona, params, grants or MCP servers) |
+| `GET /agents/runs/{id}`, `GET /work-orders` | every run / order in the org | only the runs / orders this key created (`404` otherwise) |
+
+Runs and work orders created through `/api/v1` have no actor and no filing profile (a key
+is not a person). They are marked `via_api_key` with the key's id, and the mark follows
+every run spawned from them (delegations, consults, escalations, reviews, work-order
+continuations). Such a run's knowledge tool never searches another org, and reads with the
+**key's** reach even when a person started the key-filed work order (an org key's run then
+follows the unattended rule; the person's own reach is ignored). **Every tool call** of
+such a run re-checks the key (one primary-key read): once it is revoked, expired, deleted
+or invalid, every tool — allowlisted ones included — is refused and the run ends with
+status `error`; a run picked up with its key already gone ends before its first turn.
+`create_document` in any key-started run needs `knowledge:write` on the key (org keys
+too) and counts against the key's daily write cap (the same counter as
+`POST /knowledge/documents`). A scoped key's knowledge search uses the key's masks and
+folders — checked before the agent's `knowledge_scope: "org"` grant, so it can never read
+unrestricted. It cannot run workflows and is limited to mask-aware tools (knowledge
+search; `create_document` into a folder in the key's set that its masks may add to; its
+own work order's tools; delegation/escalation/consults; the public web). Records,
+workflows, work-order artifacts, other runs' details, batch generation, local execution
+and MCP tools are refused — see [RBAC.md](RBAC.md#dimension-scoped-api-keys).
+
+### Writing documents (`POST /api/v1/knowledge/documents`)
+
+Send **either** `application/json`:
+
+```json
+{
+  "folder_id": "6a1f…",
+  "title": "Weekly status — W41",
+  "content": "# Status\n…",
+  "external_ref": "proj-weekly-2026-W41",
+  "metadata": { "source": "external-agent", "run_id": "…" }
+}
+```
+
+**or** `multipart/form-data` with a `file` part plus `folder_id`, and optional `title`
+(defaults to the filename), `external_ref`, `metadata` (a JSON-object string).
+
+- **Validation** (`422` unless noted): `folder_id` required; `title` 1–255 chars;
+  `external_ref` 1–255 chars of letters, digits, `. _ : -`, starting with a letter or digit;
+  no NUL characters in content, title or metadata; unknown fields rejected. `metadata` is
+  a flat JSON object — ≤ 50 keys, ≤ 8 KiB, values strings / numbers / booleans / null or
+  lists (≤ 50) of those — and may not set the index's reserved fields (`access_keys`,
+  `tenant_id`, `tags`, `document_key`, `document_id`, `document_title`, `type`, `text`,
+  `summary`, `summary_tree`, `section`, `chunk_order`); brain-api also ignores them in
+  metadata from any source. Content is capped at `MAX_FILE_SIZE_MB` (`413`), same as the
+  first-party upload — for multipart the declared `Content-Length` is checked first and the
+  body is counted as it streams, so an oversized upload is refused before it is spooled to
+  disk. File types are the upload allowlist (pdf, images, txt, md, docx, doc); one
+  document per call — `.zip` is refused (`400`); other content types → `415`. Filenames
+  are reduced to their last path segment, characters outside `A-Z a-z 0-9 . _ - space`
+  become `_`, leading dots are dropped and the name is capped at 200 characters.
+- **Daily cap**: each key may write `API_KEY_DOCUMENT_WRITES_PER_DAY` documents (default
+  500) per day — counting `create_document` calls by agent runs the key started. An exhausted key is refused (`429`, `Retry-After`) before the body is read;
+  a write is counted only after it was authorised and changed something (refused and
+  `unchanged` requests are free). Fails open on a Redis outage, like the per-minute
+  limiter; concurrent writes at the boundary can overshoot by the number in flight.
+- **Ingest is asynchronous**: the row is committed and the worker ingest enqueued, exactly
+  as `POST /api/documents` / `/upload` do. The response is
+  `KnowledgeDocumentWriteResult` — `{id, document_key, external_ref, folder_id, title,
+  processing_status, content_hash, outcome}`; poll `GET /api/v1/knowledge/documents/{id}`.
+- **Versioning by `external_ref`** (unique **per folder**; the same ref in another folder
+  is a different document): a new ref → `201`, `outcome: "created"`. An existing ref with
+  different content → `200`, `"updated"`: the same document's old chunks/facts are purged,
+  its content replaced and it is re-ingested. Identical content (SHA-256 of the bytes) is
+  not re-ingested → `200` with `"metadata_updated"` (a new title/metadata applied; the
+  index title follows), `"reprocessed"` (the previous ingest `FAILED`, was `CANCELLED`, or
+  is stuck `PENDING` — no task after 60 s, or anything after 10 min), or `"unchanged"`.
+  The document row is locked for the replace, so concurrent writes to one ref serialise:
+  a new version while the previous one is still `PENDING`/`PROCESSING` → `409`.
+- **Failures**: if brain-api cannot purge the old version nothing is changed → `503`. If
+  the ingest cannot be enqueued the document is marked `FAILED` → `503`; resend to retry
+  (same content → `reprocessed`). A replaced file is stored under a new object key and the
+  superseded object is deleted only after the commit; objects from a failed write are
+  deleted.
+- **Permissions**: an org key may write to any folder in its org (the same reach as an
+  org admin; `knowledge:write` is the gate). A scoped key's target folder must be inside
+  its folder set (when it lists folders) and visible to its masks (else `404`,
+  indistinguishable from a missing folder) and, if the folder — or its nearest ancestor
+  with one — sets contributor permissions, the masks must hold a matching contributor mask
+  (else `403`). Replacing a document by ref also requires that the key can see it;
+  otherwise `409` with the same text as any ref conflict (`external_ref is already in use
+  in this folder`), so the reply does not reveal that a hidden document exists. If that
+  document has its own contributor config, the masks must also hold a matching contributor
+  mask (`403`). The document's chunks and facts carry the folder's effective view masks,
+  like any document created in the UI. A document written by a key has no uploader.
 
 ## Brain API — service-to-service
 
@@ -508,6 +662,13 @@ ${BRAIN_API_KEY}`. Brain API **trusts** the caller-supplied `tenant_id` and `acc
 — the API service scopes them to the authenticated end user before calling; the key must
 never reach browsers. Prefixes: `ingest`/`search` under `/api`, `rag`/`agent` under
 `/api/v1`. See [KNOWLEDGE_ENGINE.md](KNOWLEDGE_ENGINE.md).
+
+**Retrieval scope contract** (`/api/vector-search`, `/api/vector-chat`, `/api/v1/ask`,
+`/api/v1/ask/stream`, and `access_keys` on `/api/v1/agent/ask[/stream]`): an absent or
+`null` `access_keys` / `folder_tags` means **no filter**; an explicit `[]` means **nothing
+is readable** — the answer is empty and nothing (embedding, vector store, graph, LLM) is
+queried. `BrainAPIClient` sends `null` for unrestricted callers (org admins, org-wide API
+keys, trusted workflows) and never folds one into the other.
 
 | Method | Path | Purpose |
 |--------|------|---------|
@@ -558,6 +719,7 @@ There is **no global per-user limiter** on the main API. Two limiters exist:
 |---------|-------------|---------|---------|
 | Public form render/submit (`/api/public/forms/{token}`) | `API_RATE_LIMIT_PER_MINUTE` (`rate_limit_per_minute`) | 60/min | — |
 | Enterprise `/api/v1/*` per key | `API_KEY_RATE_LIMIT_PER_MINUTE` (`api_rate_limit_per_minute`) | 600/min | `X-RateLimit-Limit`, `X-RateLimit-Remaining`; `Retry-After` on `429` |
+| `POST /api/v1/knowledge/documents` per key | `API_KEY_DOCUMENT_WRITES_PER_DAY` (`api_key_document_writes_per_day`) | 500/day | `Retry-After` on `429` |
 | Enterprise pre-auth per client IP | `API_IP_RATE_LIMIT_PER_MINUTE` (`api_ip_rate_limit_per_minute`) | 1200/min | `Retry-After` on `429` |
 
 The `/api/v1` limiters use Redis (`api/services/api_rate_limit.py`) and **fail open** if
@@ -582,7 +744,10 @@ Two models coexist:
   above as the owners of auth, release-promotion, and integration detail; they are being
   authored alongside this rewrite and may not all be present yet.
 - `GET /readyz` returns a static `ok` (real DB/Redis/Brain probes deferred — REDARCH-12).
-- Enterprise `knowledge:*` is read-only in this release; `config:write` is the only
-  write-capable config scope and is deliberately non-wildcardable.
+- Enterprise knowledge writes are add/replace only (`POST /knowledge/documents`); there is
+  no v1 delete or move. `config:write` is the only write-capable config scope and is
+  deliberately non-wildcardable.
+- Dimension and folder assignments narrow knowledge reads/writes and agent runs only — see
+  [Dimension-scoped keys](#dimension-scoped-keys) for what they do not cover.
 
 > Reviewed 2026-07-16 against Alembic migration 039. Source of truth is the code; if this doc disagrees with the code, the code wins.

@@ -184,8 +184,8 @@ org-admin-gated router `services/api/src/api/routers/api_keys.py` (mounted at
 | Method + path | Auth | Purpose |
 |---|---|---|
 | `GET /api/api-keys/scopes` | `require_org_admin` | Scope catalog for the create form. |
-| `GET /api/api-keys/` | `require_org_admin` | List keys (metadata only). |
-| `POST /api/api-keys/` | `require_org_admin` | Mint a key; the plaintext is returned **once**. |
+| `GET /api/api-keys/` | `require_org_admin` | List keys (metadata only, incl. access mode and assignments). |
+| `POST /api/api-keys/` | `require_org_admin` | Mint a key, optionally scoped to regions/roles/groups/departments and folders; the plaintext is returned **once**. |
 | `DELETE /api/api-keys/{id}` | `require_org_admin` | Revoke immediately (idempotent). |
 
 ### 5.2 Storage (shown once, hashed at rest)
@@ -209,11 +209,28 @@ presented key to exactly one row across all tenants.
 `Authorization: Bearer km2_…` **or** the `X-API-Key` header, re-hashes it, and looks it
 up by `key_hash` on a dedicated **short-lived privileged** session (cross-tenant, before
 any org is known). It rejects unknown / revoked (`revoked_at`) / expired (`is_expired`)
-keys, all with an opaque `401` (no oracle for which check tripped). A debounced
+keys, all with an opaque `401` (no oracle for which check tripped). For a **scoped** key
+(`api_keys.access_mode = 'scoped'`, migration `053`) it then loads the key's region, role,
+group, department and folder assignments on the same session, in one query, and puts the
+resulting masks and folder set on the principal (`api.services.api_key_scope`); a scoped
+key with no assignments left, or one that no longer resolves inside its org, is a `403`
+for every route (reason logged, not returned), never a fallback to org-wide, and one past
+the mask cap is a `422`. A key's folders expand to their subfolders by walking
+`parent_id` from the listed ids (never by the name-built `dot_path`, which two top-level
+folders may share), and only that subtree plus its ancestors is loaded. See
+[RBAC.md](RBAC.md#dimension-scoped-api-keys). A debounced
 `last_used_at` touch (≥60s apart) runs on that session and commits *before* the endpoint
 runs, so a hot key never holds a row lock across a request. `require_scope(scope)` then
 gates each endpoint, and `get_apikey_tenant_db` opens the RLS session scoped to the key's
 org (same `enter_tenant` mechanics as §3, org from the key rather than a header).
+
+**Agent runs a key started** (`agent_runs.via_api_key` / `api_key_id`) re-check the key
+on **every tool call** — one primary-key read (`run_key_status` in
+`services/agents/tools/key_scope.py`: still in the org, not revoked, not expired, a known
+access mode), with the full mask/folder resolution only in the tools that use it. Once the
+key is gone every tool is refused, allowlisted ones included, and the run is finalized
+`error` ("The API key that started this run is no longer valid…"); a run picked up with its
+key already gone ends before its first turn.
 
 ### 5.4 Scopes
 
@@ -232,6 +249,7 @@ they require; keys are minted with an explicit subset. Catalog
 | `workflows:run` | Trigger any workflow run (**high privilege** — bypasses per-workflow run permission). |
 | `search:read` | Semantic search + RAG chat over the knowledge base. |
 | `knowledge:read` | List/read documents and folders. |
+| `knowledge:write` | Add documents, or new versions by `external_ref` (`POST /api/v1/knowledge/documents`). **Sensitive**: never granted by a wildcard. |
 | `agents:read` | List agents, inspect agent runs. |
 | `agents:run` | Trigger an agent run (**high privilege**). |
 | `work_orders:read` | List/read work orders. |
@@ -240,9 +258,12 @@ they require; keys are minted with an explicit subset. Catalog
 | `config:write` | Receive and apply configuration promotions (**very high privilege**). |
 
 Wildcards `"*"` (everything) and `"<domain>:*"` (a whole domain) are honored when a key
-is *granted* a scope. **Exception:** `config:write` is a `SENSITIVE_SCOPE` — it is
-**never** satisfied by a wildcard and must be listed explicitly, because it can
-remote-control an org's entire configuration. `has_scope` enforces this; `normalize_scopes`
+is *granted* a scope. **Exception:** `config:write` and `knowledge:write` are
+`SENSITIVE_SCOPES` — they are **never** satisfied by a wildcard and must be listed
+explicitly: `config:write` can remote-control an org's entire configuration, and every
+`knowledge:write` call starts an LLM-billed ingest. A scoped key (dimension or folder
+assignments) may hold only scope-aware scopes and no wildcard (see
+[RBAC.md](RBAC.md#dimension-scoped-api-keys)). `has_scope` enforces this; `normalize_scopes`
 rejects unknown scopes at mint time. `config:read` / `config:write` protect the inbound
 config-promotion receiver used by release promotion — see CHANGE_MANAGEMENT.md.
 

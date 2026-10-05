@@ -138,6 +138,8 @@ async def convene(
             work_order_id=work_order.id,
             # The reviewer reads with the author's entitlement, never wider.
             actor_user_id=ctx.actor_user_id,
+            via_api_key=ctx.via_api_key,
+            api_key_id=ctx.api_key_id,
             status="queued",
             label=f"Review ({gate}): {agent.name}",
         )

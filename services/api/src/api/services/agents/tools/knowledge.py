@@ -30,6 +30,13 @@ every org for a site admin (whose elevation already grants org-wide reach
 everywhere — see ``resolve_profile_access_keys``). The agent's own grants never
 widen it, so two people running the same agent get two different reaches.
 
+**A run started through an API key** never reads with a person's reach — not even
+when a person started a key-filed work order (the run then has an actor, which is
+ignored). An org key's run behaves like any unattended run (needs
+``knowledge_scope: "org"``). A scoped key's run reads with the key's own masks and
+folders, reloaded on every call, and that check runs BEFORE the unattended branch —
+so a scoped key's run can never become unrestricted through ``knowledge_scope``.
+
 An unattended run cannot cross orgs at all. ``knowledge_scope: "org"`` is a grant
 about *one* org — this one — and letting it carry across tenants would silently
 turn every schedule and inbound webhook into a system-wide reader.
@@ -39,8 +46,10 @@ from __future__ import annotations
 
 import logging
 import uuid
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from api.services.agents.tools.key_scope import RunKeyRefused, RunKeyScope, run_key_scope
 from api.services.agents.tools.spec import Category, ToolContext, ToolSpec
 
 if TYPE_CHECKING:
@@ -196,20 +205,39 @@ async def _own_org_name(ctx: ToolContext) -> str | None:
     return org.name if org is not None else None
 
 
-async def _search_knowledge(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
-    query = str(args.get("query") or "").strip()
-    if not query:
-        return {"error": "query is required"}
-    if ctx.settings is None:
-        return {"error": "knowledge search is not configured"}
-    from api.services.brain_client import BrainAPIClient
-    from api.services.org_llm import org_default_llm_model
-    from api.services.search_access import resolve_profile_access_keys
+@dataclass(frozen=True, slots=True)
+class _Reach:
+    """What one search may read: the masks (None = unrestricted) and folder tags
+    (None = no folder limit)."""
 
-    requested = str(args.get("org") or "").strip()
-    scope = _scope(ctx)
+    access_keys: list[int] | None
+    folder_tags: list[str] | None = None
 
-    if requested and ctx.actor_user_id is None:
+
+# A refusal, or a final answer that needs no search, returned to the model as-is.
+_Outcome = dict[str, Any]
+
+_UNATTENDED_REFUSAL = (
+    "This run has no user to read on behalf of, so the knowledge base is "
+    "unavailable. An admin can grant this agent org-wide knowledge access "
+    'by setting grants.knowledge_scope to "org".'
+)
+
+
+def _cross_org_refusal(ctx: ToolContext, requested: str) -> _Outcome | None:
+    """Why this run may not search the named org, or None."""
+    if not requested:
+        return None
+    if getattr(ctx, "via_api_key", False):
+        # A key is minted for one org. Its run must not borrow the actor's other
+        # memberships (where the profile might even be an admin).
+        return {
+            "error": (
+                "This run was started through an API key, so it can only search its own "
+                "organization. Search without naming another organization."
+            )
+        }
+    if ctx.actor_user_id is None:
         # No one to inherit reach from. knowledge_scope: "org" is a grant about
         # this org; it must not become a passport to every other one.
         return {
@@ -218,44 +246,126 @@ async def _search_knowledge(ctx: ToolContext, args: dict[str, Any]) -> dict[str,
                 "organization. Search your own org instead, or have a person start the run."
             )
         }
+    return None
+
+
+def _unattended_reach(ctx: ToolContext) -> _Reach | _Outcome:
+    """No actor to inherit from: org-wide only with the agent's explicit grant."""
+    if _scope(ctx) == SCOPE_ORG:
+        return _Reach(access_keys=None)  # explicitly granted org-wide reach
+    return {"error": _UNATTENDED_REFUSAL}
+
+
+def _scoped_key_reach(key_scope: RunKeyScope, searched_org: str) -> _Reach | _Outcome:
+    """A scoped key's own masks and folders — never unrestricted, never []."""
+    from api.services.search_access import MAX_FOLDER_TAGS, folder_tags
+
+    if not key_scope.masks:  # None would mean "no filter"; refuse instead
+        return {"error": "The API key that started this run has no knowledge access."}
+    if key_scope.folder_ids is None:
+        return _Reach(access_keys=list(key_scope.masks))
+    if not key_scope.folder_ids:
+        return {
+            "answer": "No documents are available: the API key that started this run can read no folders.",
+            "sources": [],
+            "searched_org": searched_org,
+        }
+    if len(key_scope.folder_ids) > MAX_FOLDER_TAGS:
+        return {"error": "The API key that started this run lists too many folders to search at once."}
+    return _Reach(access_keys=list(key_scope.masks), folder_tags=folder_tags(sorted(key_scope.folder_ids, key=str)))
+
+
+async def _key_reach(ctx: ToolContext, searched_org: str) -> _Reach | _Outcome:
+    """A run started through an API key reads with the KEY's reach, whoever pressed
+    start: a scoped key's masks and folders; an org key, the unattended rule — the
+    actor (a person starting a key-filed work order) is ignored either way, so a
+    key's run neither gains an admin's reach nor loses the key's own."""
+    try:
+        key_scope = await run_key_scope(ctx)
+    except RunKeyRefused as exc:
+        return {"error": str(exc)}
+    if key_scope is not None and key_scope.scoped:
+        return _scoped_key_reach(key_scope, searched_org)
+    return _unattended_reach(ctx)
+
+
+async def _actor_reach(ctx: ToolContext) -> _Reach | _Outcome:
+    """The actor's own masks in this org."""
+    from api.services.permission_config import TooManyAccessMasks
+    from api.services.search_access import resolve_profile_access_keys
+
+    assert ctx.actor_user_id is not None  # callers check; keeps the type narrow
+    try:
+        access_keys = await resolve_profile_access_keys(ctx.session, ctx.org_id, ctx.actor_user_id)
+    except TooManyAccessMasks as exc:
+        return {"error": f"The person you are acting for has too many permission assignments: {exc}"}
+    if access_keys == []:
+        # A profile with no membership in this org. Distinct from None
+        # (unrestricted) and from a restricted mask list — there is nothing
+        # this actor may read, so say so rather than silently searching wide.
+        return {"error": "You have no knowledge-base access in this organization."}
+    return _Reach(access_keys=access_keys)
+
+
+async def _own_org_reach(ctx: ToolContext, searched_org: str) -> _Reach | _Outcome:
+    # The key check comes FIRST: a key's run must never fall through to the actor
+    # (an admin's reach) or, for a scoped key, to knowledge_scope: "org".
+    if getattr(ctx, "via_api_key", False):
+        return await _key_reach(ctx, searched_org)
+    if ctx.actor_user_id is not None:
+        return await _actor_reach(ctx)
+    return _unattended_reach(ctx)
+
+
+async def _search_target(ctx: ToolContext, requested: str) -> tuple[uuid.UUID, str, _Reach, str | None] | _Outcome:
+    """(org id, org label, reach, answer model) for this search, or a refusal."""
+    from api.services.org_llm import org_default_llm_model
 
     if requested:
         target = await _resolve_named_org(ctx, requested)
         if "error" in target:
             return target
-        target_org_id: uuid.UUID = target["org_id"]
-        searched_org: str | None = target["name"]
-        access_keys = target["access_keys"]
-        model = target["model"]
-    else:
-        target_org_id = ctx.org_id
-        searched_org = await _own_org_name(ctx)
-        if ctx.actor_user_id is not None:
-            access_keys = await resolve_profile_access_keys(ctx.session, ctx.org_id, ctx.actor_user_id)
-            if access_keys == []:
-                # A profile with no membership in this org. Distinct from None
-                # (unrestricted) and from a restricted mask list — there is nothing
-                # this actor may read, so say so rather than silently searching wide.
-                return {"error": "You have no knowledge-base access in this organization."}
-        elif scope == SCOPE_ORG:
-            access_keys = None  # unattended, explicitly granted org-wide reach
-        else:
-            return {
-                "error": (
-                    "This run has no user to read on behalf of, so the knowledge base is "
-                    "unavailable. An admin can grant this agent org-wide knowledge access "
-                    'by setting grants.knowledge_scope to "org".'
-                )
-            }
-        # Org-pinned answer model (local vs 3rd-party); None = brain-api default.
-        model = await org_default_llm_model(ctx.session, ctx.org_id)
+        return target["org_id"], target["name"], _Reach(access_keys=target["access_keys"]), target["model"]
+    searched_org = await _own_org_name(ctx) or str(ctx.org_id)
+    reach = await _own_org_reach(ctx, searched_org)
+    if not isinstance(reach, _Reach):
+        return reach
+    # Org-pinned answer model (local vs 3rd-party); None = brain-api default.
+    return ctx.org_id, searched_org, reach, await org_default_llm_model(ctx.session, ctx.org_id)
 
-    client = BrainAPIClient(ctx.settings)
+
+async def _search_knowledge(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
+    query = str(args.get("query") or "").strip()
+    if not query:
+        return {"error": "query is required"}
+    if ctx.settings is None:
+        return {"error": "knowledge search is not configured"}
+    requested = str(args.get("org") or "").strip()
+    refusal = _cross_org_refusal(ctx, requested)
+    if refusal is not None:
+        return refusal
+    target = await _search_target(ctx, requested)
+    if isinstance(target, dict):
+        return target
+    org_id, searched_org, reach, model = target
+    result = await _ask_brain(ctx, org_id, query, reach, model)
+    if "error" in result:
+        return result
+    return _shape_result(result, searched_org)
+
+
+async def _ask_brain(
+    ctx: ToolContext, org_id: uuid.UUID, query: str, reach: _Reach, model: str | None
+) -> dict[str, Any]:
+    from api.services.brain_client import BrainAPIClient
+
     try:
-        result = await client.vector_chat(
-            tenant_id=str(target_org_id),
+        return await BrainAPIClient(ctx.settings).vector_chat(
+            tenant_id=str(org_id),
             query=query,
-            access_keys=access_keys,
+            access_keys=reach.access_keys,
+            # A folder-limited key's folders; brain-api applies them to graph facts too.
+            folder_tags=reach.folder_tags,
             model=model,
         )
     except Exception as exc:  # noqa: BLE001 - surface as a tool error, don't crash the run
@@ -267,7 +377,7 @@ async def _search_knowledge(ctx: ToolContext, args: dict[str, Any]) -> dict[str,
         # which is not a thing anyone can supply, and parked the order on it. The
         # search layer was simply down (an embedding-width mismatch after a
         # config change); the tool was right, the service was broken.
-        logger.warning("knowledge search failed for org %s", target_org_id, exc_info=True)
+        logger.warning("knowledge search failed for org %s", org_id, exc_info=True)
         return {
             "error": (
                 "The knowledge service failed to answer — this is a fault in the platform, not a "
@@ -279,6 +389,9 @@ async def _search_knowledge(ctx: ToolContext, args: dict[str, Any]) -> dict[str,
                 f"({type(exc).__name__})"
             )
         }
+
+
+def _shape_result(result: dict[str, Any], searched_org: str) -> dict[str, Any]:
     answer = result.get("answer") or result.get("response") or result.get("result")
     sources = result.get("sources") or result.get("citations") or []
     # Trim source payloads so the tool result stays compact for the model.
@@ -292,11 +405,7 @@ async def _search_knowledge(ctx: ToolContext, args: dict[str, Any]) -> dict[str,
     # missing *from the org it never touched* — an empty result from one tenant
     # presented as proof of absence in another. The model cannot report the wrong
     # org if the result tells it which one answered.
-    return {
-        "answer": answer,
-        "sources": trimmed,
-        "searched_org": searched_org or str(target_org_id),
-    }
+    return {"answer": answer, "sources": trimmed, "searched_org": searched_org}
 
 
 SEARCH_KNOWLEDGE = ToolSpec(

@@ -14,7 +14,14 @@ logger = logging.getLogger(__name__)
 
 
 class BrainAPIClient:
-    """Thin async wrapper around the brain-api service."""
+    """Thin async wrapper around the brain-api service.
+
+    Retrieval scope travels as given: ``access_keys`` / ``folder_tags`` of ``None``
+    are sent as null and mean "no filter" (an org admin, an org-wide API key, a
+    trusted workflow); an explicit ``[]`` is sent as ``[]`` and means "nothing is
+    readable" — brain-api then answers empty without querying anything. Never
+    coerce one into the other here.
+    """
 
     def __init__(self, settings: Settings) -> None:
         self._base_url = settings.brain_api_url.rstrip("/")
@@ -40,9 +47,9 @@ class BrainAPIClient:
                     "tenant_id": tenant_id,
                     "query": query,
                     "limit": limit,
-                    "access_keys": access_keys or [],
+                    "access_keys": access_keys,
                     "tags": tags or [],
-                    "folder_tags": folder_tags or [],
+                    "folder_tags": folder_tags,
                 },
                 headers=self._headers(),
             )
@@ -68,9 +75,9 @@ class BrainAPIClient:
                     "tenant_id": tenant_id,
                     "query": query,
                     "chat_history": chat_history or [],
-                    "access_keys": access_keys or [],
+                    "access_keys": access_keys,
                     "tags": tags or [],
-                    "folder_tags": folder_tags or [],
+                    "folder_tags": folder_tags,
                     "use_knowledge_graph": use_knowledge_graph,
                     # Org-pinned answer model; null lets brain-api use its default.
                     "model": model,
@@ -136,9 +143,9 @@ class BrainAPIClient:
                     "tenant_id": tenant_id,
                     "query": query,
                     "chat_history": chat_history or [],
-                    "access_keys": access_keys or [],
+                    "access_keys": access_keys,
                     "tags": tags or [],
-                    "folder_tags": folder_tags or [],
+                    "folder_tags": folder_tags,
                     "use_knowledge_graph": use_knowledge_graph,
                     # Org-pinned answer model; null lets brain-api use its default.
                     "model": model,
@@ -168,7 +175,7 @@ class BrainAPIClient:
                     "tenant_id": tenant_id,
                     "query": query,
                     "chat_history": chat_history or [],
-                    "access_keys": access_keys or [],
+                    "access_keys": access_keys,
                     "tags": tags or [],
                     # Org-pinned reasoning model; null = brain-api's agent default.
                     "model": model,
@@ -202,7 +209,7 @@ class BrainAPIClient:
                     "tenant_id": tenant_id,
                     "query": query,
                     "chat_history": chat_history or [],
-                    "access_keys": access_keys or [],
+                    "access_keys": access_keys,
                     "tags": tags or [],
                     # Org-pinned reasoning model; null = brain-api's agent default.
                     "model": model,

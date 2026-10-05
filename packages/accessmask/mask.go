@@ -141,3 +141,99 @@ func Matches(userMask, docMask uint32) bool {
 func fieldMatches[T comparable](userVal, docVal, wildcard T) bool {
 	return docVal == wildcard || userVal == docVal
 }
+
+// ExpandWildcards returns every mask a member's mask can equal on the document
+// side. Folder and document masks use a dimension's MAX value as a wildcard, but
+// the stores that filter on masks compare integers for equality; expanding the
+// member mask with each combination of own value / wildcard across region, role,
+// group and dept (up to 16 variants) makes set membership equivalent to Matches.
+// The org is never wildcarded. The member's own mask comes first; duplicates (a
+// dimension already at its MAX) are dropped. Mirrors access_mask.expand_wildcards.
+func ExpandWildcards(userMask uint32) []uint32 {
+	d := Decode(userMask)
+	out := make([]uint32, 0, 16)
+	seen := make(map[uint32]bool, 16)
+	for _, region := range distinct(d.Region, MaxRegion) {
+		for _, role := range distinct(d.Role, MaxRole) {
+			for _, group := range distinct(d.Group, MaxGroup) {
+				for _, dept := range distinct(d.Dept, MaxDept) {
+					v := (uint32(d.Org) << OrgShift) |
+						(uint32(region) << RegionShift) |
+						(uint32(role) << RoleShift) |
+						(uint32(group) << GroupShift) |
+						(uint32(dept) << DeptShift)
+					if !seen[v] {
+						seen[v] = true
+						out = append(out, v)
+					}
+				}
+			}
+		}
+	}
+	return out
+}
+
+// ExpandMemberMasks applies ExpandWildcards to every mask, de-duplicated with the
+// order kept. Mirrors access_mask.expand_member_masks.
+func ExpandMemberMasks(userMasks []uint32) []uint32 {
+	out := make([]uint32, 0, len(userMasks)*16)
+	seen := make(map[uint32]bool, len(userMasks)*16)
+	for _, m := range userMasks {
+		for _, v := range ExpandWildcards(m) {
+			if !seen[v] {
+				seen[v] = true
+				out = append(out, v)
+			}
+		}
+	}
+	return out
+}
+
+func distinct(own, wildcard uint8) []uint8 {
+	if own == wildcard {
+		return []uint8{own}
+	}
+	return []uint8{own, wildcard}
+}
+
+// MaxAccessKeys caps a requester's mask list, matching access_mask.MAX_ACCESS_KEYS
+// and every brain-api request. MemberMasks yields
+// (regions+1) x (roles+1) x (groups+1) x (depts+1) masks.
+const MaxAccessKeys = 8192
+
+// MemberMasks builds a member's full mask set per dimension: (own values ∪ {MAX})
+// each. It is the same set as ExpandMemberMasks over every region x role x group
+// x dept tuple, built directly so the cost tracks the result size. Only valid for
+// a full product of assignments. The first mask is the member's own first tuple;
+// the org is never wildcarded. Mirrors access_mask.member_masks.
+func MemberMasks(org uint16, regions, roles, groups, depts []uint8) []uint32 {
+	rs, ros, gs, ds := withWildcard(regions, MaxRegion), withWildcard(roles, MaxRole),
+		withWildcard(groups, MaxGroup), withWildcard(depts, MaxDept)
+	out := make([]uint32, 0, len(rs)*len(ros)*len(gs)*len(ds))
+	for _, r := range rs {
+		for _, ro := range ros {
+			for _, g := range gs {
+				for _, d := range ds {
+					out = append(out, (uint32(org)<<OrgShift)|
+						(uint32(r)<<RegionShift)|
+						(uint32(ro)<<RoleShift)|
+						(uint32(g)<<GroupShift)|
+						(uint32(d)<<DeptShift))
+				}
+			}
+		}
+	}
+	return out
+}
+
+func withWildcard(values []uint8, wildcard uint8) []uint8 {
+	out := make([]uint8, 0, len(values)+1)
+	seen := map[uint8]bool{}
+	for _, v := range append(append([]uint8{}, values...), wildcard) {
+		if !seen[v] {
+			seen[v] = true
+			out = append(out, v)
+		}
+	}
+	return out
+}

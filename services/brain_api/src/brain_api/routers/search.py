@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 
 from brain_api.auth import require_api_key
 from brain_api.config import BrainAPISettings
+from brain_api.limits import MAX_ACCESS_KEYS
 from brain_api.services.search_service import SearchService
 from brain_api.stores import Stores, get_stores
 
@@ -22,13 +23,20 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+# Retrieval scope: absent/null = no filter; an explicit [] = nothing is readable
+# (the service answers empty without querying anything). Never fold one into the
+# other — an empty scope must fail closed, not open.
+_ACCESS_KEYS_DOC = "Permission masks (MatchAny). Absent/null = unrestricted; [] = nothing is readable."
+_FOLDER_TAGS_DOC = "Folder tags (folder:<id>), ORed. Absent/null = every folder; [] = no folder is readable."
+
+
 class VectorSearchRequest(BaseModel):
     tenant_id: str = Field(min_length=1, max_length=128)
     query: str = Field(min_length=1, max_length=5000)
     limit: int = Field(default=5, ge=1, le=50)
-    access_keys: list[int] = Field(default_factory=list)
+    access_keys: list[int] | None = Field(default=None, max_length=MAX_ACCESS_KEYS, description=_ACCESS_KEYS_DOC)
     tags: list[str] = Field(default_factory=list)
-    folder_tags: list[str] = Field(default_factory=list)
+    folder_tags: list[str] | None = Field(default=None, description=_FOLDER_TAGS_DOC)
     # Pull the top-ranked document's sibling chunks into the result (default on);
     # off gives a pure ranked-hits view for relevance debugging.
     expand_documents: bool = True
@@ -38,9 +46,9 @@ class VectorChatRequest(BaseModel):
     tenant_id: str = Field(min_length=1, max_length=128)
     query: str = Field(min_length=1, max_length=5000)
     chat_history: list[dict[str, str]] = Field(default_factory=list)
-    access_keys: list[int] = Field(default_factory=list)
+    access_keys: list[int] | None = Field(default=None, max_length=MAX_ACCESS_KEYS, description=_ACCESS_KEYS_DOC)
     tags: list[str] = Field(default_factory=list)
-    folder_tags: list[str] = Field(default_factory=list)
+    folder_tags: list[str] | None = Field(default=None, description=_FOLDER_TAGS_DOC)
     use_knowledge_graph: bool = True
     # Omitted => the service's CHAT_CHUNK_LIMIT. A literal default here would
     # silently outrank that setting, since callers (brain_client.vector_chat, and so
@@ -68,9 +76,9 @@ async def vector_search(
             tenant_id=body.tenant_id,
             query=body.query,
             limit=body.limit,
-            access_keys=body.access_keys or None,
+            access_keys=body.access_keys,
             tags=body.tags,
-            folder_tags=body.folder_tags or None,
+            folder_tags=body.folder_tags,
             expand_documents=body.expand_documents,
         )
     except Exception:
@@ -93,9 +101,9 @@ async def vector_chat(
             tenant_id=body.tenant_id,
             query=body.query,
             chat_history=body.chat_history,
-            access_keys=body.access_keys or None,
+            access_keys=body.access_keys,
             tags=body.tags,
-            folder_tags=body.folder_tags or None,
+            folder_tags=body.folder_tags,
             use_knowledge_graph=body.use_knowledge_graph,
             chunk_limit=body.chunk_limit,
             expand_documents=body.expand_documents,

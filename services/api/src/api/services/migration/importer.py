@@ -54,6 +54,7 @@ from api.schemas.view import ViewCreate, ViewUpdate
 from api.services.entity_service import EntityError, EntityService
 from api.services.folder_service import build_dot_path, compute_folder_masks
 from api.services.form_service import FormError, FormService
+from api.services.index_tags import index_tags, is_reserved_tag_name
 from api.services.migration.bundle import (
     CollisionStrategy,
     GeneratedSecret,
@@ -174,6 +175,11 @@ class MigrationImporter:
         for tag in tags:
             name = tag.get("name")
             if not name:
+                continue
+            if is_reserved_tag_name(str(name)):
+                # "folder:" is folder membership in the index; never import it as a tag.
+                logger.warning("import: skipped tag %r (the folder: prefix is reserved)", name)
+                out.record("skipped")
                 continue
             found, by_lineage = self._match_lineage(tag, existing, by_name.get(name))
             if found is not None:
@@ -1074,6 +1080,8 @@ class MigrationImporter:
     async def _resolve_tag_ids(self, names: list[str], existing: dict, tag_repo: TagRepository) -> list[uuid.UUID]:
         ids: list[uuid.UUID] = []
         for name in names:
+            if is_reserved_tag_name(name):
+                continue  # never a tag: see _import_tags
             tag = existing.get(name)
             if tag is None:
                 tag = await tag_repo.create(name=name)
@@ -1095,9 +1103,8 @@ class MigrationImporter:
             try:
                 folder = await folder_repo.get(doc.folder_id) if doc.folder_id else None
                 access_keys = await folder_repo.effective_view_masks(folder) if folder else []
-                tags = list(tag_names)
-                if doc.folder_id:
-                    tags.append(f"folder:{doc.folder_id}")
+                # A bundle's tag names may not forge folder membership.
+                tags = index_tags(tag_names, doc.folder_id)
                 doc.celery_task_id = dispatch_ingest(
                     {
                         "document_id": str(doc.id),

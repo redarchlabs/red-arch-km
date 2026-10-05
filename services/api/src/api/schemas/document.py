@@ -8,6 +8,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from api.services.index_tags import validate_tag_name
+
 
 def _no_dots(name: str) -> str:
     if "." in name:
@@ -113,6 +115,8 @@ class DocumentRead(BaseModel):
     size_bytes: int | None = None
     viewer_permissions_config: list[dict[str, Any]] | None = None
     contributor_permissions_config: list[dict[str, Any]] | None = None
+    # Caller-chosen id for documents written via POST /api/v1/knowledge/documents.
+    external_ref: str | None = None
 
 
 class JobLogEntry(BaseModel):
@@ -193,7 +197,15 @@ class FolderRead(BaseModel):
 
 
 class TagCreate(BaseModel):
+    """Create or rename a tag. ``folder:`` is reserved (it is folder membership in
+    the knowledge index; see :mod:`api.services.index_tags`)."""
+
     name: str = Field(min_length=1, max_length=100)
+
+    @field_validator("name")
+    @classmethod
+    def _not_reserved(cls, v: str) -> str:
+        return validate_tag_name(v)
 
 
 class TagRead(BaseModel):

@@ -31,6 +31,8 @@ class _FakeCtx:
     org_id: uuid.UUID = field(default_factory=uuid.uuid4)
     settings: Any = "configured"
     actor_user_id: uuid.UUID | None = None
+    via_api_key: bool = False
+    api_key_id: uuid.UUID | None = None
 
 
 @pytest.fixture
@@ -257,3 +259,191 @@ class TestMatchingAnOrgByName:
 
     def test_an_unknown_name_matches_nothing(self) -> None:
         assert knowledge._match_orgs([self._Org("Robots")], "Payroll") == []
+
+
+class TestRunsStartedByAnApiKey:
+    """A run started through an API key has no actor and reads with the KEY's scope.
+
+    The key is reloaded on every call (``run_key_scope``). A scoped key's masks and
+    folders are used even when the agent holds ``knowledge_scope: "org"`` — that
+    branch would otherwise make an actor-less run unrestricted."""
+
+    @pytest.fixture
+    def key(self, monkeypatch):
+        from api.services.agents.tools.key_scope import RunKeyScope
+
+        state: dict[str, Any] = {
+            "scope": RunKeyScope(scoped=True, scopes=frozenset({"agents:run"}), masks=(0, 7, 8), folder_ids=None)
+        }
+
+        async def _scope(_ctx):
+            if isinstance(state["scope"], Exception):
+                raise state["scope"]
+            return state["scope"]
+
+        monkeypatch.setattr(knowledge, "run_key_scope", _scope)
+        return state
+
+    def _ctx(self, **grants: Any) -> _FakeCtx:
+        return _FakeCtx(agent=_FakeAgent(grants=grants), via_api_key=True, api_key_id=uuid.uuid4())
+
+    async def test_cannot_search_another_org(self, captured, monkeypatch, key) -> None:
+        resolver_called = False
+
+        async def _resolve(_ctx, _requested):
+            nonlocal resolver_called
+            resolver_called = True
+            return {"org_id": uuid.uuid4(), "name": "Other", "access_keys": None, "model": None}
+
+        monkeypatch.setattr(knowledge, "_resolve_named_org", _resolve)
+        out = await knowledge.SEARCH_KNOWLEDGE.handler(self._ctx(), {"query": "x", "org": "Other"})
+
+        assert "error" in out
+        assert not resolver_called
+        assert "access_keys" not in captured
+
+    async def test_scoped_key_reads_with_the_keys_masks(self, captured, key) -> None:
+        out = await knowledge.SEARCH_KNOWLEDGE.handler(self._ctx(), {"query": "x"})
+
+        assert out["answer"] == "ok"
+        assert captured["access_keys"] == [0, 7, 8]
+        assert captured["folder_tags"] is None
+
+    async def test_org_scope_grant_cannot_make_a_scoped_key_run_unrestricted(self, captured, key) -> None:
+        """The hole this closes: actor None + knowledge_scope "org" = access_keys None."""
+        out = await knowledge.SEARCH_KNOWLEDGE.handler(self._ctx(knowledge_scope="org"), {"query": "x"})
+
+        assert out["answer"] == "ok"
+        assert captured["access_keys"] == [0, 7, 8]
+
+    async def test_folder_limited_key_always_sends_its_folders(self, captured, key) -> None:
+        from api.services.agents.tools.key_scope import RunKeyScope
+
+        f1, f2 = uuid.uuid4(), uuid.uuid4()
+        key["scope"] = RunKeyScope(scoped=True, scopes=frozenset(), masks=(0, 7), folder_ids=frozenset({f1, f2}))
+        await knowledge.SEARCH_KNOWLEDGE.handler(self._ctx(knowledge_scope="org"), {"query": "x"})
+
+        assert sorted(captured["folder_tags"]) == sorted([f"folder:{f1}", f"folder:{f2}"])
+
+    async def test_empty_folder_set_never_reaches_brain(self, captured, key) -> None:
+        """[] folder_tags means "no folder filter" downstream: answer empty instead."""
+        from api.services.agents.tools.key_scope import RunKeyScope
+
+        key["scope"] = RunKeyScope(scoped=True, scopes=frozenset(), masks=(0, 7), folder_ids=frozenset())
+        out = await knowledge.SEARCH_KNOWLEDGE.handler(self._ctx(knowledge_scope="org"), {"query": "x"})
+
+        assert out["sources"] == []
+        assert "access_keys" not in captured
+
+    @pytest.mark.parametrize("masks", [(), None])
+    async def test_scoped_key_without_masks_fails_closed(self, captured, key, masks) -> None:
+        from api.services.agents.tools.key_scope import RunKeyScope
+
+        key["scope"] = RunKeyScope(scoped=True, scopes=frozenset(), masks=masks, folder_ids=None)
+        out = await knowledge.SEARCH_KNOWLEDGE.handler(self._ctx(knowledge_scope="org"), {"query": "x"})
+
+        assert "error" in out
+        assert "access_keys" not in captured
+
+    async def test_revoked_or_deleted_key_is_refused(self, captured, key) -> None:
+        from api.services.agents.tools.key_scope import RunKeyRefused
+
+        key["scope"] = RunKeyRefused("gone")
+        out = await knowledge.SEARCH_KNOWLEDGE.handler(self._ctx(knowledge_scope="org"), {"query": "x"})
+
+        assert out == {"error": "gone"}
+        assert "access_keys" not in captured
+
+    async def test_org_key_run_keeps_the_unattended_rule(self, captured, key) -> None:
+        """An org key's run behaves like any unattended run: refused without the
+        grant, org-wide with it (an explicit admin decision about the agent)."""
+        from api.services.agents.tools.key_scope import RunKeyScope
+
+        key["scope"] = RunKeyScope(scoped=False, scopes=frozenset())
+        out = await knowledge.SEARCH_KNOWLEDGE.handler(self._ctx(), {"query": "x"})
+        assert "error" in out and "access_keys" not in captured
+
+        out = await knowledge.SEARCH_KNOWLEDGE.handler(self._ctx(knowledge_scope="org"), {"query": "x"})
+        assert out["answer"] == "ok"
+        assert captured["access_keys"] is None
+
+    async def test_a_key_run_never_reads_unrestricted_through_an_actor(self, captured, key) -> None:
+        """A person starting a key-filed order gives the run an actor; an org key's run
+        still never borrows that person's (admin) reach — without the agent's grant it
+        is refused like any unattended run."""
+        from api.services.agents.tools.key_scope import RunKeyScope
+
+        key["scope"] = RunKeyScope(scoped=False, scopes=frozenset())
+        captured["_resolved"] = None  # resolve_profile_access_keys → unrestricted
+        ctx = self._ctx()
+        ctx.actor_user_id = uuid.uuid4()
+        out = await knowledge.SEARCH_KNOWLEDGE.handler(ctx, {"query": "x"})
+
+        assert "error" in out
+        assert "access_keys" not in captured
+
+
+class TestAPersonStartingAKeyFiledOrder:
+    """A work order filed through an API key, started by a person: the run carries
+    both the key and an actor. The KEY decides — an org key reads exactly like the
+    unattended run it would otherwise be (the actor is ignored, admin or not); a
+    scoped key reads with its own masks and folders."""
+
+    @pytest.fixture
+    def key(self, monkeypatch):
+        from api.services.agents.tools.key_scope import RunKeyScope
+
+        state: dict[str, Any] = {"scope": RunKeyScope(scoped=False, scopes=frozenset({"work_orders:write"}))}
+
+        async def _scope(_ctx):
+            return state["scope"]
+
+        monkeypatch.setattr(knowledge, "run_key_scope", _scope)
+        return state
+
+    def _ctx(self, **grants: Any) -> _FakeCtx:
+        return _FakeCtx(
+            agent=_FakeAgent(grants=grants), via_api_key=True, api_key_id=uuid.uuid4(), actor_user_id=uuid.uuid4()
+        )
+
+    @pytest.mark.parametrize("actor_reach", [None, [0, 99]], ids=["admin-actor", "restricted-actor"])
+    async def test_org_key_with_the_grant_reads_org_wide(self, captured, key, actor_reach) -> None:
+        captured["_resolved"] = actor_reach
+        out = await knowledge.SEARCH_KNOWLEDGE.handler(self._ctx(knowledge_scope="org"), {"query": "x"})
+
+        assert out["answer"] == "ok"
+        assert captured["access_keys"] is None  # the org key's reach, not the actor's
+
+    async def test_org_key_without_the_grant_is_refused_like_an_unattended_run(self, captured, key) -> None:
+        captured["_resolved"] = [0, 99]
+        out = await knowledge.SEARCH_KNOWLEDGE.handler(self._ctx(), {"query": "x"})
+
+        assert "knowledge_scope" in out["error"]
+        assert "cannot read unrestricted" not in out["error"]
+        assert "access_keys" not in captured
+
+    async def test_scoped_key_reads_with_its_own_masks_whoever_started_it(self, captured, key) -> None:
+        from api.services.agents.tools.key_scope import RunKeyScope
+
+        key["scope"] = RunKeyScope(scoped=True, scopes=frozenset(), masks=(0, 7), folder_ids=None)
+        captured["_resolved"] = None  # an admin actor
+        out = await knowledge.SEARCH_KNOWLEDGE.handler(self._ctx(knowledge_scope="org"), {"query": "x"})
+
+        assert out["answer"] == "ok"
+        assert captured["access_keys"] == [0, 7]
+
+
+class TestTooManyMasks:
+    async def test_an_actor_over_the_mask_cap_gets_an_error_not_a_crash(self, captured, monkeypatch) -> None:
+        from api.services.permission_config import TooManyAccessMasks
+
+        async def _too_many(_session, _org, _profile):
+            raise TooManyAccessMasks(20_000)
+
+        monkeypatch.setattr("api.services.search_access.resolve_profile_access_keys", _too_many)
+        ctx = _FakeCtx(agent=_FakeAgent(), actor_user_id=uuid.uuid4())
+
+        out = await knowledge.SEARCH_KNOWLEDGE.handler(ctx, {"query": "x"})
+
+        assert "too many" in out["error"]
+        assert "access_keys" not in captured

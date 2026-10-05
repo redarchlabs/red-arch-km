@@ -123,6 +123,21 @@ class AgentRead(BaseModel):
     updated_at: datetime
 
 
+class AgentSummaryRead(BaseModel):
+    """An agent as a key limited to dimension or folder assignments may see it:
+    enough to pick one and start it, nothing about how it is built (no persona,
+    params, grants or MCP servers)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    name: str
+    display_name: str | None
+    description: str | None
+    kind: str
+    enabled: bool
+
+
 class AgentActivityRead(BaseModel):
     """Live state for one agent on the roster page. Only agents with something going
     on are returned, so an empty list means the whole roster is idle."""

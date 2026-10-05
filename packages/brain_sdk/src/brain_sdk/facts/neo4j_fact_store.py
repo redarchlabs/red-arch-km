@@ -32,6 +32,24 @@ logger = logging.getLogger(__name__)
 
 _LABEL_RE = re.compile(r"[^A-Za-z0-9_]")
 
+# A claim is visible to whoever can see at least one document that states it, so
+# its access_keys are the UNION of its source documents' masks — and empty
+# (public) if any source is public. Each source's masks live on its Document
+# node. A source recorded before masks were kept there (NULL) contributes the
+# claim's current masks, which never widens anything.
+_RECOMPUTE_CLAIM_MASKS = """
+MATCH (c:Claim:{label})
+WHERE c.claim_id IN $ids
+OPTIONAL MATCH (c)-[:SOURCED_FROM]->(:Chunk:{label})-[:PART_OF]->(d:Document:{label})
+WITH c, collect(DISTINCT coalesce(d.access_keys, c.access_keys, [])) AS lists
+WHERE size(lists) > 0
+SET c.access_keys = CASE
+    WHEN any(l IN lists WHERE size(l) = 0) THEN []
+    ELSE reduce(acc = [], l IN lists | acc + [k IN l WHERE NOT k IN acc])
+END
+RETURN count(c) AS updated
+"""
+
 
 def _gap_props(gap: KnowledgeGap) -> dict[str, Any]:
     """Flatten a KnowledgeGap to Neo4j-storable primitive properties."""
@@ -399,7 +417,8 @@ class Neo4jFactStore:
             UNWIND $prov AS p
             MERGE (k:Chunk {{chunk_id: p.chunk_id}})
                 SET k:{label}, k.document_key = p.document_key
-            MERGE (d:Document {{document_key: p.document_key}}) SET d:{label}
+            MERGE (d:Document {{document_key: p.document_key}})
+                SET d:{label}, d.access_keys = $doc_keys, d.tags = $doc_tags
             MERGE (k)-[:PART_OF]->(d)
             MERGE (c)-[sf:SOURCED_FROM]->(k)
             SET sf.text_span = p.text_span,
@@ -409,7 +428,15 @@ class Neo4jFactStore:
             """,
             id=claim.claim_id,
             prov=prov,
+            # The claim carries its document's masks at ingest; record them on the
+            # Document so the claim's masks can be recomputed from all sources.
+            doc_keys=list(claim.access_keys),
+            # And its folder tags: folder-limited search tests the folder on the
+            # source Document (claim tags are fixed at creation and never follow a
+            # corroborating document or a move), on the same node as the masks.
+            doc_tags=list(claim.tags),
         )
+        tx.run(_RECOMPUTE_CLAIM_MASKS.format(label=label), ids=[claim.claim_id])
 
     @staticmethod
     def _row_claim(tenant_id: str, r: dict[str, Any]) -> Claim:
@@ -568,6 +595,59 @@ class Neo4jFactStore:
 
     # ---- lifecycle ------------------------------------------------------
 
+    def update_document_access_keys(self, tenant_id: str, document_key: str, access_keys: list[int]) -> int:
+        """Record a document's new masks (folder move / permission change) and
+        recompute every claim it supports as the union of all its sources' masks.
+        Returns how many claims were recomputed."""
+        return self.update_document_metadata(tenant_id, document_key, access_keys=access_keys)
+
+    def update_document_metadata(
+        self,
+        tenant_id: str,
+        document_key: str,
+        *,
+        tags: list[str] | None = None,
+        access_keys: list[int] | None = None,
+    ) -> int:
+        """Record a document's current folder tags and/or masks on its Document node.
+
+        ``tags`` feed folder-limited graph search; new ``access_keys`` also
+        recompute every claim the document supports (union of all sources' masks).
+        None leaves that field alone. Returns how many claims were recomputed.
+        """
+        sets: list[str] = []
+        params: dict[str, Any] = {"dk": document_key}
+        if tags is not None:
+            sets.append("d.tags = $tags")
+            params["tags"] = list(tags)
+        if access_keys is not None:
+            sets.append("d.access_keys = $keys")
+            params["keys"] = list(access_keys)
+        if not sets:
+            return 0
+        label = self._tenant_label(tenant_id)
+        query = f"MATCH (d:Document:{label} {{document_key: $dk}}) SET {', '.join(sets)}"
+        if access_keys is None:
+            self._run(query, **params)
+            return 0
+        rows = self._run(
+            f"""
+            {query}
+            WITH d
+            MATCH (d)<-[:PART_OF]-(:Chunk:{label})<-[:SOURCED_FROM]-(c:Claim:{label})
+            RETURN collect(DISTINCT c.claim_id) AS ids
+            """,
+            **params,
+        )
+        ids = rows[0]["ids"] if rows else []
+        return self._recompute_masks(label, ids)
+
+    def _recompute_masks(self, label: str, claim_ids: list[str]) -> int:
+        if not claim_ids:
+            return 0
+        rows = self._run(_RECOMPUTE_CLAIM_MASKS.format(label=label), ids=claim_ids)
+        return int(rows[0]["updated"]) if rows else 0
+
     def delete_by_document_key(self, tenant_id: str, document_key: str) -> None:
         label = self._tenant_label(tenant_id)
         # First collect ONLY the claims sourced from this document and the
@@ -603,6 +683,9 @@ class Neo4jFactStore:
                 """,
                 ids=claim_ids,
             )
+            # The survivors lost a source: their masks are the union of what is left
+            # (a fact last stated by a public document becomes restricted).
+            self._recompute_masks(label, claim_ids)
         # Delete only the affected entities now unreferenced by any claim.
         if entity_ids:
             self._run(

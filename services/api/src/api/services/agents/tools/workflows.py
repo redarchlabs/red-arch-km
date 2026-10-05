@@ -16,6 +16,7 @@ if TYPE_CHECKING:
 
 from fastapi import HTTPException
 
+from api.services.agents.tools.key_scope import is_scoped_key_run
 from api.services.agents.tools.spec import Category, ToolContext, ToolSpec
 
 
@@ -43,6 +44,13 @@ async def _run_workflow(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any
     from api.schemas.workflow import ManualRunRequest
     from api.services.workflow.manual_run import execute_workflow_run, resolve_published_version
 
+    if await is_scoped_key_run(ctx):
+        # A run started by a scoped key must read only what that key may read; a
+        # workflow's knowledge_search is scoped by the workflow, not the run
+        # (org-wide by default), so it would bypass that.
+        return {
+            "error": "A run started through an API key limited to dimension or folder assignments cannot run workflows"
+        }
     raw_id = args.get("workflow_id")
     allow = _allowed(ctx)
     if not raw_id or not allow or str(raw_id) not in allow:

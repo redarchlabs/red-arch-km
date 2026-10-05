@@ -77,3 +77,55 @@ def _catalog_order() -> list[str]:
     from api.services.api_key_scopes import API_SCOPES
 
     return [s.name for s in API_SCOPES]
+
+
+class TestKnowledgeWriteScope:
+    """``knowledge:write`` gates the v1 document upload (POST /api/v1/knowledge/documents)."""
+
+    def test_is_in_the_catalog(self) -> None:
+        assert "knowledge:write" in VALID_SCOPES
+
+    def test_read_does_not_grant_write(self) -> None:
+        assert not has_scope(frozenset({"knowledge:read"}), "knowledge:write")
+
+    def test_wildcards_do_not_grant_write(self) -> None:
+        # SENSITIVE: every write is an LLM-billed ingest, so an existing "*" or
+        # "knowledge:*" key must not silently gain it.
+        assert not has_scope(frozenset({"knowledge:*"}), "knowledge:write")
+        assert not has_scope(frozenset({"*"}), "knowledge:write")
+
+    def test_explicit_grant_works(self) -> None:
+        assert has_scope(frozenset({"knowledge:write"}), "knowledge:write")
+
+    def test_wildcards_still_grant_read(self) -> None:
+        assert has_scope(frozenset({"knowledge:*"}), "knowledge:read")
+
+
+class TestScopedKeyScopes:
+    """A scoped key may only hold scopes whose routes honour its assignments."""
+
+    def test_scope_aware_set(self) -> None:
+        from api.services.api_key_scopes import SCOPED_KEY_SCOPES
+
+        assert (
+            frozenset(
+                {
+                    "search:read",
+                    "knowledge:read",
+                    "knowledge:write",
+                    "agents:read",
+                    "agents:run",
+                    "work_orders:read",
+                    "work_orders:write",
+                }
+            )
+            == SCOPED_KEY_SCOPES
+        )
+
+    def test_validate_scoped_key_scopes_rejects_wildcards_and_unaware_scopes(self) -> None:
+        from api.services.api_key_scopes import validate_scoped_key_scopes
+
+        validate_scoped_key_scopes(["search:read", "knowledge:write"])
+        for bad in (["*"], ["knowledge:*"], ["records:read"], ["search:read", "workflows:run"], ["config:read"]):
+            with pytest.raises(ValueError, match="dimension or folder"):
+                validate_scoped_key_scopes(bad)

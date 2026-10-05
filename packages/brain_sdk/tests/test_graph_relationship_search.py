@@ -160,3 +160,80 @@ class TestFuzzyRelationshipSearch:
         params = store._cypher.call_args_list[0].kwargs
         assert params["tags"] == ["t1"]
         assert params["keys"] == [7]
+
+
+class TestFolderScopedSearch:
+    """``folder_tags`` limits graph context to claims stated by a document in one of
+    those folders that the caller may also read.
+
+    Claim ``tags`` are written once, when the claim is created, and never follow a
+    corroborating document or a folder move — so the folder test runs against the
+    source Document nodes, and the folder and the access masks are checked on the
+    SAME document. Checking them on different documents would let a claim through
+    because a public document outside the folders states it.
+    """
+
+    FOLDERS = ["folder:aaaa", "folder:bbbb"]
+
+    @staticmethod
+    def _queries(store: Neo4jGraphStore) -> list[str]:
+        return [c.args[0] for c in store._cypher.call_args_list]  # type: ignore[attr-defined]
+
+    def test_folder_tags_are_parameters_not_query_text(self, store: Neo4jGraphStore) -> None:
+        store._cypher = MagicMock(return_value=[])  # type: ignore[method-assign]
+        store.fuzzy_relationship_search(TENANT, "Adam", user_access=[7], folder_tags=self.FOLDERS)
+
+        query = self._queries(store)[0]
+        params = store._cypher.call_args_list[0].kwargs
+        assert params["folder_tags"] == self.FOLDERS
+        assert all(tag not in query for tag in self.FOLDERS)
+
+    def test_folder_and_mask_are_checked_on_the_same_source_document(self, store: Neo4jGraphStore) -> None:
+        store._cypher = MagicMock(return_value=[])  # type: ignore[method-assign]
+        store.fuzzy_relationship_search(TENANT, "Adam", user_access=[7], folder_tags=self.FOLDERS)
+
+        query = " ".join(self._queries(store)[0].split())
+        label = "Tenant_e7170490_02cf_410e_9f64_cb1db279668e"
+        exists_start = query.index("EXISTS {")
+        exists = query[exists_start : query.index("}", query.index("WHERE", exists_start))]
+        assert f"(c)-[:SOURCED_FROM]->(:Chunk:{label})-[:PART_OF]->(d:Document:{label})" in exists
+        assert "$folder_tags" in exists and "d.tags" in exists
+        # The mask test sits inside the same EXISTS, bound to the same d.
+        assert "d.access_keys" in exists and "$keys" in exists
+
+    def test_unrestricted_caller_still_needs_a_document_in_the_folders(self, store: Neo4jGraphStore) -> None:
+        store._cypher = MagicMock(return_value=[])  # type: ignore[method-assign]
+        store.fuzzy_relationship_search(TENANT, "Adam", user_access=None, folder_tags=self.FOLDERS)
+
+        query = self._queries(store)[0]
+        assert "EXISTS {" in query and "$folder_tags" in query
+        assert "d.access_keys" not in query
+        assert "keys" not in store._cypher.call_args_list[0].kwargs
+
+    def test_legacy_triplets_are_skipped_when_folder_limited(self, store: Neo4jGraphStore) -> None:
+        """Legacy REL triplets carry merged entity-level tags/masks with no per-document
+        provenance, so they cannot be held to the same-document rule."""
+
+        def fake_cypher(query: str, **params: Any) -> list[dict[str, Any]]:
+            if "SUBJECT" in query:
+                return []
+            return [{"subj": "Alice", "pred": "knows", "obj": "Bob"}]
+
+        store._cypher = MagicMock(side_effect=fake_cypher)  # type: ignore[method-assign]
+        assert store.fuzzy_relationship_search(TENANT, "alice", folder_tags=self.FOLDERS) == []
+        assert all("SUBJECT" in q for q in self._queries(store))
+
+    def test_explicit_empty_folder_list_matches_nothing(self, store: Neo4jGraphStore) -> None:
+        """An empty list is a folder limit with no folders in it — never 'unlimited'."""
+        store._cypher = MagicMock(return_value=[{"subj": "A", "pred": "b", "obj": "c", "score": 1}])  # type: ignore[method-assign]
+        assert store.fuzzy_relationship_search(TENANT, "Adam", folder_tags=[]) == []
+        store._cypher.assert_not_called()
+
+    def test_no_folder_tags_leaves_the_query_unchanged(self, store: Neo4jGraphStore) -> None:
+        store._cypher = MagicMock(return_value=[])  # type: ignore[method-assign]
+        store.fuzzy_relationship_search(TENANT, "Adam", user_access=[7])
+
+        queries = self._queries(store)
+        assert len(queries) == 2  # claim shape + legacy shape
+        assert "EXISTS" not in queries[0] and "Document" not in queries[0]
+        assert "folder_tags" not in store._cypher.call_args_list[0].kwargs

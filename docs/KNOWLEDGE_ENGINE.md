@@ -122,7 +122,12 @@ Each supporting source is a `Provenance` record (`document_key`, `chunk_id`,
 `text_span` — the supporting sentence — `extractor_model`, `extracted_at`,
 `confidence`). In Neo4j this materializes as
 `(:Claim)-[:SOURCED_FROM]->(:Chunk)-[:PART_OF]->(:Document)`, so every claim
-traces back to the exact passages that support it.
+traces back to the exact passages that support it. Each `:Document` node also
+records that document's current `access_keys` and `tags` (including its
+`folder:<id>` tag), written at ingest and kept current by
+`/api/update-document-metadata`. A claim's own `tags` are set once, when the
+claim is created, and never follow a corroborating document or a folder move, so
+anything that needs a claim's folders reads them from its source documents.
 
 ### Predicates and cardinality
 
@@ -269,7 +274,14 @@ The legacy top-K path is `SearchService`
 per-document RBAC.** The caller (`services/api`) resolves the requester's masks
 with `resolve_user_access_keys` (`services/api/src/api/services/
 search_access.py`) — admins get `None` (unrestricted); everyone else gets a list
-of integer masks — and passes them to brain-api. Both stores filter on them:
+of integer masks — and passes them to brain-api. Agent runs use their actor's
+masks (`resolve_profile_access_keys`); `/api/v1` keys use `api_key_access_keys`
+(`None` for an unbound org key, the bound member's masks otherwise — see
+[RBAC.md](RBAC.md#dimension-scoped-api-keys)). Member masks include their wildcard
+variants (`access_mask.expand_member_masks`), because both stores match by
+equality and folder masks use `MAX` as "any value". An empty list reaches the
+stores as *no filter*, so callers never send one for "no access". Both stores
+filter on them:
 
 - **Qdrant**: `QdrantVectorStore.search(..., access_keys=...)` — only chunks
   whose `access_keys` intersect the caller's masks are returned.
@@ -280,7 +292,85 @@ of integer masks — and passes them to brain-api. Both stores filter on them:
 Folder scoping rides the same call: `folder:<id>` tags are ORed
 (`folder_tags`), so retrieval can be narrowed to a set of folders without
 excluding docs that match only one. See [RBAC.md](RBAC.md) §"Query Filtering"
-for how masks are computed from membership and folder configuration.
+for how masks are computed from membership and folder configuration. Only a
+document's own folder is tagged; `services/api` expands a folder selection to its
+subfolders (by `parent_id`) before calling. The `folder:` prefix is reserved for this
+tag: user tag names may not start with it, and the API drops any that do from a
+document's index tags (see [RBAC.md](RBAC.md)).
+
+**Empty-list contract at the HTTP edge** (`/api/vector-search`, `/api/vector-chat`,
+`/api/v1/ask[/stream]`, and `access_keys` on `/api/v1/agent/ask[/stream]`): an absent
+or `null` `access_keys` / `folder_tags` is **no filter**; an explicit `[]` is **nothing
+readable** — `SearchService` answers empty (chat: a short "no documents you can read"
+answer, no sources) without embedding, searching, touching the graph or calling the LLM.
+The API sends `null` for unrestricted callers and never `[]` for them.
+
+**The folder limit applies to graph context too.** `vector_chat` and
+`vector_chat_stream` (behind `/api/vector-chat` and `/api/v1/ask[/stream]`) pass
+`folder_tags` to `Neo4jGraphStore.fuzzy_relationship_search`. With a folder limit
+a claim is returned only if some source document is **both** tagged with one of
+`folder_tags` **and** readable with the caller's masks — the same document:
+
+```cypher
+EXISTS { MATCH (c)-[:SOURCED_FROM]->(:Chunk)-[:PART_OF]->(d:Document)
+         WHERE any(t IN coalesce(d.tags, []) WHERE t IN $folder_tags)
+           AND d.access_keys IS NOT NULL
+           AND (size(d.access_keys) = 0 OR any(k IN d.access_keys WHERE k IN $keys)) }
+```
+
+(the mask half is dropped for an unrestricted caller). Testing the folder and the
+masks on different documents would leak a claim that a restricted document inside
+the folders and a public document outside them both state. A `:Document` with no
+`tags` matches nothing (fails closed), legacy flat triplets are skipped entirely
+under a folder limit (their entity-level tags and masks are merged across
+documents), and an explicit empty list inside the stores returns nothing. Without
+`folder_tags` the graph search is unchanged. The agentic `/api/v1/agent/ask` path
+takes no folder limit.
+
+**Backfill after upgrading.** `:Document` nodes written before they carried `tags`
+have none, so until they are backfilled a folder-limited chat gets no graph facts
+from those documents (passages are unaffected). Re-ingesting a document fixes its
+node; to fix all of a tenant's documents in place, run in the brain-api container:
+
+```bash
+docker exec km2_brain_api python -m brain_api.backfill_document_tags --tenant-id <org-uuid> [--tenant-id ...]
+```
+
+It copies each document's current `tags` and `access_keys` from its first chunk's
+Qdrant payload (the copy metadata updates keep current; the `[0]` public sentinel
+becomes the graph's empty list) onto its `:Document` node and recomputes its
+claims' masks. Documents with nothing to copy from (a chunk 0 without a
+`document_key`, or a document record with no chunk 0) are skipped, logged and
+counted; the last line prints totals (`documents`, `claims_recomputed`, `skipped`,
+`masks_repaired`, `failed_tenants`). It is idempotent, exits non-zero only if a
+tenant **failed** (never for skips), and needs `USE_FACT_ENGINE` on for the graph part.
+
+**Public documents that vanished from restricted search.** Ingest stores a public
+document's chunks with the `[0]` sentinel, and every mask-filtered search includes 0;
+but `update_metadata` (a move, a permission change, a metadata write) used to store
+`[]`, which `MatchAny` never matches, so such a document disappeared for every
+non-admin. Both the Python and Go stores now store `[0]` for `[]` (the graph keeps
+`[]` = public). Repair chunks written before the fix — idempotent; only an exact `[]`
+is rewritten — with:
+
+```bash
+docker exec km2_brain_api python -m brain_api.backfill_document_tags --tenant-id <org-uuid> --repair-empty-masks
+```
+
+(the repair needs only Qdrant, so it also runs with the fact engine off).
+
+**Caller metadata never overrides index fields.** A document's `metadata` is copied
+into every chunk and document payload, but the fields retrieval filters, scopes or
+cites on (`RESERVED_INGEST_METADATA_KEYS` in `ingest_service.py`: `access_keys`,
+`tenant_id`, `tags`, `document_key`, `document_id`, `document_title`, `type`, `text`,
+`summary`, `summary_tree`, `section`, `chunk_order`) are dropped from it and always set
+by ingest itself.
+
+**A fact's masks are the union of its sources'.** A claim is visible to whoever can
+see at least one document that states it: each source's masks are recorded on its
+`Document` node, and the claim's `access_keys` are recomputed (empty = public if any
+source is public) whenever a source is added, removed, moved or re-masked. Every
+brain-api request caps `access_keys` at 8192 (`brain_api/limits.py`); over it is a 422.
 
 ## Citations
 
@@ -409,7 +499,7 @@ for the app-facing chat/search routes.
 | `POST /api/ingest-document` | accept a document; **202** + background processing |
 | `GET /api/ingest-status/{tenant}/{key}` | poll a background ingest job |
 | `POST /api/remove-document` | purge one document from all stores |
-| `POST /api/update-document-metadata` | update tags/access_keys/title in place |
+| `POST /api/update-document-metadata` | update tags/access_keys/title in place (Qdrant payloads, legacy vertices, and — with the fact engine on — the document's recorded tags and masks on its `:Document` node, recomputing each of its claims as the union of all its sources' masks) |
 | `POST /api/init-tenant` / `POST /api/remove-tenant` | create/delete a tenant's collections + graph |
 | `GET /api/documents/{tenant}/{key}/chunks` | paged chunk text |
 | `GET /api/documents/{tenant}/{key}/summary` | doc summary + hierarchical tree |

@@ -14,16 +14,14 @@ import httpx
 import mammoth
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from redis.asyncio import Redis
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm.attributes import set_committed_value
 
-from api import db_scope
 from api.auth.dependencies import OrgContext, require_org_access
 from api.config import Settings, get_settings
 from api.dependencies import get_redis, get_tenant_db
-from api.models.document import Document, ProcessingStatus, Tag
+from api.models.document import ProcessingStatus, Tag
 from api.models.org import Org
 from api.repositories.document import DocumentRepository
 from api.repositories.folder import FolderRepository
@@ -39,8 +37,23 @@ from api.schemas.document import (
     validate_document_key,
 )
 from api.services.brain_client import BrainAPIClient
+from api.services.document_ingest import (
+    ALLOWED_UPLOAD_EXTENSIONS as _ALLOWED_UPLOAD_EXTENSIONS,
+)
+from api.services.document_ingest import (
+    EXTENSION_CONTENT_TYPES as _EXTENSION_CONTENT_TYPES,
+)
+from api.services.document_ingest import (
+    persist_task_id as _persist_task_id,
+)
+from api.services.document_ingest import (
+    read_upload_bounded,
+)
 from api.services.folder_service import compute_folder_masks
+from api.services.index_tags import index_tags
+from api.services.knowledge_visibility import document_visible
 from api.services.permission_config import calculate_user_masks_from_membership
+from api.services.search_access import UNRESTRICTED_MASK, resolve_user_access_keys
 from api.services.storage import StorageClient
 from api.tasks.celery_app import celery_app
 from api.tasks.ingest import dispatch_extract_ingest, dispatch_ingest, dispatch_metadata_update
@@ -58,44 +71,6 @@ _CANCELLABLE_STATUSES: frozenset[str] = frozenset({ProcessingStatus.PENDING, Pro
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-# Extension allowlist for uploads. Extension is authoritative (a mislabelled
-# Content-Type must not smuggle in an unsupported type). Kept in sync with the
-# worker's extraction dispatcher.
-_ALLOWED_UPLOAD_EXTENSIONS: frozenset[str] = frozenset(
-    {
-        ".pdf",
-        ".png",
-        ".jpg",
-        ".jpeg",
-        ".tif",
-        ".tiff",
-        ".bmp",
-        ".gif",
-        ".webp",
-        ".txt",
-        ".md",
-        ".docx",
-        ".doc",
-    }
-)
-
-# Best-effort Content-Type per extension when the client omits/mislabels it.
-_EXTENSION_CONTENT_TYPES: dict[str, str] = {
-    ".pdf": "application/pdf",
-    ".png": "image/png",
-    ".jpg": "image/jpeg",
-    ".jpeg": "image/jpeg",
-    ".tif": "image/tiff",
-    ".tiff": "image/tiff",
-    ".bmp": "image/bmp",
-    ".gif": "image/gif",
-    ".webp": "image/webp",
-    ".txt": "text/plain",
-    ".md": "text/markdown",
-    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    ".doc": "application/msword",
-}
-
 _VALID_TRANSLATION_METHODS: frozenset[str] = frozenset({"ocr", "ai"})
 
 # A .zip is expanded server-side into one document per supported member; the
@@ -106,6 +81,33 @@ _MAX_ZIP_ENTRIES = 200
 # Total uncompressed bytes allowed across all members, as a multiple of the
 # per-file upload cap. Each member must also individually fit under that cap.
 _ZIP_TOTAL_UNCOMPRESSED_FACTOR = 20
+
+
+def _with_public(masks: list[int] | None) -> list[int]:
+    return [UNRESTRICTED_MASK, *(masks or [])]
+
+
+async def _visible_document(session: AsyncSession, ctx: OrgContext, document_id: uuid.UUID) -> Any:
+    """The document if this member may read it, else 404 (also for a missing id).
+
+    Reading by id used to skip folder permissions entirely, so a member who learned
+    a restricted document's UUID could read it. Same rule as the member list and
+    the public API (``knowledge_visibility.document_visible``); admins see all.
+    """
+    doc = await DocumentRepository(session, ctx.org_id).get(document_id)
+    if doc is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
+    if ctx.is_org_admin:
+        return doc
+    # An unfiled document bypasses folder permissions, so members cannot see each
+    # other's — but whoever uploaded one can always open it.
+    own_unfiled = doc.folder_id is None and doc.uploaded_by_id is not None and doc.uploaded_by_id == ctx.user.profile_id
+    if own_unfiled:
+        return doc
+    masks = await resolve_user_access_keys(session, ctx)
+    if not await document_visible(session, ctx.org_id, doc, masks):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
+    return doc
 
 
 @router.get("/", response_model=PaginatedResponse[DocumentRead])
@@ -129,6 +131,7 @@ async def list_documents(
     folder_repo = FolderRepository(session, ctx.org_id)
     doc_repo = DocumentRepository(session, ctx.org_id)
 
+    user_masks: list[int] | None = None
     if ctx.is_org_admin:
         visible_folders, _ = await folder_repo.list_visible_to_masks(user_masks=None)
     else:
@@ -139,6 +142,9 @@ async def list_documents(
         visible_folders, _ = await folder_repo.list_visible_to_masks(user_masks=user_masks)
 
     visible_ids = [f.id for f in visible_folders]
+    # A document's own viewer override applies on top of its folder (as it does in
+    # search and on the read-by-id routes); admins are unrestricted.
+    list_masks = None if user_masks is None else _with_public(user_masks)
 
     if folder_id is not None:
         # Scoped browse: only that folder, and only if the caller can see it.
@@ -152,6 +158,7 @@ async def list_documents(
             include_unfiled=False,
             offset=pagination.offset,
             limit=pagination.page_size,
+            viewer_masks=list_masks,
         )
     else:
         # Unfiled docs bypass folder permissions → only admins see them.
@@ -160,6 +167,7 @@ async def list_documents(
             include_unfiled=ctx.is_org_admin,
             offset=pagination.offset,
             limit=pagination.page_size,
+            viewer_masks=list_masks,
         )
 
     pages = (total + pagination.page_size - 1) // pagination.page_size
@@ -197,7 +205,7 @@ async def create_document(
             )
         access_keys = await folder_repo.effective_view_masks(folder)
         # Encode folder membership as a tag for graph-level filtering
-        tag_names.append(f"folder:{folder.id}")
+        tag_names = index_tags([], folder.id)
 
     # An explicit key must be unique within the org. Pre-check for a clean 409
     # message; the DB constraint (caught below) is the authoritative backstop
@@ -273,48 +281,6 @@ async def create_document(
         logger.info("Document %s created without text; skipping ingestion", doc.id)
 
     return DocumentRead.model_validate(doc)
-
-
-async def _persist_task_id(session: AsyncSession, org_id: Any, doc: Any, task_id: str | None) -> None:
-    """Write ``celery_task_id`` back in its own tenant-scoped transaction.
-
-    Every caller dispatches only *after* committing the row, and that commit ends
-    the transaction — taking the ``SET LOCAL ROLE`` and ``app.current_tenant_id``
-    GUC with it. Assigning the attribute and leaving it for ``get_tenant_db``'s
-    teardown commit does not work: that flush runs with no tenant context, so the
-    RLS ``USING`` predicate is NULL, the UPDATE matches 0 rows, and SQLAlchemy
-    raises ``StaleDataError``. Dependency teardown runs *after* the response has
-    been sent, so the error cannot become a 500 — uvicorn drops the TCP
-    connection instead, which the client sees as a socket hang up on its next
-    keep-alive request, and the id is lost either way.
-
-    Written as a Core UPDATE rather than by dirtying the instance: an ORM flush
-    that matches no row raises, while this simply reports zero rows, and it
-    leaves nothing pending for a later commit to trip over. The in-memory value
-    is then set as *committed* state so the response carries it without the
-    instance going dirty again.
-
-    ``None`` is a legitimate value: a re-dispatch with nothing to enqueue clears
-    the previous id so cancellation cannot target a task that no longer owns this
-    document.
-
-    Never raises. Losing the id costs cancellation and job-log correlation for
-    this ingest; it must not fail a request whose row and task both exist.
-    """
-    document_id = doc.id
-    try:
-        await db_scope.enter_tenant(session, org_id)
-        result = await session.execute(
-            update(Document).where(Document.id == document_id).values(celery_task_id=task_id)
-        )
-        await session.commit()
-        if int(getattr(result, "rowcount", 0) or 0) < 1:
-            logger.error("celery_task_id not stored: document %s not visible in org %s", document_id, org_id)
-            return
-        set_committed_value(doc, "celery_task_id", task_id)
-    except Exception:
-        await session.rollback()
-        logger.exception("Failed to persist celery_task_id for document %s", document_id)
 
 
 def _member_title(name: str) -> str:
@@ -506,24 +472,8 @@ async def upload_document(
             detail=f"Unsupported file type '{ext or filename}'. Allowed: {sorted(_ALLOWED_UPLOAD_EXTENSIONS)}",
         )
 
-    # Read in bounded chunks and abort the moment we exceed the cap, so a
-    # malicious/huge upload can't spool gigabytes to disk/memory before being
-    # rejected. `await file.read()` (unbounded) would defeat the limit — Starlette
-    # does not cap file parts by size.
     max_bytes = settings.max_file_size_mb * 1024 * 1024
-    chunks: list[bytes] = []
-    total = 0
-    while chunk := await file.read(1 << 20):  # 1 MiB at a time
-        total += len(chunk)
-        if total > max_bytes:
-            raise HTTPException(
-                status_code=status.HTTP_413_CONTENT_TOO_LARGE,
-                detail=f"File exceeds the {settings.max_file_size_mb} MB limit",
-            )
-        chunks.append(chunk)
-    if total == 0:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="File is empty")
-    content = b"".join(chunks)
+    content = await read_upload_bounded(file, settings.max_file_size_mb)
 
     # --- Folder validation + permission masks (mirrors create_document) ---
     folder_uuid: uuid.UUID | None = None
@@ -546,7 +496,7 @@ async def upload_document(
                 detail="folder_id does not exist in this organization",
             )
         access_keys = await folder_repo.effective_view_masks(folder)
-        tag_names.append(f"folder:{folder.id}")
+        tag_names = index_tags([], folder.id)
 
     # --- Stage document(s): one for a plain file, N for a .zip's members ---
     doc_repo = DocumentRepository(session, ctx.org_id)
@@ -645,7 +595,7 @@ async def get_document_by_key(
     doc = await repo.get_by_key(document_key)
     if doc is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
-    return DocumentRead.model_validate(doc)
+    return DocumentRead.model_validate(await _visible_document(session, ctx, doc.id))
 
 
 @router.get("/{document_id}", response_model=DocumentRead)
@@ -654,10 +604,7 @@ async def get_document(
     ctx: Annotated[OrgContext, Depends(require_org_access)],
     session: Annotated[AsyncSession, Depends(get_tenant_db)],
 ) -> DocumentRead:
-    repo = DocumentRepository(session, ctx.org_id)
-    doc = await repo.get(document_id)
-    if doc is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
+    doc = await _visible_document(session, ctx, document_id)
     return DocumentRead.model_validate(doc)
 
 
@@ -734,10 +681,10 @@ async def update_document(
     retag = bool({"folder_id", "tag_ids"} & fields_set) or body.title is not None or perms_changed
     if retag:
         access_keys: list[int] = []
-        tag_names = [t.name for t in doc.tags]
         folder = await folder_repo.get(doc.folder_id) if doc.folder_id is not None else None
-        if folder is not None:
-            tag_names.append(f"folder:{doc.folder_id}")
+        # User tags may not carry the reserved folder: prefix (it would forge
+        # membership of another folder); only the server's folder tag does.
+        tag_names = index_tags([t.name for t in doc.tags], folder.id if folder is not None else None)
         # The document's OWN viewer permissions take precedence for entitlement;
         # otherwise it inherits its folder's effective masks (which themselves
         # inherit up the folder tree when the folder has no config of its own).
@@ -896,12 +843,10 @@ async def get_document_logs(
 
     The worker appends structured lines to a capped, TTL'd Redis list as it runs
     each stage. Empty when nothing has run yet, the TTL expired, or the doc was
-    created before this feature. Scoped to the caller's org via RLS.
+    created before this feature. Scoped to the caller's org via RLS, and to
+    documents the caller may read.
     """
-    repo = DocumentRepository(session, ctx.org_id)
-    doc = await repo.get(document_id)
-    if doc is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
+    await _visible_document(session, ctx, document_id)
 
     try:
         raw = list(await redis.lrange(_JOB_LOG_KEY.format(document_id=document_id), 0, -1))  # type: ignore[misc]
@@ -944,10 +889,7 @@ async def get_document_content(
         original file, embedded natively (perfect formatting).
       - "other": nothing readable here → the reader falls back to chunks.
     """
-    repo = DocumentRepository(session, ctx.org_id)
-    doc = await repo.get(document_id)
-    if doc is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
+    doc = await _visible_document(session, ctx, document_id)
 
     empty = {"content": None, "format": None, "kind": "other", "original_url": None}
 
@@ -1043,11 +985,9 @@ async def _derive_ingest_scoping(folder_repo: FolderRepository, doc: Any) -> tup
     precedence, otherwise it inherits its folder's effective masks (which
     themselves inherit up the folder tree when unconfigured).
     """
-    tag_names: list[str] = []
     access_keys: list[int] = []
     folder = await folder_repo.get(doc.folder_id) if doc.folder_id is not None else None
-    if folder is not None:
-        tag_names.append(f"folder:{doc.folder_id}")
+    tag_names = index_tags([], folder.id if folder is not None else None)
     if doc.viewer_permissions_config is not None:
         access_keys = list(doc.view_permission_masks or [])
     else:
@@ -1305,10 +1245,7 @@ async def get_document_chunks(
     Paginated (offset/limit) so a large document can be lazy-loaded a page at a
     time by the reader rather than fetching every chunk up front.
     """
-    repo = DocumentRepository(session, ctx.org_id)
-    doc = await repo.get(document_id)
-    if doc is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
+    doc = await _visible_document(session, ctx, document_id)
 
     client = BrainAPIClient(settings)
     try:
@@ -1335,10 +1272,7 @@ async def get_document_summary(
     still running) is surfaced as a 404 so the UI can show a "not available
     yet" state rather than a hard error.
     """
-    repo = DocumentRepository(session, ctx.org_id)
-    doc = await repo.get(document_id)
-    if doc is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
+    doc = await _visible_document(session, ctx, document_id)
 
     client = BrainAPIClient(settings)
     try:

@@ -246,6 +246,30 @@ FOREACH (_ IN CASE WHEN $dk IS NOT NULL THEN [1] ELSE [] END |
         cleaned = term.strip().lower()
         return [cleaned] if cleaned else []
 
+    @staticmethod
+    def _folder_source_condition(label: str, *, check_access: bool) -> str:
+        """Cypher predicate: some source document of ``c`` is in ``$folder_tags``
+        and, when ``check_access``, readable with ``$keys`` — the SAME document.
+
+        Claim ``tags`` cannot carry this test: they are written when the claim is
+        created and never follow a corroborating document or a folder move. The
+        Document node's ``tags`` are kept current instead. Testing the folder and
+        the masks on different documents would leak a claim that a restricted
+        document inside the folders and a public document outside them both
+        state. A Document with no ``tags`` (written before nodes carried them, not
+        yet backfilled) or no ``access_keys`` matches nothing: fail closed.
+        """
+        access = ""
+        if check_access:
+            access = (
+                f" AND d.{_PROP_ACCESS_KEYS} IS NOT NULL"
+                f" AND (size(d.{_PROP_ACCESS_KEYS}) = 0 OR any(k IN d.{_PROP_ACCESS_KEYS} WHERE k IN $keys))"
+            )
+        return (
+            f"EXISTS {{ MATCH (c)-[:SOURCED_FROM]->(:Chunk:{label})-[:PART_OF]->(d:Document:{label}) "
+            f"WHERE any(t IN coalesce(d.{_PROP_TAGS}, []) WHERE t IN $folder_tags){access} }}"
+        )
+
     def _claim_search(
         self,
         tenant_id: str,
@@ -253,6 +277,7 @@ FOREACH (_ IN CASE WHEN $dk IS NOT NULL THEN [1] ELSE [] END |
         *,
         tags: list[str] | None = None,
         user_access: list[int] | None = None,
+        folder_tags: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         """Search the reified claim graph written by the fact engine.
 
@@ -262,6 +287,10 @@ FOREACH (_ IN CASE WHEN $dk IS NOT NULL THEN [1] ELSE [] END |
 
         Only ``active`` claims are returned: superseded/contradicted/retracted ones
         are retained for history and would otherwise feed the model stale facts.
+
+        ``folder_tags`` (not None) keeps only claims with a source document that is
+        in one of those folders AND readable with ``user_access`` — see
+        :meth:`_folder_source_condition`.
         """
         label = self._tenant_label(tenant_id)
         params: dict[str, Any] = {"terms": terms, "limit": _RELATIONSHIP_SEARCH_LIMIT}
@@ -277,6 +306,10 @@ FOREACH (_ IN CASE WHEN $dk IS NOT NULL THEN [1] ELSE [] END |
                 f"OR size([k IN coalesce(c.{_PROP_ACCESS_KEYS}, []) WHERE k IN $keys]) > 0)"
             )
             params["keys"] = user_access
+
+        if folder_tags is not None:
+            conds.append(self._folder_source_condition(label, check_access=user_access is not None))
+            params["folder_tags"] = list(folder_tags)
 
         # Terms are weighted by inverse document frequency. Counting matched terms
         # equally lets words naming the corpus itself dominate: for "What does Come,
@@ -342,18 +375,29 @@ FOREACH (_ IN CASE WHEN $dk IS NOT NULL THEN [1] ELSE [] END |
         *,
         tags: list[str] | None = None,
         user_access: list[int] | None = None,
+        folder_tags: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         """Find triplets related to ``term`` across both graph shapes.
 
         Returns ``{subj, pred, obj}`` dicts ordered by how many query terms each
         matched, so callers taking a head slice get the most relevant ones.
+
+        ``folder_tags`` limits results to claims stated by a document in one of
+        those folders (``folder:<id>``) that ``user_access`` can also read. None
+        means no folder limit; an empty list is a limit with no folders and
+        returns nothing. Legacy triplets are skipped under a folder limit: their
+        entity-level tags and masks are merged across documents, so the
+        per-document rule cannot be applied to them.
         """
+        if folder_tags is not None and not folder_tags:
+            return []
         terms = self._search_terms(term)
         if not terms:
             return []
 
-        results = self._claim_search(tenant_id, terms, tags=tags, user_access=user_access)
-        results += self._legacy_triplet_search(tenant_id, terms, tags=tags, user_access=user_access)
+        results = self._claim_search(tenant_id, terms, tags=tags, user_access=user_access, folder_tags=folder_tags)
+        if folder_tags is None:
+            results += self._legacy_triplet_search(tenant_id, terms, tags=tags, user_access=user_access)
 
         # Both shapes can describe the same fact; key on the rendered triplet.
         seen: set[tuple[str, str, str]] = set()

@@ -17,7 +17,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text, false
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -72,6 +72,15 @@ class AgentRun(Base, UUIDMixin, TimestampMixin):
 
     status: Mapped[str] = mapped_column(String(12), default="queued", index=True)
     trigger: Mapped[str] = mapped_column(String(12), default="manual")
+    # Started through the public API (or spawned from a run that was). Such a run
+    # reads knowledge only in its own org and never unrestricted, whatever its
+    # actor's other memberships or roles (see services/agents/tools/knowledge.py).
+    via_api_key: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    # The key that started it (inherited like via_api_key). Tools re-check that key
+    # at call time — still active, still holding the scope — before they write.
+    api_key_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("api_keys.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     wait_kind: Mapped[str | None] = mapped_column(String(12), nullable=True)
 
     provider: Mapped[str | None] = mapped_column(String(40), nullable=True)

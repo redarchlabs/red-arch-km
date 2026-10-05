@@ -99,3 +99,127 @@ class TestListDocumentChunks:
         )
         store._client = client  # type: ignore[assignment]
         assert [r.payload["text"] for r in store.list_document_chunks("t1", "dk")] == ["unordered", "ordered"]
+
+
+class TestIterDocumentHeads:
+    """Feeds the fact-graph Document-node backfill: one chunk per document (its
+    first, ``chunk_order`` 0), paged until Qdrant reports no further cursor.
+
+    Chunks rather than the document-level record, because ``update_metadata``
+    re-tags and re-masks chunk payloads only — after a folder move the chunk
+    carries the document's current folder tag and the document record does not.
+    """
+
+    def test_pages_through_first_chunks(self, store: QdrantVectorStore) -> None:
+        client = MagicMock()
+        client.scroll.side_effect = [
+            ([_point("c1", document_key="k1", tags=["folder:a"], access_keys=[0])], "cursor-2"),
+            ([_point("c2", document_key="k2", tags=[], access_keys=[5])], None),
+        ]
+        store._client = client  # type: ignore[assignment]
+
+        keys = [r.payload["document_key"] for r in store.iter_document_heads("t1", batch_size=1)]
+
+        assert keys == ["k1", "k2"]
+        first, second = client.scroll.call_args_list
+        assert first.kwargs["collection_name"] == "t1-chunks"
+        assert first.kwargs["offset"] is None and second.kwargs["offset"] == "cursor-2"
+        conds = {c.key: c.match.value for c in first.kwargs["scroll_filter"].must}
+        assert conds == {"tenant_id": "t1", "chunk_order": 0}
+
+    def test_missing_collection_yields_nothing(self, store: QdrantVectorStore) -> None:
+        client = MagicMock()
+        client.scroll.side_effect = RuntimeError("Collection `t1-chunks` doesn't exist!")
+        store._client = client  # type: ignore[assignment]
+        assert list(store.iter_document_heads("t1")) == []
+
+    def test_other_errors_propagate(self, store: QdrantVectorStore) -> None:
+        client = MagicMock()
+        client.scroll.side_effect = RuntimeError("connection refused")
+        store._client = client  # type: ignore[assignment]
+        with pytest.raises(RuntimeError, match="connection refused"):
+            list(store.iter_document_heads("t1"))
+
+
+class TestUpdateMetadataPublicSentinel:
+    """Ingest stores a public document's chunks with ``access_keys: [0]`` and every
+    mask-filtered search carries 0 (``MatchAny``). ``[]`` matches nothing, so a
+    metadata write that stored ``[]`` made a public document vanish from every
+    restricted reader's search after a move or permission change."""
+
+    def _client(self) -> MagicMock:
+        client = MagicMock()
+        client.scroll.return_value = ([_point("c1"), _point("c2")], None)
+        return client
+
+    def test_empty_masks_are_stored_as_the_public_sentinel(self, store: QdrantVectorStore) -> None:
+        client = self._client()
+        store._client = client  # type: ignore[assignment]
+        store.update_metadata("t1", "dk", tags=["folder:a"], access_keys=[])
+        assert client.set_payload.call_args.kwargs["payload"] == {"tags": ["folder:a"], "access_keys": [0]}
+
+    def test_real_masks_are_stored_as_given(self, store: QdrantVectorStore) -> None:
+        client = self._client()
+        store._client = client  # type: ignore[assignment]
+        store.update_metadata("t1", "dk", access_keys=[5, 6])
+        assert client.set_payload.call_args.kwargs["payload"] == {"access_keys": [5, 6]}
+
+    def test_masks_left_alone_when_not_given(self, store: QdrantVectorStore) -> None:
+        client = self._client()
+        store._client = client  # type: ignore[assignment]
+        store.update_metadata("t1", "dk", title="New")
+        assert client.set_payload.call_args.kwargs["payload"] == {"document_title": "New"}
+
+
+class TestRepairEmptyAccessKeys:
+    """Rewrites chunks a buggy metadata write left with ``access_keys == []`` to the
+    public sentinel ``[0]``. Idempotent: only an exact empty list is touched — not a
+    missing field, not real masks — so a second run repairs nothing."""
+
+    def test_only_exact_empty_lists_are_rewritten(self, store: QdrantVectorStore) -> None:
+        client = MagicMock()
+        client.scroll.side_effect = [
+            ([_point("c1", access_keys=[]), _point("c2", access_keys=[0])], "next"),
+            ([_point("c3"), _point("c4", access_keys=[])], None),
+        ]
+        store._client = client  # type: ignore[assignment]
+
+        result = store.repair_empty_access_keys("t1")
+
+        assert result == {"scanned": 4, "repaired": 2}
+        client.set_payload.assert_called_once()
+        kwargs = client.set_payload.call_args.kwargs
+        assert kwargs["collection_name"] == "t1-chunks"
+        assert kwargs["payload"] == {"access_keys": [0]}
+        assert kwargs["points"] == ["c1", "c4"]
+
+    def test_nothing_to_repair_writes_nothing(self, store: QdrantVectorStore) -> None:
+        client = MagicMock()
+        client.scroll.return_value = ([_point("c1", access_keys=[0])], None)
+        store._client = client  # type: ignore[assignment]
+        assert store.repair_empty_access_keys("t1") == {"scanned": 1, "repaired": 0}
+        client.set_payload.assert_not_called()
+
+    def test_missing_collection_is_zero(self, store: QdrantVectorStore) -> None:
+        client = MagicMock()
+        client.scroll.side_effect = RuntimeError("Collection `t1-chunks` doesn't exist!")
+        store._client = client  # type: ignore[assignment]
+        assert store.repair_empty_access_keys("t1") == {"scanned": 0, "repaired": 0}
+
+
+class TestIterDocumentKeys:
+    def test_pages_through_document_records(self, store: QdrantVectorStore) -> None:
+        client = MagicMock()
+        client.scroll.side_effect = [
+            ([_point("d1", document_key="k1")], "n"),
+            ([_point("d2", document_key="k2"), _point("d3")], None),
+        ]
+        store._client = client  # type: ignore[assignment]
+        assert list(store.iter_document_keys("t1")) == ["k1", "k2"]
+        assert client.scroll.call_args_list[0].kwargs["collection_name"] == "t1-documents"
+
+    def test_missing_collection_yields_nothing(self, store: QdrantVectorStore) -> None:
+        client = MagicMock()
+        client.scroll.side_effect = RuntimeError("Not found: Collection `t1-documents`")
+        store._client = client  # type: ignore[assignment]
+        assert list(store.iter_document_keys("t1")) == []

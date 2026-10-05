@@ -75,6 +75,11 @@ class ToolContext:
     settings: Settings
     agent: Agent
     actor_user_id: uuid.UUID | None = None
+    # The run was started through the public API (or spawned from one that was):
+    # knowledge reads stay in this org and are never unrestricted.
+    via_api_key: bool = False
+    # The API key that started the run (None otherwise); write tools re-check it.
+    api_key_id: uuid.UUID | None = None
     run_id: uuid.UUID | None = None
     work_order_id: uuid.UUID | None = None
     # The provider's id for the call currently executing, set by the loop before

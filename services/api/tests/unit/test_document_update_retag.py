@@ -154,3 +154,23 @@ async def test_description_only_change_does_not_retag(wiring: dict[str, Any]) ->
     assert resp.status_code == 200
     # A pure description edit touches no vector-store metadata → no dispatch.
     assert wiring["dispatched"] is None
+
+
+async def test_a_user_tag_cannot_forge_folder_membership(
+    monkeypatch: pytest.MonkeyPatch, wiring: dict[str, Any]
+) -> None:
+    """Folder-limited search matches ``folder:<id>`` in the same tag list as user tags.
+    A legacy user tag spelled like one is dropped; only the server's folder tag stays."""
+    forged = uuid.uuid4()
+
+    class _TaggedDocRepo(_FakeDocRepo):
+        async def get(self, _id: uuid.UUID) -> _FakeDoc:
+            doc = await super().get(_id)
+            doc.tags = [SimpleNamespace(name="policy"), SimpleNamespace(name=f" FOLDER:{forged}")]
+            return doc
+
+    monkeypatch.setattr(documents_module, "DocumentRepository", _TaggedDocRepo)
+    async with _client(_app()) as client:
+        resp = await client.patch(f"/api/documents/{uuid.uuid4()}", json={"folder_id": str(NEW_FOLDER_ID)})
+    assert resp.status_code == 200
+    assert wiring["dispatched"]["new_tags"] == ["policy", f"folder:{NEW_FOLDER_ID}"]

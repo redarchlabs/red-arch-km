@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Collection
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy import text as sql_text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -57,6 +58,24 @@ def _folder_visible_to(folder: Folder, by_dot_path: dict[str, Folder], user_mask
     if not effective:
         return True
     return bool(user_masks.intersection(effective))
+
+
+def _effective_masks_by_parent(folder: Folder, by_id: dict[uuid.UUID, Folder]) -> list[int]:
+    """:func:`_effective_masks_from_map`, walking ``parent_id`` instead of ``dot_path``.
+
+    ``dot_path`` is built from names, and two root folders may share a name, so a
+    name-keyed map can resolve the wrong ancestor. ``by_id`` must hold every
+    ancestor of ``folder`` (a missing one ends the walk). The step bound guards a
+    corrupt cycle.
+    """
+    node: Folder | None = folder
+    for _ in range(len(by_id) + 1):
+        if node is None:
+            return []
+        if node.viewer_permissions_config is not None:
+            return list(node.view_permission_masks or [])
+        node = by_id.get(node.parent_id) if node.parent_id is not None else None
+    return []
 
 
 class FolderRepository:
@@ -117,6 +136,55 @@ class FolderRepository:
         if limit is not None:
             visible = visible[:limit]
         return visible, total
+
+    async def get_many(self, folder_ids: Collection[uuid.UUID]) -> list[Folder]:
+        """These folders (those in this org), ordered by path."""
+        if not folder_ids:
+            return []
+        result = await self._session.execute(
+            select(Folder)
+            .where(Folder.org_id == self._org_id, Folder.id.in_(list(folder_ids)))
+            .order_by(Folder.dot_path, Folder.id)
+        )
+        return list(result.scalars().all())
+
+    async def visible_subtrees(self, root_ids: Collection[uuid.UUID], user_masks: list[int]) -> dict[uuid.UUID, bool]:
+        """The listed folders plus every descendant, each mapped to whether
+        ``user_masks`` may see it.
+
+        Expands by walking ``parent_id`` (a recursive CTE), never by ``dot_path``:
+        paths are built from names and two ROOT folders may share a name, so a path
+        prefix would pull a same-named root's whole subtree in. Only the subtree and
+        the listed folders' ancestors (needed for inherited restrictions) are loaded
+        — not every folder in the org. Ids not in this org are simply absent.
+        """
+        roots = list(dict.fromkeys(root_ids))
+        if not roots:
+            return {}
+        in_org = Folder.org_id == self._org_id
+        down = select(Folder.id).where(in_org, Folder.id.in_(roots)).cte("key_subtree", recursive=True)
+        down = down.union(select(Folder.id).where(in_org, Folder.parent_id == down.c.id))
+        up = (
+            select(Folder.id, Folder.parent_id).where(in_org, Folder.id.in_(roots)).cte("key_ancestors", recursive=True)
+        )
+        up = up.union(select(Folder.id, Folder.parent_id).where(in_org, Folder.id == up.c.parent_id))
+        subtree_ids = select(down.c.id)
+        rows = (
+            await self._session.execute(
+                select(Folder, Folder.id.in_(subtree_ids).label("in_key_subtree")).where(
+                    in_org, or_(Folder.id.in_(subtree_ids), Folder.id.in_(select(up.c.id)))
+                )
+            )
+        ).all()
+        by_id = {folder.id: folder for folder, _ in rows}
+        user_set = set(user_masks)
+        result: dict[uuid.UUID, bool] = {}
+        for folder, in_subtree_flag in rows:
+            if not in_subtree_flag:
+                continue
+            effective = _effective_masks_by_parent(folder, by_id)
+            result[folder.id] = not effective or bool(user_set.intersection(effective))
+        return result
 
     async def list_children(self, parent_id: uuid.UUID | None) -> list[Folder]:
         query = (
@@ -191,6 +259,35 @@ class FolderRepository:
             return list(folder.view_permission_masks or [])
         ancestor = await self.nearest_configured_ancestor(folder)
         return list(ancestor.view_permission_masks or []) if ancestor else []
+
+    async def nearest_contributor_configured_ancestor(self, folder: Folder) -> Folder | None:
+        """The closest ancestor folder with its OWN contributor config (or None)."""
+        prefixes = _ancestor_dot_paths(folder.dot_path)
+        if not prefixes:
+            return None
+        result = await self._session.execute(
+            select(Folder)
+            .where(
+                Folder.org_id == self._org_id,
+                Folder.dot_path.in_(prefixes),
+                Folder.contributor_permissions_config.isnot(None),
+            )
+            .order_by(func.length(Folder.dot_path).desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
+    async def effective_contributor_masks(self, folder: Folder) -> list[int]:
+        """Contributor masks governing who may ADD to a folder, honoring inheritance.
+
+        Mirrors :meth:`effective_view_masks`: the folder's own contributor config
+        if it has one, else the nearest configured ancestor's, else empty — which
+        means "no contributor restriction beyond being able to see the folder".
+        """
+        if folder.contributor_permissions_config is not None:
+            return list(folder.contributor_permission_masks or [])
+        ancestor = await self.nearest_contributor_configured_ancestor(folder)
+        return list(ancestor.contributor_permission_masks or []) if ancestor else []
 
     async def descendants(self, folder: Folder) -> list[Folder]:
         """Return this folder and all descendants via dot_path prefix match."""

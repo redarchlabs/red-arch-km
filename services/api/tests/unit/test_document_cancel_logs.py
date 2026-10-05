@@ -188,7 +188,7 @@ async def test_cancel_without_task_id_still_marks_cancelled(wiring: dict[str, An
     assert wiring["revoked"] == []  # nothing to revoke
 
 
-async def test_logs_returns_parsed_events(wiring: dict[str, Any]) -> None:
+async def test_logs_returns_parsed_events(wiring: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
     doc = _fake_doc()
     wiring["doc"] = doc
     wiring["redis"] = _FakeRedis(
@@ -199,6 +199,10 @@ async def test_logs_returns_parsed_events(wiring: dict[str, Any]) -> None:
         ]
     )
     _CTX["ctx"] = _ctx(profile_id=OWNER_ID, is_admin=False)
+    # A member's read is now gated on folder visibility; this test is about log
+    # parsing, so the (separately integration-tested) visibility check passes.
+    monkeypatch.setattr(documents_module, "resolve_user_access_keys", AsyncMock(return_value=[0]))
+    monkeypatch.setattr(documents_module, "document_visible", AsyncMock(return_value=True))
 
     async with _client(_build_app(wiring)) as client:
         resp = await client.get(f"/api/documents/{doc.id}/logs")

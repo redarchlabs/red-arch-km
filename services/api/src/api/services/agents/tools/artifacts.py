@@ -22,6 +22,7 @@ from api.repositories.document import DocumentRepository
 from api.repositories.folder import FolderRepository
 from api.repositories.work_order_artifacts import WorkOrderArtifactRepository
 from api.services.agents.tools.spec import Category, ToolContext, ToolSpec
+from api.services.index_tags import index_tags
 from api.tasks.ingest import dispatch_ingest
 
 logger = logging.getLogger(__name__)
@@ -66,7 +67,7 @@ async def _attach_document(ctx: ToolContext, args: dict[str, Any]) -> dict[str, 
         if folder is None:
             return {"error": "folder_id does not exist in this organization"}
         access_keys = await folder_repo.effective_view_masks(folder)
-        tag_names.append(f"folder:{folder.id}")
+        tag_names = index_tags([], folder.id)
 
     doc = await doc_repo.create(
         title=title,

@@ -110,6 +110,22 @@ class FactStore(Protocol):
         """Retrieve community summaries, largest first."""
         ...
 
+    def update_document_access_keys(self, tenant_id: str, document_key: str, access_keys: list[int]) -> int:
+        """Record new document masks; recompute its claims as the union of all sources' masks."""
+        ...
+
+    def update_document_metadata(
+        self,
+        tenant_id: str,
+        document_key: str,
+        *,
+        tags: list[str] | None = None,
+        access_keys: list[int] | None = None,
+    ) -> int:
+        """Record a document's current folder tags and/or masks (None = unchanged);
+        new masks recompute its claims. Returns how many claims were recomputed."""
+        ...
+
     def delete_by_document_key(self, tenant_id: str, document_key: str) -> None:
         """Remove provenance from a document; drop claims/entities left unsupported."""
         ...

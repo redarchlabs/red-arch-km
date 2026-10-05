@@ -61,6 +61,8 @@ class FakeCtx:
     work_order_id: uuid.UUID | None = None
     tool_call_id: str | None = None
     actor_user_id: uuid.UUID | None = None
+    via_api_key: bool = False
+    api_key_id: uuid.UUID | None = None
 
 
 @dataclass

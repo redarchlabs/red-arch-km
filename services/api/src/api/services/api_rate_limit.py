@@ -72,3 +72,31 @@ async def check_rate_limit(
         remaining=remaining,
         retry_after=retry_after if remaining == 0 else 0,
     )
+
+
+async def peek_rate_limit(
+    redis: Redis,
+    key: str,
+    *,
+    limit: int,
+    window_seconds: int = _WINDOW_SECONDS,
+    now: float | None = None,
+) -> RateLimitResult:
+    """Report whether ``key`` still has room in its current window, without
+    recording a hit. Pair with :func:`check_rate_limit` once the action has
+    actually happened, so refused or no-op requests do not use up the allowance.
+    Fail-open on any Redis error, like :func:`check_rate_limit`.
+    """
+    current = time.time() if now is None else now
+    bucket = int(current // window_seconds)
+    retry_after = window_seconds - int(current % window_seconds)
+    try:
+        raw = await redis.get(f"ratelimit:{key}:{bucket}")
+        count = int(raw or 0)
+    except Exception:  # noqa: BLE001 — cache outage must not take down the API
+        logger.warning("Rate-limit peek failed (allowing request) for key=%s", key, exc_info=True)
+        return RateLimitResult(allowed=True, limit=limit, remaining=limit, retry_after=0)
+    remaining = max(0, limit - count)
+    return RateLimitResult(
+        allowed=count < limit, limit=limit, remaining=remaining, retry_after=retry_after if remaining == 0 else 0
+    )

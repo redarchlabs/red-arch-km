@@ -509,3 +509,34 @@ class TestRerank:
 
         assert hits == []
         mock_stores.reranker.rerank.assert_not_called()
+
+
+class TestFolderScopedGraphContext:
+    """The folder limit applies to graph context too: a folder-limited chat must not
+    be grounded on claims stated only by documents outside those folders."""
+
+    FOLDERS = ["folder:f1", "folder:f2"]
+
+    def test_chat_passes_folder_tags_to_the_graph(self, mock_stores: MagicMock, fake_settings: MagicMock) -> None:
+        with patch("brain_api.openai_client.OpenAI"):
+            service = SearchService(mock_stores, fake_settings)
+            service.vector_chat(tenant_id="t1", query="q", access_keys=[0, 7], folder_tags=self.FOLDERS)
+
+        kwargs = mock_stores.graph.fuzzy_relationship_search.call_args.kwargs
+        assert kwargs["folder_tags"] == self.FOLDERS
+        assert kwargs["user_access"] == [0, 7]
+
+    def test_stream_passes_folder_tags_to_the_graph(self, mock_stores: MagicMock, fake_settings: MagicMock) -> None:
+        with patch("brain_api.openai_client.OpenAI") as mock_openai:
+            mock_openai.return_value.chat.completions.create.return_value = iter([])
+            service = SearchService(mock_stores, fake_settings)
+            list(service.vector_chat_stream(tenant_id="t1", query="q", folder_tags=self.FOLDERS))
+
+        assert mock_stores.graph.fuzzy_relationship_search.call_args.kwargs["folder_tags"] == self.FOLDERS
+
+    def test_no_folder_limit_stays_unlimited(self, mock_stores: MagicMock, fake_settings: MagicMock) -> None:
+        with patch("brain_api.openai_client.OpenAI"):
+            service = SearchService(mock_stores, fake_settings)
+            service.vector_chat(tenant_id="t1", query="q")
+
+        assert mock_stores.graph.fuzzy_relationship_search.call_args.kwargs["folder_tags"] is None

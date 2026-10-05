@@ -18,6 +18,13 @@ provides the programmatic auth path:
 
 Every failure returns an opaque ``401`` so a caller learns nothing about which
 check tripped (unknown key vs revoked vs expired).
+
+A key may be **scoped** (``access_mode = 'scoped'``): bound to its own region,
+role, group and department assignments, optionally narrowed to folders. Its masks
+and folder set are resolved here, on every request, on the same privileged session
+as the hash lookup; a scope that no longer resolves (no assignment rows left, an
+assignment outside the org) is a ``403`` for every route — the key fails closed
+and never degrades to org-wide. See ``api.services.api_key_scope``.
 """
 
 from __future__ import annotations
@@ -39,9 +46,10 @@ from api import db_scope
 from api.config import Settings, get_settings
 from api.db import get_session_factory
 from api.dependencies import get_redis
-from api.models.api_key import ApiKey
+from api.models.api_key import ACCESS_MODE_ORG, ACCESS_MODE_SCOPED, ApiKey
 from api.repositories.api_key import lookup_by_key_hash
-from api.services.api_key_scopes import has_scope
+from api.services.api_key_scope import KeyScopeError, is_scoped, resolve_key_scope
+from api.services.api_key_scopes import SCOPED_KEY_SCOPES, has_scope
 from api.services.api_key_service import hash_key, is_expired
 from api.services.api_rate_limit import check_rate_limit
 
@@ -61,6 +69,13 @@ _UNAUTHORIZED = HTTPException(
     headers={"WWW-Authenticate": "Bearer"},
 )
 
+# A valid scoped key whose scope no longer resolves. Deliberately reason-free: the
+# reason is logged for operators, not handed to whoever holds the key.
+_SCOPE_INVALID = HTTPException(
+    status_code=status.HTTP_403_FORBIDDEN,
+    detail="This API key's access assignments no longer resolve; ask an org admin to re-issue it",
+)
+
 
 @dataclass(frozen=True, slots=True)
 class ApiKeyPrincipal:
@@ -70,6 +85,16 @@ class ApiKeyPrincipal:
     org_id: uuid.UUID
     scopes: frozenset[str]
     name: str
+    # "org" (org-wide knowledge visibility) or "scoped". For a scoped key, the
+    # masks of its own assignments resolved for THIS request (never empty) and its
+    # folder set (None = no folder limit; may be empty). Both None for an org key.
+    access_mode: str = ACCESS_MODE_ORG
+    masks: tuple[int, ...] | None = None
+    folder_ids: frozenset[uuid.UUID] | None = None
+
+    @property
+    def is_scoped(self) -> bool:
+        return self.access_mode == ACCESS_MODE_SCOPED
 
 
 def _presented_key(
@@ -124,11 +149,27 @@ async def require_api_key(
         api_key = await lookup_by_key_hash(session, hash_key(presented))
         if api_key is None or api_key.revoked_at is not None or is_expired(api_key):
             raise _UNAUTHORIZED
+        masks: tuple[int, ...] | None = None
+        folder_ids: frozenset[uuid.UUID] | None = None
+        if is_scoped(api_key):
+            try:
+                scope = await resolve_key_scope(session, api_key)
+            except KeyScopeError as exc:
+                logger.warning("API key %s refused: its scope does not resolve (%s)", api_key.id, exc)
+                raise _SCOPE_INVALID from exc
+            # TooManyAccessMasks propagates: 422 via the app's handler (fails closed, says why).
+            masks, folder_ids = scope.masks, scope.folder_ids
+        elif api_key.access_mode != ACCESS_MODE_ORG:
+            logger.warning("API key %s refused: unknown access mode %r", api_key.id, api_key.access_mode)
+            raise _SCOPE_INVALID
         principal = ApiKeyPrincipal(
             api_key_id=api_key.id,
             org_id=api_key.org_id,
             scopes=frozenset(api_key.scopes or ()),
             name=api_key.name,
+            access_mode=api_key.access_mode,
+            masks=masks,
+            folder_ids=folder_ids,
         )
         await _touch_last_used(session, api_key)
         await session.commit()
@@ -145,6 +186,13 @@ def require_scope(scope: str) -> Callable[..., Awaitable[ApiKeyPrincipal]]:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"API key is missing the required scope: {scope}",
+            )
+        # Defense in depth: minting already limits a scoped key to scope-aware
+        # scopes, but a route that ignores the key's scope must never serve one.
+        if principal.is_scoped and scope not in SCOPED_KEY_SCOPES:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"A key limited to dimension or folder assignments cannot use {scope}",
             )
         return principal
 

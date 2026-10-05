@@ -8,6 +8,201 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — Folders that name only some dimensions are now visible to the members they name
+
+**This changes what existing members can see.** A folder's viewer config leaves any
+dimension it does not name as a wildcard: `{"department": "Finance"}` means "Finance, in
+any region, role or group". But member masks were exact, and every place that filters on
+masks — folder visibility, Qdrant, the fact graph — compares integers for equality, so a
+wildcard never equalled anything a member held. Such folders were visible to **no
+member at all**: only org admins, who bypass masks, could see them, in folder and
+document lists, search, chat and agent answers alike. It failed closed, but it made
+partially-scoped folders useless.
+
+- A member's masks now include wildcard variants, built per dimension (each dimension's
+  assigned values plus its wildcard; the org is never wildcarded) by one shared helper,
+  `access_mask.member_masks`, used by `calculate_user_masks_from_membership` — the single
+  resolution point for members, agent actors and dimension-bound API keys. Equality against
+  that set is exactly `access_mask.matches`, tested exhaustively. The Go `accessmask`
+  package gains the same `MemberMasks` / `ExpandWildcards` / `ExpandMemberMasks`.
+- **On deploy, members gain access to partially-scoped folders that match them**, and to
+  those folders' documents, chunks and facts. No data or re-ingest is involved. Before
+  deploying, org admins should check for folder configs written on the assumption that
+  they were effectively admin-only. Folders that name every dimension, and unrestricted
+  folders, behave as before.
+- A member sends `(regions+1)(departments+1)(roles+1)(groups+1)` masks. The API and
+  every brain-api request that takes masks now share one cap, 8192 (the RAG request's was
+  256; search, chat and agent requests had none). A membership over it fails closed with
+  a `422` that says why, never a truncated filter.
+- Creating a region, role, group or department now stops before its wildcard number
+  (31 / 31 / 127 / 15) with a `409`: a dimension numbered at the wildcard would read as
+  "any". Existing data is not changed — `docs/RBAC.md` has a read-only query to find any
+  such rows.
+
+### Added — API keys limited to dimension assignments and folders, and documents sent in over the public API
+
+An org API key saw the whole organisation's knowledge. Its *operations* were gated by
+scopes, but `service_key_access_keys()` returned "unrestricted", so v1 search and chat
+ignored folder permissions entirely: an external agent platform holding one key could
+read HR's documents and facts as easily as its own. And `/api/v1/knowledge` could only
+read, so the same platform had nowhere to put the reports and project documents its
+agents produce.
+
+- **A key can be minted with its own regions, roles, groups and departments** (any
+  subset; Admin Area → API & Keys → *Knowledge access*; migration `053`:
+  `api_keys.access_mode` plus `api_key_regions` / `_roles` / `_groups` / `_departments`).
+  It then searches, chats, lists folders and reads documents, chunks and summaries with
+  **exactly the masks a member holding those assignments would have** (one builder,
+  `calculate_masks_from_assignments`, serves both). No member profile is involved.
+  Folders and documents it cannot see are `404`, and for chunks and summaries brain-api
+  is never asked. Keys minted with no assignments (and every existing key) are
+  `access_mode = 'org'` and behave exactly as before.
+- **Folders only narrow** (`api_key_folders`). A key may also list folders; it then reads
+  only those folders and their subfolders, intersected with what its masks may see — a
+  folder never grants anything the assignments lack, and a key with folders but no
+  dimensions reads like a member with no assignments, never org-wide. A folder outside the
+  list is a `404 folder not found`; `folder_tags` is always sent to brain-api for search
+  **and** chat (graph facts included); a key whose folders are all hidden gets an empty
+  answer without brain-api being called. More than 1024 folders is a `422`, at mint as
+  well as per request. Subfolders are found by walking `parent_id` from the listed
+  folders (index `ix_folders_parent_id`), never by the name-built path — two top-level
+  folders may share a name, and a path match would let a new root "Finance" join a key
+  that lists the other one. **Moving a folder under a listed folder widens the key's
+  folder set** to include it (its masks still cap what it reads).
+- **Graph facts honour the folder limit.** A folder-limited chat only gets a fact when one
+  document that states it is both inside the folders and readable by the masks (checked on
+  the same document, so a public document elsewhere cannot carry a fact in). Document nodes
+  in the graph now carry their folder tags, kept current when a document's metadata or
+  masks change. **Run `python -m brain_api.backfill_document_tags --tenant-id <org>` once
+  per org** for documents ingested before this change; until then folder-limited callers
+  get no graph facts from them (passages are unaffected).
+- **Assignments are resolved on every request and fail closed.** A scoped key with no
+  assignment rows, or one that no longer resolves inside its org, is a `403`; one whose
+  assignments exceed the mask cap is a `422`. Minting checks that every id belongs to the
+  key's org, that the masks stay under the cap and that every listed folder is visible to
+  them (a `422`; hidden folders are named by path), and commits the key before the
+  response carries its plaintext. Assignments cannot be edited (revoke and re-issue).
+  Deleting a region, role, group, department or folder that an active key holds is a
+  `409` naming the keys; rows of revoked or expired keys are released first (the admin
+  list then says so instead of calling the key broken). The database refuses it too
+  (`NO ACTION`, deferred to commit so deleting the whole org still cascades); a mint and a
+  delete of the same item lock it (`FOR SHARE` / `FOR UPDATE`) and check that constraint
+  in the handler, so a race is a `409`, never a `500` or a `204` that later rolls back.
+- **A scoped key holds only scope-aware scopes** (search, knowledge, agents, work
+  orders) and no wildcard; minting refuses anything else, and the other routes refuse a
+  scoped key even if it somehow holds their scope. Assignments cannot narrow records,
+  reports, entities, workflows or config, so such a key must not be allowed to reach them.
+- **The create form** (Admin Area → API & Keys) loads every region, role, group,
+  department and folder (all pages; it says so if a list is cut short), keeps the admin's
+  scope selection when assignments are toggled and names the scopes a scoped key will
+  leave out, and shows folder paths instead of ids in mint errors.
+- **Runs started through the API stay inside the key's limits.** Runs and work orders
+  created via `/api/v1` have no actor and no filing profile (a key is not a person); they
+  are marked `via_api_key` with the key's id (inherited by delegations, consults,
+  escalations, reviews, work-order dispatch and continuations). Their knowledge search
+  never reaches another org and reads with the **key's** reach even when a person started
+  the key-filed work order (an org key's run then follows the unattended rule). **Every
+  tool call** re-checks the key (one primary-key read); once it is revoked, expired,
+  deleted or invalid every tool is refused — allowlisted ones too — and the run ends with
+  status `error`. `create_document` needs `knowledge:write` on the key (org keys too) and
+  counts against the key's daily write cap. A scoped key's run searches with the key's
+  masks and folders — checked before the agent's `knowledge_scope: "org"` grant, so it can
+  never become unrestricted. It may use only mask-aware tools (knowledge search,
+  `create_document` into the key's folders that its masks may add to, its own work order,
+  delegation, a person, the public web); records, workflows, work-order artifacts, other
+  runs, batch generation, local execution and MCP tools are refused. A scoped key sees
+  only the runs and work orders it created, and lists agents as summaries (no persona,
+  params, grants or MCP servers).
+- **Developers who applied an earlier draft of migration `053`** (with
+  `api_keys.profile_id`) must run `alembic downgrade 052` before upgrading again.
+- **`POST /api/v1/knowledge/documents`** (new `knowledge:write` scope) takes text (JSON) or
+  a file (multipart) into a folder and runs the same ingest the UI does; the response is
+  the document id and its status, polled via `GET /knowledge/documents/{id}`. A caller's
+  `external_ref` (unique per folder) makes it idempotent: the same ref with new content
+  replaces that document and re-ingests it under a row lock, identical content is not
+  re-ingested (a new title or metadata is still applied), and a failed or stuck ingest is
+  re-run. A broker or brain-api outage is a `503` the caller can retry, never a document
+  silently stuck in `PENDING`. A scoped key may only write where its assignments may add,
+  inside its folders when it lists any — visible folder, and a contributor mask when the
+  folder sets contributor permissions — which makes this the first write path that
+  enforces contributor masks; a ref used by a document the key cannot see is reported as
+  an ordinary conflict, and a document with its own contributor config needs a matching
+  contributor mask. Documents written by a key have no uploader. Org keys may write
+  anywhere in their org, like an org admin.
+- **`knowledge:write` is a sensitive scope**: like `config:write`, it is never granted by a
+  `*` or `knowledge:*` wildcard, so no existing key gains it. Each key may also write at
+  most `API_KEY_DOCUMENT_WRITES_PER_DAY` documents (default 500) — agent-run
+  `create_document` calls included — because every write is an LLM-billed ingest; refused and unchanged requests do not count, and an exhausted key
+  is refused before its upload is read.
+- Uploads are bounded before they are spooled (declared length checked, body counted as
+  it streams), filenames are sanitised and capped, NUL characters and deeply nested
+  metadata are a `422`, and objects left by a failed write are deleted.
+
+### Security — The `folder:` tag prefix is reserved
+
+Folder-limited retrieval matches `folder:<folder-id>` in a document's index tags (Qdrant
+`tags`, Neo4j `d.tags`) — the same list that carries the document's own user tags. A
+member who could tag a document `folder:<another folder's id>` could therefore make it
+appear inside a folder-limited key's (or a folder-scoped chat's) search. Tag names
+starting with `folder:` (any case, after trimming) are now refused (`422`) on create and
+rename, skipped by config import, refused by the tag repository, and dropped wherever the
+API builds a document's index tags, so only the server-appended folder tag carries the
+prefix. Existing data is not changed; find such tags (read-only) with
+`SELECT org_id, id, name FROM tags WHERE lower(btrim(name)) LIKE 'folder:%';` and rename
+or delete them, then re-save the documents that carry them.
+
+### Changed — An empty retrieval scope now means "nothing", not "everything"
+
+brain-api folded an empty `access_keys` or `folder_tags` list into "no filter", and
+`BrainAPIClient` sent `[]` for unrestricted callers, so any caller that computed an empty
+scope and forgot to short-circuit read the whole tenant. Now absent/`null` is "no filter"
+and an explicit `[]` is "nothing readable" — search, chat, ask and agent ask answer empty
+without querying anything — and the client sends `null` for unrestricted callers (org
+admins, org-wide keys, trusted workflows). brain-api and the API must be deployed
+together: an older API would send `[]` for org admins and get empty answers.
+
+### Fixed — Public documents vanished from restricted search after a move or permission change
+
+Ingest stores a public document's chunks with the `[0]` sentinel that every mask-filtered
+search includes, but a metadata update (moving the document, changing its folder's
+permissions, a metadata-only API write) stored `[]`, which matches nothing — so the
+document disappeared for everyone but org admins. The Python and Go vector stores now
+store `[0]` for `[]`. **Repair existing chunks** (idempotent) with
+`python -m brain_api.backfill_document_tags --tenant-id <org> --repair-empty-masks`. The
+backfill now also counts and logs documents it had to skip (no first chunk) and prints
+totals; it exits non-zero only when a tenant failed.
+
+### Fixed — Document metadata could rewrite a document's own access masks
+
+Caller-supplied document metadata was spread into every chunk and document payload
+*after* the fields retrieval filters on, so a document created with
+`metadata: {"access_keys": [0]}` was indexed as public whatever its folder said — and
+`tags`, `document_key`, `tenant_id` and `type` could be overridden the same way. This
+applied to the first-party upload as well as the new API, and to the Go brain-api. Ingest
+now drops those fields from metadata and always sets them itself
+(`RESERVED_INGEST_METADATA_KEYS`; `withUserMetadata` in Go), the API rejects them with a
+`422` (API metadata is limited to flat scalar values), and the agent `create_document`
+tool rejects them and any non-object metadata.
+
+### Fixed — Reading a restricted document by id, and facts that kept old permissions
+
+- `GET /api/documents/{id}` and its `/content`, `/chunks`, `/summary`, `/logs` and
+  `/by-key` siblings resolved a document by id alone, so a member who learned a restricted
+  document's id could read it in full. They now apply the same visibility rule as the
+  public API (admins unaffected; a member can still open an unfiled document they
+  uploaded). The member list now also honours each document's own viewer override.
+- A fact's visibility followed whichever document stated it first, and never changed: a
+  document moved from a public folder to a restricted one kept public facts, and a fact
+  first stated publicly stayed public after that document was deleted even if only an HR
+  document still stated it. A fact is now visible to whoever can see at least one of its
+  source documents — its masks are the union of its sources', recomputed when a source is
+  added, removed, moved or re-masked. Facts from documents ingested before this release
+  get their masks recorded on the next reprocess or move.
+
+Still open, documented in `docs/RBAC.md`: first-party document *writes* do not check
+folder permissions, and the legacy triplet graph search (data ingested before the fact
+engine) can surface a relationship when either end is visible.
+
 ### Added — An acceptance auditor: does the delivered work answer what was asked?
 
 The gap the other completion checks cannot close. Evidence proves *something* was
