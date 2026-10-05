@@ -94,8 +94,8 @@ func TestNewUpdateMetadataTask(t *testing.T) {
 		TenantID:      "tenant-456",
 		DocumentKey:   "key-789",
 		Title:         &title,
-		NewTags:       []string{"newtag1", "newtag2"},
-		NewAccessKeys: []int{4, 5, 6},
+		NewTags:       &[]string{"newtag1", "newtag2"},
+		NewAccessKeys: &[]int{4, 5, 6},
 	}
 
 	task, err := NewUpdateMetadataTask(payload)
@@ -121,11 +121,11 @@ func TestNewUpdateMetadataTask(t *testing.T) {
 	if parsed.Title == nil || *parsed.Title != title {
 		t.Errorf("title mismatch")
 	}
-	if len(parsed.NewTags) != len(payload.NewTags) {
-		t.Errorf("tags length mismatch: %d != %d", len(parsed.NewTags), len(payload.NewTags))
+	if len(*parsed.NewTags) != len(*payload.NewTags) {
+		t.Errorf("tags length mismatch: %d != %d", len(*parsed.NewTags), len(*payload.NewTags))
 	}
-	if len(parsed.NewAccessKeys) != len(payload.NewAccessKeys) {
-		t.Errorf("access keys length mismatch: %d != %d", len(parsed.NewAccessKeys), len(payload.NewAccessKeys))
+	if len(*parsed.NewAccessKeys) != len(*payload.NewAccessKeys) {
+		t.Errorf("access keys length mismatch: %d != %d", len(*parsed.NewAccessKeys), len(*payload.NewAccessKeys))
 	}
 }
 
@@ -153,4 +153,27 @@ func TestParseInvalidPayload(t *testing.T) {
 			t.Error("expected error for invalid payload")
 		}
 	})
+}
+
+func TestUpdateMetadataPayload_EmptyVersusAbsent(t *testing.T) {
+	public := asynq.NewTask(TypeUpdateMetadata, []byte(`{"tenant_id":"t","document_key":"k","new_access_keys":[],"new_tags":[]}`))
+	parsed, err := ParseUpdateMetadataPayload(public)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if parsed.NewAccessKeys == nil || len(*parsed.NewAccessKeys) != 0 {
+		t.Errorf("new_access_keys [] must parse as a present, empty list; got %v", parsed.NewAccessKeys)
+	}
+	if parsed.NewTags == nil || len(*parsed.NewTags) != 0 {
+		t.Errorf("new_tags [] must parse as a present, empty list; got %v", parsed.NewTags)
+	}
+
+	absent := asynq.NewTask(TypeUpdateMetadata, []byte(`{"tenant_id":"t","document_key":"k"}`))
+	parsed, err = ParseUpdateMetadataPayload(absent)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if parsed.NewAccessKeys != nil || parsed.NewTags != nil {
+		t.Errorf("absent fields must stay nil (no change); got %v %v", parsed.NewAccessKeys, parsed.NewTags)
+	}
 }

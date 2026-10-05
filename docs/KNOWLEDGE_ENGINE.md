@@ -254,7 +254,14 @@ the otherwise-opaque extraction loop.
 Qdrant holds two collections per tenant (`QdrantVectorStore`): `chunks`
 (passage vectors) and `documents` (doc-level vectors). Each chunk payload keeps
 its raw `text`, `summary`, `section` heading path, `chunk_order`, document
-identifiers, `tags`, and `access_keys` (defaulting to `[0]` = public). The
+identifiers, `tags`, and `access_keys` (defaulting to `[0]` = public), plus the
+caller's document metadata minus the reserved fields (`RESERVED_INGEST_METADATA_KEYS`:
+`access_keys`, `tenant_id`, `tags`, `document_key`, `document_id`, `document_title`,
+`type`, `text`, `summary`, `summary_tree`, `section`, `chunk_order`), which the pipeline
+always writes itself — Python and Go alike. The API refuses those keys in metadata on
+every write path (`422`; `api.schemas.reserved_metadata`) and drops them on bundle
+import; `test_reserved_metadata_parity.py` keeps the API's, Python's and Go's lists
+equal. The
 document payload additionally stores the hierarchical `summary_tree` so the UI
 can render an expandable summary; `GET /api/documents/{tenant}/{key}/summary`
 returns it, and `GET /api/documents/{tenant}/{key}/chunks` pages through chunks.
@@ -358,6 +365,17 @@ docker exec km2_brain_api python -m brain_api.backfill_document_tags --tenant-id
 ```
 
 (the repair needs only Qdrant, so it also runs with the fact engine off).
+
+**`new_tags` / `new_access_keys` on the update: absent = no change, `[]` = a change.**
+`[]` for `new_access_keys` makes the document public (stored as `[0]`), and `[]` for
+`new_tags` clears its tags (a document moved out of every folder loses its old
+`folder:<id>` tag). The Python worker forwards the API's payload as-is; the Go worker
+(`worker-go`) and the Go API's queue payload (`api-go`) carry both as pointer-to-slice
+fields, so a `nil` is omitted and an empty list is sent as `[]`. They used plain slices
+with `omitempty`, which dropped `[]` — a document made public through the Go worker
+stayed restricted, and a cleared tag list stayed stale. Only a stack running the Go
+worker was affected; a document it left behind is re-synced by any later touch (a PATCH,
+a folder permission save).
 
 **Caller metadata never overrides index fields.** A document's `metadata` is copied
 into every chunk and document payload, but the fields retrieval filters, scopes or

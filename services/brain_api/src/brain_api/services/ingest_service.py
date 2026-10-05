@@ -44,6 +44,8 @@ _tracer = get_tracer("brain_api.ingest")
 # document metadata rides along in every chunk/document payload but can never set
 # these: a writer posting {"access_keys": [0]} would otherwise make restricted
 # content public, and document_key / tenant_id / tags / type would re-scope it.
+# The API refuses the same keys up front (api.schemas.reserved_metadata); Go has
+# reservedIngestMetadataKeys. test_reserved_metadata_parity.py keeps all three equal.
 RESERVED_INGEST_METADATA_KEYS: frozenset[str] = frozenset(
     {
         "access_keys",

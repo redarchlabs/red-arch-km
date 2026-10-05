@@ -33,7 +33,9 @@ type Querier interface {
 	CountDocumentsForFolders(ctx context.Context, arg CountDocumentsForFoldersParams) (int64, error)
 	CountDocumentsForOrg(ctx context.Context, orgID pgtype.UUID) (int64, error)
 	CountDocumentsWithNullFolder(ctx context.Context, orgID pgtype.UUID) (int64, error)
-	CountFolderDescendants(ctx context.Context, id pgtype.UUID) (int64, error)
+	// The folder plus all its descendants, walked by parent_id and held to org_id
+	// (see GetFolderDescendants).
+	CountFolderDescendants(ctx context.Context, arg CountFolderDescendantsParams) (int64, error)
 	CountFolders(ctx context.Context) (int64, error)
 	CountFoldersForOrg(ctx context.Context, orgID pgtype.UUID) (int64, error)
 	CountGroups(ctx context.Context) (int64, error)
@@ -73,8 +75,10 @@ type Querier interface {
 	GetDocumentByKey(ctx context.Context, arg GetDocumentByKeyParams) (Document, error)
 	GetFolder(ctx context.Context, id pgtype.UUID) (Folder, error)
 	GetFolderByName(ctx context.Context, arg GetFolderByNameParams) (Folder, error)
-	// Returns the folder and all its descendants (via dot_path prefix match)
-	GetFolderDescendants(ctx context.Context, id pgtype.UUID) ([]Folder, error)
+	// Returns the folder and all its descendants, walked by parent_id. Never by
+	// dot_path: two root folders may share a name, and so a path prefix. Every
+	// step is held to org_id as well as RLS (defence in depth).
+	GetFolderDescendants(ctx context.Context, arg GetFolderDescendantsParams) ([]Folder, error)
 	// Groups
 	GetGroup(ctx context.Context, id pgtype.UUID) (Group, error)
 	GetGroupByName(ctx context.Context, arg GetGroupByNameParams) (Group, error)
@@ -149,7 +153,10 @@ type Querier interface {
 	UpdateDocument(ctx context.Context, arg UpdateDocumentParams) (Document, error)
 	UpdateDocumentStatus(ctx context.Context, arg UpdateDocumentStatusParams) error
 	UpdateFolder(ctx context.Context, arg UpdateFolderParams) (Folder, error)
-	// Update dot_path for a folder and all its descendants when moved
+	// Set a folder's dot_path to new_prefix and rebuild every descendant's from its
+	// names, walked by parent_id (a LIKE on the old path would also rewrite a
+	// same-named root's subtree). The depth bound guards a corrupt cycle. Held to
+	// org_id at every step as well as RLS (defence in depth).
 	UpdateFolderDotPath(ctx context.Context, arg UpdateFolderDotPathParams) error
 	UpdateGroup(ctx context.Context, arg UpdateGroupParams) (Group, error)
 	UpdateMembership(ctx context.Context, arg UpdateMembershipParams) (UserOrgMembership, error)

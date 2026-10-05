@@ -9,6 +9,9 @@ of it.
 (validate folder → persist → commit → enqueue ingest) rather than writing a row of
 its own: an attached report should be searchable, permissioned and reprocessable
 like every other document in the org. The artifact row is a *link*, added on top.
+It is a knowledge-base write all the same, so a run started through an API key is
+held to ``create_document``'s rules (``knowledge:write`` on the key, the key's
+folders and masks, the shared daily write cap — see ``tools/documents.py``).
 """
 
 from __future__ import annotations
@@ -21,6 +24,7 @@ from api import db_scope
 from api.repositories.document import DocumentRepository
 from api.repositories.folder import FolderRepository
 from api.repositories.work_order_artifacts import WorkOrderArtifactRepository
+from api.services.agents.tools.documents import count_key_run_write, key_run_write_refusal
 from api.services.agents.tools.spec import Category, ToolContext, ToolSpec
 from api.services.index_tags import index_tags
 from api.tasks.ingest import dispatch_ingest
@@ -57,6 +61,7 @@ async def _attach_document(ctx: ToolContext, args: dict[str, Any]) -> dict[str, 
     access_keys: list[int] = []
     tag_names: list[str] = []
     folder_id: uuid.UUID | None = None
+    folder = None
     raw_folder = args.get("folder_id")
     if raw_folder:
         try:
@@ -66,6 +71,12 @@ async def _attach_document(ctx: ToolContext, args: dict[str, Any]) -> dict[str, 
         folder = await folder_repo.get(folder_id)
         if folder is None:
             return {"error": "folder_id does not exist in this organization"}
+    via_api_key = bool(getattr(ctx, "via_api_key", False))
+    if via_api_key:
+        refusal = await key_run_write_refusal(ctx, folder)
+        if refusal is not None:
+            return {"error": refusal}
+    if folder is not None:
         access_keys = await folder_repo.effective_view_masks(folder)
         tag_names = index_tags([], folder.id)
 
@@ -74,7 +85,8 @@ async def _attach_document(ctx: ToolContext, args: dict[str, Any]) -> dict[str, 
         text=text,
         description=args.get("description"),
         folder_id=folder_id,
-        uploaded_by_id=ctx.actor_user_id,
+        # A key is not a person: a key-started run's documents have no uploader.
+        uploaded_by_id=None if via_api_key else ctx.actor_user_id,
         metadata={"work_order_id": str(ctx.work_order_id)},
     )
     doc.size_bytes = len(text.encode("utf-8"))
@@ -94,6 +106,8 @@ async def _attach_document(ctx: ToolContext, args: dict[str, Any]) -> dict[str, 
     # SET LOCAL, and the caller keeps writing on this same session afterwards.
     await ctx.session.commit()
     await db_scope.enter_tenant(ctx.session, ctx.org_id)
+    if via_api_key:
+        await count_key_run_write(ctx)
 
     ingest = "queued"
     try:

@@ -12,13 +12,24 @@ import (
 )
 
 const countFolderDescendants = `-- name: CountFolderDescendants :one
-SELECT COUNT(*) FROM folders f
-WHERE f.dot_path = (SELECT f2.dot_path FROM folders f2 WHERE f2.id = $1)
-   OR f.dot_path LIKE (SELECT f2.dot_path FROM folders f2 WHERE f2.id = $1) || '.%'
+WITH RECURSIVE subtree AS (
+    SELECT f0.id FROM folders f0 WHERE f0.id = $1 AND f0.org_id = $2
+    UNION
+    SELECT c.id FROM folders c JOIN subtree s ON c.parent_id = s.id
+    WHERE c.org_id = $2
+)
+SELECT COUNT(*) FROM subtree
 `
 
-func (q *Queries) CountFolderDescendants(ctx context.Context, id pgtype.UUID) (int64, error) {
-	row := q.db.QueryRow(ctx, countFolderDescendants, id)
+type CountFolderDescendantsParams struct {
+	ID    pgtype.UUID `json:"id"`
+	OrgID pgtype.UUID `json:"org_id"`
+}
+
+// The folder plus all its descendants, walked by parent_id and held to org_id
+// (see GetFolderDescendants).
+func (q *Queries) CountFolderDescendants(ctx context.Context, arg CountFolderDescendantsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countFolderDescendants, arg.ID, arg.OrgID)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -170,15 +181,27 @@ func (q *Queries) GetFolderByName(ctx context.Context, arg GetFolderByNameParams
 }
 
 const getFolderDescendants = `-- name: GetFolderDescendants :many
+WITH RECURSIVE subtree AS (
+    SELECT f0.id FROM folders f0 WHERE f0.id = $1 AND f0.org_id = $2
+    UNION
+    SELECT c.id FROM folders c JOIN subtree s ON c.parent_id = s.id
+    WHERE c.org_id = $2
+)
 SELECT f.id, f.name, f.description, f."order", f.dot_path, f.view_permission_masks, f.contributor_permission_masks, f.viewer_permissions_config, f.contributor_permissions_config, f.org_id, f.parent_id, f.created_at, f.updated_at FROM folders f
-WHERE f.dot_path = (SELECT f2.dot_path FROM folders f2 WHERE f2.id = $1)
-   OR f.dot_path LIKE (SELECT f2.dot_path FROM folders f2 WHERE f2.id = $1) || '.%'
+WHERE f.id IN (SELECT id FROM subtree)
 ORDER BY f.dot_path
 `
 
-// Returns the folder and all its descendants (via dot_path prefix match)
-func (q *Queries) GetFolderDescendants(ctx context.Context, id pgtype.UUID) ([]Folder, error) {
-	rows, err := q.db.Query(ctx, getFolderDescendants, id)
+type GetFolderDescendantsParams struct {
+	ID    pgtype.UUID `json:"id"`
+	OrgID pgtype.UUID `json:"org_id"`
+}
+
+// Returns the folder and all its descendants, walked by parent_id. Never by
+// dot_path: two root folders may share a name, and so a path prefix. Every
+// step is held to org_id as well as RLS (defence in depth).
+func (q *Queries) GetFolderDescendants(ctx context.Context, arg GetFolderDescendantsParams) ([]Folder, error) {
+	rows, err := q.db.Query(ctx, getFolderDescendants, arg.ID, arg.OrgID)
 	if err != nil {
 		return nil, err
 	}
@@ -479,20 +502,32 @@ func (q *Queries) UpdateFolder(ctx context.Context, arg UpdateFolderParams) (Fol
 }
 
 const updateFolderDotPath = `-- name: UpdateFolderDotPath :exec
+WITH RECURSIVE subtree(id, path, depth) AS (
+    SELECT f0.id, $2::text, 0 FROM folders f0
+    WHERE f0.id = $3 AND f0.org_id = $1
+    UNION ALL
+    SELECT c.id, s.path || '.' || c.name, s.depth + 1
+    FROM folders c JOIN subtree s ON c.parent_id = s.id
+    WHERE c.org_id = $1 AND s.depth < 1000
+)
 UPDATE folders SET
-    dot_path = $1::text || SUBSTRING(dot_path FROM $2::int + 1),
+    dot_path = subtree.path,
     updated_at = NOW()
-WHERE dot_path = $3 OR dot_path LIKE $3 || '.%'
+FROM subtree
+WHERE folders.id = subtree.id AND folders.org_id = $1
 `
 
 type UpdateFolderDotPathParams struct {
-	NewPrefix    string      `json:"new_prefix"`
-	OldPrefixLen int32       `json:"old_prefix_len"`
-	OldPrefix    pgtype.Text `json:"old_prefix"`
+	OrgID     pgtype.UUID `json:"org_id"`
+	NewPrefix string      `json:"new_prefix"`
+	FolderID  pgtype.UUID `json:"folder_id"`
 }
 
-// Update dot_path for a folder and all its descendants when moved
+// Set a folder's dot_path to new_prefix and rebuild every descendant's from its
+// names, walked by parent_id (a LIKE on the old path would also rewrite a
+// same-named root's subtree). The depth bound guards a corrupt cycle. Held to
+// org_id at every step as well as RLS (defence in depth).
 func (q *Queries) UpdateFolderDotPath(ctx context.Context, arg UpdateFolderDotPathParams) error {
-	_, err := q.db.Exec(ctx, updateFolderDotPath, arg.NewPrefix, arg.OldPrefixLen, arg.OldPrefix)
+	_, err := q.db.Exec(ctx, updateFolderDotPath, arg.OrgID, arg.NewPrefix, arg.FolderID)
 	return err
 }

@@ -15,6 +15,9 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+# Index-owned keys (access_keys, tenant_id, …) are refused by the one shared rule.
+from api.schemas.reserved_metadata import reject_reserved_metadata_keys
+
 # Caller-chosen stable id ("proj-weekly-2026-W41", "proj:charter"). Restricted to a
 # URL/log-safe alphabet; it is looked up, never interpolated into paths. Matched with
 # fullmatch: ``re.match`` + ``$`` would accept a trailing newline.
@@ -25,25 +28,6 @@ _EXTERNAL_REF_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:\-]{0,254}")
 MAX_METADATA_BYTES = 8 * 1024
 MAX_METADATA_KEYS = 50
 MAX_METADATA_LIST = 50
-# Fields the index filters, scopes or cites on. brain-api already makes them win
-# over caller metadata (RESERVED_INGEST_METADATA_KEYS); rejecting them here gives
-# the caller a clear 422 instead of a silently ignored key. Keep in sync.
-RESERVED_METADATA_KEYS: frozenset[str] = frozenset(
-    {
-        "access_keys",
-        "tenant_id",
-        "tags",
-        "document_key",
-        "document_id",
-        "document_title",
-        "type",
-        "text",
-        "summary",
-        "summary_tree",
-        "section",
-        "chunk_order",
-    }
-)
 _SCALARS = (str, int, float, bool, type(None))
 
 
@@ -71,20 +55,6 @@ def _check_scalar(key: str, value: Any) -> None:
         raise ValueError(msg)
     if isinstance(value, str):
         reject_nul(value, f"metadata[{key!r}]")
-
-
-def reject_reserved_metadata_keys(value: dict[str, Any]) -> dict[str, Any]:
-    """Raise ``ValueError`` naming every reserved key in ``value``; else return it.
-
-    Shared by the public API (:func:`validate_metadata`) and the first-party
-    document schemas, which keep their looser shape rules but must not let
-    metadata name an index-owned field either.
-    """
-    reserved = sorted(set(value) & RESERVED_METADATA_KEYS)
-    if reserved:
-        msg = f"metadata may not set reserved field(s): {', '.join(reserved)}"
-        raise ValueError(msg)
-    return value
 
 
 def validate_metadata(value: dict[str, Any]) -> dict[str, Any]:

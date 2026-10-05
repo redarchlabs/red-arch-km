@@ -143,7 +143,14 @@ router where `{dimension}` ∈ `regions`, `departments`, `roles`, `groups`.
 
 Router `documents.py`. Reads and writes are member-gated with per-document permission
 masks applied (see [document permissions](DATABASE.md) and the folder inheritance model).
-For a member, the list applies each document's own viewer override as well as its folder's,
+`POST /api/documents` and `PATCH /api/documents/{id}` refuse `metadata` naming a reserved
+index field (`access_keys`, `tenant_id`, `tags`, `document_key`, `document_id`,
+`document_title`, `type`, `text`, `summary`, `summary_tree`, `section`, `chunk_order`)
+with `422` listing them — the same rule as the public write below. A PATCH is checked
+against the stored metadata: it is refused only for a reserved key it adds or changes, so a
+document stored earlier with such a key (e.g. its own `document_key`) stays editable, even by
+a client that re-sends the metadata it loaded; such a key is still dropped at ingest. Bundle
+import drops the keys (logged) instead of failing. For a member, the list applies each document's own viewer override as well as its folder's,
 and `GET /{id}`, `/by-key/{key}`, `/content`, `/chunks`, `/summary` and `/logs` answer `404`
 unless the document is filed in a folder the member can see and its own viewer override (if
 any) admits them — except an unfiled document the member uploaded themselves. Admins read
@@ -578,8 +585,8 @@ follows the unattended rule; the person's own reach is ignored). **Every tool ca
 such a run re-checks the key (one primary-key read): once it is revoked, expired, deleted
 or invalid, every tool — allowlisted ones included — is refused and the run ends with
 status `error`; a run picked up with its key already gone ends before its first turn.
-`create_document` in any key-started run needs `knowledge:write` on the key (org keys
-too) and counts against the key's daily write cap (the same counter as
+`create_document` and `attach_document` in any key-started run need `knowledge:write` on
+the key (org keys too) and count against the key's daily write cap (the same counter as
 `POST /knowledge/documents`). A scoped key's knowledge search uses the key's masks and
 folders — checked before the agent's `knowledge_scope: "org"` grant, so it can never read
 unrestricted. It cannot run workflows and is limited to mask-aware tools (knowledge
@@ -620,7 +627,8 @@ Send **either** `application/json`:
   are reduced to their last path segment, characters outside `A-Z a-z 0-9 . _ - space`
   become `_`, leading dots are dropped and the name is capped at 200 characters.
 - **Daily cap**: each key may write `API_KEY_DOCUMENT_WRITES_PER_DAY` documents (default
-  500) per day — counting `create_document` calls by agent runs the key started. An exhausted key is refused (`429`, `Retry-After`) before the body is read;
+  500) per day — counting `create_document` and `attach_document` calls by agent runs
+  the key started. An exhausted key is refused (`429`, `Retry-After`) before the body is read;
   a write is counted only after it was authorised and changed something (refused and
   `unchanged` requests are free). Fails open on a Redis outage, like the per-minute
   limiter; concurrent writes at the boundary can overshoot by the number in flight.

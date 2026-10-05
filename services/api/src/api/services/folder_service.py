@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Collection
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -40,20 +41,17 @@ class FolderCycleError(ValueError):
     """Raised when a folder move would create a cycle."""
 
 
-def would_create_cycle(folder: Folder, new_parent: Folder | None) -> bool:
+def would_create_cycle(folder: Folder, new_parent: Folder | None, new_parent_ancestors: Collection[Folder]) -> bool:
     """Check if moving `folder` under `new_parent` would create a cycle.
 
-    A cycle occurs when `new_parent` is the folder itself or a descendant
-    of it — detectable via dot_path prefix match without extra queries.
+    A cycle occurs when `new_parent` is the folder itself or a descendant of it,
+    i.e. `folder` is `new_parent` or among its ancestors (by ``parent_id``, see
+    :meth:`FolderRepository.ancestors`). Not by ``dot_path``: a same-named root's
+    subtree shares the path prefix without being a descendant.
     """
     if new_parent is None:
         return False
-    if new_parent.id == folder.id:
-        return True
-    folder_prefix = folder.dot_path
-    if not folder_prefix:
-        return False
-    return new_parent.dot_path == folder_prefix or new_parent.dot_path.startswith(f"{folder_prefix}.")
+    return new_parent.id == folder.id or any(a.id == folder.id for a in new_parent_ancestors)
 
 
 async def move_folder(
@@ -75,7 +73,8 @@ async def move_folder(
             msg = f"Parent folder {new_parent_id} not found"
             raise ValueError(msg)
 
-    if would_create_cycle(folder, new_parent):
+    ancestors = await repo.ancestors(new_parent) if new_parent is not None else []
+    if would_create_cycle(folder, new_parent, ancestors):
         msg = "Cannot move a folder under itself or one of its descendants"
         raise FolderCycleError(msg)
 

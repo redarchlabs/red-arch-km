@@ -18,7 +18,10 @@ is not a person, so the agent never reads with anyone's personal reach.
     unrestricted.
   * ``create_document`` — needs ``knowledge:write`` on the (still valid) key (org
     keys too), counts against the key's daily write cap, and a folder inside the
-    key's folder set that its masks may add to.
+    key's folder set that its masks may add to. ``attach_document`` is not on the
+    list (it sits beside work-order artifact tools that read org-wide), but it
+    applies the same write gate itself, so an org key's run needs
+    ``knowledge:write`` and the daily cap for it too.
   * work-order task tools, ``submit_plan``, and the workflow-bridge
     ``complete_task`` / ``escalate_task`` — the run's own order.
   * ``delegate_task``, ``escalate``, ``consult_peer``, ``reply_to_peer``,

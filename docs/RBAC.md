@@ -273,6 +273,21 @@ override — inherit the folder." A non-NULL config overrides the folder for tha
 This lets a single document be tightened or loosened without moving it or nesting folders.
 Existing rows were left NULL so they keep inheriting (matching pre-migration behaviour).
 
+### Inheritance (folder ← ancestor folders)
+
+A folder with no viewer (or contributor) config of its own inherits its **nearest
+ancestor that has one**; with none in the chain it is public within the org. A folder
+that defines its own config is a boundary: a change above it does not reach it or its
+subtree. `FolderRepository` resolves all of this by walking `parent_id` — the ancestor
+chain (`ancestors`, `nearest_configured_ancestor`,
+`nearest_contributor_configured_ancestor`), the subtree a permission change re-scopes
+(`descendants`, a recursive CTE), folder-list visibility (`list_visible_to_masks`), the
+move cycle check and the `dot_path` rebuild after a rename or move. **Never by
+`dot_path`**: it is built from names, and two top-level folders may share a name (the
+`(org_id, name, parent_id)` unique constraint does not bind `NULL` parents), so a path
+match would let one root inherit the other's permissions, or a permission change on one
+re-scope the other's documents. `dot_path` is a display string only.
+
 ### Feeding the knowledge brain (search / RAG chat)
 
 A document's resolved masks become the `access_keys` stored with each of its chunks in the
@@ -586,8 +601,12 @@ org key or by a person are not restricted by this list. For every run,
 
 An **org** key may add documents to any folder in its org — the same reach as an org
 admin, gated only by the explicit `knowledge:write`, through the REST write and through
-`create_document` in runs it started alike; both count against the key's
-`API_KEY_DOCUMENT_WRITES_PER_DAY` cap.
+`create_document` and `attach_document` in runs it started alike; all count against the
+key's `API_KEY_DOCUMENT_WRITES_PER_DAY` cap. `attach_document` (a work-order deliverable)
+is a knowledge-base write, so in any key-started run it applies `create_document`'s gate
+(`key_run_write_refusal`: the key still valid and holding `knowledge:write`, and — should a
+scoped key's run ever reach it — the key's folders and masks; then the daily cap) and
+leaves the document without an uploader. Before this it wrote without either check.
 
 ## Migration reference
 

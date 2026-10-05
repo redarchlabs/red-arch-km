@@ -8,6 +8,8 @@ assignments, so:
   ``POST /api/v1/knowledge/documents``), and for a scoped key a folder inside the
   key's folder set that its masks may add to, never an unfiled document; the
   document has no uploader.
+* ``attach_document`` (a work-order deliverable) writes to the knowledge base the
+  same way, so it is held to exactly the same rules.
 * ``search_knowledge`` reads with the key's masks and folders — even when the agent
   holds ``knowledge_scope: "org"``, which would make an actor-less run
   unrestricted — and refuses once the key is revoked.
@@ -29,9 +31,11 @@ from api import db_scope
 from api.models.api_key import ApiKey, api_key_folders, api_key_roles
 from api.models.document import Document, Folder
 from api.models.org import Org, Role
+from api.services.agents.tools import artifacts as artifact_tools
 from api.services.agents.tools import documents as doc_tools
 from api.services.agents.tools import knowledge as knowledge_tools
 from api.services.agents.tools.spec import ToolContext
+from api.services.agents.work_order_service import WorkOrderService
 from api.services.api_key_service import generate_key
 from api.services.api_rate_limit import RateLimitResult
 from sqlalchemy import select
@@ -115,6 +119,9 @@ async def world(seed_factory: async_sessionmaker[AsyncSession]) -> dict[str, Any
             "org_writer": await _key(s, org, "org-writer", ["knowledge:write", "agents:run"], role=None),
         }
         await s.commit()
+        await db_scope.enter_tenant(s, org.id)
+        work_order = await WorkOrderService(s, org.id).create_work_order(title="Deliver a report")
+        await s.commit()
     return {
         "org": org,
         "role_mask": role_mask,
@@ -123,6 +130,7 @@ async def world(seed_factory: async_sessionmaker[AsyncSession]) -> dict[str, Any
         "hidden": hidden,
         "readonly": readonly,
         "keys": keys,
+        "work_order_id": work_order.id,
     }
 
 
@@ -133,6 +141,7 @@ _ALLOWED = RateLimitResult(allowed=True, limit=100, remaining=99, retry_after=0)
 def cap(monkeypatch: pytest.MonkeyPatch) -> dict[str, AsyncMock]:
     """No broker; the daily write cap's Redis calls are recorded, allowed by default."""
     monkeypatch.setattr(doc_tools, "dispatch_ingest", lambda _p: "task-x")
+    monkeypatch.setattr(artifact_tools, "dispatch_ingest", lambda _p: "task-x")
     monkeypatch.setattr(doc_tools, "get_redis_client", lambda _settings: MagicMock())
     calls = {"peek": AsyncMock(return_value=_ALLOWED), "count": AsyncMock(return_value=_ALLOWED)}
     monkeypatch.setattr(doc_tools, "peek_rate_limit", calls["peek"])
@@ -149,6 +158,7 @@ def _ctx(s: AsyncSession, world: dict[str, Any], key: str | None, grants: dict[s
         actor_user_id=None,  # a key-started run has no actor
         via_api_key=True,
         api_key_id=world["keys"][key] if key else None,
+        work_order_id=world["work_order_id"],
     )
 
 
@@ -250,6 +260,79 @@ class TestCreateDocument:
         out = await _call(
             app_factory, world, "writer", {"title": "t", "text": "x", "folder_id": str(world["public"].id)}
         )
+        assert "error" in out
+        assert await _docs(seed_factory, world["org"].id) == []
+
+
+async def _attach(app_factory: Any, world: dict[str, Any], key: str, folder: str | None) -> dict[str, Any]:
+    args: dict[str, Any] = {"title": "Report", "content": "# Findings"}
+    if folder:
+        args["folder_id"] = str(world[folder].id)
+    async with app_factory() as s:
+        await db_scope.enter_tenant(s, world["org"].id)
+        out = await artifact_tools.ATTACH_DOCUMENT.handler(_ctx(s, world, key), args)
+        await s.commit()
+        return out
+
+
+class TestAttachDocument:
+    """A work-order deliverable is a knowledge-base write like create_document, so a
+    key-started run is held to the same scope, folder and daily-cap rules."""
+
+    async def test_an_org_key_needs_knowledge_write(
+        self, world: dict[str, Any], app_factory: Any, seed_factory: Any, cap: dict[str, AsyncMock]
+    ) -> None:
+        out = await _attach(app_factory, world, "org", "public")
+        assert "knowledge:write" in out["error"]
+        assert await _docs(seed_factory, world["org"].id) == []
+        cap["count"].assert_not_awaited()
+
+    @pytest.mark.parametrize("key", ["writer", "org_writer"])
+    async def test_counts_against_the_keys_daily_cap(
+        self, world: dict[str, Any], app_factory: Any, seed_factory: Any, cap: dict[str, AsyncMock], key: str
+    ) -> None:
+        out = await _attach(app_factory, world, key, "public")
+        assert out.get("attached") is True, out
+        counted = cap["count"].await_args
+        assert counted.args[1] == f"docwrite:{world['keys'][key]}"  # the REST write's counter
+        assert counted.kwargs == {"limit": 100, "window_seconds": 86_400}
+        docs = await _docs(seed_factory, world["org"].id)
+        assert len(docs) == 1
+        assert docs[0].uploaded_by_id is None  # a key is not a person
+
+    async def test_refused_once_the_daily_cap_is_spent(
+        self, world: dict[str, Any], app_factory: Any, seed_factory: Any, cap: dict[str, AsyncMock]
+    ) -> None:
+        cap["peek"].return_value = RateLimitResult(allowed=False, limit=100, remaining=0, retry_after=60)
+        out = await _attach(app_factory, world, "org_writer", "public")
+        assert "daily" in out["error"]
+        assert await _docs(seed_factory, world["org"].id) == []
+        cap["count"].assert_not_awaited()
+
+    @pytest.mark.parametrize("folder", ["hidden", "readonly", None])
+    async def test_a_scoped_key_may_not_add_outside_its_reach(
+        self, world: dict[str, Any], app_factory: Any, seed_factory: Any, folder: str | None
+    ) -> None:
+        out = await _attach(app_factory, world, "writer", folder)
+        assert "error" in out
+        assert await _docs(seed_factory, world["org"].id) == []
+
+    async def test_a_folder_limited_key_stays_in_its_folders(
+        self, world: dict[str, Any], app_factory: Any, seed_factory: Any
+    ) -> None:
+        out = await _attach(app_factory, world, "mine_only", "public")
+        assert "outside" in out["error"]
+        out = await _attach(app_factory, world, "mine_only", "mine")
+        assert out.get("attached") is True, out
+
+    async def test_refused_once_the_key_is_revoked(
+        self, world: dict[str, Any], app_factory: Any, seed_factory: Any
+    ) -> None:
+        async with seed_factory() as s:
+            key = await s.get(ApiKey, world["keys"]["org_writer"])
+            key.revoked_at = datetime.now(UTC)
+            await s.commit()
+        out = await _attach(app_factory, world, "org_writer", "public")
         assert "error" in out
         assert await _docs(seed_factory, world["org"].id) == []
 

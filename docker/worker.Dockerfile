@@ -12,14 +12,22 @@ RUN pip install --no-cache-dir uv
 
 WORKDIR /app
 
-COPY pyproject.toml uv.lock* ./
+COPY pyproject.toml uv.lock ./
 COPY packages/ packages/
 COPY services/worker/ services/worker/
 
-RUN uv pip install --system --no-cache \
+# Install exactly the third-party versions pinned in uv.lock, hash-checked:
+# `uv export --frozen` reads the lockfile without re-resolving (a plain
+# `uv pip install -e ...` would resolve to the newest versions the pyproject
+# ranges allow). Then the workspace packages themselves, editable as before,
+# with --no-deps so nothing is resolved twice. Fails loudly on any drift.
+RUN uv export --frozen --no-dev --no-emit-workspace --package worker -o /tmp/requirements.txt \
+    && uv pip install --system --no-cache --require-hashes -r /tmp/requirements.txt \
+    && uv pip install --system --no-cache --no-deps \
         -e ./packages/shared_config \
         -e ./packages/brain_sdk \
-        -e ./services/worker
+        -e ./services/worker \
+    && rm /tmp/requirements.txt
 
 RUN useradd --create-home appuser && chown -R appuser:appuser /app
 USER appuser

@@ -308,8 +308,8 @@ func TestMetadataHandler_ProcessTask(t *testing.T) {
 			TenantID:      "tenant-123",
 			DocumentKey:   "key-789",
 			Title:         &title,
-			NewTags:       []string{"tag1"},
-			NewAccessKeys: []int{1, 2},
+			NewTags:       &[]string{"tag1"},
+			NewAccessKeys: &[]int{1, 2},
 		})
 
 		err := handler.ProcessTask(context.Background(), task)

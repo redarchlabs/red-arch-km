@@ -55,12 +55,17 @@ type IngestDocumentResponse struct {
 }
 
 // UpdateMetadataRequest is the request body for metadata updates.
+//
+// NewTags and NewAccessKeys are pointers so "no change" (nil, omitted) is
+// distinct from an empty list, which IS a change: new_access_keys [] makes the
+// document public (brain-api stores the [0] sentinel) and new_tags [] clears
+// its tags. A plain slice with omitempty silently dropped both.
 type UpdateMetadataRequest struct {
-	TenantID      string   `json:"tenant_id"`
-	DocumentKey   string   `json:"document_key"`
-	Title         *string  `json:"title,omitempty"`
-	NewTags       []string `json:"new_tags,omitempty"`
-	NewAccessKeys []int    `json:"new_access_keys,omitempty"`
+	TenantID      string    `json:"tenant_id"`
+	DocumentKey   string    `json:"document_key"`
+	Title         *string   `json:"title,omitempty"`
+	NewTags       *[]string `json:"new_tags,omitempty"`
+	NewAccessKeys *[]int    `json:"new_access_keys,omitempty"`
 }
 
 // HTTPError represents an HTTP error response.

@@ -84,8 +84,8 @@ func TestUpdateMetadataPayload_JSON(t *testing.T) {
 		TenantID:      "tenant-456",
 		DocumentKey:   "key-789",
 		Title:         &title,
-		NewTags:       []string{"newtag1", "newtag2"},
-		NewAccessKeys: []int{4, 5, 6},
+		NewTags:       &[]string{"newtag1", "newtag2"},
+		NewAccessKeys: &[]int{4, 5, 6},
 	}
 
 	data, err := json.Marshal(payload)
@@ -107,11 +107,11 @@ func TestUpdateMetadataPayload_JSON(t *testing.T) {
 	if parsed.Title == nil || *parsed.Title != title {
 		t.Errorf("Title mismatch")
 	}
-	if len(parsed.NewTags) != len(payload.NewTags) {
-		t.Errorf("NewTags length mismatch: %d != %d", len(parsed.NewTags), len(payload.NewTags))
+	if len(*parsed.NewTags) != len(*payload.NewTags) {
+		t.Errorf("NewTags length mismatch: %d != %d", len(*parsed.NewTags), len(*payload.NewTags))
 	}
-	if len(parsed.NewAccessKeys) != len(payload.NewAccessKeys) {
-		t.Errorf("NewAccessKeys length mismatch: %d != %d", len(parsed.NewAccessKeys), len(payload.NewAccessKeys))
+	if len(*parsed.NewAccessKeys) != len(*payload.NewAccessKeys) {
+		t.Errorf("NewAccessKeys length mismatch: %d != %d", len(*parsed.NewAccessKeys), len(*payload.NewAccessKeys))
 	}
 }
 
@@ -155,5 +155,31 @@ func TestTaskTypeConstants(t *testing.T) {
 	}
 	if TypeUpdateMetadata != "document:update_metadata" {
 		t.Errorf("TypeUpdateMetadata mismatch: %s", TypeUpdateMetadata)
+	}
+}
+
+func TestUpdateMetadataPayload_EmptyListsAreAChange(t *testing.T) {
+	// A document made public is new_access_keys: [] (brain-api stores the public
+	// sentinel); clearing tags is new_tags: []. Neither may be dropped as "empty".
+	payload := UpdateMetadataPayload{
+		TenantID:      "tenant-456",
+		DocumentKey:   "key-789",
+		NewTags:       &[]string{},
+		NewAccessKeys: &[]int{},
+	}
+
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("failed to marshal: %v", err)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("failed to unmarshal to map: %v", err)
+	}
+	if string(raw["new_access_keys"]) != "[]" {
+		t.Errorf("new_access_keys = %q, want []", raw["new_access_keys"])
+	}
+	if string(raw["new_tags"]) != "[]" {
+		t.Errorf("new_tags = %q, want []", raw["new_tags"])
 	}
 }

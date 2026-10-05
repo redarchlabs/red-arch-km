@@ -36,6 +36,7 @@ from api.schemas.document import (
     UploadBatchRead,
     validate_document_key,
 )
+from api.schemas.reserved_metadata import changed_reserved_metadata_keys
 from api.services.brain_client import BrainAPIClient
 from api.services.document_ingest import (
     ALLOWED_UPLOAD_EXTENSIONS as _ALLOWED_UPLOAD_EXTENSIONS,
@@ -632,6 +633,18 @@ async def update_document(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
 
     fields_set = body.model_fields_set
+
+    if "metadata" in fields_set:
+        # Checked against what is stored, before anything is applied: a document
+        # saved before reserved keys were refused (e.g. holding its own
+        # document_key) stays editable by a client that re-sends its metadata,
+        # but a PATCH may not add a reserved key or change one.
+        changed = changed_reserved_metadata_keys(body.metadata, doc.metadata_)
+        if changed:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=f"metadata may not set reserved field(s): {', '.join(changed)}",
+            )
 
     if body.title is not None:
         doc.title = body.title

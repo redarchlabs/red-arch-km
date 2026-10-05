@@ -29,7 +29,7 @@ from api import db_scope
 from api.dependencies import get_redis_client
 from api.repositories.document import DocumentRepository
 from api.repositories.folder import FolderRepository
-from api.schemas.knowledge_write import RESERVED_METADATA_KEYS
+from api.schemas.reserved_metadata import reject_reserved_metadata_keys
 from api.services.agents.tools.key_scope import RunKeyRefused, run_key_scope
 from api.services.agents.tools.spec import Category, ToolContext, ToolSpec
 from api.services.api_key_scopes import has_scope
@@ -55,11 +55,12 @@ async def _create_document(ctx: ToolContext, args: dict[str, Any]) -> dict[str, 
     metadata = args.get("metadata")
     if metadata is not None and not isinstance(metadata, dict):
         return {"error": "metadata must be an object"}
-    reserved = sorted(set(metadata or {}) & RESERVED_METADATA_KEYS)
-    if reserved:
-        # These are the index's own fields (masks, scope, identity); brain-api
-        # ignores them in metadata anyway, but say so rather than drop them silently.
-        return {"error": f"metadata may not set reserved field(s): {', '.join(reserved)}"}
+    try:
+        # The index's own fields (masks, scope, identity); brain-api ignores them in
+        # metadata anyway, but say so rather than drop them silently.
+        reject_reserved_metadata_keys(metadata or {})
+    except ValueError as exc:
+        return {"error": str(exc)}
     text = args.get("text")
     text = str(text) if text is not None else None
 
@@ -75,7 +76,7 @@ async def _create_document(ctx: ToolContext, args: dict[str, Any]) -> dict[str, 
         return {"error": "folder_id does not exist in this organization"}
     via_api_key = bool(getattr(ctx, "via_api_key", False))
     if via_api_key:
-        refusal = await _key_write_refusal(ctx, folder) or await _daily_cap_refusal(ctx)
+        refusal = await key_run_write_refusal(ctx, folder)
         if refusal is not None:
             return {"error": refusal}
     if folder is not None:
@@ -109,7 +110,7 @@ async def _create_document(ctx: ToolContext, args: dict[str, Any]) -> dict[str, 
     await ctx.session.commit()
     await db_scope.enter_tenant(ctx.session, ctx.org_id)
     if via_api_key:
-        await _count_key_write(ctx)
+        await count_key_run_write(ctx)
 
     ingest = "skipped_no_text"
     if text:
@@ -134,6 +135,18 @@ async def _create_document(ctx: ToolContext, args: dict[str, Any]) -> dict[str, 
             ingest = "pending_enqueue_failed"
 
     return {"id": str(doc_id), "title": title, "folder_id": str(folder_id) if folder_id else None, "ingest": ingest}
+
+
+async def key_run_write_refusal(ctx: ToolContext, folder: Any) -> str | None:
+    """Why a run started through an API key may not write a document into
+    ``folder`` (``None`` = unfiled) now, or ``None`` when it may.
+
+    The one gate for every agent tool that adds a knowledge-base document
+    (``create_document``, ``attach_document``): the key's scope and folder limits,
+    then the key's daily write cap. Call it before persisting anything, and
+    :func:`count_key_run_write` after the commit.
+    """
+    return await _key_write_refusal(ctx, folder) or await _daily_cap_refusal(ctx)
 
 
 async def _key_write_refusal(ctx: ToolContext, folder: Any) -> str | None:
@@ -182,7 +195,7 @@ async def _daily_cap_refusal(ctx: ToolContext) -> str | None:
     return "The API key that started this run has reached its daily document-write limit; try again tomorrow."
 
 
-async def _count_key_write(ctx: ToolContext) -> None:
+async def count_key_run_write(ctx: ToolContext) -> None:
     """Count a committed write against the key's daily cap."""
     await check_rate_limit(
         get_redis_client(ctx.settings),

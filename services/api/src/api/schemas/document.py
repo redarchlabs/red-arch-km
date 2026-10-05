@@ -8,7 +8,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from api.schemas.knowledge_write import reject_reserved_metadata_keys
+from api.schemas.reserved_metadata import reject_reserved_metadata_keys
 from api.services.index_tags import validate_tag_name
 
 
@@ -94,10 +94,9 @@ class DocumentUpdate(BaseModel):
     viewer_permissions_config: list[dict[str, Any]] | None = None
     contributor_permissions_config: list[dict[str, Any]] | None = None
 
-    @field_validator("metadata")
-    @classmethod
-    def _validate_metadata(cls, v: dict[str, Any] | None) -> dict[str, Any] | None:
-        return reject_reserved_metadata_keys(v) if v is not None else None
+    # No reserved-key validator here: whether a key is newly set or an unchanged
+    # legacy one depends on the stored document, so ``PATCH /api/documents/{id}``
+    # checks it (``changed_reserved_metadata_keys``) once the document is loaded.
 
 
 class DocumentContentUpdate(BaseModel):
