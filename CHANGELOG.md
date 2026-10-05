@@ -63,6 +63,30 @@ path-rewrite queries walk `parent_id` too. No unique index on root names is adde
 masks or folder tags in the index from an earlier propagation. Re-saving the permissions of
 each such root (or of the affected folders) re-propagates the correct values.
 
+### Fixed — Folder path rewrites: timestamps, org scoping and a swallowed failure
+
+- The Python API's subtree `dot_path` rewrite (raw SQL, so outside the ORM's `onupdate`)
+  now bumps `updated_at` on every folder it rewrites.
+- The Go API's recursive folder queries (`GetFolderDescendants`, `CountFolderDescendants`,
+  `UpdateFolderDotPath`) carry an explicit `org_id` predicate at every step, as defence in
+  depth alongside RLS; a corrupt cross-org `parent_id` link is no longer walked.
+- `PATCH /api/folders/{id}` in the Go API logged a failed descendant path rewrite and still
+  returned 200. It now rolls back the request's transaction (folder update included) and
+  returns 500 (`TenantConn.Rollback`).
+
+### Changed — Docker images install the versions pinned in `uv.lock`
+
+The api, worker and brain-api images copied `uv.lock` but ran `uv pip install -e ...`, which
+re-resolved every dependency to the newest version the `pyproject.toml` ranges allow — so
+images drifted from what CI tested (SQLAlchemy 2.1.3 was running against a lock of 2.0.48).
+They now install `uv export --frozen --no-dev --no-emit-workspace --package <service>` with
+`--require-hashes`, then the workspace packages editable with `--no-deps`; entrypoints,
+paths and the non-root user are unchanged. CI's lint job runs `uv lock --check`.
+
+**On the next deploy** every image's third-party packages move to the locked versions —
+notably SQLAlchemy 2.1.3 → 2.0.48, which also clears the OpenTelemetry SQLAlchemy
+instrumentation error logged under 2.1.
+
 ### Changed — Reserved metadata keys have a single definition
 
 The reserved-key set and its checks now live in one module,
@@ -73,6 +97,13 @@ remains in the API. `test_reserved_metadata_parity.py` keeps it equal to brain-a
 `RESERVED_INGEST_METADATA_KEYS` and the Go `reservedIngestMetadataKeys` map (parsed from
 source), replacing the Python-only equality test. Import now logs a warning naming the
 reserved keys it dropped from a document.
+
+`PATCH /api/documents/{id}` now checks reserved keys against the document's **stored**
+metadata instead of in the request schema: it refuses (422) only a reserved key the PATCH
+adds or whose value it changes. A document stored before the rule with such a key — some
+carry their own `document_key` in metadata — stays editable even by a client that re-sends
+the metadata it loaded; the unchanged key stays stored and brain-api still drops it at
+ingest. `POST` stays strict.
 
 ### Fixed — The Go worker dropped a change to public (`new_access_keys: []`)
 

@@ -10,8 +10,10 @@ in ``brain_api.services.ingest_service`` and ``reservedIngestMetadataKeys`` in
 ``brain-api-go/internal/pipeline/metadata.go``). The API refuses them up front so a
 caller gets a clear 422 instead of a silently ignored key — every write path
 (first-party ``/api/documents``, ``/api/v1/knowledge/documents``, the agent
-``create_document`` tool) through :func:`reject_reserved_metadata_keys`, and bundle
-import drops them with :func:`strip_reserved_metadata_keys`.
+``create_document`` tool) through :func:`reject_reserved_metadata_keys`, except a
+first-party PATCH, which refuses only keys it adds or changes
+(:func:`changed_reserved_metadata_keys`); bundle import drops them with
+:func:`strip_reserved_metadata_keys`.
 ``test_reserved_metadata_parity.py`` keeps the three lists equal.
 """
 
@@ -51,6 +53,19 @@ def reject_reserved_metadata_keys(value: dict[str, Any]) -> dict[str, Any]:
         msg = f"metadata may not set reserved field(s): {', '.join(reserved)}"
         raise ValueError(msg)
     return value
+
+
+def changed_reserved_metadata_keys(sent: Mapping[str, Any] | None, stored: Mapping[str, Any] | None) -> list[str]:
+    """Reserved keys in ``sent`` that ``stored`` lacks or holds a different value for.
+
+    For a partial update of metadata saved before the rule existed: a client that
+    re-sends what it loaded (say, the document's own ``document_key``) is not
+    refused for it, but it cannot add a reserved key or change one. Unchanged
+    legacy keys stay in the stored metadata and are dropped by brain-api at
+    ingest like any other reserved key.
+    """
+    stored = stored or {}
+    return [k for k in reserved_metadata_keys(sent) if k not in stored or stored[k] != (sent or {})[k]]
 
 
 def strip_reserved_metadata_keys(value: Mapping[str, Any] | None) -> tuple[dict[str, Any], list[str]]:

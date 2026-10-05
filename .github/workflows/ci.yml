@@ -17,6 +17,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Lockfile is up to date
+        # The Docker images install exactly what uv.lock pins (uv export --frozen),
+        # so a pyproject change without a re-lock must fail here, not ship stale.
+        run: uv lock --check
       - name: Install dependencies
         run: uv sync --all-packages --extra dev
       - name: Lint

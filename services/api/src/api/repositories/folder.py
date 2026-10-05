@@ -308,7 +308,8 @@ class FolderRepository:
         from names, any path that drifted is repaired). The depth bound guards a
         corrupt cycle. Scoped to the repository's ``org_id`` so a rewrite can
         never touch another tenant's folders, whether or not RLS is enforced on
-        the current connection.
+        the current connection. Raw SQL skips the ORM's ``onupdate``, so
+        ``updated_at`` is bumped here.
         """
         await self._session.execute(
             sql_text(
@@ -320,7 +321,7 @@ class FolderRepository:
                 "  FROM folders f JOIN subtree ON f.parent_id = subtree.id"
                 "  WHERE f.org_id = :org_id AND subtree.depth < :max_depth"
                 ") "
-                "UPDATE folders SET dot_path = subtree.path FROM subtree "
+                "UPDATE folders SET dot_path = subtree.path, updated_at = now() FROM subtree "
                 "WHERE folders.id = subtree.id AND folders.org_id = :org_id"
             ),
             {"new_prefix": new_prefix, "folder_id": folder_id, "org_id": self._org_id, "max_depth": _MAX_DEPTH},

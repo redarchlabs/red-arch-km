@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 from api.models.document import Folder
 from api.models.org import Org
 from api.services.folder_service import FolderCycleError, move_folder
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .helpers import set_tenant
@@ -132,3 +134,34 @@ class TestFolderMove:
         folders = {f.name: f.dot_path for f in result.scalars().all()}
         assert folders["alpha"] == "target.alpha"
         assert folders["alpha2"] == "alpha2"  # untouched
+
+
+class TestSubtreeRewriteTimestamps:
+    async def test_rewritten_descendants_get_a_fresh_updated_at(self, admin_session: AsyncSession) -> None:
+        """The raw-SQL path rewrite bypasses the ORM's ``onupdate``, so it must bump
+        ``updated_at`` itself or a moved subtree looks unchanged to anything that
+        syncs on it."""
+        await set_tenant(admin_session, None)
+        org = Org(name="MoveTestTimestamps", permission_number=4)
+        admin_session.add(org)
+        await admin_session.commit()
+
+        await set_tenant(admin_session, str(org.id))
+        a = await _make_folder(admin_session, name="a", org_id=org.id, dot_path="a")
+        await _make_folder(admin_session, name="b", org_id=org.id, parent_id=a.id, dot_path="a.b")
+        x = await _make_folder(admin_session, name="x", org_id=org.id, dot_path="x")
+        await admin_session.commit()
+        stale = datetime(2000, 1, 1, tzinfo=UTC)
+        await admin_session.execute(update(Folder).where(Folder.org_id == org.id).values(updated_at=stale))
+        await admin_session.commit()
+
+        await move_folder(admin_session, org.id, a, x.id)
+        await admin_session.commit()
+
+        result = await admin_session.execute(
+            select(Folder).where(Folder.org_id == org.id).execution_options(populate_existing=True)
+        )
+        stamps = {f.name: f.updated_at for f in result.scalars().all()}
+        assert stamps["a"] > stale
+        assert stamps["b"] > stale
+        assert stamps["x"] == stale  # not in the moved subtree

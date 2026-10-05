@@ -94,13 +94,9 @@ class DocumentUpdate(BaseModel):
     viewer_permissions_config: list[dict[str, Any]] | None = None
     contributor_permissions_config: list[dict[str, Any]] | None = None
 
-    @field_validator("metadata")
-    @classmethod
-    def _validate_metadata(cls, v: dict[str, Any] | None) -> dict[str, Any] | None:
-        # Only metadata that is SENT is checked: a document stored before the rule
-        # (holding, say, its own document_key) stays editable by a PATCH that
-        # leaves metadata alone.
-        return reject_reserved_metadata_keys(v) if v is not None else None
+    # No reserved-key validator here: whether a key is newly set or an unchanged
+    # legacy one depends on the stored document, so ``PATCH /api/documents/{id}``
+    # checks it (``changed_reserved_metadata_keys``) once the document is loaded.
 
 
 class DocumentContentUpdate(BaseModel):

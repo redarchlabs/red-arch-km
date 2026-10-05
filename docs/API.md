@@ -146,9 +146,11 @@ masks applied (see [document permissions](DATABASE.md) and the folder inheritanc
 `POST /api/documents` and `PATCH /api/documents/{id}` refuse `metadata` naming a reserved
 index field (`access_keys`, `tenant_id`, `tags`, `document_key`, `document_id`,
 `document_title`, `type`, `text`, `summary`, `summary_tree`, `section`, `chunk_order`)
-with `422` listing them — the same rule as the public write below. A PATCH is checked only
-when it sends `metadata`, so a document stored earlier with such a key stays editable;
-bundle import drops the keys (logged) instead of failing. For a member, the list applies each document's own viewer override as well as its folder's,
+with `422` listing them — the same rule as the public write below. A PATCH is checked
+against the stored metadata: it is refused only for a reserved key it adds or changes, so a
+document stored earlier with such a key (e.g. its own `document_key`) stays editable, even by
+a client that re-sends the metadata it loaded; such a key is still dropped at ingest. Bundle
+import drops the keys (logged) instead of failing. For a member, the list applies each document's own viewer override as well as its folder's,
 and `GET /{id}`, `/by-key/{key}`, `/content`, `/chunks`, `/summary` and `/logs` answer `404`
 unless the document is filed in a folder the member can see and its own viewer override (if
 any) admits them — except an unfiled document the member uploaded themselves. Admins read

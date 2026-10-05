@@ -124,6 +124,20 @@ func (tc *TenantConn) Release() {
 	}
 }
 
+// Rollback abandons the tenant transaction, so nothing this request wrote is
+// persisted even when no statement failed (e.g. a handler's second write was
+// refused before reaching the server). A later Release then only returns the
+// connection. Safe to call more than once; do not run queries afterwards.
+func (tc *TenantConn) Rollback() {
+	if tc.tx == nil {
+		return
+	}
+	if err := tc.tx.Rollback(tc.ctx); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+		slog.Warn("rollback tenant transaction failed", "error", err)
+	}
+	tc.tx = nil
+}
+
 // QueryRow executes a query returning a single row, within the tenant transaction.
 func (tc *TenantConn) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
 	return tc.tx.QueryRow(ctx, sql, args...)

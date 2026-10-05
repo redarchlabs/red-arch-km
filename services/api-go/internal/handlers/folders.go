@@ -412,7 +412,7 @@ func (h *FolderHandler) UpdateFolder(w http.ResponseWriter, r *http.Request) {
 		newParentID = ToPgUUID(pid)
 
 		// Check for cycle
-		if err := h.checkForCycle(ctx, queries, folder, pid); err != nil {
+		if err := h.checkForCycle(ctx, queries, orgID, folder, pid); err != nil {
 			httputil.BadRequest(w, err.Error())
 			return
 		}
@@ -498,18 +498,14 @@ func (h *FolderHandler) UpdateFolder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Update descendant dot_paths if name/parent changed
-	if newDotPath.Valid {
-		oldPrefix := folder.DotPath.String
-		newPrefix := newDotPath.String
-		if oldPrefix != newPrefix {
-			if err := queries.UpdateFolderDotPath(ctx, repository.UpdateFolderDotPathParams{
-				NewPrefix: newPrefix,
-				FolderID:  folder.ID,
-			}); err != nil {
-				slog.Error("update descendant dot_paths", "error", err)
-			}
-		}
+	// Rebuild descendant dot_paths if name/parent changed. This runs in the same
+	// tenant transaction as UpdateFolder: on failure roll both back and report
+	// it, rather than committing a renamed/moved folder over stale child paths.
+	if err := rewriteSubtreeDotPaths(ctx, queries, orgID, folder, newDotPath); err != nil {
+		tenantConn.Rollback()
+		slog.Error("update descendant dot_paths", "error", err, "folder_id", folderID)
+		httputil.InternalError(w, "Failed to update folder")
+		return
 	}
 
 	slog.Info("updated folder", "folder_id", folderID, "org_id", orgID)
@@ -562,7 +558,10 @@ func (h *FolderHandler) DeleteFolder(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check for children
-	count, err := queries.CountFolderDescendants(ctx, folder.ID)
+	count, err := queries.CountFolderDescendants(ctx, repository.CountFolderDescendantsParams{
+		ID:    folder.ID,
+		OrgID: ToPgUUID(orgID),
+	})
 	if err != nil {
 		slog.Error("count folder descendants", "error", err)
 		httputil.InternalError(w, "")
@@ -759,6 +758,7 @@ func (h *FolderHandler) requireOrgAdmin(ctx context.Context, keycloakSub string)
 func (h *FolderHandler) checkForCycle(
 	ctx context.Context,
 	queries *repository.Queries,
+	orgID uuid.UUID,
 	folder repository.Folder,
 	newParentID uuid.UUID,
 ) error {
@@ -767,7 +767,10 @@ func (h *FolderHandler) checkForCycle(
 	}
 
 	// Check if new parent is a descendant of the folder
-	descendants, err := queries.GetFolderDescendants(ctx, folder.ID)
+	descendants, err := queries.GetFolderDescendants(ctx, repository.GetFolderDescendantsParams{
+		ID:    folder.ID,
+		OrgID: ToPgUUID(orgID),
+	})
 	if err != nil {
 		return err
 	}
@@ -779,6 +782,32 @@ func (h *FolderHandler) checkForCycle(
 	}
 
 	return nil
+}
+
+// folderPathRewriter is the one query rewriteSubtreeDotPaths needs.
+type folderPathRewriter interface {
+	UpdateFolderDotPath(ctx context.Context, arg repository.UpdateFolderDotPathParams) error
+}
+
+// rewriteSubtreeDotPaths sets folder's dot_path to newDotPath and rebuilds its
+// descendants' paths, when newDotPath is set and differs from the stored path.
+// Errors are returned, never swallowed: the caller must roll back so a folder
+// is not saved with descendants still on the old path.
+func rewriteSubtreeDotPaths(
+	ctx context.Context,
+	q folderPathRewriter,
+	orgID uuid.UUID,
+	folder repository.Folder,
+	newDotPath pgtype.Text,
+) error {
+	if !newDotPath.Valid || newDotPath.String == folder.DotPath.String {
+		return nil
+	}
+	return q.UpdateFolderDotPath(ctx, repository.UpdateFolderDotPathParams{
+		NewPrefix: newDotPath.String,
+		FolderID:  folder.ID,
+		OrgID:     ToPgUUID(orgID),
+	})
 }
 
 type cycleError struct {
