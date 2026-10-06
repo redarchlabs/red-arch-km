@@ -35,6 +35,7 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.models.custom_entity import EntityDefinition, EntityField, EntityRelationship
@@ -61,6 +62,9 @@ _MAX_IN_VALUES = 200
 # Case-insensitive string spellings accepted for a JSON-delivered boolean field.
 _TRUE_STRINGS = frozenset({"true", "t", "1", "yes", "y", "on"})
 _FALSE_STRINGS = frozenset({"false", "f", "0", "no", "n", "off"})
+
+# SQLSTATE for a unique-constraint violation.
+_UNIQUE_VIOLATION = "23505"
 
 # Base columns present on every entity table, exposed read-only.
 _BASE_READ_COLUMNS = ("id", "created_at", "updated_at")
@@ -111,6 +115,39 @@ def _escape_like(value: str) -> str:
 
 class EntityRecordError(ValueError):
     """Raised for invalid record payloads (mapped to HTTP 400 by the router)."""
+
+
+class RecordConflictError(EntityRecordError):
+    """Raised when a write would duplicate a unique field (mapped to HTTP 409).
+
+    A subclass of ``EntityRecordError`` so the callers that already turn a bad
+    payload into a clean error (agent tools, the importer, forms, workflow steps)
+    handle it without changes; the record routers catch it first to return 409.
+    ``fields`` names the field/relationship slug(s) whose value is already taken —
+    never the conflicting value, which belongs to another record.
+    """
+
+    def __init__(self, fields: tuple[str, ...] = ()) -> None:
+        self.fields = fields
+        if fields:
+            names = ", ".join(repr(f) for f in fields)
+            message = f"another record already has this value for unique field {names}"
+        else:
+            message = "the record conflicts with a unique constraint on this entity"
+        super().__init__(message)
+
+
+def _unique_violation_constraint(exc: IntegrityError) -> tuple[bool, str | None]:
+    """``(is_unique_violation, constraint_name)`` from a driver error.
+
+    SQLAlchemy's asyncpg adapter copies the SQLSTATE onto ``exc.orig`` and chains
+    the asyncpg error (which carries ``constraint_name``) as its ``__cause__``.
+    """
+    orig = exc.orig
+    candidates = (orig, getattr(orig, "__cause__", None))
+    is_unique = any(getattr(c, "sqlstate", None) == _UNIQUE_VIOLATION for c in candidates)
+    name = next((str(n) for c in candidates if (n := getattr(c, "constraint_name", None))), None)
+    return is_unique, name
 
 
 class RecordAccessError(Exception):
@@ -445,6 +482,43 @@ class DynamicEntityRepository:
     # ------------------------------------------------------------------ #
     # CRUD
     # ------------------------------------------------------------------ #
+    async def _execute_write(self, stmt: Any) -> Any:
+        """Execute an INSERT/UPDATE inside a savepoint, translating a unique
+        violation into ``RecordConflictError``.
+
+        The savepoint confines the failure: without it the IntegrityError aborts
+        the caller's whole transaction, so a workflow step, an import loop or an
+        agent tool that reports the error and carries on would hit "current
+        transaction is aborted" on its next statement. Any other integrity error
+        is re-raised unchanged (after the savepoint rolls back).
+        """
+        try:
+            async with self._session.begin_nested():
+                return await self._session.execute(stmt)
+        except IntegrityError as exc:
+            is_unique, constraint = _unique_violation_constraint(exc)
+            if not is_unique:
+                raise
+            slug = self._slug_for_unique_constraint(constraint)
+            raise RecordConflictError((slug,) if slug else ()) from exc
+
+    def _slug_for_unique_constraint(self, constraint: str | None) -> str | None:
+        """The field/relationship slug a unique constraint belongs to, if any.
+
+        Unique fields and one-to-one relationships are the per-record unique
+        constraints SchemaManager creates, each named ``uq_<hex of its id>``.
+        Resolved only on a conflict, so the hot write path pays nothing for it.
+        """
+        if not constraint:
+            return None
+        for f in self._fields:
+            if f.is_unique and identifiers.unique_constraint_name(f.id) == constraint:
+                return f.slug
+        for r in self._relationships:
+            if r.cardinality == "one_to_one" and identifiers.unique_constraint_name(r.id) == constraint:
+                return r.slug
+        return None
+
     async def _capture(
         self, operation: str, record_id: uuid.UUID, before: dict[str, Any] | None, after: dict[str, Any] | None
     ) -> None:
@@ -528,7 +602,7 @@ class DynamicEntityRepository:
         row = self._to_row(payload, for_create=True)
         row["org_id"] = self._org_id
         stmt = self._table.insert().values(**row).returning(*self._table.c)
-        result = await self._session.execute(stmt)
+        result = await self._execute_write(stmt)
         created = self._to_public(result.one())
         await self._capture("create", uuid.UUID(str(created["id"])), None, created)
         return created
@@ -811,7 +885,7 @@ class DynamicEntityRepository:
             .values(**row)
             .returning(*self._table.c)
         )
-        result = await self._session.execute(stmt)
+        result = await self._execute_write(stmt)
         found = result.one_or_none()
         if found is None:
             return None
@@ -885,7 +959,7 @@ class DynamicEntityRepository:
             .values(**row)
             .returning(*self._table.c)
         )
-        result = await self._session.execute(stmt)
+        result = await self._execute_write(stmt)
         found = result.one_or_none()
         if found is None:
             return None

@@ -20,7 +20,7 @@ import pytest
 from api.auth import api_key as ak
 from api.auth.api_key import ApiKeyPrincipal, get_apikey_tenant_db, require_api_key
 from api.dependencies import get_db, get_redis
-from api.repositories.dynamic_entity import EntityRecordError
+from api.repositories.dynamic_entity import EntityRecordError, RecordConflictError
 from api.routers import v1 as v1_router
 from api.routers.v1 import agents as v1_agents
 from api.routers.v1 import entities as v1_entities
@@ -156,6 +156,32 @@ class TestRecordsRouter:
                 resp = await client.post("/api/v1/entities/thing/records", json={"x": 1})
         assert resp.status_code == 400
         assert resp.json()["detail"] == "bad payload"
+
+    async def test_create_unique_conflict_is_409(self) -> None:
+        repo = MagicMock()
+        repo.create = AsyncMock(side_effect=RecordConflictError(("code",)))
+        with (
+            patch.object(v1_records, "build_record_repo", AsyncMock(return_value=(repo, MagicMock()))),
+            patch.object(v1_records, "dispatch_inline_workflows", AsyncMock()) as dispatch,
+        ):
+            async with _client(_app({"records:write"})) as client:
+                resp = await client.post("/api/v1/entities/thing/records", json={"code": "A-1"})
+        assert resp.status_code == 409
+        assert "'code'" in resp.json()["detail"]
+        dispatch.assert_not_awaited()
+
+    async def test_update_unique_conflict_is_409(self) -> None:
+        repo = MagicMock()
+        repo.update = AsyncMock(side_effect=RecordConflictError(("code",)))
+        with (
+            patch.object(v1_records, "build_record_repo", AsyncMock(return_value=(repo, MagicMock()))),
+            patch.object(v1_records, "dispatch_inline_workflows", AsyncMock()) as dispatch,
+        ):
+            async with _client(_app({"records:write"})) as client:
+                resp = await client.patch(f"/api/v1/entities/thing/records/{uuid.uuid4()}", json={"code": "A-1"})
+        assert resp.status_code == 409
+        assert "'code'" in resp.json()["detail"]
+        dispatch.assert_not_awaited()
 
     async def test_get_missing_record_is_404(self) -> None:
         repo = MagicMock()

@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.auth.dependencies import OrgContext, require_org_access
 from api.config import Settings, get_settings
 from api.dependencies import get_tenant_db
-from api.repositories.dynamic_entity import EntityRecordError
+from api.repositories.dynamic_entity import EntityRecordError, RecordConflictError
 from api.schemas.aggregate import AggregateQuery, AggregateResult
 from api.services.entity_records_helpers import (
     build_record_repo,
@@ -113,6 +113,8 @@ async def create_record(
     repo, _definition = await build_record_repo(session, ctx.org_id, slug, privileged=ctx.is_org_admin)
     try:
         created = await repo.create(body)
+    except RecordConflictError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except EntityRecordError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     await dispatch_inline_workflows(session, ctx.org_id, repo.last_change_event, settings)
@@ -145,6 +147,8 @@ async def update_record(
     repo, _definition = await build_record_repo(session, ctx.org_id, slug, privileged=ctx.is_org_admin)
     try:
         record = await repo.update(record_id, body)
+    except RecordConflictError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except EntityRecordError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     if record is None:

@@ -108,7 +108,7 @@ Router `orgs.py`. Org membership is checked inside the handlers for read routes.
 | GET | `/api/orgs/{org_id}` | Org details | Clerk (member of that org) |
 | PATCH | `/api/orgs/{org_id}` | Update org (name, description, OpenAI key, LLM pin) | Site admin |
 | PATCH | `/api/orgs/{org_id}/settings` | Set/clear the org's home view | Org admin (X-Org-ID must match) |
-| DELETE | `/api/orgs/{org_id}` | Delete org (cascades to all tenant data) | Site admin |
+| DELETE | `/api/orgs/{org_id}` | Delete org (cascades to all tenant data and drops its custom-entity tables) | Site admin |
 
 ### Users and memberships
 
@@ -232,6 +232,12 @@ outbox. Bodies: `api/schemas/custom_entity.py`, `api/schemas/aggregate.py`.
 `eq ne gt gte lt lte in contains isnull`); `q` is a case-insensitive text search;
 `order_by` + `order_dir` sort (the cursor carries the sort key). Aggregation metrics:
 `count, count_distinct, sum, avg, min, max`; time buckets: `hour/day/week/month/quarter/year`.
+
+Record writes (`POST` / `PATCH`, here and under `/api/v1`) return `409` when the value
+would duplicate a unique field (or a one-to-one relationship) another record already
+holds: `{"detail": "another record already has this value for unique field 'code'"}`.
+The detail names the field, never the other record's value. Other payload problems
+(unknown field, wrong type, missing required field) stay `400`.
 
 ### Reports and views
 
@@ -506,8 +512,8 @@ Catalog (`API_SCOPES`) — only scopes with a live `/api/v1` endpoint are listed
 | GET | `/api/v1/entities/{slug}/records` | List records (keyset cursor, `q`/`filter`/`order_by`; `@me` rejected) | `records:read` |
 | GET | `/api/v1/entities/{slug}/records/{id}` | One record | `records:read` |
 | POST | `/api/v1/entities/{slug}/aggregate` | GROUP BY / metric aggregation | `records:read` |
-| POST | `/api/v1/entities/{slug}/records` | Create a record (fires inline workflows) | `records:write` |
-| PATCH | `/api/v1/entities/{slug}/records/{id}` | Update a record | `records:write` |
+| POST | `/api/v1/entities/{slug}/records` | Create a record (fires inline workflows; `409` on a unique-field clash) | `records:write` |
+| PATCH | `/api/v1/entities/{slug}/records/{id}` | Update a record (`409` on a unique-field clash) | `records:write` |
 | DELETE | `/api/v1/entities/{slug}/records/{id}` | Delete a record | `records:write` |
 | GET | `/api/v1/reports` | List saved reports | `reports:read` |
 | GET | `/api/v1/reports/{id}` | One report definition | `reports:read` |
@@ -712,7 +718,7 @@ in-flight-blocker `409` (promotion / config apply) returns a structured object
 | 401 | Missing or invalid auth (opaque for API keys and signed webhooks) |
 | 403 | Authenticated but lacks the required role/scope |
 | 404 | Resource not found (or RLS-filtered) |
-| 409 | Conflict — duplicate name, last-admin guard, or in-flight-run block |
+| 409 | Conflict — duplicate name, duplicate unique record field, last-admin guard, or in-flight-run block |
 | 413 | Upload too large (e.g. migration bundle over the size cap) |
 | 422 | Request-body validation error (Pydantic) |
 | 500 | Unhandled server error |

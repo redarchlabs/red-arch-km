@@ -46,6 +46,13 @@ class EntityDefinitionRepository:
         result = await self._session.execute(base.order_by(EntityDefinition.name).offset(offset).limit(limit))
         return list(result.scalars().all()), total
 
+    async def list_physical_tables(self) -> list[str]:
+        """Every entity table name this org owns (no paging: names only)."""
+        result = await self._session.execute(
+            select(EntityDefinition.physical_table).where(EntityDefinition.org_id == self._org_id)
+        )
+        return list(result.scalars().all())
+
     async def count(self) -> int:
         return (
             await self._session.execute(
@@ -204,6 +211,16 @@ class EntityRelationshipRepository:
                 EntityRelationship.org_id == self._org_id,
             )
             .order_by(EntityRelationship.name)
+        )
+        return list(result.scalars().all())
+
+    async def list_join_tables(self) -> list[str]:
+        """Every many-to-many join table name this org owns."""
+        result = await self._session.execute(
+            select(EntityRelationship.physical_name).where(
+                EntityRelationship.org_id == self._org_id,
+                EntityRelationship.cardinality == "many_to_many",
+            )
         )
         return list(result.scalars().all())
 
