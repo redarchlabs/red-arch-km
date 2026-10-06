@@ -175,7 +175,7 @@ async def test_new_profile_uses_real_claims_when_present() -> None:
 
 @pytest.mark.parametrize("blank", ["", None])
 async def test_blank_claims_are_treated_as_absent(blank: str | None) -> None:
-    """Clerk omits the claim entirely on some tokens; jose yields None there."""
+    """Clerk omits the claim entirely on some tokens; the decoder yields None there."""
     profile = _existing()
     session = _FakeSession(profile)
 

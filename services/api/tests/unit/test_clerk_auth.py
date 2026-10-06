@@ -13,12 +13,14 @@ import json
 import time
 from typing import Any
 
+import jwt
 import pytest
 from api.auth import clerk
 from api.auth.clerk import validate_clerk_token
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
-from jose import JWTError, jwk, jwt
+from cryptography.hazmat.primitives.asymmetric import ec, rsa
+from jwt import InvalidAlgorithmError, InvalidKeyError, PyJWTError
+from jwt.algorithms import ECAlgorithm, RSAAlgorithm
 
 ISSUER = "https://clerk.example.com"
 KID = "test-key-id"
@@ -40,16 +42,7 @@ def rsa_key() -> rsa.RSAPrivateKey:
 
 @pytest.fixture(autouse=True)
 def _patch_jwks(monkeypatch: pytest.MonkeyPatch, rsa_key: rsa.RSAPrivateKey) -> None:
-    pub_pem = (
-        rsa_key.public_key()
-        .public_bytes(
-            serialization.Encoding.PEM,
-            serialization.PublicFormat.SubjectPublicKeyInfo,
-        )
-        .decode()
-    )
-    pub: dict[str, Any] = jwk.construct(pub_pem, "RS256").to_dict()
-    pub = {k: (v.decode() if isinstance(v, bytes) else v) for k, v in pub.items()}
+    pub: dict[str, Any] = RSAAlgorithm.to_jwk(rsa_key.public_key(), as_dict=True)
     pub["kid"] = KID
     pub["use"] = "sig"
     jwks = {"keys": [pub]}
@@ -89,22 +82,22 @@ async def test_valid_token_authenticates(rsa_key: rsa.RSAPrivateKey) -> None:
 
 
 async def test_rejects_bad_azp(rsa_key: rsa.RSAPrivateKey) -> None:
-    with pytest.raises(JWTError):
+    with pytest.raises(PyJWTError):
         await validate_clerk_token(_sign(rsa_key, azp="http://evil.example.com"), ISSUER, ALLOWED)
 
 
 async def test_rejects_missing_azp(rsa_key: rsa.RSAPrivateKey) -> None:
-    with pytest.raises(JWTError):
+    with pytest.raises(PyJWTError):
         await validate_clerk_token(_sign(rsa_key, azp=_OMIT), ISSUER, ALLOWED)
 
 
 async def test_rejects_empty_azp(rsa_key: rsa.RSAPrivateKey) -> None:
-    with pytest.raises(JWTError):
+    with pytest.raises(PyJWTError):
         await validate_clerk_token(_sign(rsa_key, azp=""), ISSUER, ALLOWED)
 
 
 async def test_rejects_expired(rsa_key: rsa.RSAPrivateKey) -> None:
-    with pytest.raises(JWTError):
+    with pytest.raises(PyJWTError):
         await validate_clerk_token(
             _sign(rsa_key, exp=int(time.time()) - 10, iat=int(time.time()) - 3600),
             ISSUER,
@@ -113,19 +106,19 @@ async def test_rejects_expired(rsa_key: rsa.RSAPrivateKey) -> None:
 
 
 async def test_rejects_wrong_issuer(rsa_key: rsa.RSAPrivateKey) -> None:
-    with pytest.raises(JWTError):
+    with pytest.raises(PyJWTError):
         await validate_clerk_token(_sign(rsa_key, iss="https://attacker.example.com"), ISSUER, ALLOWED)
 
 
 async def test_rejects_future_nbf(rsa_key: rsa.RSAPrivateKey) -> None:
-    with pytest.raises(JWTError):
+    with pytest.raises(PyJWTError):
         await validate_clerk_token(_sign(rsa_key, nbf=int(time.time()) + 3600), ISSUER, ALLOWED)
 
 
 async def test_rejects_bad_signature(rsa_key: rsa.RSAPrivateKey) -> None:
     # Sign with a different key whose public half is NOT in the JWKS.
     other = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    with pytest.raises(JWTError):
+    with pytest.raises(PyJWTError):
         await validate_clerk_token(_sign(other), ISSUER, ALLOWED)
 
 
@@ -134,7 +127,7 @@ def _b64url(raw: bytes) -> str:
 
 
 def _forge(header: dict[str, Any], claims: dict[str, Any], signature: bytes) -> str:
-    """Hand-assemble a JWT, bypassing jose's client-side signing guards — this is
+    """Hand-assemble a JWT, bypassing the JWT library's client-side signing guards — this is
     what an attacker who does NOT use our library does."""
     h = _b64url(json.dumps(header, separators=(",", ":")).encode())
     p = _b64url(json.dumps(claims, separators=(",", ":")).encode())
@@ -154,9 +147,9 @@ def _attack_claims() -> dict[str, Any]:
 async def test_rejects_alg_none() -> None:
     """An unsigned (alg:none) token must be rejected — the `algorithms=["RS256"]`
     pin in clerk.py is the guard, so this locks it against a future widening.
-    Forged by hand because jose refuses to emit `none` tokens."""
+    Forged by hand so no library-side signing guard is involved."""
     token = _forge({"alg": "none", "kid": KID, "typ": "JWT"}, _attack_claims(), b"")
-    with pytest.raises(JWTError):
+    with pytest.raises(PyJWTError):
         await validate_clerk_token(token, ISSUER, ALLOWED)
 
 
@@ -164,7 +157,7 @@ async def test_rejects_hs256_confusion(rsa_key: rsa.RSAPrivateKey) -> None:
     """Canonical RS256→HS256 downgrade: the attacker HMAC-signs with the (public)
     RSA key bytes as the shared secret. Rejected because decode pins RS256 and
     never treats the key as an HMAC secret. Mirrors the Go HS256-confusion
-    negative. Forged by hand because jose refuses to HMAC-sign with a public key."""
+    negative. Forged by hand because PyJWT refuses to HMAC-sign with a public key."""
     pub_pem = (
         rsa_key.public_key()
         .public_bytes(
@@ -179,8 +172,76 @@ async def test_rejects_hs256_confusion(rsa_key: rsa.RSAPrivateKey) -> None:
     p = _b64url(json.dumps(claims, separators=(",", ":")).encode())
     sig = hmac.new(pub_pem.encode(), f"{h}.{p}".encode(), hashlib.sha256).digest()
     token = f"{h}.{p}.{_b64url(sig)}"
-    with pytest.raises(JWTError):
+    with pytest.raises(PyJWTError):
         await validate_clerk_token(token, ISSUER, ALLOWED)
+
+
+async def test_rejects_hs256_confusion_with_der_key(rsa_key: rsa.RSAPrivateKey) -> None:
+    """The DER variant of the HS256 downgrade (CVE-2026-85394 in python-jose): the
+    attacker uses the DER-encoded public key as the HMAC secret. Rejected for the
+    same reason as the PEM form — only RS256 is accepted."""
+    der = rsa_key.public_key().public_bytes(
+        serialization.Encoding.DER,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    header = {"alg": "HS256", "kid": KID, "typ": "JWT"}
+    h = _b64url(json.dumps(header, separators=(",", ":")).encode())
+    p = _b64url(json.dumps(_attack_claims(), separators=(",", ":")).encode())
+    sig = hmac.new(der, f"{h}.{p}".encode(), hashlib.sha256).digest()
+    with pytest.raises(InvalidAlgorithmError):
+        await validate_clerk_token(f"{h}.{p}.{_b64url(sig)}", ISSUER, ALLOWED)
+
+
+async def test_rejects_future_iat(rsa_key: rsa.RSAPrivateKey) -> None:
+    """A token issued in the future is rejected, matching the Go verifier
+    (jwx WithValidate checks iat)."""
+    with pytest.raises(PyJWTError):
+        await validate_clerk_token(_sign(rsa_key, iat=int(time.time()) + 3600), ISSUER, ALLOWED)
+
+
+async def test_rejects_unknown_kid(rsa_key: rsa.RSAPrivateKey) -> None:
+    token = jwt.encode(_attack_claims(), _priv_pem(rsa_key), algorithm="RS256", headers={"kid": "other"})
+    with pytest.raises(PyJWTError, match="No matching key"):
+        await validate_clerk_token(token, ISSUER, ALLOWED)
+
+
+async def test_rejects_missing_kid(rsa_key: rsa.RSAPrivateKey) -> None:
+    """A token with no kid is rejected before key lookup, even if a JWKS entry
+    also lacks a kid."""
+    token = jwt.encode(_attack_claims(), _priv_pem(rsa_key), algorithm="RS256")
+    with pytest.raises(PyJWTError, match="no kid"):
+        await validate_clerk_token(token, ISSUER, ALLOWED)
+
+
+async def test_rejects_malformed_token() -> None:
+    with pytest.raises(PyJWTError):
+        await validate_clerk_token("not-a-jwt", ISSUER, ALLOWED)
+
+
+async def test_rejects_non_rsa_jwk_for_the_kid(monkeypatch: pytest.MonkeyPatch) -> None:
+    """If the JWKS entry for the kid is not an RSA key, verification fails closed
+    rather than reinterpreting the key under another algorithm."""
+    ec_key = ec.generate_private_key(ec.SECP256R1())
+    ec_jwk: dict[str, Any] = ECAlgorithm.to_jwk(ec_key.public_key(), as_dict=True)
+    ec_jwk["kid"] = KID
+
+    async def _ec_jwks(issuer: str) -> dict[str, Any]:
+        return {"keys": [ec_jwk]}
+
+    monkeypatch.setattr(clerk, "get_clerk_jwks", _ec_jwks)
+    token = jwt.encode(_attack_claims(), ec_key, algorithm="ES256", headers={"kid": KID})
+    with pytest.raises(InvalidKeyError):
+        await validate_clerk_token(token, ISSUER, ALLOWED)
+
+
+async def test_verify_bearer_rejects_malformed_token() -> None:
+    """An unparseable bearer token yields an empty issuer and hits the routing guard."""
+    from api.auth import dependencies
+    from api.config import Settings
+
+    settings = Settings(secret_key="x", clerk_jwt_issuer=ISSUER, clerk_allowed_azp="http://localhost:3002")
+    with pytest.raises(PyJWTError, match="does not match the configured auth provider"):
+        await dependencies._verify_bearer_token("not-a-jwt", settings)
 
 
 async def test_get_current_user_rejects_missing_sub(
@@ -231,7 +292,7 @@ async def test_get_current_user_rejects_missing_credentials() -> None:
 async def test_verify_bearer_rejects_unknown_issuer(rsa_key: rsa.RSAPrivateKey) -> None:
     """_verify_bearer_token must reject a token whose `iss` matches no configured
     provider via the dispatch branch (dependencies.py), distinct from the verifier's
-    own jose issuer pin (validate_clerk_token). The `match=` pins the ROUTING branch
+    own issuer pin (validate_clerk_token). The `match=` pins the ROUTING branch
     specifically: only `_verify_bearer_token`'s guard emits this exact message, so if
     the routing were deleted (token always handed to validate_clerk_token) this test
     would fail even though the verifier's own pin still fails closed. Mirrors Go's
@@ -242,7 +303,7 @@ async def test_verify_bearer_rejects_unknown_issuer(rsa_key: rsa.RSAPrivateKey) 
     settings = Settings(secret_key="x", clerk_jwt_issuer=ISSUER, clerk_allowed_azp="http://localhost:3002")
     token = _sign(rsa_key, iss="https://attacker.example.com")
 
-    with pytest.raises(JWTError, match="does not match the configured auth provider"):
+    with pytest.raises(PyJWTError, match="does not match the configured auth provider"):
         await dependencies._verify_bearer_token(token, settings)
 
 
