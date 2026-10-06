@@ -10,8 +10,8 @@ from typing import Annotated, Any
 
 from fastapi import Depends, Header, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from jose import JWTError
-from jose import jwt as jose_jwt
+from jwt import InvalidTokenError, PyJWTError
+from jwt import decode as jwt_decode
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -122,8 +122,8 @@ def _token_issuer(token: str) -> str:
     verifier. The verified decode re-pins the issuer independently, so a forged
     `iss` cannot bypass signature/issuer validation (mirrors the Go verifier)."""
     try:
-        claims = jose_jwt.get_unverified_claims(token)
-    except JWTError:
+        claims = jwt_decode(token, options={"verify_signature": False})
+    except PyJWTError:
         return ""
     issuer = claims.get("iss", "")
     return issuer if isinstance(issuer, str) else ""
@@ -140,7 +140,7 @@ async def _verify_bearer_token(token: str, settings: Settings) -> dict[str, Any]
 
     if clerk_issuer and issuer == clerk_issuer:
         return await validate_clerk_token(token, issuer=clerk_issuer, allowed_azp=settings.clerk_allowed_azp_list)
-    raise JWTError("Token issuer does not match the configured auth provider")
+    raise InvalidTokenError("Token issuer does not match the configured auth provider")
 
 
 async def get_current_user(

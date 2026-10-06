@@ -15,7 +15,8 @@ import time
 from typing import Any
 
 import httpx
-from jose import JWTError, jwt
+import jwt
+from jwt import InvalidTokenError, PyJWK
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +49,7 @@ async def validate_clerk_token(
 ) -> dict[str, Any]:
     """Validate a Clerk JWT and return the decoded claims.
 
-    Raises JWTError if the token is invalid, including when ``azp`` is missing
+    Raises a ``jwt.PyJWTError`` if the token is invalid, including when ``azp`` is missing
     or not in ``allowed_azp`` (anti token-origin-confusion, G-AZP).
     """
     pinned_issuer = issuer.rstrip("/")
@@ -56,6 +57,11 @@ async def validate_clerk_token(
 
     unverified_header = jwt.get_unverified_header(token)
     kid = unverified_header.get("kid")
+    if not isinstance(kid, str) or not kid:
+        # Select keys by kid only, like the Go verifier: without this, a token
+        # with no kid would match a JWKS entry that also has none.
+        msg = "Token header has no kid"
+        raise InvalidTokenError(msg)
 
     matching_key = None
     for key in jwks.get("keys", []):
@@ -65,11 +71,14 @@ async def validate_clerk_token(
 
     if not matching_key:
         msg = "No matching key found in Clerk JWKS"
-        raise JWTError(msg)
+        raise InvalidTokenError(msg)
 
+    # Bind the key to RS256 regardless of any `alg` the JWK carries: a non-RSA
+    # JWK fails here instead of being reinterpreted.
+    signing_key = PyJWK(matching_key, algorithm="RS256")
     claims: dict[str, Any] = jwt.decode(
         token,
-        matching_key,
+        signing_key,
         algorithms=["RS256"],
         issuer=pinned_issuer,
         # Clerk default session tokens have no `aud`; skip aud, enforce azp below.
@@ -82,6 +91,6 @@ async def validate_clerk_token(
     azp = claims.get("azp")
     if not isinstance(azp, str) or not azp or azp not in allowed_azp:
         msg = "Token azp is missing or not an authorized party"
-        raise JWTError(msg)
+        raise InvalidTokenError(msg)
 
     return claims
