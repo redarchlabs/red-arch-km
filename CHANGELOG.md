@@ -8,6 +8,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — A duplicate unique field on a record write is a 409, not a 500
+
+Creating or updating a custom-entity record with a value another record already holds
+in a unique field (or a one-to-one relationship) raised an unhandled `IntegrityError`:
+a `500` for the caller, and an aborted transaction for anything sharing the session.
+
+- `DynamicEntityRepository` runs each record `INSERT`/`UPDATE` in a savepoint and turns
+  a unique violation into `RecordConflictError`, naming the field slug but never the
+  conflicting value. The savepoint keeps the surrounding transaction usable, so a
+  workflow step, an import loop or an agent tool that reports the error and carries on
+  no longer fails on its next statement. Other integrity errors are re-raised unchanged.
+- `POST`/`PATCH` on `/api/entities/{slug}/records` and `/api/v1/entities/{slug}/records`
+  return `409` with that message. `RecordConflictError` subclasses `EntityRecordError`,
+  so agent tools, migration import and forms report it as they already report a bad
+  payload, and an app-wide handler maps any that escapes elsewhere to `409`.
+
+### Fixed — Deleting an org drops its custom-entity tables
+
+`DELETE /api/orgs/{org_id}` cascaded the org's catalog rows and records away but left its
+generated `ce_*` (entity) and `cej_*` (many-to-many join) tables behind, empty. They are
+now dropped in the same transaction, before the org row (`EntityService.drop_all_tables`,
+one `DROP TABLE` for the set so entities that reference each other drop together; only
+that org's tables). The drop is best-effort inside a savepoint: if a table can't be
+dropped (another role owns it, a lock timeout) the org is still deleted and the failure
+is logged, as the brain-api cleanup already is.
+
 ### Security — Reserved metadata keys are refused on the internal document routes and dropped on import
 
 Ingest-time stripping of index-owned metadata keys (`access_keys`, `tenant_id`, `tags`,

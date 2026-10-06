@@ -183,6 +183,23 @@ class EntityService:
         await self._schema.drop_entity_table(definition)
         await self._defs.delete(definition)  # cascades catalog fields + outgoing rels
 
+    async def drop_all_tables(self) -> list[str]:
+        """Drop every physical table this org's entities own (entity + M:M join).
+
+        For org deletion: the FK cascade from ``orgs`` removes the catalog rows and
+        the records, but not the generated tables themselves. Run it in the same
+        transaction as the org delete, before it — the table names come from the
+        catalog rows that delete removes. Only this org's tables are touched (the
+        catalog reads are org-scoped). Returns the dropped table names.
+        """
+        tables = await self.physical_table_names()
+        await self._schema.drop_tables(tables)
+        return tables
+
+    async def physical_table_names(self) -> list[str]:
+        """Every physical table this org's entities own (M:M join tables first)."""
+        return await self._rels.list_join_tables() + await self._defs.list_physical_tables()
+
     async def _drop_incoming_relationship(self, rel: EntityRelationship) -> None:
         """Remove one relationship that TARGETS the entity being dropped —
         physical object first, then its catalog row."""

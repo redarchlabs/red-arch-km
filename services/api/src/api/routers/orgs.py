@@ -7,6 +7,7 @@ import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile, status
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth.dependencies import (
@@ -24,6 +25,7 @@ from api.schemas.common import PaginatedResponse, PaginationParams, make_page
 from api.schemas.org import OrgCreate, OrgRead, OrgSettingsUpdate, OrgUpdate
 from api.services.brain_client import BrainAPIClient
 from api.services.crypto import encrypt_secret
+from api.services.entity_service import EntityService
 from api.services.openai_client import model_routes
 from api.services.storage import StorageClient
 
@@ -302,6 +304,36 @@ def _logo_response(settings: Settings, key: str) -> Response:
     return Response(content=data, media_type=content_type, headers={"Cache-Control": "public, max-age=3600"})
 
 
+async def _drop_entity_tables(session: AsyncSession, org_id: uuid.UUID) -> None:
+    """Drop the org's generated ce_*/cej_* tables ahead of the org delete.
+
+    The FK cascade removes the org's catalog rows and records but not the tables
+    themselves, so they go first, in the same transaction (their names come from
+    the catalog rows the cascade deletes). An unknown org owns no tables, so this
+    is a no-op before the 404.
+
+    Best-effort, in a savepoint: a table the app role can't drop (e.g. one owned
+    by another role) or a lock timeout must not block deleting the org — that
+    only leaves the empty tables behind, as before, and is logged for follow-up.
+    """
+    service = EntityService(session, org_id)
+    # Read the names before trying: the org delete cascades away the catalog rows,
+    # which are the only record of which tables belonged to this org.
+    tables = await service.physical_table_names()
+    if not tables:
+        return
+    try:
+        async with session.begin_nested():
+            await service.drop_all_tables()
+    except (SQLAlchemyError, ValueError) as exc:  # ValueError: a malformed table name in the catalog
+        logger.error(
+            "dropping custom-entity tables for deleted org %s failed: %s — manual cleanup may be required for: %s",
+            org_id,
+            exc,
+            ", ".join(tables),
+        )
+
+
 @router.delete("/{org_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_org(
     org_id: uuid.UUID,
@@ -312,7 +344,8 @@ async def delete_org(
     """Delete an org. Cascades across PostgreSQL, Qdrant, and Neo4j.
 
     Site admin only. Destructive: wipes all data belonging to the org from:
-      - PostgreSQL (via FK CASCADE on org_id)
+      - PostgreSQL (via FK CASCADE on org_id, after dropping the org's
+        generated custom-entity tables)
       - Qdrant (both per-tenant collections)
       - Neo4j (all nodes with the tenant label)
 
@@ -322,6 +355,7 @@ async def delete_org(
     outage would be worse than leaving orphan vectors behind.
     """
     repo = OrgRepository(session)
+    await _drop_entity_tables(session, org_id)
     deleted = await repo.delete(org_id)
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Org not found")

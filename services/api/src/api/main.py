@@ -18,12 +18,13 @@ from api.db import dispose_engine, get_engine, get_session_factory
 from api.dependencies import close_redis_client, get_redis_client
 from api.exception_handlers import (
     make_record_access_handler,
+    make_record_conflict_handler,
     make_too_many_masks_handler,
     make_unhandled_exception_handler,
 )
 from api.middleware.request_logging import RequestLoggingMiddleware
 from api.observability import setup_observability
-from api.repositories.dynamic_entity import RecordAccessError
+from api.repositories.dynamic_entity import RecordAccessError, RecordConflictError
 from api.routers import (
     admin,
     agent,
@@ -180,6 +181,8 @@ def create_app() -> FastAPI:
     app.add_exception_handler(Exception, make_unhandled_exception_handler(settings.cors_origins))
     # A member writing a workflow-only entity is a 403, not a 500.
     app.add_exception_handler(RecordAccessError, make_record_access_handler(settings.cors_origins))
+    # A record write duplicating a unique field is a 409, not a 500.
+    app.add_exception_handler(RecordConflictError, make_record_conflict_handler(settings.cors_origins))
     # A membership with more permission assignments than the stores can filter on.
     app.add_exception_handler(TooManyAccessMasks, make_too_many_masks_handler(settings.cors_origins))
 

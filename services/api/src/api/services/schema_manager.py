@@ -242,6 +242,24 @@ class SchemaManager:
         table = Table(name, MetaData())
         await self._session.execute(DropTable(table, if_exists=True))
 
+    async def drop_tables(self, table_names: list[str]) -> None:
+        """Drop several generated tables in ONE statement.
+
+        Entity tables can reference each other (to-one FKs, in a cycle even) and
+        join tables reference both ends, so dropping them one at a time fails on
+        whichever is still referenced. A single ``DROP TABLE a, b, ...`` removes a
+        set whose dependencies all lie inside it. No CASCADE: anything outside the
+        set still depending on one of them is an error, not a silent drop.
+        """
+        if not table_names:
+            return
+        names = ", ".join(identifiers.quote(name) for name in table_names)  # validates each
+        await self._set_lock_timeout()
+        await self._session.execute(text(f"DROP TABLE IF EXISTS {names}"))
+        # SET LOCAL lasts until the transaction ends; don't leave the short DDL lock
+        # timeout on the (possibly large) work the caller does after the drop.
+        await self._session.execute(text("SET LOCAL lock_timeout TO DEFAULT"))
+
     async def add_field_column(self, definition: EntityDefinition, field: EntityField) -> None:
         await self._set_lock_timeout()
         qt = identifiers.quote(definition.physical_table)

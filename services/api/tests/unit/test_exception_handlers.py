@@ -63,3 +63,24 @@ def test_unhandled_500_without_origin_has_no_cors_headers() -> None:
 
     assert resp.status_code == 500
     assert "access-control-allow-origin" not in resp.headers
+
+
+def test_record_conflict_that_escapes_a_route_is_409_with_cors() -> None:
+    """A unique-field conflict raised on a path that doesn't map it itself (the
+    record routers do) is still a 409, not a 500."""
+    from api.exception_handlers import make_record_conflict_handler
+    from api.repositories.dynamic_entity import RecordConflictError
+
+    app = _app()
+    app.add_exception_handler(RecordConflictError, make_record_conflict_handler(_ALLOWED))
+
+    @app.get("/dup")
+    async def dup() -> None:
+        raise RecordConflictError(("code",))
+
+    client = TestClient(app, raise_server_exceptions=False)
+    resp = client.get("/dup", headers={"Origin": "http://localhost:3002"})
+
+    assert resp.status_code == 409
+    assert "'code'" in resp.json()["detail"]
+    assert resp.headers["access-control-allow-origin"] == "http://localhost:3002"

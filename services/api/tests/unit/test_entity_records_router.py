@@ -12,7 +12,7 @@ import pytest
 from api.auth.dependencies import OrgContext, require_org_access
 from api.config import get_settings
 from api.dependencies import get_tenant_db
-from api.repositories.dynamic_entity import EntityRecordError, RecordCursor
+from api.repositories.dynamic_entity import EntityRecordError, RecordConflictError, RecordCursor
 from api.routers import entity_records
 from api.services import entity_records_helpers
 from api.services.entity_records_helpers import decode_cursor as _decode_cursor
@@ -137,3 +137,21 @@ class TestErrorMapping:
                 resp = await client.post("/api/entities/thing/records", json={"x": 1})
         assert resp.status_code == 400
         assert resp.json()["detail"] == "bad payload"
+
+    async def test_create_unique_conflict_is_409(self) -> None:
+        repo = MagicMock()
+        repo.create = AsyncMock(side_effect=RecordConflictError(("code",)))
+        with patch.object(entity_records, "build_record_repo", AsyncMock(return_value=(repo, MagicMock()))):
+            async with _client(_app()) as client:
+                resp = await client.post("/api/entities/thing/records", json={"code": "A-1"})
+        assert resp.status_code == 409
+        assert "'code'" in resp.json()["detail"]
+
+    async def test_update_unique_conflict_is_409(self) -> None:
+        repo = MagicMock()
+        repo.update = AsyncMock(side_effect=RecordConflictError(("code",)))
+        with patch.object(entity_records, "build_record_repo", AsyncMock(return_value=(repo, MagicMock()))):
+            async with _client(_app()) as client:
+                resp = await client.patch(f"/api/entities/thing/records/{uuid.uuid4()}", json={"code": "A-1"})
+        assert resp.status_code == 409
+        assert "'code'" in resp.json()["detail"]

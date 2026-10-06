@@ -70,6 +70,23 @@ def make_record_access_handler(
     return handler
 
 
+def make_record_conflict_handler(
+    allow_origins: Sequence[str],
+) -> Callable[[Request, Exception], Awaitable[JSONResponse]]:
+    """Map a :class:`RecordConflictError` (a record write duplicating a unique
+    field) to a 409 with CORS headers. The record routers map it themselves; this
+    covers any other route that lets one escape, so it is never a 500."""
+
+    async def handler(request: Request, exc: Exception) -> JSONResponse:
+        return JSONResponse(
+            status_code=409,
+            content={"detail": str(exc) or "conflict"},
+            headers=_cors_headers(request, allow_origins),
+        )
+
+    return handler
+
+
 def make_too_many_masks_handler(
     allow_origins: Sequence[str],
 ) -> Callable[[Request, Exception], Awaitable[JSONResponse]]:
