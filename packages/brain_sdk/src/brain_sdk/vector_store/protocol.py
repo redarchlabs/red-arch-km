@@ -69,6 +69,49 @@ class VectorStore(Protocol):
         """Every indexed chunk of one document, ordered by ``chunk_order``."""
         ...
 
+    def text_search(
+        self,
+        tenant_id: str,
+        terms: list[str],
+        *,
+        match_all: bool = True,
+        limit: int = 400,
+        access_keys: list[int] | None = None,
+        required_tags: list[str] | None = None,
+        any_tags: list[str] | None = None,
+    ) -> list[SearchResult]:
+        """Chunks containing every term (or any, when ``match_all`` is false),
+        matched by word, any case. Unscored, capped at ``limit``."""
+        ...
+
+    def document_chunk_window(
+        self,
+        tenant_id: str,
+        document_key: str,
+        *,
+        start: int = 0,
+        limit: int = 40,
+        access_keys: list[int] | None = None,
+        required_tags: list[str] | None = None,
+        any_tags: list[str] | None = None,
+    ) -> tuple[list[SearchResult], int]:
+        """Chunks ``[start, start+limit)`` of one document in reading order, plus
+        the document's visible chunk count (0 = missing or not readable)."""
+        ...
+
+    def has_chunks_from(
+        self,
+        tenant_id: str,
+        document_key: str,
+        *,
+        start: int,
+        access_keys: list[int] | None = None,
+        required_tags: list[str] | None = None,
+        any_tags: list[str] | None = None,
+    ) -> bool:
+        """Whether any visible chunk of the document has ``chunk_order >= start``."""
+        ...
+
     def delete_document(self, tenant_id: str, document_key: str) -> None:
         """Delete all vectors associated with a document key."""
         ...

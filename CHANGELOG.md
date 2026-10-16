@@ -8,6 +8,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Agents can search documents for exact words and read whole documents
+
+Retrieval was dense-only: an agent got the few passages that ranked closest to a
+question. A specific name, code or phrase could rank too low to come back at all, and
+an answer that continued past the matching passage (a list, a table, a procedure) was
+out of reach. Two read tools close that gap, for the chat's Agentic mode (FactAgent),
+Agent Office agents, and the chat Assistant:
+
+- `grep_documents` — every document containing the words (`all`, the default), any of
+  them (`any`), or an exact `phrase`; whole-word, any case. Results are ranked (title
+  hit, distinct terms, occurrences) with a snippet per hit labelled by chunk number.
+- `read_document` — one document in reading order, paged by characters
+  (`start_chunk` / `next_chunk`), stitched back together from its chunks with ingest's
+  sentence overlap removed and section headings restored.
+
+Both read the chunk store, so they cover every format (an uploaded PDF has no text
+anywhere else), and apply the same access masks and folder tags as ranked search: an
+explicit empty scope reads nothing, and a missing document and an unreadable one give
+the same answer. Agent Office tools resolve their reach through the same function as
+`search_knowledge` (actor, API key, or the `knowledge_scope` grant); a scoped key's run
+may use both. brain-api exposes them as `POST /api/text-search` and
+`POST /api/document-read`. Chunk collections get a full-text index on `text` — created
+on first use for existing collections (no re-ingest), in the background for large
+ones, and never allowed to fail an ingest. FactAgent passage results now carry the
+`document_key` and chunk that `read_document` needs.
+
+### Security — The chat Assistant's knowledge search reads with the caller's permissions
+
+`search_knowledge_base` in the chat Assistant called brain-api without access masks,
+which brain-api treats as unrestricted, so since the Assistant was opened to every
+member a member could get answers drawn from documents they cannot open. It now
+passes the caller's masks, resolved exactly as the member chat resolves them (an org
+admin stays unrestricted).
+
 ### Fixed — A duplicate unique field on a record write is a 409, not a 500
 
 Creating or updating a custom-entity record with a value another record already holds

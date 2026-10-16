@@ -22,6 +22,18 @@ _RANGE_INDEX_ERROR = "No range index for `order_by` key"
 # would match nothing at all.
 PUBLIC_ACCESS_KEYS: tuple[int, ...] = (0,)
 
+# Full-text index on chunk text, for lexical (exact-word) matching. Word tokens,
+# lowercased, so "Pump" finds "PUMP" and "pump's". Only fields the
+# deployed server (1.12) understands — newer options such as phrase matching or
+# stemming would be rejected there.
+_TEXT_INDEX = rest.TextIndexParams(
+    type=rest.TextIndexType.TEXT,
+    tokenizer=rest.TokenizerType.WORD,
+    lowercase=True,
+)
+# Up to this many chunks, creating the text index waits for it to be built.
+_TEXT_INDEX_WAIT_MAX_POINTS = 20_000
+
 
 def _is_missing_collection(exc: Exception) -> bool:
     msg = str(exc).lower()
@@ -72,6 +84,9 @@ class QdrantVectorStore:
         self._chunk_suffix = chunk_suffix
         self._doc_suffix = document_suffix
         self._dimension = dimension
+        # Chunk collections known to carry the full-text index, so the check is
+        # one round-trip per collection per process rather than one per search.
+        self._text_indexed: set[str] = set()
 
     def _chunk_collection(self, tenant_id: str) -> str:
         return f"{tenant_id}-{self._chunk_suffix}"
@@ -120,9 +135,48 @@ class QdrantVectorStore:
     def ensure_collections(self, tenant_id: str, *, reset: bool = False) -> None:
         for name in [self._chunk_collection(tenant_id), self._doc_collection(tenant_id)]:
             if reset:
+                self._text_indexed.discard(name)
                 self._recreate_collection(name)
             else:
                 self._ensure_collection(name)
+        self.ensure_text_index(tenant_id)
+
+    def ensure_text_index(self, tenant_id: str) -> None:
+        """Give the tenant's chunk collection its full-text index on ``text``.
+
+        Idempotent, and cheap after the first call per process. Collections created
+        before lexical search existed get the index on their first text search, so
+        no migration or re-ingest is needed. A missing collection is left alone (a
+        tenant with nothing ingested has nothing to index).
+
+        Best-effort: it never raises, because ingest calls it through
+        :meth:`ensure_collections` and an index is not worth failing an ingest over.
+        Without the index a text condition still runs, as a slower case-sensitive
+        substring scan, and the next call tries again.
+        """
+        collection = self._chunk_collection(tenant_id)
+        if collection in self._text_indexed:
+            return
+        try:
+            info = self._client.get_collection(collection)
+            if "text" not in (info.payload_schema or {}):
+                # Small collections index in well under a second, so wait and the
+                # very next search is indexed. A large legacy collection could take
+                # longer than the client's request timeout: build it in the
+                # background instead, and searches pick it up when it is ready.
+                small = (info.points_count or 0) <= _TEXT_INDEX_WAIT_MAX_POINTS
+                self._client.create_payload_index(
+                    collection_name=collection,
+                    field_name="text",
+                    field_schema=_TEXT_INDEX,
+                    wait=small,
+                )
+                logger.info("Created full-text index on %s.text (wait=%s)", collection, small)
+        except Exception as e:  # noqa: BLE001 — Qdrant raises generic errors, incl. missing collection
+            if not _is_missing_collection(e):
+                logger.warning("Could not ensure full-text index on %s", collection, exc_info=True)
+            return
+        self._text_indexed.add(collection)
 
     def _recreate_collection(self, name: str) -> None:
         with contextlib.suppress(Exception):
@@ -244,6 +298,143 @@ class QdrantVectorStore:
         results.sort(key=lambda r: r.payload.get("chunk_order") or 0)
         return results
 
+    def text_search(
+        self,
+        tenant_id: str,
+        terms: list[str],
+        *,
+        match_all: bool = True,
+        limit: int = 400,
+        access_keys: list[int] | None = None,
+        required_tags: list[str] | None = None,
+        any_tags: list[str] | None = None,
+    ) -> list[SearchResult]:
+        """Chunks whose text contains the terms — a lexical filter, not a ranking.
+
+        Each term is matched against the full-text index (word tokens, any case):
+        a multi-word term needs all of its words in the chunk. ``match_all``
+        requires every term; otherwise any one suffices. The same visibility
+        conditions as :meth:`search` apply, so a lexical read can never reach a
+        chunk a ranked search would hide.
+
+        Results are unscored and in storage order, capped at ``limit``. Callers
+        that need exact phrase or substring semantics verify the returned text —
+        the index answers "these words occur", not "in this order".
+        """
+        cleaned = [t for t in (term.strip() for term in terms) if t]
+        if not cleaned:
+            return []
+        self.ensure_text_index(tenant_id)
+        visibility = self._chunk_conditions(
+            access_keys=access_keys,
+            required_tags=required_tags,
+            any_tags=any_tags,
+        )
+        text_conditions: list[rest.Condition] = [
+            rest.FieldCondition(key="text", match=rest.MatchText(text=term)) for term in cleaned
+        ]
+        if match_all:
+            scroll_filter = rest.Filter(must=[*visibility, *text_conditions])
+        else:
+            scroll_filter = rest.Filter(must=visibility, should=text_conditions)
+        try:
+            points, _ = self._client.scroll(
+                collection_name=self._chunk_collection(tenant_id),
+                scroll_filter=scroll_filter,
+                limit=limit,
+                with_payload=True,
+                with_vectors=False,
+            )
+        except Exception as e:  # noqa: BLE001 — Qdrant raises generic on missing collection
+            if _is_missing_collection(e):
+                return []
+            raise
+        return [SearchResult(id=str(p.id), score=0.0, payload=_chunk_payload(p.payload)) for p in points if p]
+
+    def document_chunk_window(
+        self,
+        tenant_id: str,
+        document_key: str,
+        *,
+        start: int = 0,
+        limit: int = 40,
+        access_keys: list[int] | None = None,
+        required_tags: list[str] | None = None,
+        any_tags: list[str] | None = None,
+    ) -> tuple[list[SearchResult], int]:
+        """The chunks with ``chunk_order`` in ``[start, start+limit)``, in reading
+        order, plus the document's visible chunk count.
+
+        A range filter rather than a scroll over the whole document, so a page of a
+        very long document costs one window. Every point in the window is returned
+        (paged), so a document left with duplicate chunks by an older, appending
+        re-ingest still yields each order at least once; callers de-duplicate.
+        Visibility conditions apply to the window and the count alike: a document
+        the caller may not read has zero chunks, indistinguishable from one that
+        does not exist.
+        """
+        visibility = self._document_visibility(document_key, access_keys, required_tags, any_tags)
+        collection = self._chunk_collection(tenant_id)
+        try:
+            total = self._client.count(
+                collection_name=collection,
+                count_filter=rest.Filter(must=visibility),
+                exact=True,
+            ).count
+        except Exception as e:  # noqa: BLE001 — Qdrant raises generic on missing collection
+            if _is_missing_collection(e):
+                return [], 0
+            raise
+        if total == 0:
+            return [], 0
+        window = rest.FieldCondition(key="chunk_order", range=rest.Range(gte=start, lt=start + limit))
+        points = self._scroll_points(collection, scroll_filter=rest.Filter(must=[*visibility, window]))
+        results = [SearchResult(id=str(p.id), score=0.0, payload=_chunk_payload(p.payload)) for p in points if p]
+        results.sort(key=lambda r: r.payload.get("chunk_order") or 0)
+        return results, total
+
+    def has_chunks_from(
+        self,
+        tenant_id: str,
+        document_key: str,
+        *,
+        start: int,
+        access_keys: list[int] | None = None,
+        required_tags: list[str] | None = None,
+        any_tags: list[str] | None = None,
+    ) -> bool:
+        """Whether the document has any visible chunk with ``chunk_order >= start`` —
+        how a paged read tells a gap in the numbering from the end of the document."""
+        visibility = self._document_visibility(document_key, access_keys, required_tags, any_tags)
+        later = rest.FieldCondition(key="chunk_order", range=rest.Range(gte=start))
+        try:
+            return (
+                self._client.count(
+                    collection_name=self._chunk_collection(tenant_id),
+                    count_filter=rest.Filter(must=[*visibility, later]),
+                    # Exact: an estimate can be non-zero for an empty filter, which
+                    # would advertise a continuation that does not exist.
+                    exact=True,
+                ).count
+                > 0
+            )
+        except Exception as e:  # noqa: BLE001 — Qdrant raises generic on missing collection
+            if _is_missing_collection(e):
+                return False
+            raise
+
+    def _document_visibility(
+        self,
+        document_key: str,
+        access_keys: list[int] | None,
+        required_tags: list[str] | None,
+        any_tags: list[str] | None,
+    ) -> list[rest.Condition]:
+        """One document's chunks, under the same visibility rules as ranked search."""
+        conditions = self._chunk_conditions(access_keys=access_keys, required_tags=required_tags, any_tags=any_tags)
+        conditions.append(rest.FieldCondition(key="document_key", match=rest.MatchValue(value=document_key)))
+        return conditions
+
     def delete_document(self, tenant_id: str, document_key: str) -> None:
         conditions: list[rest.Condition] = [
             rest.FieldCondition(key="document_key", match=rest.MatchValue(value=document_key)),
@@ -261,6 +452,7 @@ class QdrantVectorStore:
             self._chunk_collection(tenant_id),
             self._doc_collection(tenant_id),
         ):
+            self._text_indexed.discard(collection)
             try:
                 self._client.delete_collection(collection_name=collection)
             except Exception as e:  # noqa: BLE001 — Qdrant raises generic on 404

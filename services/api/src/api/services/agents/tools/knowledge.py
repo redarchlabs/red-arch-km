@@ -334,20 +334,46 @@ async def _search_target(ctx: ToolContext, requested: str) -> tuple[uuid.UUID, s
     return ctx.org_id, searched_org, reach, await org_default_llm_model(ctx.session, ctx.org_id)
 
 
-async def _search_knowledge(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
-    query = str(args.get("query") or "").strip()
-    if not query:
-        return {"error": "query is required"}
+@dataclass(frozen=True, slots=True)
+class KnowledgeTarget:
+    """Where one knowledge read goes and what it may see — resolved per call."""
+
+    org_id: uuid.UUID
+    org_name: str
+    access_keys: list[int] | None  # None = unrestricted
+    folder_tags: list[str] | None  # None = no folder limit
+    model: str | None  # the target org's pinned answer model
+
+
+async def resolve_knowledge_target(ctx: ToolContext, requested_org: str) -> KnowledgeTarget | _Outcome:
+    """The org and reach for a knowledge read, or a result to hand the model as-is.
+
+    Every tool that reads the knowledge base goes through here, so they all read
+    with the same eyes as ``search_knowledge``: the actor's, a key's, or an
+    unattended run's explicit grant — and another org only when one is named.
+    """
     if ctx.settings is None:
         return {"error": "knowledge search is not configured"}
-    requested = str(args.get("org") or "").strip()
+    requested = requested_org.strip()
     refusal = _cross_org_refusal(ctx, requested)
     if refusal is not None:
         return refusal
     target = await _search_target(ctx, requested)
     if isinstance(target, dict):
         return target
-    org_id, searched_org, reach, model = target
+    org_id, org_name, reach, model = target
+    return KnowledgeTarget(org_id, org_name, reach.access_keys, reach.folder_tags, model)
+
+
+async def _search_knowledge(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
+    query = str(args.get("query") or "").strip()
+    if not query:
+        return {"error": "query is required"}
+    target = await resolve_knowledge_target(ctx, str(args.get("org") or ""))
+    if not isinstance(target, KnowledgeTarget):
+        return target
+    org_id, searched_org, model = target.org_id, target.org_name, target.model
+    reach = _Reach(access_keys=target.access_keys, folder_tags=target.folder_tags)
     result = await _ask_brain(ctx, org_id, query, reach, model)
     if "error" in result:
         return result
@@ -378,17 +404,23 @@ async def _ask_brain(
         # search layer was simply down (an embedding-width mismatch after a
         # config change); the tool was right, the service was broken.
         logger.warning("knowledge search failed for org %s", org_id, exc_info=True)
-        return {
-            "error": (
-                "The knowledge service failed to answer — this is a fault in the platform, not a "
-                "missing capability and not something you lack permission for. You DO have "
-                "knowledge search; it is temporarily unavailable. Try once more, and if it fails "
-                "again say so plainly and carry on with what you can do without it. Do not ask a "
-                "person for a host, a URL, an endpoint or database access: there is nothing they "
-                "can give you that would change this. "
-                f"({type(exc).__name__})"
-            )
-        }
+        return knowledge_service_failure(exc)
+
+
+def knowledge_service_failure(exc: Exception) -> dict[str, Any]:
+    """The tool result for a knowledge-service outage — worded so the model retries
+    once and carries on, rather than hunting for a capability it already has."""
+    return {
+        "error": (
+            "The knowledge service failed to answer — this is a fault in the platform, not a "
+            "missing capability and not something you lack permission for. You DO have "
+            "knowledge search; it is temporarily unavailable. Try once more, and if it fails "
+            "again say so plainly and carry on with what you can do without it. Do not ask a "
+            "person for a host, a URL, an endpoint or database access: there is nothing they "
+            "can give you that would change this. "
+            f"({type(exc).__name__})"
+        )
+    }
 
 
 def _shape_result(result: dict[str, Any], searched_org: str) -> dict[str, Any]:

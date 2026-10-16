@@ -87,6 +87,70 @@ class BrainAPIClient:
             response.raise_for_status()
             return cast("dict[str, Any]", response.json())
 
+    async def text_search(
+        self,
+        *,
+        tenant_id: str,
+        query: str,
+        mode: str = "all",
+        max_documents: int = 10,
+        access_keys: list[int] | None = None,
+        tags: list[str] | None = None,
+        folder_tags: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Documents containing the query's words or phrase, with snippets — the
+        exact-match counterpart of :meth:`vector_search`."""
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.post(
+                f"{self._base_url}/api/text-search",
+                json={
+                    "tenant_id": tenant_id,
+                    "query": query,
+                    "mode": mode,
+                    "max_documents": max_documents,
+                    "access_keys": access_keys,
+                    "tags": tags or [],
+                    "folder_tags": folder_tags,
+                },
+                headers=self._headers(),
+            )
+            response.raise_for_status()
+            return cast("dict[str, Any]", response.json())
+
+    async def read_document(
+        self,
+        *,
+        tenant_id: str,
+        document_key: str,
+        start_chunk: int = 0,
+        max_chars: int | None = None,
+        access_keys: list[int] | None = None,
+        tags: list[str] | None = None,
+        folder_tags: list[str] | None = None,
+    ) -> dict[str, Any] | None:
+        """One document in reading order from ``start_chunk``, or ``None`` when it
+        does not exist or this scope cannot read it (brain-api answers both 404)."""
+        body: dict[str, Any] = {
+            "tenant_id": tenant_id,
+            "document_key": document_key,
+            "start_chunk": start_chunk,
+            "access_keys": access_keys,
+            "tags": tags or [],
+            "folder_tags": folder_tags,
+        }
+        if max_chars is not None:
+            body["max_chars"] = max_chars
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.post(
+                f"{self._base_url}/api/document-read",
+                json=body,
+                headers=self._headers(),
+            )
+            if response.status_code == httpx.codes.NOT_FOUND:
+                return None
+            response.raise_for_status()
+            return cast("dict[str, Any]", response.json())
+
     async def healthz(self) -> dict[str, Any]:
         """Liveness probe for the admin console's System tab (no auth needed)."""
         async with httpx.AsyncClient(timeout=3) as client:

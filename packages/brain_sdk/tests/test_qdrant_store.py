@@ -223,3 +223,39 @@ class TestIterDocumentKeys:
         client.scroll.side_effect = RuntimeError("Not found: Collection `t1-documents`")
         store._client = client  # type: ignore[assignment]
         assert list(store.iter_document_keys("t1")) == []
+
+
+class TestTextIndexIsBestEffort:
+    """Ingest reaches ensure_text_index through ensure_collections; an index that
+    cannot be built must never fail an ingest."""
+
+    def test_a_failed_index_build_does_not_raise_and_is_retried(self, store: QdrantVectorStore) -> None:
+        client = MagicMock()
+        client.get_collection.return_value = SimpleNamespace(payload_schema={}, points_count=10)
+        client.create_payload_index.side_effect = RuntimeError("timed out")
+        store._client = client  # type: ignore[assignment]
+
+        store.ensure_collections("t1")  # does not raise
+        store.ensure_text_index("t1")
+
+        assert client.create_payload_index.call_count == 2  # not cached as built
+
+    def test_a_large_collection_builds_in_the_background(self, store: QdrantVectorStore) -> None:
+        client = MagicMock()
+        client.get_collection.return_value = SimpleNamespace(payload_schema={}, points_count=5_000_000)
+        store._client = client  # type: ignore[assignment]
+
+        store.ensure_text_index("t1")
+
+        assert client.create_payload_index.call_args.kwargs["wait"] is False
+
+    def test_an_existing_index_is_not_rebuilt_and_is_cached(self, store: QdrantVectorStore) -> None:
+        client = MagicMock()
+        client.get_collection.return_value = SimpleNamespace(payload_schema={"text": object()}, points_count=1)
+        store._client = client  # type: ignore[assignment]
+
+        store.ensure_text_index("t1")
+        store.ensure_text_index("t1")
+
+        client.create_payload_index.assert_not_called()
+        assert client.get_collection.call_count == 1

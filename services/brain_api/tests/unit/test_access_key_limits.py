@@ -11,6 +11,7 @@ from __future__ import annotations
 import pytest
 from brain_api.limits import MAX_ACCESS_KEYS
 from brain_api.routers.agent import AgentAskRequest, GapReExtractRequest
+from brain_api.routers.documents_text import DocumentReadRequest, TextSearchRequest
 from brain_api.routers.rag import AskRequest
 from brain_api.routers.search import VectorChatRequest, VectorSearchRequest
 from pydantic import ValidationError
@@ -21,6 +22,8 @@ _MODELS = [
     (VectorChatRequest, {"tenant_id": "t", "query": "q"}),
     (AgentAskRequest, {"tenant_id": "t", "query": "q"}),
     (GapReExtractRequest, {"tenant_id": "t", "gap_id": "g"}),
+    (TextSearchRequest, {"tenant_id": "t", "query": "q"}),
+    (DocumentReadRequest, {"tenant_id": "t", "document_key": "dk"}),
 ]
 
 

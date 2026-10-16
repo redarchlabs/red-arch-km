@@ -14,8 +14,9 @@ is not a person, so the agent never reads with anyone's personal reach.
   other runs' details, batch generation, local execution and MCP servers would all
   reach org-wide data — so such a run gets an allowlist:
 
-  * ``search_knowledge`` — the key's masks and folders, own org only, never
-    unrestricted.
+  * ``search_knowledge``, ``grep_documents``, ``read_document`` — the key's masks
+    and folders, own org only, never unrestricted (all three resolve their reach
+    through ``knowledge.resolve_knowledge_target``).
   * ``create_document`` — needs ``knowledge:write`` on the (still valid) key (org
     keys too), counts against the key's daily write cap, and a folder inside the
     key's folder set that its masks may add to. ``attach_document`` is not on the
@@ -58,6 +59,8 @@ logger = logging.getLogger(__name__)
 SCOPED_KEY_RUN_TOOLS: frozenset[str] = frozenset(
     {
         "search_knowledge",
+        "grep_documents",
+        "read_document",
         "create_document",
         "set_work_order_tasks",
         "update_work_order_task",
