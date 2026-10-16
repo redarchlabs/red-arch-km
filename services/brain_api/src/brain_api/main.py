@@ -11,7 +11,7 @@ from fastapi import FastAPI
 
 from brain_api.config import BrainAPISettings
 from brain_api.observability import setup_observability
-from brain_api.routers import agent, health, ingest, rag, search
+from brain_api.routers import agent, documents_text, health, ingest, rag, search
 from brain_api.stores import close_stores, get_stores
 
 logger = logging.getLogger(__name__)
@@ -76,6 +76,7 @@ def create_app() -> FastAPI:
     app.include_router(health.router)
     app.include_router(ingest.router, prefix="/api", tags=["ingest"])
     app.include_router(search.router, prefix="/api", tags=["search"])
+    app.include_router(documents_text.router, prefix="/api", tags=["search"])
     app.include_router(rag.router, prefix="/api/v1", tags=["rag"])
     app.include_router(agent.router, prefix="/api/v1", tags=["agent"])
 

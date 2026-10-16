@@ -240,3 +240,154 @@ class TestAgentLoop:
         assert _resolve_relative_dates("lesson for this week", now) == "lesson for the week of July 27–August 2, 2026"
         # Queries without relative-time words pass through untouched.
         assert _resolve_relative_dates("Ezra Nehemiah lesson", now) == "Ezra Nehemiah lesson"
+
+
+class _RecordingReader:
+    """Stands in for DocumentTextReader; records the scope each call was given."""
+
+    def __init__(self) -> None:
+        self.scopes: list[Any] = []
+
+    def grep(self, tenant_id: str, query: str, *, scope: Any, mode: str = "all") -> dict[str, Any]:
+        self.scopes.append((tenant_id, scope))
+        return {
+            "query": query,
+            "mode": mode,
+            "documents_matched": 1,
+            "truncated": False,
+            "documents": [
+                {
+                    "document_key": "pumps",
+                    "title": "Pumps",
+                    "occurrences": 1,
+                    "matching_chunks": 1,
+                    "snippets": [{"chunk": 4, "section": "Units", "text": "ATLAS unit, asset tag PMP-2041-X"}],
+                }
+            ],
+        }
+
+    def read(self, tenant_id: str, document_key: str, *, scope: Any, start_chunk: int = 0, max_chars: int = 0) -> Any:
+        self.scopes.append((tenant_id, scope))
+        if document_key != "pumps":
+            return None
+        return {
+            "document_key": "pumps",
+            "title": "Pumps",
+            "total_chunks": 9,
+            "start_chunk": start_chunk,
+            "end_chunk": 9,
+            "next_chunk": None,
+            "text": "The six pumps are Atlas, Vortex, Orion, Cascade, Delta and Summit.",
+        }
+
+
+def _observation(llm: ScriptedLLM, evidence_id: str) -> str:
+    """The tool observation fed back for ``evidence_id`` (the loop appends to one
+    message list, so look it up by label rather than by call index)."""
+    return next(m.content for m in llm.seen[-1] if m.content.startswith(f"[{evidence_id}]"))
+
+
+class TestDocumentTools:
+    def test_grep_then_read_then_answer(self) -> None:
+        """The folder-of-files move: find the term, open the document, answer from it."""
+        store, _ = _acme_store()
+        reader = _RecordingReader()
+        llm = ScriptedLLM(
+            [
+                json.dumps(
+                    {"thought": "find it", "action": {"tool": "grep_documents", "args": {"query": "PMP-2041-X"}}}
+                ),
+                json.dumps(
+                    {
+                        "thought": "read it",
+                        "action": {"tool": "read_document", "args": {"document_key": "pumps", "start_chunk": 2}},
+                    }
+                ),
+                json.dumps({"thought": "done", "final": {"answer": "Six pumps [E2].", "citations": ["E2"]}}),
+            ]
+        )
+        agent = FactAgent(llm, store, text_reader=reader)  # type: ignore[arg-type]
+        result = agent.run("Name every pump", AgentContext(tenant_id="t1"))
+
+        assert result.unsupported_citations == []
+        grep_obs = _observation(llm, "E1")
+        assert "document_key=pumps" in grep_obs and "chunk 4" in grep_obs
+        read_obs = _observation(llm, "E2")
+        assert "Atlas, Vortex, Orion" in read_obs and "end of document" in read_obs
+        assert result.evidence[1]["result"][0]["start_chunk"] == 2
+
+    def test_document_tools_read_with_the_callers_scope(self) -> None:
+        store, _ = _acme_store()
+        reader = _RecordingReader()
+        llm = ScriptedLLM(
+            [
+                json.dumps({"thought": "x", "action": {"tool": "grep_documents", "args": {"query": "pump"}}}),
+                json.dumps({"thought": "y", "action": {"tool": "read_document", "args": {"document_key": "pumps"}}}),
+                json.dumps({"thought": "z", "final": {"answer": "a", "citations": []}}),
+            ]
+        )
+        agent = FactAgent(llm, store, text_reader=reader)  # type: ignore[arg-type]
+        agent.run("q", AgentContext(tenant_id="t-scope", access_keys=(0, 7), tags=("hr",)))
+
+        for tenant_id, scope in reader.scopes:
+            assert tenant_id == "t-scope"
+            assert scope.access_keys == [0, 7]
+            assert scope.required_tags == ["hr"]
+
+    def test_unrestricted_context_reads_without_a_mask_filter(self) -> None:
+        store, _ = _acme_store()
+        reader = _RecordingReader()
+        llm = ScriptedLLM(
+            [
+                json.dumps({"thought": "x", "action": {"tool": "grep_documents", "args": {"query": "pump"}}}),
+                json.dumps({"thought": "z", "final": {"answer": "a", "citations": []}}),
+            ]
+        )
+        FactAgent(llm, store, text_reader=reader).run("q", AgentContext(tenant_id="t1"))  # type: ignore[arg-type]
+        assert reader.scopes[0][1].access_keys is None
+
+    def test_unreadable_document_is_reported_not_raised(self) -> None:
+        store, _ = _acme_store()
+        llm = ScriptedLLM(
+            [
+                json.dumps({"thought": "x", "action": {"tool": "read_document", "args": {"document_key": "secret"}}}),
+                json.dumps({"thought": "z", "final": {"answer": "a", "citations": []}}),
+            ]
+        )
+        result = FactAgent(llm, store, text_reader=_RecordingReader()).run(  # type: ignore[arg-type]
+            "q", AgentContext(tenant_id="t1")
+        )
+        assert "no readable document" in _observation(llm, "E1")
+        assert result.evidence[0]["result"] == []
+
+    def test_document_tools_unavailable_without_a_reader(self) -> None:
+        store, _ = _acme_store()
+        llm = ScriptedLLM(
+            [
+                json.dumps({"thought": "x", "action": {"tool": "grep_documents", "args": {"query": "pump"}}}),
+                json.dumps({"thought": "z", "final": {"answer": "a", "citations": []}}),
+            ]
+        )
+        FactAgent(llm, store).run("q", AgentContext(tenant_id="t1"))  # type: ignore[arg-type]
+        assert "not available" in _observation(llm, "E1")
+
+    def test_passage_results_carry_the_key_read_document_needs(self) -> None:
+        store, _ = _acme_store()
+
+        def fake_vs(query: str, limit: int, tenant_id: str, access_keys: tuple[int, ...]) -> list[dict[str, Any]]:
+            return [{"document_title": "Pumps", "document_key": "pumps", "chunk_order": 3, "text": "Six pumps."}]
+
+        llm = ScriptedLLM(
+            [
+                json.dumps({"thought": "x", "action": {"tool": "search_passages", "args": {"query": "pumps"}}}),
+                json.dumps({"thought": "z", "final": {"answer": "a", "citations": []}}),
+            ]
+        )
+        FactAgent(llm, store, vector_search=fake_vs).run("q", AgentContext(tenant_id="t1"))  # type: ignore[arg-type]
+        assert "[document_key=pumps, chunk 3]" in _observation(llm, "E1")
+
+    def test_system_prompt_offers_both_document_tools(self) -> None:
+        from brain_sdk.facts.agent import _system_prompt
+
+        prompt = _system_prompt()
+        assert "grep_documents" in prompt and "read_document" in prompt

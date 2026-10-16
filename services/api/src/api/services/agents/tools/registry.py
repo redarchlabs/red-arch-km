@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 from api.services.agents.tools.artifacts import artifact_tool_specs
 from api.services.agents.tools.batch_generate import BATCH_GENERATE, CHECK_BATCH
 from api.services.agents.tools.claude_code import RUN_CLAUDE_CODE
+from api.services.agents.tools.document_text import GREP_DOCUMENTS, READ_DOCUMENT
 from api.services.agents.tools.documents import CREATE_DOCUMENT
 from api.services.agents.tools.knowledge import SEARCH_KNOWLEDGE
 from api.services.agents.tools.records import (
@@ -34,8 +35,8 @@ if TYPE_CHECKING:
 def base_tool_specs(settings: Settings | None = None) -> list[ToolSpec]:
     """The always-registered KM2 tools (before per-agent authority filtering).
 
-    Read tools (``search_knowledge``, ``list_records``, ``get_record``,
-    ``list_workflows``) are available to every agent; the write/execute tools are
+    Read tools (``search_knowledge``, ``grep_documents``, ``read_document``,
+    ``list_records``, ``get_record``, ``list_workflows``) are available to every agent; the write/execute tools are
     listed here but the authority engine (kind-gate + grants) decides per agent
     whether they are actually offered.
 
@@ -44,6 +45,8 @@ def base_tool_specs(settings: Settings | None = None) -> list[ToolSpec]:
     """
     specs = [
         SEARCH_KNOWLEDGE,
+        GREP_DOCUMENTS,
+        READ_DOCUMENT,
         READ_RUN_DETAIL,
         LIST_RECORDS,
         GET_RECORD,

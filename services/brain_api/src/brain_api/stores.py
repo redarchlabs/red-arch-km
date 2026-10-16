@@ -10,6 +10,7 @@ import logging
 import threading
 from typing import Any
 
+from brain_sdk.document_text import DocumentTextReader
 from brain_sdk.embedding.openai_provider import OpenAIEmbeddingProvider
 from brain_sdk.extraction.triplet_extractor import TripletExtractor
 from brain_sdk.facts.agent import FactAgent
@@ -322,6 +323,7 @@ class Stores:
             {
                 "document_title": r.payload.get("document_title", "Untitled"),
                 "document_key": r.payload.get("document_key", ""),
+                "chunk_order": r.payload.get("chunk_order"),
                 "text": r.payload.get("text", ""),
                 "score": r.score,
             }
@@ -383,6 +385,7 @@ class Stores:
             self.llm_for_model(model),
             self.fact_store,
             vector_search=self._search_passages,
+            text_reader=DocumentTextReader(self.vector),
             max_iterations=self._settings.agent_max_iterations,
         )
 

@@ -95,6 +95,8 @@ def test_allowlist_is_exactly_the_documented_set() -> None:
         frozenset(
             {
                 "search_knowledge",
+                "grep_documents",
+                "read_document",
                 "create_document",
                 "set_work_order_tasks",
                 "update_work_order_task",
